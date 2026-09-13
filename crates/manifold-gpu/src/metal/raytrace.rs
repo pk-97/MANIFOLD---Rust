@@ -133,6 +133,7 @@ pub struct RtAccel {
     /// descriptors beyond the rewritten range (the count assert alone
     /// can't see it). Rigid topology: a real change rebuilds instead.
     pub(crate) instance_slot_total: u32,
+    pub(crate) topology: Vec<RtGeometryTopology>,
     /// RT_INSTANCING_DESIGN.md D1: CPU-mapped per-object descriptor-build
     /// params (model matrix, `instances_addr`, slot base/count, cast mask) —
     /// rewritten every instanced build/refit from the CURRENT `objects`
@@ -170,6 +171,96 @@ pub struct RtAccel {
     pub emissive_table: Option<EmissiveLightTable>,
     /// Queue clone for `Drop`'s self-retire (see the Drop impl below).
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RtGeometryTopology {
+    vertex: usize,
+    vertex_offset: u32,
+    vertex_stride: u32,
+    triangle_count: u32,
+    index: Option<usize>,
+    normal_offset: u32,
+    uv_offset: u32,
+    instance_slots: u32,
+    wired: bool,
+    alpha_mask: bool,
+}
+
+impl RtGeometryTopology {
+    fn from_geometry(object: &RtObjectGeometry<'_>) -> Self {
+        Self {
+            vertex: object.vertex_buffer.identity_key(),
+            vertex_offset: object.vertex_offset,
+            vertex_stride: object.vertex_stride,
+            triangle_count: object.triangle_count,
+            index: object.index_buffer.map(|b| b.identity_key()),
+            normal_offset: object.normal_offset,
+            uv_offset: object.uv_offset,
+            instance_slots: effective_instance_slots(object),
+            wired: object.instances_addr != 0,
+            alpha_mask: object.alpha_mask,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RtTopologyMismatchCategory {
+    ObjectCount,
+    DescriptorMode,
+    Vertex,
+    Index,
+    NormalUv,
+    InstanceSlots,
+    AlphaMask,
+    SlotOverflow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RtTopologyMismatch {
+    pub object: usize,
+    pub category: RtTopologyMismatchCategory,
+}
+
+fn geometry_topology(objects: &[RtObjectGeometry<'_>]) -> Result<(Vec<RtGeometryTopology>, bool, u32), RtTopologyMismatch> {
+    let wired = objects.iter().any(|o| o.instances_addr != 0);
+    let mut slots = 0u32;
+    let mut records = Vec::with_capacity(objects.len());
+    for (index, object) in objects.iter().enumerate() {
+        let count = effective_instance_slots(object);
+        slots = slots.checked_add(count).ok_or(RtTopologyMismatch {
+            object: index,
+            category: RtTopologyMismatchCategory::SlotOverflow,
+        })?;
+        records.push(RtGeometryTopology::from_geometry(object));
+    }
+    Ok((records, wired, slots))
+}
+
+fn check_topology_records<I: ExactSizeIterator<Item = RtGeometryTopology>>(
+    resident: &[RtGeometryTopology], resident_instanced: bool, resident_slots: u32, current: I,
+) -> Result<(), RtTopologyMismatch> {
+    if resident.len() != current.len() { return Err(RtTopologyMismatch { object: resident.len().min(current.len()), category: RtTopologyMismatchCategory::ObjectCount }); }
+    let mut slots = 0u32;
+    let mut current_instanced = false;
+    for (index, (old, new)) in resident.iter().zip(current).enumerate() {
+        current_instanced |= new.wired;
+        slots = slots.checked_add(new.instance_slots).ok_or(RtTopologyMismatch { object: index, category: RtTopologyMismatchCategory::SlotOverflow })?;
+        if old.vertex != new.vertex || old.vertex_offset != new.vertex_offset || old.vertex_stride != new.vertex_stride || old.triangle_count != new.triangle_count { return Err(RtTopologyMismatch { object: index, category: RtTopologyMismatchCategory::Vertex }); }
+        if old.index != new.index { return Err(RtTopologyMismatch { object: index, category: RtTopologyMismatchCategory::Index }); }
+        if old.normal_offset != new.normal_offset || old.uv_offset != new.uv_offset { return Err(RtTopologyMismatch { object: index, category: RtTopologyMismatchCategory::NormalUv }); }
+        if old.instance_slots != new.instance_slots || old.wired != new.wired { return Err(RtTopologyMismatch { object: index, category: RtTopologyMismatchCategory::InstanceSlots }); }
+        if old.alpha_mask != new.alpha_mask { return Err(RtTopologyMismatch { object: index, category: RtTopologyMismatchCategory::AlphaMask }); }
+    }
+    if current_instanced != resident_instanced { return Err(RtTopologyMismatch { object: 0, category: RtTopologyMismatchCategory::DescriptorMode }); }
+    if slots != resident_slots { return Err(RtTopologyMismatch { object: resident.len(), category: RtTopologyMismatchCategory::InstanceSlots }); }
+    Ok(())
+}
+
+impl RtAccel {
+    pub fn check_topology(&self, objects: &[RtObjectGeometry<'_>]) -> Result<(), RtTopologyMismatch> {
+        check_topology_records(&self.topology, self.instanced, self.instance_slot_total, objects.iter().map(RtGeometryTopology::from_geometry))
+    }
 }
 
 /// BUG-84fv class, root fix: an RtAccel must NEVER free its Metal objects
@@ -255,12 +346,12 @@ pub struct RtObjectGeometry<'a> {
     /// before this feature.
     pub alpha_mask: bool,
     /// RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): this object's material
-    /// carries a nonzero `translucency` factor — it must ALSO leave the
-    /// hardware opaque fast path, or the kernel's `walk_with_transmission`
-    /// never sees solid-but-thin surfaces as candidates. Read fresh at every
-    /// BLAS build and folded into the topo dirty key (render_scene.rs), so a
-    /// live 0→nonzero card flip triggers a bounded async rebuild — the same
-    /// D17 gesture as toggling RT itself.
+    /// carries a nonzero `translucency` factor. Geometry rays still block on
+    /// it through the hardware opaque fast path; transmission rays use
+    /// `intersection_params::force_opacity(non_opaque)` so their shared walk
+    /// receives every surface candidate. This is material data, not BLAS
+    /// topology, so a live factor change does not rebuild the acceleration
+    /// structure.
     pub translucent: bool,
     /// RT-T2-A: cutout threshold in `[0, 1]` — mirrors `Material::
     /// alpha_cutoff`. Unused when `alpha_mask` is `false`.
@@ -342,12 +433,13 @@ pub struct RtObjectGeometry<'a> {
 pub const RT_MASK_VISIBLE: u32 = 0x01;
 pub const RT_MASK_SHADOW_CASTER: u32 = 0x02;
 
-/// RT-T2-A / RT-TL-B (I-TL6): the BLAS hardware-opacity decision, one place.
-/// Opaque (hardware early-out) only when the object is neither alpha-masked
-/// nor translucent — both flags mean the kernel's candidate walks must see
-/// this object's triangles to reject/attenuate them manually.
-fn blas_geometry_opaque(alpha_mask: bool, translucent: bool) -> bool {
-    !(alpha_mask || translucent)
+/// RT-T2-A / RT-TL-B: the BLAS hardware-opacity decision, one place.
+/// Alpha-masked geometry always needs candidate callbacks so a texture sample
+/// can reject a cutout. Translucency is ray-specific: geometry rays block on
+/// it and keep this fast path, while transmission rays override opacity in
+/// their `intersection_params` and receive every candidate.
+fn blas_geometry_opaque(alpha_mask: bool) -> bool {
+    !alpha_mask
 }
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
@@ -395,9 +487,11 @@ fn encode_blas_build(
     // `walk_with_alpha_test` a chance to reject a below-cutoff texel.
     // Non-alpha-masked objects stay `setOpaque(true)`, preserving the exact
     // fast-path cost they had before this feature.
-    // RT-TL-B (section 16 TL6): translucent objects leave the fast path too —
-    // `walk_with_transmission` needs them delivered as candidates.
-    tri_desc.setOpaque(blas_geometry_opaque(obj.alpha_mask, obj.translucent));
+    // RT-TL-B: transmission is a per-ray behavior. Keeping translucent-only
+    // geometry opaque here lets primary/AO/GI/reflection queries use Metal's
+    // hardware fast path; transmission queries explicitly force non-opaque
+    // traversal and still receive every surface candidate.
+    tri_desc.setOpaque(blas_geometry_opaque(obj.alpha_mask));
     let geom: Retained<MTLAccelerationStructureGeometryDescriptor> = tri_desc.into_super();
     let array = NSArray::from_retained_slice(&[geom]);
     let descriptor = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
@@ -440,6 +534,23 @@ fn to_packed_4x3(m: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
     MTLPackedFloat4x3 {
         columns: [col(0), col(1), col(2), col(3)],
     }
+}
+
+/// Metal acceleration-structure descriptors must never receive NaN/Inf
+/// transforms. Invalid affine data is not meaningful scene geometry and can
+/// fault inside driver traversal, so reject it at the CPU-authored boundary
+/// instead of forwarding it to Metal.
+fn finite_instance_transform(m: &[[f32; 4]; 4]) -> bool {
+    m.iter().flatten().all(|value| value.is_finite())
+}
+
+fn disabled_instance_transform() -> MTLPackedFloat4x3 {
+    to_packed_4x3([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
 }
 
 /// RT_INSTANCING_DESIGN.md D1: encode the descriptor-build compute dispatch
@@ -513,10 +624,24 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
         .mapped_ptr()
         .expect("RT instance-descriptor buffer must be CPU-mapped");
     for (i, obj) in objects.iter().enumerate() {
+        let transform_valid = finite_instance_transform(&obj.transform);
+        if !transform_valid {
+            log::error!(
+                "[GPU] RT object {i} has a non-finite TLAS transform; disabling its descriptor"
+            );
+        }
         let desc = MTLAccelerationStructureInstanceDescriptor {
-            transformationMatrix: to_packed_4x3(obj.transform),
+            transformationMatrix: if transform_valid {
+                to_packed_4x3(obj.transform)
+            } else {
+                disabled_instance_transform()
+            },
             options: MTLAccelerationStructureInstanceOptions::None,
-            mask: instance_mask(obj.cast_shadows),
+            mask: if transform_valid {
+                instance_mask(obj.cast_shadows)
+            } else {
+                0
+            },
             intersectionFunctionTableOffset: 0,
             accelerationStructureIndex: i as u32,
         };
@@ -560,10 +685,16 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
     // can only place an identity descriptor at model. Otherwise today's
     // CPU per-object path, byte-identical.
     let instanced = objects.iter().any(|o| o.instances_addr != 0);
-    let slot_total_raw: usize = objects
-        .iter()
-        .map(|o| effective_instance_slots(o) as usize)
-        .sum();
+    if !gi_materials.is_empty() {
+        assert_eq!(
+            objects.len(),
+            gi_materials.len(),
+            "RT emissive table requires one material row per RT object"
+        );
+    }
+    let (topology, _wired, slot_total) = geometry_topology(objects)
+        .expect("RT instance-slot total overflow while building acceleration structure");
+    let slot_total_raw = slot_total as usize;
     let total_slots = slot_total_raw.max(1);
     if super::gpu_fault::diagnostics_enabled() {
         log::info!("[RT-DIAG] AS build objects={} instances={total_slots} instanced={instanced}", objects.len());
@@ -706,6 +837,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry], gi_m
         instance_buffer,
         instanced,
         instance_slot_total: slot_total_raw as u32,
+        topology,
         instance_obj_params,
         geometry_buffers,
         ready,
@@ -740,6 +872,7 @@ fn add_ready_completion_handler<T: Send + 'static>(
 ) {
     use block2::RcBlock;
     use objc2_metal::MTLCommandBufferStatus;
+    super::gpu_fault::track_submission();
     let block = RcBlock::new(move |buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
         let _keep_alive = &keep_alive;
         let cb = unsafe { buf.as_ref() };
@@ -751,8 +884,11 @@ fn add_ready_completion_handler<T: Send + 'static>(
                     (err.code() as i64, err.localizedDescription().to_string())
                 },
             };
-            super::gpu_fault::record_fault(&desc);
             log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
+            // Publish only after this callback's complete evidence is in the
+            // log. Export exits as soon as it observes FAULT_COUNT.
+            super::gpu_fault::record_fault(&desc);
+            super::gpu_fault::finish_submission();
             // BUG-84fv: a failed build/refit must NOT flip ready — tracing
             // a structure the GPU faulted while writing sends hardware
             // traversal into garbage and can hang the device. Leaving
@@ -761,6 +897,7 @@ fn add_ready_completion_handler<T: Send + 'static>(
             return;
         }
         ready.store(true, Ordering::Release);
+        super::gpu_fault::finish_submission();
     });
     unsafe {
         cb.addCompletedHandler(RcBlock::as_ptr(&block));
@@ -776,7 +913,8 @@ fn add_ready_completion_handler<T: Send + 'static>(
 /// (`render_scene.rs`'s `accel_key` folds `cast_shadows` in alongside the
 /// transform) without ever updating the mask this fn is the only writer of
 /// outside `build_instance_buffer`.
-pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) {
+pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) -> Result<(), RtTopologyMismatch> {
+    accel.check_topology(objects)?;
     debug_assert_eq!(
         objects.len(),
         accel.blas.len(),
@@ -864,7 +1002,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
             )),
         );
         cb.commit();
-        return;
+        return Ok(());
     }
 
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
@@ -874,11 +1012,25 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         .mapped_ptr()
         .expect("RT instance-descriptor buffer must be CPU-mapped");
     for (i, obj) in objects.iter().enumerate() {
+        let transform_valid = finite_instance_transform(&obj.transform);
+        if !transform_valid {
+            log::error!(
+                "[GPU] RT object {i} has a non-finite TLAS transform during refit; disabling its descriptor"
+            );
+        }
         unsafe {
             let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
-            field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+            field_ptr.write_unaligned(if transform_valid {
+                to_packed_4x3(obj.transform)
+            } else {
+                disabled_instance_transform()
+            });
             let mask_ptr = ptr.add(i * stride + mask_offset) as *mut u32;
-            mask_ptr.write_unaligned(instance_mask(obj.cast_shadows));
+            mask_ptr.write_unaligned(if transform_valid {
+                instance_mask(obj.cast_shadows)
+            } else {
+                0
+            });
         }
     }
 
@@ -937,6 +1089,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         )),
     );
     cb.commit();
+    Ok(())
 }
 
 // ─── Raw MSL kernels (shadow-only slice of rt_trace.metal) ────────────
@@ -1034,6 +1187,11 @@ constant uint MAX_RT_CASTERS = 8;
 // (walk_with_transmission). Baked into the PSO via MTLFunctionConstantValues
 // at index 100.
 constant bool HAS_TRANSLUCENCY [[function_constant(100)]];
+// Separate compiled call graphs, not runtime SPP overrides. Mirrors TracePass.
+constant uint TRACE_PASS [[function_constant(101)]];
+constant uint TRACE_SHADOW = 0u;
+constant uint TRACE_DIFFUSE = 1u;
+constant uint TRACE_REFLECTION = 2u;
 
 // RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
 // cap — power-rank truncated. Matches manifold-gpu's Rust
@@ -1781,7 +1939,7 @@ static float3 sun_bounce_at_hit(
         sun_r.min_distance = bias_eps * 0.5;
         sun_r.max_distance = INFINITY;
         intersection_query<triangle_data, instancing> sun_q;
-        rt_sanitize_ray(sun_r, 1u, tid, diagnostics); sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
+        rt_sanitize_ray(sun_r, 1u, tid, diagnostics);
         // RT-TL-B (TL4): sun-bounce shadow rays transmit — a petal between
         // the bounce vertex and the sun attenuates (tinted) instead of
         // killing the term outright. Binary-identical when every factor
@@ -1790,9 +1948,16 @@ static float3 sun_bounce_at_hit(
         // binary scenes use walk_with_alpha_test (pre-TL-B codegen).
         float hit_ndotl = max(dot(hit_n, sdir), 0.0);
         if (HAS_TRANSLUCENCY) {
+            // Geometry rays keep translucent-only triangles on Metal's
+            // opaque fast path. Visibility is the one ray class that needs
+            // material callbacks for every surface.
+            intersection_params transmission_params;
+            transmission_params.force_opacity(forced_opacity::non_opaque);
+            sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
             float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures);
             term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
         } else {
+            sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
             float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
             term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
         }
@@ -1942,6 +2107,7 @@ kernel void trace_shadow_rays(
     device const RtAsInstanceDescriptor* emissive_descriptors [[buffer(6)]],
     device RtTraceDiagnostics* diagnostics [[buffer(7)]],
     constant uint4& trace_region [[buffer(8)]],
+    constant uint& runtime_pass [[buffer(9)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
@@ -1974,10 +2140,22 @@ kernel void trace_shadow_rays(
     texture2d<float>               prefiltered_env [[texture(69)]],
     uint2 local_tid [[thread_position_in_grid]])
 {
+    uint active_pass = TRACE_PASS == 3u ? runtime_pass : TRACE_PASS;
+    bool fused = active_pass == 4u;
+    bool do_shadow = fused || active_pass == TRACE_SHADOW;
+    bool do_diffuse = fused || active_pass == TRACE_DIFFUSE;
+    bool do_reflection = fused || active_pass == TRACE_REFLECTION;
     uint2 region_extent = trace_region.zw;
     if (local_tid.x >= region_extent.x || local_tid.y >= region_extent.y) return;
     uint2 tid = trace_region.xy + local_tid;
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
+    // Diffuse owns the normal whenever it runs. Reflection supplies it only
+    // for reflection-only lighting; shadow never writes lighting outputs.
+    bool fused_lighting = fused && (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u);
+    bool owns_normal = fused_lighting ||
+        (!fused && (active_pass == TRACE_DIFFUSE ||
+            (active_pass == TRACE_REFLECTION && p.ao_spp == 0u && p.gi_spp == 0u)));
+    bool clears_reflection = !fused && active_pass == TRACE_DIFFUSE && p.refl_spp == 0u;
     // RT_INSTANCING_DESIGN.md D11: the material/normal tables are ONE
     // buffer — canonical per-object rows at [0, N), per-slot rows at
     // [N, N+Σ). Every read indexed by a committed instance_id (a SLOT)
@@ -1997,16 +2175,16 @@ kernel void trace_shadow_rays(
         // no surface to gather against (ED2: rgb 0, alpha = neutral
         // unoccluded ao 1.0). `.w = -1`: no object (RT-T2-C).
         // RT-A3a: gate writes on dispatch role.
-        if (p.shadow_spp > 0u) {
+        if (do_shadow && p.shadow_spp > 0u) {
             out_sv.write(float4(1, 1, 1, 1), tid);
             out_sv2.write(float4(1, 1, 1, 1), tid);
             // RT-TL-C: void sky = unoccluded sun everywhere; white tint.
             out_svt.write(float4(1, 1, 1, 1), tid);
         }
-        if (p.ao_spp > 0u || p.gi_spp > 0u) {
+        if (do_diffuse && (p.ao_spp > 0u || p.gi_spp > 0u)) {
             out_irr.write(float4(0, 0, 0, 1.0), tid);
         }
-        if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+        if (owns_normal) {
             out_n.write(float4(0, 1, 0, -1.0), tid);
         }
         // BUG-88m: `.a = -1` = "no traced value at this texel". Blend
@@ -2015,8 +2193,9 @@ kernel void trace_shadow_rays(
         // `render_scene.wgsl` gates the rt_reflection substitution on
         // `.a >= 0`. Alpha semantics: >0 hit distance, 0 env-miss
         // (RT_REFL_MISS_HIT_DIST), -1 no valid value.
-        // Reflection gate already exists (refl_spp > 0u).
-        out_refl.write(float4(0, 0, 0, -1.0), tid);
+        if (do_reflection || clears_reflection) {
+            out_refl.write(float4(0, 0, 0, -1.0), tid);
+        }
         return;
     }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
@@ -2070,7 +2249,9 @@ kernel void trace_shadow_rays(
     // itself only runs inside the gi_spp block below, so gi_spp==0 (the
     // RT-A3a mask dispatch) must not pay for a primary cast it never uses.
     bool sampler_active = (p.emissive_table_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr) && (p.gi_spp > 0u);
-    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u || sampler_active) {
+    bool primary_needed = (!fused && !do_shadow) ||
+        (fused && (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u || sampler_active));
+    if (primary_needed) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
         if (dist > 1e-6) {
@@ -2169,7 +2350,7 @@ kernel void trace_shadow_rays(
     // rays outright — the out_sv write below is gated, and without this guard
     // the lighting dispatch traces every shadow ray and discards the result
     // (measured +13ms/frame at half-res 4K, A3 cost matrix 2026-08-02).
-    if (p.shadow_spp > 0u) {
+    if (do_shadow && p.shadow_spp > 0u) {
     uint spp = p.shadow_spp;
     for (uint c = 0; c < n_casters; c++) {
         RtCasterParams cst = p.casters[c];
@@ -2217,13 +2398,17 @@ kernel void trace_shadow_rays(
             for (uint s = 0; s < spp; s++) {
                 r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
                 intersection_query<triangle_data, instancing> shadow_q;
-                rt_sanitize_ray(r, 1u, tid, diagnostics); shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
+                rt_sanitize_ray(r, 1u, tid, diagnostics);
                 // RT-TL-B (TL4/TL5): shadow rays transmit through thin surfaces
                 // when HAS_TRANSLUCENCY is true. Binary scenes keep the pre-TL-B
                 // walk_with_alpha_test codegen byte-for-byte.
                 if (HAS_TRANSLUCENCY) {
+                    intersection_params transmission_params;
+                    transmission_params.force_opacity(forced_opacity::non_opaque);
+                    shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
                     vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures);
                 } else {
+                    shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
                     bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true);
                     if (!blocked) vis += 1.0;
                 }
@@ -2257,7 +2442,7 @@ kernel void trace_shadow_rays(
     // matching P1's shadow_spp==0-never-happens discipline but explicit
     // here since AO is the new, optional term.
     float ao = 1.0;
-    if (p.ao_spp > 0) {
+    if (do_diffuse && p.ao_spp > 0) {
         ao = 0.0;
         ray ao_r;
         ao_r.origin = sec_origin;
@@ -2272,7 +2457,7 @@ kernel void trace_shadow_rays(
         ao /= float(p.ao_spp);
     }
     // RT-A3a: gate mask write on shadow_spp so lighting-only dispatch leaves texture untouched.
-    if (p.shadow_spp > 0u) {
+    if (do_shadow && p.shadow_spp > 0u) {
         out_sv.write(sv_lo, tid);
         out_sv2.write(sv_hi, tid);
         // RT-TL-C: rgb sun-transmission tint. White when no caster matched
@@ -2286,7 +2471,7 @@ kernel void trace_shadow_rays(
     // real surface normal instead of reconstructing one from depth.
     // RT-T2-C: `.w` carries the primary-hit object id (see `obj_id` above).
     // RT-A3a: gate normal write on lighting terms so mask-only dispatch leaves texture untouched.
-    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+    if (owns_normal) {
         out_n.write(float4(n, obj_id), tid);
     }
 
@@ -2344,7 +2529,7 @@ kernel void trace_shadow_rays(
     // GI gather block (below), where `sec_origin` and `shading_n` from
     // the primary ray cast are valid.
     const float RT_EMISSIVE_FIREFLY_GAIN = 32.0; // committed range 8–32, RS8; tuned by RS-C fixture
-    if (p.gi_spp > 0) {
+    if (do_diffuse && p.gi_spp > 0) {
         // ED5: one anchor per pixel. Inert for a scene with no env chain
         // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
         // clamp never fires — env samples there are 0 too).
@@ -2544,8 +2729,8 @@ kernel void trace_shadow_rays(
     }
 
     // RT-R1 (RAYTRACING_DESIGN.md section 9.3 kernel flow): traced specular for
-    // the PBR base lobe, inside the SAME thread/dispatch as shadow/AO/GI
-    // (RD2 — D16's seam, no reflection pass). Reuses their `origin`, `n`,
+    // the PBR base lobe, specialized independently from shadow and diffuse.
+    // Repeats the unchanged primary reconstruction for `sec_origin`, `n`,
     // `bias_eps`, `obj_id`. `.rgb` = incident radiance along R
     // (SUBSTITUTES the raster's prefiltered-env fetch in fs_pbr — RD1);
     // `.a` = hit distance for R2's virtual-hit-point reprojection (RD6),
@@ -2558,6 +2743,7 @@ kernel void trace_shadow_rays(
     // caster direction): the t_min rejection below is what protects the
     // reflection ray from self-intersection, same as the shadow ray's.
     const float RT_REFL_MISS_HIT_DIST = 0.0;
+    if (do_reflection) {
     if (p.refl_spp > 0u && obj_id >= 0.0) {
         uint roi = uint(obj_id);
         float4 mr = gi_materials[roi].metallic_roughness;
@@ -2722,6 +2908,9 @@ kernel void trace_shadow_rays(
         // depth where the RT primary ray alpha-tests the triangle away).
         out_refl.write(float4(0, 0, 0, -1.0), tid);
     }
+    } else if (clears_reflection) {
+        out_refl.write(float4(0, 0, 0, -1.0), tid);
+    }
 
     // RT-P2/D3, ED2 (RAYTRACING_DESIGN.md section 14.2): demodulated
     // irradiance — `.rgb` = the env+GI gather, `.a` = ao. NO flat-ambient
@@ -2733,7 +2922,7 @@ kernel void trace_shadow_rays(
     // albedo multiply here either (that happens once, downstream — D3's
     // "accumulate lighting separated from albedo").
     // RT-A3a: gate irradiance write on lighting terms so mask-only dispatch leaves texture untouched.
-    if (p.ao_spp > 0u || p.gi_spp > 0u) {
+    if (do_diffuse && (p.ao_spp > 0u || p.gi_spp > 0u)) {
         out_irr.write(float4(gi, ao), tid);
     }
 }
@@ -4273,6 +4462,26 @@ static void rti_write_descriptor(
     out->acceleration_structure_index = asi;
 }
 
+static void rti_write_disabled_descriptor(
+    device RtAsInstanceDescriptor* out,
+    uint asi
+) {
+    rti_write_descriptor(
+        out, asi, 0u,
+        float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0),
+        float3(0.0, 0.0, 1.0), float3(0.0, 0.0, 0.0)
+    );
+}
+
+static bool rti_finite4(float4 v) {
+    return rt_finite(v.x) && rt_finite(v.y) && rt_finite(v.z) && rt_finite(v.w);
+}
+
+static bool rti_finite_model(float4x4 m) {
+    return rti_finite4(m[0]) && rti_finite4(m[1]) &&
+        rti_finite4(m[2]) && rti_finite4(m[3]);
+}
+
 kernel void build_instance_descriptors(
     device RtAsInstanceDescriptor* descriptors [[buffer(0)]],
     constant RtInstanceBuildObj*   objs        [[buffer(1)]],
@@ -4287,6 +4496,11 @@ kernel void build_instance_descriptors(
     // (negative determinant) intersect identically. The P2 mirror proof is
     // the arbiter per the design's VERIFY-AT-IMPL note.
     uint mask = RT_MASK_VISIBLE | (o.cast_shadows ? RT_MASK_SHADOW_CASTER : 0u);
+    if (!rti_finite_model(o.model)) {
+        // A malformed object transform must not reach TLAS construction.
+        rti_write_disabled_descriptor(out, tid.y);
+        return;
+    }
     if (o.instances_addr == 0ul) {
         // D7: unwired object — one slot at the object's MODEL transform (an
         // identity INSTANCE: world = model·I = model, exactly where the
@@ -4301,11 +4515,12 @@ kernel void build_instance_descriptors(
         (o.instances_addr + (ulong)tid.x * (ulong)sizeof(RtInstanceTransform));
     if (inst->pos_scale.w == 0.0) {
         // D2: dead slot — identity + mask 0, never intersected.
-        rti_write_descriptor(
-            out, tid.y, 0u,
-            float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0),
-            float3(0.0, 0.0, 1.0), float3(0.0, 0.0, 0.0)
-        );
+        rti_write_disabled_descriptor(out, tid.y);
+        return;
+    }
+    if (!rti_finite4(inst->pos_scale) || !rti_finite4(inst->rot_pad)) {
+        // GPU-authored instance data is untrusted at the Metal API boundary.
+        rti_write_disabled_descriptor(out, tid.y);
         return;
     }
     // D4: A = euler_xyz(rot)·diag(msign·scale), t = pos — the raster's
@@ -4330,6 +4545,11 @@ kernel void build_instance_descriptors(
     float3x3 m3 = float3x3(o.model[0].xyz, o.model[1].xyz, o.model[2].xyz);
     float3x3 w = m3 * a;
     float3 t = m3 * inst->pos_scale.xyz + o.model[3].xyz;
+    if (!rt_diag_finite3(w[0]) || !rt_diag_finite3(w[1]) ||
+        !rt_diag_finite3(w[2]) || !rt_diag_finite3(t)) {
+        rti_write_disabled_descriptor(out, tid.y);
+        return;
+    }
     out->t0 = packed_float3(w[0]);
     out->t1 = packed_float3(w[1]);
     out->t2 = packed_float3(w[2]);
@@ -4402,9 +4622,9 @@ struct RtTraceDiagnostics {
 /// `[f32; 3]` here, no padding).
 ///
 /// RAYTRACING_DESIGN.md section 5.2 P2 extended this in place (same struct, same
-/// binding(1) slot, same single half-res dispatch — D11/D16's "P2 joins
-/// the SAME half-res dispatch and SAME upsample" seam, not a parallel
-/// pass): `ao_radius`/`ao_spp` drive the added AO-ray gather. ED2 (section
+/// binding(1) slot, shared trace resolution and upsample). The compiled
+/// shadow/diffuse/reflection specializations receive this same struct without
+/// changing its sample counts; `ao_radius`/`ao_spp` drive the diffuse gather. ED2 (section
 /// 14.2) DELETED `ambient_color`: the flat ambient term no longer enters
 /// the kernel — the gather's output is `rgb = env+GI, a = ao`, and the flat
 /// ambient is recomposed consumer-side in `render_scene.wgsl`'s
@@ -4770,6 +4990,14 @@ pub fn build_emissive_table(
     objects: &[RtObjectGeometry],
     gi_materials: &[GiMaterial],
 ) -> Option<EmissiveLightTable> {
+    if gi_materials.is_empty() {
+        return None;
+    }
+    assert_eq!(
+        objects.len(),
+        gi_materials.len(),
+        "RT emissive table requires one material row per RT object"
+    );
     // D8: same mode rule as `build_accel` (any WIRED object, P1.5: a wired
     // 1-capacity buffer is GPU-path too) — the table's slot set must equal
     // the accel's slot set exactly, or entries would name descriptors that
@@ -4799,12 +5027,10 @@ pub fn build_emissive_table(
 
     for (oi, obj) in objects.iter().enumerate() {
         let obj_slots = effective_instance_slots(obj);
-        if oi >= gi_materials.len() {
-            break;
-        }
-        let emissive_luma = luma(gi_materials[oi].emissive);
+        let material = &gi_materials[oi];
+        let reserved_base = reserve_emissive_slot_range(&mut slot_base, obj_slots);
+        let emissive_luma = luma(material.emissive);
         if emissive_luma <= 0.0 {
-            slot_base += obj_slots;
             continue;
         }
         let Some(ptr) = obj.vertex_buffer.mapped_ptr() else {
@@ -4875,12 +5101,11 @@ pub fn build_emissive_table(
                     uv1,
                     uv2,
                     obj_index: oi as u32,
-                    desc_index: slot_base + s,
+                    desc_index: reserved_base + s,
                     power,
                 });
             }
         }
-        slot_base += obj_slots;
     }
 
     if candidates.is_empty() {
@@ -5330,6 +5555,14 @@ fn effective_instance_slots(obj: &RtObjectGeometry) -> u32 {
     } else {
         1
     }
+}
+
+fn reserve_emissive_slot_range(slot_base: &mut u32, slots: u32) -> u32 {
+    let reserved = *slot_base;
+    *slot_base = slot_base
+        .checked_add(slots)
+        .expect("RT emissive slot count overflow");
+    reserved
 }
 
 /// CPU-side rewrite of the instanced descriptor-build params from the
@@ -5940,6 +6173,19 @@ fn compile_pipeline_with_constants(
         .raw_device()
         .newComputePipelineStateWithFunction_error(&func)
         .unwrap_or_else(|e| panic!("{entry}: compute PSO error: {}", e.localizedDescription()));
+    let max_threads = state.maxTotalThreadsPerThreadgroup();
+    let execution_width = state.threadExecutionWidth();
+    let static_memory = state.staticThreadgroupMemoryLength();
+    let workgroup_product = SHADOW_WORKGROUP[0] as usize
+        * SHADOW_WORKGROUP[1] as usize
+        * SHADOW_WORKGROUP[2] as usize;
+    log::info!(
+        "RT pipeline {entry}: workgroup={SHADOW_WORKGROUP:?} threads={workgroup_product} max_threads={max_threads} execution_width={execution_width} static_threadgroup_memory={static_memory}"
+    );
+    assert!(
+        workgroup_product <= max_threads,
+        "RT pipeline {entry} workgroup {SHADOW_WORKGROUP:?} ({workgroup_product} threads) exceeds device limit {max_threads}"
+    );
     GpuComputePipeline {
         state,
         slot_map,
@@ -5990,12 +6236,11 @@ pub trait ShadowRayTracer {
     /// idiom). A topology change calls `build_accel` again instead.
     /// RS-B: also refits the emissive light table's world-space positions
     /// when the accel carries one.
-    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]);
+    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) -> Result<(), RtTopologyMismatch>;
 
-    /// Dispatch the half-res shadow/AO-ray pass (RT-D3; RT-P2 widens this
-    /// SAME dispatch to add the AO gather + demodulated-irradiance term —
-    /// D16's seam note, not a parallel pass; RT-P3 widens it again with the
-    /// emissive/sun-bounce GI gather, reading `gi_materials` — one entry
+    /// Dispatch the enabled shadow, diffuse and reflection specializations
+    /// at `params.trace_size`, within the shared spatial/command-buffer plan.
+    /// Diffuse includes AO and emissive/sun-bounce GI, reading `gi_materials` — one entry
     /// per object, SAME order as the `objects` slice `build_accel` was
     /// called with, so `instance_id` at a GI ray hit indexes it directly):
     /// ray origins + bias normal reconstructed in-kernel from `depth_tex`
@@ -6245,17 +6490,48 @@ struct TraceDiagnosticPool {
     disabled: GpuBuffer,
 }
 
+const TRACE_TRANSLUCENCY_CONSTANT_INDEX: usize = 100;
+const TRACE_PASS_CONSTANT_INDEX: usize = 101;
+const TRACE_ROLE_BYTES: [[u8; 4]; 3] = [0u32.to_ne_bytes(), 1u32.to_ne_bytes(), 2u32.to_ne_bytes()];
+
+/// Values and array order mirror the MSL TRACE_* constants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+enum TracePass {
+    Shadow = 0,
+    Diffuse = 1,
+    Reflection = 2,
+}
+
+impl TracePass {
+    const ALL: [Self; 3] = [Self::Shadow, Self::Diffuse, Self::Reflection];
+
+    fn enabled(self, params: &ShadowRayParams) -> bool {
+        match self {
+            Self::Shadow => params.shadow_spp > 0,
+            Self::Diffuse => params.ao_spp > 0 || params.gi_spp > 0,
+            Self::Reflection => params.refl_spp > 0,
+        }
+    }
+
+    fn pipeline_label(self, translucent: bool) -> &'static str {
+        match (self, translucent) {
+            (Self::Shadow, false) => "RT shadow binary",
+            (Self::Shadow, true) => "RT shadow translucent",
+            (Self::Diffuse, false) => "RT AO+GI binary",
+            (Self::Diffuse, true) => "RT AO+GI translucent",
+            (Self::Reflection, false) => "RT reflection binary",
+            (Self::Reflection, true) => "RT reflection translucent",
+        }
+    }
+}
+
 pub struct MetalShadowRayTracer {
     /// Fixed slots retain their first incident; callbacks hold the pool alive.
     rt_diagnostics: Arc<TraceDiagnosticPool>,
-    /// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): trace pipeline
-    /// for translucent scenes — `HAS_TRANSLUCENCY` baked to true (walk_with_transmission
-    /// in sv caster loop + sun_bounce_at_hit).
-    trace_pipeline_translucent: GpuComputePipeline,
-    /// RT-TL-B cost recovery (section 16.4): trace pipeline for binary (no-translucency)
-    /// scenes — `HAS_TRANSLUCENCY` baked to false (walk_with_alpha_test, pre-TL-B
-    /// codegen byte-for-byte in the sv caster loop).
-    trace_pipeline_binary: GpuComputePipeline,
+    /// [TracePass][HAS_TRANSLUCENCY], specialized once in the device cache.
+    trace_pipelines: [[GpuComputePipeline; 2]; 3],
+    fused_invocation: bool,
     upsample_pipeline: GpuComputePipeline,
     /// RT-T1-D (BUG-312): the dilated edge-aware à-trous filter pipeline.
     atrous_pipeline: GpuComputePipeline,
@@ -6290,14 +6566,14 @@ pub struct MetalShadowRayTracer {
 }
 
 /// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
-/// one MSL library + seven PSOs, compiled once per process behind
+/// one MSL library and its PSOs, compiled once per process behind
 /// [`GpuDevice::rt_pipelines`] (OnceLock; the MSL source is a per-build
 /// constant, so the OnceLock IS the source-hash cache). Tracer instances
 /// own data (accels, buffers, textures), never code.
 #[derive(Clone)]
 pub struct RtPipelines {
-    pub trace_pipeline_binary: GpuComputePipeline,
-    pub trace_pipeline_translucent: GpuComputePipeline,
+    pub trace_pipelines: [[GpuComputePipeline; 2]; 3],
+    pub fused_invocation: bool,
     pub upsample_pipeline: GpuComputePipeline,
     pub atrous_pipeline: GpuComputePipeline,
     pub accumulate_pipeline: GpuComputePipeline,
@@ -6315,6 +6591,20 @@ pub struct RtPipelines {
 
 impl RtPipelines {
     pub(crate) fn compile(device: &GpuDevice) -> Self {
+        let compile_mode = std::env::var("MANIFOLD_RT_COMPILE_MODE").unwrap_or_else(|_| "specialized".into());
+        let runtime_role = match compile_mode.as_str() {
+            "specialized" => false,
+            "runtime-role" => true,
+            "fused-invocation" => false,
+            other => panic!("invalid MANIFOLD_RT_COMPILE_MODE={other:?}; expected specialized, runtime-role, or fused-invocation"),
+        };
+        let fused_invocation = compile_mode == "fused-invocation";
+        if runtime_role || fused_invocation {
+            for key in ["MANIFOLD_RT_DIAGNOSTIC_TERM", "MANIFOLD_RT_DIAGNOSTIC_SEQUENCE_FRAME", "MANIFOLD_RT_DIAGNOSTIC_SUBTILE"] {
+                assert!(std::env::var_os(key).is_none(), "MANIFOLD_RT_COMPILE_MODE=runtime-role cannot combine with {key}");
+            }
+        }
+        log::info!("[RT] compile mode={compile_mode}");
         // One MSL library compile per populate (the PSO compiles record
         // themselves inside compile_pipeline_with_constants).
         record_cold_touch(ColdTouchKind::PipelineCompile);
@@ -6370,52 +6660,45 @@ impl RtPipelines {
         trace_slots.push((6 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         // RT-TL-C: out_svt, MSL [[texture(71)]].
         trace_slots.push((7 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
-        // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): two PSO
-        // variants of the same kernel, selected at dispatch time by
-        // ShadowRayParams.has_translucency. Binary scenes get the pre-TL-B
-        // codegen (walk_with_alpha_test in sv caster loop + sun_bounce_at_hit);
-        // translucent scenes get walk_with_transmission. The function constant
-        // is baked at PSO compile time — dead-code elimination means a binary
-        // scene never pays for translucency code.
+        trace_slots.push((9, SlotKind::Buffer));
+        // Each pass has an independent function-constant specialization.
+        // Requested SPP remain runtime quality, never the pass selector.
         let trace_slot_map = identity_slot_map(&trace_slots);
-        let binary_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let val: u8 = 0; // false
-            unsafe {
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&val).cast(),
-                    MTLDataType::Bool,
-                    100,
-                )
-            };
-            cv
-        };
-        let translucent_constants = {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let val: u8 = 1; // true
-            unsafe {
-                cv.setConstantValue_type_atIndex(
-                    core::ptr::NonNull::from(&val).cast(),
-                    MTLDataType::Bool,
-                    100,
-                )
-            };
-            cv
-        };
-        let trace_pipeline_binary = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            trace_slot_map.clone(),
-            Some(&binary_constants),
-        );
-        let trace_pipeline_translucent = compile_pipeline_with_constants(
-            device,
-            &library,
-            "trace_shadow_rays",
-            trace_slot_map,
-            Some(&translucent_constants),
-        );
+        let trace_pipelines = TracePass::ALL.map(|pass| {
+            [false, true].map(|has_translucency| {
+                let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
+                let translucent = u8::from(has_translucency);
+                let pass_value = if runtime_role { 3 } else if fused_invocation { 4 } else { pass as u32 };
+                unsafe {
+                    cv.setConstantValue_type_atIndex(
+                        core::ptr::NonNull::from(&translucent).cast(),
+                        MTLDataType::Bool,
+                        TRACE_TRANSLUCENCY_CONSTANT_INDEX,
+                    );
+                    cv.setConstantValue_type_atIndex(
+                        core::ptr::NonNull::from(&pass_value).cast(),
+                        MTLDataType::UInt,
+                        TRACE_PASS_CONSTANT_INDEX,
+                    );
+                }
+                let mut pipeline = compile_pipeline_with_constants(
+                    device,
+                    &library,
+                    "trace_shadow_rays",
+                    trace_slot_map.clone(),
+                    Some(&cv),
+                );
+                pipeline.label = format!("{} [{}]", pass.pipeline_label(has_translucency), compile_mode);
+                log::info!(
+                    "[RT] compiled {} TRACE_PASS={} HAS_TRANSLUCENCY={} max_threads={} execution_width={} static_threadgroup_bytes={}",
+                    pipeline.label, pass_value, has_translucency,
+                    pipeline.state.maxTotalThreadsPerThreadgroup(),
+                    pipeline.state.threadExecutionWidth(),
+                    pipeline.state.staticThreadgroupMemoryLength(),
+                );
+                pipeline
+            })
+        });
         let upsample_pipeline = compile_pipeline(
             device,
             &library,
@@ -6623,8 +6906,8 @@ impl RtPipelines {
         );
 
         Self {
-            trace_pipeline_binary,
-            trace_pipeline_translucent,
+            trace_pipelines,
+            fused_invocation,
             upsample_pipeline,
             atrous_pipeline,
             accumulate_pipeline,
@@ -6672,8 +6955,8 @@ impl MetalShadowRayTracer {
         });
 
         Self {
-            trace_pipeline_translucent: p.trace_pipeline_translucent.clone(),
-            trace_pipeline_binary: p.trace_pipeline_binary.clone(),
+            trace_pipelines: p.trace_pipelines.clone(),
+            fused_invocation: p.fused_invocation,
             upsample_pipeline: p.upsample_pipeline.clone(),
             atrous_pipeline: p.atrous_pipeline.clone(),
             accumulate_pipeline: p.accumulate_pipeline.clone(),
@@ -7063,12 +7346,13 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         build_accel(device, objects, gi_materials)
     }
 
-    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) {
-        refit_accel(device, accel, objects);
+    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) -> Result<(), RtTopologyMismatch> {
+        refit_accel(device, accel, objects)?;
         // RS-B: refit the emissive light table's world-space positions.
         if let Some(ref table) = accel.emissive_table {
             refit_emissive_table(table, objects);
         }
+        Ok(())
     }
 
     fn dispatch_shadow_rays(
@@ -7167,6 +7451,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 buffer: params_buffer,
                 offset: 0,
             },
+            GpuBinding::Bytes { binding: 9, data: &[0u8; 4] },
             GpuBinding::Buffer {
                 binding: 2,
                 buffer: gi_materials,
@@ -7214,6 +7499,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 texture: out_n,
             },
         ];
+        let runtime_role_binding_index = 1usize;
         // RT-T2-A / Raster-parity reflections: fill all MAX_RT_MATERIAL_TEXTURES
         // argument-table slots — real textures first (caller-supplied order matches
         // `RtNormalSource::alpha_tex_index`/`base_color_tex_index`), the 1x1 dummy
@@ -7277,7 +7563,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         )
         .expect("validated RT trace dimensions must produce a tile plan")
         .peekable();
-        while let Some(region) = regions.next() {
+        while let Some(parent_region) = regions.next() {
             if diagnostic_sequence {
                 for (term, probe_params) in [
                     DiagnosticTraceTerm::Ao,
@@ -7300,19 +7586,20 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                         data: bytemuck_bytes(probe_params),
                     };
                     let probe_label = format!(
-                        "{label} probe={term:?} tile origin={},{} extent={}x{}",
-                        region.origin[0], region.origin[1], region.extent[0], region.extent[1],
-                    );
+                            "{label} probe={term:?} tile origin={},{} extent={}x{}",
+                            parent_region.origin[0], parent_region.origin[1], parent_region.extent[0], parent_region.extent[1],
+                        );
+                    bindings[runtime_role_binding_index] = GpuBinding::Bytes { binding: 9, data: &TRACE_ROLE_BYTES[term.pass() as usize] };
                     encoder.dispatch_compute_with_accel(
-                        if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
-                        0,
-                        accel,
-                        &bindings,
-                        Some((8, trace_region_bytes(&region))),
-                        dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
+                            &self.trace_pipelines[term.pass() as usize][usize::from(has_translucency)],
+                            0,
+                            accel,
+                            &bindings,
+                            Some((8, trace_region_bytes(&parent_region))),
+                            dispatch_groups_2d(parent_region.extent, SHADOW_WORKGROUP),
                         &probe_label,
                     );
-                    let completion_label = probe_label.clone();
+                    let completion_label = probe_label;
                     encoder.add_gpu_time_handler(move |gpu_seconds| {
                         log::warn!(
                             "[RT-DIAG] completed {completion_label} gpu_ms={:.3}",
@@ -7327,21 +7614,43 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     offset: 0,
                 };
             }
-            let diagnostic_label = super::gpu_fault::diagnostics_enabled().then(|| {
-                format!(
-                    "{label} tile origin={},{} extent={}x{}",
-                    region.origin[0], region.origin[1], region.extent[0], region.extent[1],
-                )
-            });
-            encoder.dispatch_compute_with_accel(
-                if has_translucency { &self.trace_pipeline_translucent } else { &self.trace_pipeline_binary },
-                0,
-                accel,
-                &bindings,
-                Some((8, trace_region_bytes(&region))),
-                dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
-                diagnostic_label.as_deref().unwrap_or(label),
-            );
+            if self.fused_invocation {
+                let pipeline = &self.trace_pipelines[0][usize::from(has_translucency)];
+                bindings[runtime_role_binding_index] = GpuBinding::Bytes { binding: 9, data: &TRACE_ROLE_BYTES[0] };
+                encoder.dispatch_compute_with_accel(
+                    pipeline,
+                    0,
+                    accel,
+                    &bindings,
+                    Some((8, trace_region_bytes(&parent_region))),
+                    dispatch_groups_2d(parent_region.extent, SHADOW_WORKGROUP),
+                    &pipeline.label,
+                );
+            } else {
+            for pass in TracePass::ALL {
+                if !pass.enabled(params) {
+                    continue;
+                }
+                let pipeline = &self.trace_pipelines[pass as usize][usize::from(has_translucency)];
+                bindings[runtime_role_binding_index] = GpuBinding::Bytes { binding: 9, data: &TRACE_ROLE_BYTES[pass as usize] };
+                let diagnostic_label = super::gpu_fault::diagnostics_enabled().then(|| {
+                    format!(
+                        "{label} {} tile origin={},{} extent={}x{}",
+                        pipeline.label,
+                        parent_region.origin[0], parent_region.origin[1], parent_region.extent[0], parent_region.extent[1],
+                    )
+                });
+                encoder.dispatch_compute_with_accel(
+                    pipeline,
+                    0,
+                    accel,
+                    &bindings,
+                    Some((8, trace_region_bytes(&parent_region))),
+                    dispatch_groups_2d(parent_region.extent, SHADOW_WORKGROUP),
+                    diagnostic_label.as_deref().unwrap_or(&pipeline.label),
+                );
+            }
+            }
             if regions.peek().is_some() {
                 encoder.commit_and_continue(device);
             }
@@ -7920,6 +8229,13 @@ enum DiagnosticTraceTerm {
 }
 
 impl DiagnosticTraceTerm {
+    fn pass(self) -> TracePass {
+        match self {
+            Self::Ao | Self::Gi => TracePass::Diffuse,
+            Self::Reflection => TracePass::Reflection,
+        }
+    }
+
     fn sample_count(self, params: &ShadowRayParams) -> u32 {
         match self {
             Self::Ao => params.ao_spp,
@@ -7930,7 +8246,7 @@ impl DiagnosticTraceTerm {
 }
 
 /// One-run incident probe: execute each active lighting term separately for
-/// every tile of exactly one frame, then execute the unchanged fused tile.
+/// every tile of exactly one frame, then execute its production specializations.
 /// Completion timings are WARN-level so the session log retains them even when
 /// the app's normal info logging is filtered.
 fn diagnostic_trace_sequence_enabled(params: &ShadowRayParams) -> bool {
@@ -7956,14 +8272,15 @@ fn diagnostic_trace_sequence_enabled(params: &ShadowRayParams) -> bool {
         "MANIFOLD_RT_DIAGNOSTIC_SEQUENCE_FRAME and MANIFOLD_RT_DIAGNOSTIC_TERM are mutually exclusive"
     );
     log::warn!(
-        "[RT-DIAG] frame={frame} term sequence enabled; AO, GI, and reflection probes run before each unchanged fused tile"
+        "[RT-DIAG] frame={frame} term sequence enabled; specialized AO, GI, and reflection probes run before each production tile"
     );
     true
 }
 
 /// Incident-only term isolation. `FRAME:TERM` keeps the full export history,
 /// scene state, dimensions, frame index, and selected term's requested sample
-/// count, but disables the other fused terms for exactly one lighting frame.
+/// count, but disables other terms for exactly one lighting frame. Dispatch
+/// still selects the corresponding compiled specialization.
 fn diagnostic_trace_params(mut params: ShadowRayParams) -> ShadowRayParams {
     if !super::gpu_fault::diagnostics_enabled()
         || (params.ao_spp == 0 && params.gi_spp == 0 && params.refl_spp == 0)
@@ -7994,7 +8311,7 @@ fn diagnostic_trace_params(mut params: ShadowRayParams) -> ShadowRayParams {
     );
     params = isolate_trace_term(params, term);
     log::warn!(
-        "[RT-DIAG] frame={frame} isolated term={term:?} requested_spp={requested_spp}; other fused terms disabled for this frame"
+        "[RT-DIAG] frame={frame} isolated term={term:?} requested_spp={requested_spp}; other terms disabled for this frame"
     );
     params
 }
@@ -8130,10 +8447,37 @@ impl UploadBytes for GpuBuffer {
 mod tests {
     use super::blas_geometry_opaque;
     use super::{
-        DiagnosticTraceTerm, GpuDevice, MetalShadowRayTracer, SVT_SLOT_NONE, ShadowRayParams,
-        isolate_trace_term, parse_diagnostic_trace_term,
+        DiagnosticTraceTerm, GpuDevice, MetalShadowRayTracer, SHADOW_RAYS_MSL, SVT_SLOT_NONE,
+        ShadowRayParams, finite_instance_transform, isolate_trace_term,
+        parse_diagnostic_trace_term, reserve_emissive_slot_range, TracePass,
+        TRACE_PASS_CONSTANT_INDEX, TRACE_TRANSLUCENCY_CONSTANT_INDEX,
+        RtGeometryTopology, RtTopologyMismatchCategory, check_topology_records,
     };
     use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
+
+    fn topo(id: usize, slots: u32) -> RtGeometryTopology {
+        RtGeometryTopology { vertex: id, vertex_offset: 4, vertex_stride: 32, triangle_count: 3, index: Some(id + 100), normal_offset: 12, uv_offset: 24, instance_slots: slots, wired: false, alpha_mask: false }
+    }
+
+    #[test]
+    fn topology_records_reject_structural_changes() {
+        let resident = [topo(1, 1), topo(2, 3)];
+        assert!(check_topology_records(&resident, false, 4, resident.into_iter()).is_ok());
+        assert!(check_topology_records(&resident, false, 4, [topo(2, 3), topo(1, 1)].into_iter()).is_err());
+        assert!(check_topology_records(&resident, false, 4, [topo(1, 2), topo(2, 2)].into_iter()).is_err());
+        assert!(check_topology_records(&resident, false, 4, [topo(9, 1), topo(2, 3)].into_iter()).is_err());
+        assert!(check_topology_records(&resident, false, 4, [RtGeometryTopology { alpha_mask: true, ..topo(1, 1) }, topo(2, 3)].into_iter()).is_err());
+        assert!(check_topology_records(&resident, false, 4, [RtGeometryTopology { index: None, ..topo(1, 1) }, topo(2, 3)].into_iter()).is_err());
+        assert!(check_topology_records(&resident, true, 4, resident.into_iter()).is_err());
+        let mixed = [RtGeometryTopology { wired: true, instance_slots: 2, ..topo(1, 2) }, topo(2, 1)];
+        assert!(check_topology_records(&mixed, true, 3, mixed.into_iter()).is_ok());
+        assert!(check_topology_records(&mixed, false, 3, mixed.into_iter()).is_err());
+        assert!(check_topology_records(&mixed, true, 3, [RtGeometryTopology { wired: false, ..mixed[0] }, RtGeometryTopology { wired: true, ..mixed[1] }].into_iter()).is_err());
+        let unwired = [topo(1, 1), topo(2, 1)];
+        assert!(check_topology_records(&unwired, false, 2, unwired.into_iter()).is_ok());
+        assert!(check_topology_records(&[topo(1, u32::MAX)], false, u32::MAX, [topo(1, u32::MAX), topo(2, 1)].into_iter()).is_err());
+        let _ = RtTopologyMismatchCategory::Vertex;
+    }
 
     fn diagnostic_params_fixture() -> ShadowRayParams {
         ShadowRayParams::new(
@@ -8155,6 +8499,127 @@ mod tests {
             0.0,
             SVT_SLOT_NONE,
         )
+    }
+
+    #[test]
+    fn trace_specialization_selects_requested_terms_without_mutating_params() {
+        for enabled in 0u32..16 {
+            let mut params = diagnostic_params_fixture();
+            params.shadow_spp = if enabled & 1 != 0 { 8 } else { 0 };
+            params.ao_spp = if enabled & 2 != 0 { 16 } else { 0 };
+            params.gi_spp = if enabled & 4 != 0 { 16 } else { 0 };
+            params.refl_spp = if enabled & 8 != 0 { 32 } else { 0 };
+            let before = super::bytemuck_bytes(&params).to_vec();
+            let passes: Vec<_> = TracePass::ALL.into_iter()
+                .filter(|pass| pass.enabled(&params)).collect();
+            let expected: Vec<_> = [
+                (enabled & 1 != 0).then_some(TracePass::Shadow),
+                (enabled & 6 != 0).then_some(TracePass::Diffuse),
+                (enabled & 8 != 0).then_some(TracePass::Reflection),
+            ].into_iter().flatten().collect();
+            assert_eq!(passes, expected, "enabled mask {enabled}");
+            assert_eq!(super::bytemuck_bytes(&params), before);
+        }
+    }
+
+    #[test]
+    fn trace_specialization_has_six_distinct_variant_keys() {
+        assert_eq!(TRACE_TRANSLUCENCY_CONSTANT_INDEX, 100);
+        assert_eq!(TRACE_PASS_CONSTANT_INDEX, 101);
+        assert!(SHADOW_RAYS_MSL.contains("constant bool HAS_TRANSLUCENCY [[function_constant(100)]];"));
+        assert!(SHADOW_RAYS_MSL.contains("constant uint TRACE_PASS [[function_constant(101)]];"));
+        let mut labels = std::collections::HashSet::new();
+        for (index, pass) in TracePass::ALL.into_iter().enumerate() {
+            assert_eq!(pass as usize, index);
+            for translucent in [false, true] {
+                assert!(labels.insert(pass.pipeline_label(translucent)));
+            }
+        }
+        assert_eq!(labels.len(), 6);
+        for declaration in [
+            "constant uint TRACE_SHADOW = 0u;",
+            "constant uint TRACE_DIFFUSE = 1u;",
+            "constant uint TRACE_REFLECTION = 2u;",
+        ] {
+            assert!(SHADOW_RAYS_MSL.contains(declaration));
+        }
+        assert_eq!(DiagnosticTraceTerm::Ao.pass(), TracePass::Diffuse);
+        assert_eq!(DiagnosticTraceTerm::Gi.pass(), TracePass::Diffuse);
+        assert_eq!(DiagnosticTraceTerm::Reflection.pass(), TracePass::Reflection);
+    }
+
+    // Source-contract checks only: these inspect gate placement, not Metal
+    // machine code, numeric output parity, or successful GPU execution.
+    fn msl_braced_block<'a>(source: &'a str, marker: &str) -> &'a str {
+        let tail = source.split_once(marker).expect(marker).1;
+        let start = tail.find('{').expect("opening brace");
+        let mut depth = 0;
+        for (index, byte) in tail.bytes().enumerate().skip(start) {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &tail[start + 1..index];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unclosed MSL block {marker}")
+    }
+
+    #[test]
+    fn trace_specialization_source_gates_queries_and_output_owners() {
+        let kernel = msl_braced_block(SHADOW_RAYS_MSL, "kernel void trace_shadow_rays(");
+        let void = msl_braced_block(kernel, "if (!valid)");
+        assert!(msl_braced_block(void, "if (do_shadow")
+            .contains("out_svt.write(float4(1, 1, 1, 1), tid);"));
+        assert!(msl_braced_block(void, "if (do_diffuse")
+            .contains("out_irr.write(float4(0, 0, 0, 1.0), tid);"));
+        assert!(msl_braced_block(void, "if (owns_normal)")
+            .contains("out_n.write(float4(0, 1, 0, -1.0), tid);"));
+        assert!(msl_braced_block(void, "if (do_reflection || clears_reflection)")
+            .contains("out_refl.write(float4(0, 0, 0, -1.0), tid);"));
+        assert!(kernel.contains("bool owns_normal = fused_lighting ||"));
+        assert!(kernel.contains("bool clears_reflection = !fused && active_pass == TRACE_DIFFUSE && p.refl_spp == 0u;"));
+        let primary = msl_braced_block(kernel, "if (primary_needed)");
+        assert!(primary.contains("primary_q.reset(pr, accel, RT_MASK_VISIBLE)"));
+        // Skip the void branch so the shadow marker identifies its ray loop.
+        let ordinary = kernel.split_once("return;\n    }\n    // Neighbor world positions").unwrap().1;
+        let shadow = msl_braced_block(ordinary, "if (do_shadow");
+        assert!(shadow.contains("intersection_query<triangle_data, instancing> shadow_q;"));
+        let ao = msl_braced_block(ordinary, "if (do_diffuse && p.ao_spp > 0)");
+        assert!(ao.contains("ao_q.reset(ao_r, accel, RT_MASK_VISIBLE)"));
+        let gi = msl_braced_block(ordinary, "if (do_diffuse && p.gi_spp > 0)");
+        assert!(gi.contains("gi_q.reset(gr, accel, RT_MASK_VISIBLE)"));
+        assert!(gi.contains("intersection_query<triangle_data, instancing> em_q;"));
+        let reflection = msl_braced_block(ordinary, "if (do_reflection)");
+        assert!(reflection.contains("float3 rsamples[MAX_RT_REFL_SPP];"));
+        assert!(reflection.contains("median_luma(rsamples, rspp)"));
+        assert!(reflection.contains("refl_q.reset(rr, accel, RT_MASK_VISIBLE)"));
+        assert!(reflection.contains("out_refl.write(float4(0, 0, 0, -1.0), tid);"));
+        for forbidden in ["out_irr.write", "out_n.write", "out_sv.write"] {
+            assert!(!reflection.contains(forbidden));
+        }
+        assert_eq!(kernel.matches("if (owns_normal)").count(), 2);
+        assert_eq!(kernel.matches("if (do_diffuse && (p.ao_spp > 0u || p.gi_spp > 0u))").count(), 2);
+        assert!(msl_braced_block(ordinary, "else if (clears_reflection)")
+            .contains("out_refl.write(float4(0, 0, 0, -1.0), tid);"));
+    }
+
+    #[test]
+    fn fused_invocation_source_contract_and_mode_are_present() {
+        assert!(SHADOW_RAYS_MSL.contains("constant uint TRACE_REFLECTION = 2u;"));
+        assert!(SHADOW_RAYS_MSL.contains("bool fused = active_pass == 4u;"));
+        assert!(SHADOW_RAYS_MSL.contains("bool do_shadow = fused || active_pass == TRACE_SHADOW;"));
+        assert!(SHADOW_RAYS_MSL.contains("bool do_diffuse = fused || active_pass == TRACE_DIFFUSE;"));
+        assert!(SHADOW_RAYS_MSL.contains("bool do_reflection = fused || active_pass == TRACE_REFLECTION;"));
+        assert!(SHADOW_RAYS_MSL.contains("bool fused_lighting = fused && (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u);"));
+        assert!(SHADOW_RAYS_MSL.contains("bool primary_needed = (!fused && !do_shadow) ||"));
+        assert!(SHADOW_RAYS_MSL.contains("bool clears_reflection = !fused"));
+        assert!(SHADOW_RAYS_MSL.contains("active_pass = TRACE_PASS == 3u ? runtime_pass : TRACE_PASS") || SHADOW_RAYS_MSL.contains("uint active_pass = TRACE_PASS == 3u ? runtime_pass : TRACE_PASS;"));
+        assert_eq!(TracePass::ALL.len(), 3);
     }
 
     #[test]
@@ -8201,6 +8666,43 @@ mod tests {
         assert_eq!(reflection.frame_index, original.frame_index);
         assert_eq!(reflection.trace_size, original.trace_size);
         assert_eq!(reflection.gbuffer_size, original.gbuffer_size);
+    }
+
+    #[test]
+    fn tlas_transform_boundary_rejects_non_finite_components() {
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        assert!(finite_instance_transform(&identity));
+
+        let mut nan = identity;
+        nan[3][0] = f32::NAN;
+        assert!(!finite_instance_transform(&nan));
+
+        let mut infinite = identity;
+        infinite[1][2] = f32::INFINITY;
+        assert!(!finite_instance_transform(&infinite));
+    }
+
+    #[test]
+    fn tlas_gpu_descriptor_builder_disables_non_finite_transforms() {
+        assert!(SHADOW_RAYS_MSL.contains("if (!rti_finite_model(o.model))"));
+        assert!(SHADOW_RAYS_MSL.contains(
+            "if (!rti_finite4(inst->pos_scale) || !rti_finite4(inst->rot_pad))"
+        ));
+        assert!(SHADOW_RAYS_MSL.contains("rti_write_disabled_descriptor(out, tid.y);"));
+    }
+
+    #[test]
+    fn emissive_slot_ranges_reserve_before_material_filtering() {
+        let mut base = 0;
+        assert_eq!(reserve_emissive_slot_range(&mut base, 2), 0);
+        assert_eq!(reserve_emissive_slot_range(&mut base, 3), 2);
+        assert_eq!(base, 5);
+        assert_eq!(reserve_emissive_slot_range(&mut base, 0), 5);
     }
 
     /// Executes the production normal-frame helper under production MSL options.
@@ -8312,15 +8814,23 @@ mod tests {
         assert_eq!(result, [0.0,1.0,0.0,1.0]);
     }
 
-    /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks
-    /// translucency — the hardware fast path is kept only for objects the
-    /// kernel's candidate walks never need to see.
+    /// BLAS opacity is a geometry property. Translucency is selected by the
+    /// visibility ray's intersection parameters and must not pessimize every
+    /// geometry ray in the fused kernel.
     #[test]
-    fn blas_opacity_tracks_alpha_mask_and_translucency() {
-        assert!(blas_geometry_opaque(false, false));
-        assert!(!blas_geometry_opaque(true, false));
-        assert!(!blas_geometry_opaque(false, true));
-        assert!(!blas_geometry_opaque(true, true));
+    fn blas_opacity_tracks_alpha_mask_only() {
+        assert!(blas_geometry_opaque(false));
+        assert!(!blas_geometry_opaque(true));
+    }
+
+    #[test]
+    fn transmission_rays_override_blas_opacity_at_both_visibility_sites() {
+        assert_eq!(
+            SHADOW_RAYS_MSL
+                .matches("force_opacity(forced_opacity::non_opaque)")
+                .count(),
+            2,
+        );
     }
 
     /// COMPILE_CONTRACT_DESIGN INV2: code is device-global — a second tracer

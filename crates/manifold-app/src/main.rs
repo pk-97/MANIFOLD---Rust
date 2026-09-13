@@ -424,6 +424,31 @@ fn write_crash_log(
 /// A GPU-failed session cannot safely resume using its partially written resources.
 fn abort_gpu_work(reason: &str) -> ! {
     log::error!("[GPU] Aborting session: {reason}; exit_code=70");
+    // Completion handlers run on Metal-owned threads. The first innocent
+    // victim can wake export before the originating buffer's callback has
+    // logged; give already-submitted buffers a short, absolute deadline to
+    // contribute evidence, without submitting recovery work or retrying.
+    let pending = manifold_gpu::gpu_fault::drain_submitted_callbacks(
+        std::time::Duration::from_secs(2),
+    );
+    let originating = manifold_gpu::gpu_fault::originating_fault_count();
+    if pending == 0 {
+        log::error!(
+            "[GPU] Fatal callback drain complete; originating_faults={originating}"
+        );
+    } else {
+        log::error!(
+            "[GPU] Fatal callback drain reached deadline; pending_callbacks={pending}; \
+             originating_faults={originating}"
+        );
+    }
+    if originating == 0 {
+        log::error!(
+            "[GPU] No originating fault callback was observed; report contains recovery \
+             victims/queue rejections only"
+        );
+    }
+    session_log::flush();
     write_fatal_gpu_report(reason, 70);
     std::process::exit(70);
 }
@@ -442,6 +467,12 @@ fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
     );
     msg.push_str(&format!("diagnostic_mode={}\napp_version={}\narchitecture={}\n",
         manifold_gpu::gpu_fault::diagnostics_enabled(), env!("CARGO_PKG_VERSION"), std::env::consts::ARCH));
+    msg.push_str(&format!(
+        "gpu_faults={}\noriginating_gpu_faults={}\npending_gpu_callbacks={}\n",
+        manifold_gpu::gpu_fault::fault_count(),
+        manifold_gpu::gpu_fault::originating_fault_count(),
+        manifold_gpu::gpu_fault::pending_callback_count(),
+    ));
     msg.push_str("diagnostic_limitations=GPU timing may be unavailable on failed buffers; missing completion is not proof of a hang; shader counters may be incomplete after device failure; resource metadata does not prove lifetime or ordering safety; geometry hit-index bounds and driver-internal traversal are not fully instrumented.\n");
     msg.push_str("--- recent session evidence (bounded; full session path above) ---\n");
     msg.push_str(&session_log::crash_tail());

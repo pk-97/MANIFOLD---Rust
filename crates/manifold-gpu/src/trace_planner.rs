@@ -13,6 +13,7 @@ pub const DEFAULT_TRACE_WORK_LIMITS: TraceWorkLimits = TraceWorkLimits {
     max_pixels_per_tile: 1 << 18,
 };
 
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct TraceRegion {
@@ -96,6 +97,7 @@ pub struct TraceRegionIter {
     x: u32,
     y: u32,
 }
+
 
 /// Plan a row-major exact cover of the trace image without allocating.
 pub fn plan_trace_regions(
@@ -270,6 +272,7 @@ mod tests {
         assert_eq!(plan.tile_width, u32::MAX);
         assert_eq!(plan.tile_height, u32::MAX);
     }
+
 }
 
 impl Iterator for TraceRegionIter {

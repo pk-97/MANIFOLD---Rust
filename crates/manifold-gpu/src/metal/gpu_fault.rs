@@ -7,8 +7,10 @@
 //! timeouts with no signal distinguishable from a slow GPU unless it can
 //! ASK. `submissions_ignored` is that ask.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use objc2_foundation::NSError;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Emit Metal's encoder execution diagnostics attached to an NSError.
 pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
@@ -42,7 +44,10 @@ fn emit_diagnostic(args: std::fmt::Arguments<'_>) {
 }
 
 static FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
+static ORIGINATING_FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SUBMISSIONS_IGNORED: AtomicBool = AtomicBool::new(false);
+static PENDING_CALLBACKS: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_DRAIN: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
 
 /// True for the driver's queue-blacklist error description. The blacklist
 /// signature has no stable numeric code exposed to us, so match the
@@ -58,17 +63,83 @@ fn is_blacklist_desc(desc: &str) -> bool {
     desc.contains("for causing prior") || desc.contains("SubmissionsIgnored")
 }
 
+fn is_innocent_victim_desc(desc: &str) -> bool {
+    desc.contains("victim of GPU error/recovery") || desc.contains("InnocentVictim")
+}
+
+/// Register a command buffer whose completion callback can contribute fault
+/// evidence. Hosts use this count only while making an intentional fatal exit;
+/// it never blocks normal rendering.
+pub(crate) fn track_submission() {
+    PENDING_CALLBACKS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Mark a registered command-buffer callback complete and wake a fatal-exit
+/// waiter. This runs for successful buffers too so the count cannot retain
+/// stale work from earlier frames.
+pub(crate) fn finish_submission() {
+    let (lock, wake) = CALLBACK_DRAIN.get_or_init(|| (Mutex::new(()), Condvar::new()));
+    // Change the predicate while holding the same mutex used by the waiter,
+    // preventing a zero-transition notification from being lost between its
+    // predicate check and wait_timeout call.
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = PENDING_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
+    debug_assert!(previous > 0, "GPU callback completed without tracked submission");
+    if previous <= 1 {
+        wake.notify_all();
+    }
+}
+
 /// Called from command-buffer completion handlers on `Error` status.
 pub(crate) fn record_fault(desc: &str) {
     FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
     if is_blacklist_desc(desc) {
         SUBMISSIONS_IGNORED.store(true, Ordering::Release);
+    } else if !is_innocent_victim_desc(desc) {
+        ORIGINATING_FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 /// Total command-buffer faults observed this process.
 pub fn fault_count() -> u64 {
     FAULT_COUNT.load(Ordering::Relaxed)
+}
+
+/// Faults that are neither queue-blacklist rejections nor buffers discarded
+/// as collateral damage. A non-zero value means a callback carrying direct
+/// hang/page-fault/interactivity evidence reached the process.
+pub fn originating_fault_count() -> u64 {
+    ORIGINATING_FAULT_COUNT.load(Ordering::Relaxed)
+}
+
+/// Command buffers registered with the universal or acceleration-structure
+/// completion handlers that have not delivered their callbacks yet.
+pub fn pending_callback_count() -> u64 {
+    PENDING_CALLBACKS.load(Ordering::Acquire)
+}
+
+/// Give already-submitted Metal work a bounded chance to publish its error
+/// callbacks before a fatal report is written. No GPU work is submitted and
+/// the deadline is absolute, so a wedged driver cannot hold process exit.
+pub fn drain_submitted_callbacks(timeout: Duration) -> u64 {
+    let deadline = Instant::now() + timeout;
+    let (lock, wake) = CALLBACK_DRAIN.get_or_init(|| (Mutex::new(()), Condvar::new()));
+    let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        let pending = pending_callback_count();
+        if pending == 0 {
+            return 0;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return pending;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let (next_guard, _) = wake
+            .wait_timeout(guard, remaining)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard = next_guard;
+    }
 }
 
 /// True once any command buffer completed with the driver's
@@ -125,7 +196,7 @@ mod tests {
     // The exact description strings the driver produced in the BUG-84fv
     // incident log (2026-08-02) — pinning the REAL text, not a remembered
     // paraphrase, is what the BUG-665r original lacked.
-    use super::is_blacklist_desc;
+    use super::{is_blacklist_desc, is_innocent_victim_desc};
 
     #[test]
     fn blacklist_description_matches() {
@@ -145,6 +216,21 @@ mod tests {
             "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)"
         ));
         assert!(!is_blacklist_desc(
+            "Caused GPU Address Fault Error \
+             (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)"
+        ));
+    }
+
+    #[test]
+    fn innocent_victim_description_matches_only_recovery_discards() {
+        assert!(is_innocent_victim_desc(
+            "Discarded (victim of GPU error/recovery) \
+             (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)"
+        ));
+        assert!(!is_innocent_victim_desc(
+            "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)"
+        ));
+        assert!(!is_innocent_victim_desc(
             "Caused GPU Address Fault Error \
              (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)"
         ));

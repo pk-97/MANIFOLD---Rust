@@ -1771,13 +1771,16 @@ so the glow can breathe with the music like every other material param.
   exact; the general case degrades gracefully. `out_svt` rides the existing
   upsample → à-trous → accumulate chain and the SAME
   `TemporalResetDetector` (I-R2's negative `rg` discipline extends).
-- **TL6 — translucent objects leave the hardware opaque fast path.**
-  `encode_blas_build`'s `setOpaque(!alpha_mask)` becomes
-  `setOpaque(!(alpha_mask || translucency > 0))`, keyed through the same
-  dirty-key path the alpha flag already rides, under D17's async-build
-  discipline (no mid-frame builds; the bounded raster-presenting transition
-  covers a live factor flip from 0 — same gesture as toggling RT itself).
-  Without this the walk never sees solid-but-thin leaves as candidates.
+- **TL6 — opacity follows ray semantics (amended 2026-09-08).** BLAS opacity
+  remains `setOpaque(!alpha_mask)`: primary, AO, GI, and reflection rays block
+  on translucent surfaces and retain Metal's hardware-opaque fast path. The
+  two transmission-ray sites pass `intersection_params` with
+  `force_opacity(non_opaque)`, so their shared walk receives every surface
+  candidate and can attenuate translucent hits. Translucency is therefore
+  material state, not BLAS topology; a live factor change needs no rebuild.
+  This replaces the landed scene-wide non-opaque policy after the Corrosion
+  export exposed GPU watchdog failures in the fused kernel's unnecessary
+  candidate walks.
 - **TL7 — one new material uniform vec4 `diffuse_transmission_params`** (x =
   factor; yzw reserved, first consumer = the future color-texture flag).
   Smallest possible E1/D2-style growth, `RenderSceneUniforms` size asserts
@@ -1882,9 +1885,8 @@ number is in TL-B's gate.
   primary) untouched.
 - **I-TL5 — one temporal-reset path.** Negative `rg` — zero additional
   `TemporalResetDetector` constructions (I-R2 extended).
-- **I-TL6 — BLAS opacity tracks translucency.** Unit test on the opacity
-  decision (`alpha_mask || translucency > 0` → non-opaque), the
-  `wants_shafts_gate` precedent.
+- **I-TL6 — opacity is ray-specific.** Unit tests pin alpha mask as the only
+  BLAS-opacity input and pin exactly two transmission-query opacity overrides.
 - **I-TL7 — no Apple types above `manifold-gpu`.** Standing negative `rg`.
 
 ### 16.6 Feature B — volumetric participation: scope, price, revival trigger
@@ -1956,7 +1958,12 @@ number or exit code; PNGs are Peter's morning look only.
 
 #### TL-B — transmitting shadow walk (grey in sv, rgb inside) — **LANDED 2026-08-07 (wave/rt-translucency-b)**
 
-Landing notes: the walk's terminal committed-type check is load-bearing (an opaque-BLAS object auto-commits in hardware with no candidate delivered — the first revision dropped it and read opaque-blocked rays as fully lit; the factor-0 control leg caught it). The 0→0.5 live flip is verification debt (the fixture's serialized store predates TL-A and never materialized the param — BUG-079 (preset-template-unresolved placeholder reconcile)); measurement used asset-baked translucency (KHR extension on a glb copy), and the D17 transition was exercised via the RT-toggle proxy (bounded, +5 ms over two frames at 4K, no hang). One-off GPU hang sighting in the gesture run logged as BUG-09ut (generators-CB hang sighting).
+Landing notes: the walk's terminal committed-type check is load-bearing. Under
+the amended TL6 policy, transmission queries force all triangles non-opaque,
+so opaque blockers arrive as candidates and return immediately; geometry rays
+auto-commit translucent-only triangles in hardware. The 0→0.5 live flip is
+material-only and no longer exercises D17. One-off GPU hang sighting in the
+original gesture run logged as BUG-09ut (generators-CB hang sighting).
 
 - *Entry:* TL-A landed; re-verify `raytrace.rs:871-898` (walk), `:1304-1346`
   (sv loop), `:989-1019` (sun-bounce), `GiMaterial` still 48 B.
@@ -1967,7 +1974,7 @@ Landing notes: the walk's terminal committed-type check is load-bearing (an opaq
   more surfaces at more angles; the bias rules are load-bearing).
 - *Deliverables:* `GiMaterial` 64 B + population; `walk_with_transmission`
   with the cap and early-out; two call sites switched; sv writes `luma(tint)`;
-  TL6's BLAS opacity change + key; I-TL4/I-TL5/I-TL6 checks by name.
+  TL6's per-query opacity override; I-TL4/I-TL5/I-TL6 checks by name.
 - *Gate:* (a) value tests on the region-probe harness: single translucent
   occluder (factor 0.5, known albedo) between sun and floor — floor region
   mean within epsilon of CPU-computed `luma(tint)` × lit value; **control
@@ -2282,3 +2289,34 @@ probe — "they will be better than previous."
   beauty denoise is dead for live; section 18 = lighting-only
   architecture (native 4K scene, RT lighting traced + denoised at
   reduced res, per section 17.6 per-term trigger, now fired).
+
+### 17.8 Corrosion AS-input safety (2026-09-08)
+
+TLAS descriptor construction rejects non-finite transforms at the Metal
+boundary. CPU-authored objects log the error and write identity plus mask zero;
+the GPU descriptor builder applies the same disabled-descriptor result to
+non-finite object or instance values. Valid finite coordinates and scales are
+not clamped. Runtime hang resolution and performance still require bounded
+Corrosion verification.
+
+### 17.9 RT pass specialization (2026-09-08)
+
+The shared Metal trace entry is specialized by `TRACE_PASS` (function constant
+101: shadow 0, diffuse 1, reflection 2), crossed with the existing binary/
+translucent constant 100. Six PSOs live in the device cache. Each spatial region
+encodes enabled passes in that order with unchanged parameters and sample
+counts; command-buffer boundaries retain the original parent-region plan.
+Live rendering and export use this same path.
+
+Shadow owns visibility/tint outputs. Diffuse owns irradiance and normals;
+reflection owns reflected radiance and supplies normals only when diffuse is
+absent. Diffuse clears the invalid-reflection sentinel when reflections are
+disabled. Both lighting passes repeat the original primary reconstruction;
+there is no hit-record buffer. Void and primary-miss values retain the existing
+semantics. Shadow no longer clears an unrelated reflection target.
+
+Function-constant gates exclude unrelated ray terms from each specialization,
+including the reflection sample arrays from diffuse. CPU/source-contract tests
+verify selection and gate placement, not generated machine code or hang
+resolution. Metal compilation, output parity, performance and Corrosion
+reliability remain GPU validation requirements.

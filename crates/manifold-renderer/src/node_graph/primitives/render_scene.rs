@@ -67,20 +67,18 @@
 
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
-use manifold_gpu::raytrace::ShadowRayTracer;
 use manifold_gpu::denoiser::denoiser_available;
+use manifold_gpu::raytrace::ShadowRayTracer;
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
-};
-use crate::node_graph::temporal_reset::TemporalResetDetector;
+use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
 use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
+use crate::node_graph::temporal_reset::TemporalResetDetector;
 
 // ── RT capture harness: headless RT channel verification ────────
 // The `rt-capture` subcommand (manifold-app, behind perf-soak feature) sets
@@ -1051,6 +1049,10 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
+    /// A resident AS whose topology was rejected remains resident so the
+    /// deferred key state can make progress without repeatedly clearing it.
+    rt_topology_rejected: bool,
+    rt_topology_mismatch_logged: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1320,9 +1322,76 @@ fn rt_trace_gate(
     resident_content_key: Option<u64>,
     content_key: u64,
 ) -> bool {
-    rt_ready
-        && resident_topo_key == Some(topo_key)
-        && resident_content_key == Some(content_key)
+    rt_ready && resident_topo_key == Some(topo_key) && resident_content_key == Some(content_key)
+}
+
+#[inline]
+fn rt_refit_eligible(topology_valid: bool, resident_accel_key: Option<u64>, accel_key: u64) -> bool {
+    topology_valid && resident_accel_key != Some(accel_key)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RtBuildDecision {
+    Defer,
+    Build { content_trigger_fired: bool },
+}
+
+/// Advance the two-key settle state. This is the production transition used
+/// by evaluate; keeping it pure makes the one-frame defer contract explicit.
+fn rt_deferred_build_decision(
+    resident_topo: Option<u64>,
+    resident_content: Option<u64>,
+    pending_topo: &mut Option<u64>,
+    pending_content: &mut Option<u64>,
+    topo_key: u64,
+    content_key: u64,
+) -> RtBuildDecision {
+    let mut build = false;
+    let mut content_trigger_fired = false;
+    if resident_topo != Some(topo_key) {
+        if *pending_topo == Some(topo_key) {
+            build = true;
+        } else {
+            *pending_topo = Some(topo_key);
+        }
+    }
+    if resident_topo == Some(topo_key) && resident_content != Some(content_key) {
+        if *pending_content == Some(content_key) {
+            build = true;
+            content_trigger_fired = true;
+        } else {
+            *pending_content = Some(content_key);
+        }
+    }
+    if build {
+        RtBuildDecision::Build {
+            content_trigger_fired,
+        }
+    } else {
+        RtBuildDecision::Defer
+    }
+}
+
+fn reject_topology(
+    topo_key: &mut Option<u64>,
+    accel_key: &mut Option<u64>,
+    content_key: &mut Option<u64>,
+    pending_topo: &mut Option<u64>,
+    pending_content: &mut Option<u64>,
+    built: &mut bool,
+    rejected: &mut bool,
+) -> bool {
+    *built = false;
+    if *rejected {
+        return false;
+    }
+    *topo_key = None;
+    *accel_key = None;
+    *content_key = None;
+    *pending_topo = None;
+    *pending_content = None;
+    *rejected = true;
+    true
 }
 
 /// D1's `shaft_quality` enum (0/1/2 = Low/Med/High) -> D2's committed march
@@ -1520,6 +1589,9 @@ struct ShaftCompositeUniforms {
 const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
 impl RenderScene {
+    /// Reject the current resident topology. The first rejection clears the
+    /// resident/pending keys; later observations of that same rejected AS
+    /// preserve pending keys so a deferred rebuild cannot starve.
     pub fn new() -> Self {
         let mut s = Self {
             inputs: Vec::new(),
@@ -1616,6 +1688,8 @@ impl RenderScene {
             rt_accel_content_key: None,
             rt_accel_content_pending_key: None,
             rt_accel_built: false,
+            rt_topology_rejected: false,
+            rt_topology_mismatch_logged: false,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_half2: None,
@@ -1697,7 +1771,6 @@ impl RenderScene {
             object_port_names: Vec::new(),
             light_port_names: Vec::new(),
         };
-
 
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -1902,10 +1975,12 @@ impl RenderScene {
         // `objects`/`lights` param change — never per frame). `evaluate()`
         // indexes these by object/light number instead of calling `format!`
         // itself.
-        self.object_port_names =
-            (0..n_obj).map(|i| format!("object_{i}").into_boxed_str()).collect();
-        self.light_port_names =
-            (0..n_lights).map(|i| format!("light_{i}").into_boxed_str()).collect();
+        self.object_port_names = (0..n_obj)
+            .map(|i| format!("object_{i}").into_boxed_str())
+            .collect();
+        self.light_port_names = (0..n_lights)
+            .map(|i| format!("light_{i}").into_boxed_str())
+            .collect();
     }
 
     /// Ensure the memoryless MSAA color + depth targets match the render
@@ -1937,8 +2012,17 @@ impl RenderScene {
         self.depth_height = height;
     }
 
-    fn ensure_depth_resolve_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        if self.depth_resolve_scratch.as_ref().is_some_and(|t| t.width == width && t.height == height) {
+    fn ensure_depth_resolve_scratch(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
+        if self
+            .depth_resolve_scratch
+            .as_ref()
+            .is_some_and(|t| t.width == width && t.height == height)
+        {
             return;
         }
         self.depth_resolve_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -1947,7 +2031,8 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "node.render_scene native depth resolve",
             mip_levels: 1,
         }));
@@ -2025,32 +2110,37 @@ impl RenderScene {
             return;
         }
         self.denoise_normals_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise normals",
         ));
         self.denoise_roughness_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::R16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise roughness",
         ));
         self.denoise_diffuse_albedo_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise diffuse_albedo",
         ));
         self.denoise_specular_albedo_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise specular_albedo",
         ));
         // DN-L (section 17.7): reactive mask — R16Float like roughness.
         self.denoise_reactive_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::R16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise reactive_mask",
@@ -2165,12 +2255,15 @@ impl RenderScene {
         if self.dummy_emissive_buffer.is_none() {
             // Metal validates one complete pointee even when entry_count=0
             // skips the sampler block. Size from both shared GPU ABI types.
-            let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>()
-                .max(std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>());
+            let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>().max(
+                std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>(),
+            );
             let buf = device.create_buffer_shared(bytes as u64);
             // The newly allocated buffer is exclusively owned and not yet
             // submitted, and the write covers exactly its allocation.
-            unsafe { std::ptr::write_bytes(buf.mapped_ptr().expect("shared buffer"), 0, bytes); }
+            unsafe {
+                std::ptr::write_bytes(buf.mapped_ptr().expect("shared buffer"), 0, bytes);
+            }
             self.dummy_emissive_buffer = Some(buf);
         }
     }
@@ -2244,7 +2337,12 @@ impl RenderScene {
     /// recreating it if the caster's requested resolution changed.
     /// `RENDER_TARGET | SHADER_READ`: rendered as a depth target, then sampled
     /// as a shadow map — both usages at creation (AGX 0x78 guard).
-    fn ensure_shadow_map(&mut self, device: &manifold_gpu::GpuDevice, slot: usize, resolution: u32) {
+    fn ensure_shadow_map(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        slot: usize,
+        resolution: u32,
+    ) {
         let res = resolution.clamp(256, 4096);
         let needs = match &self.shadow_maps[slot] {
             Some((cached, _)) => *cached != res,
@@ -2271,7 +2369,12 @@ impl RenderScene {
     /// textures match `half_w x half_h`, recreating on resize. Same
     /// `ensure_shadow_map` lazy pattern — called ONLY when [`wants_shafts`]
     /// is true this frame.
-    fn ensure_shaft_half_res(&mut self, device: &manifold_gpu::GpuDevice, half_w: u32, half_h: u32) {
+    fn ensure_shaft_half_res(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        half_w: u32,
+        half_h: u32,
+    ) {
         if self.shaft_half_width == half_w
             && self.shaft_half_height == half_h
             && self.shaft_inscatter.is_some()
@@ -2311,7 +2414,12 @@ impl RenderScene {
     /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
     /// The native depth resolve is converted into this R32Float texture by
     /// compute, then read by the shaft downsample kernel.
-    fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_shaft_depth_internal(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.shaft_depth_internal_width == width
             && self.shaft_depth_internal_height == height
             && self.shaft_depth_internal.is_some()
@@ -2383,14 +2491,20 @@ impl RenderScene {
     /// (the resolve write) + `SHADER_READ` (MetalFX Temporal samples it as
     /// the `color` input) usage — same idiom as every other scratch target
     /// in this file (`ensure_opaque_scene_color` above).
-    fn ensure_rt_temporal_color_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_rt_temporal_color_scratch(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.rt_temporal_color_scratch_width == width
             && self.rt_temporal_color_scratch_height == height
             && self.rt_temporal_color_scratch.is_some()
         {
             return;
         }
-        self.rt_temporal_color_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+        self.rt_temporal_color_scratch =
+            Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
             depth: 1,
@@ -2418,7 +2532,12 @@ impl RenderScene {
     /// SHADER_READ` usage as the temporal scratch — a legal MSAA resolve
     /// destination read back by the clamp's `texture2d<float>` (the clamp
     /// writes `target`, not this texture, so no `SHADER_WRITE` here).
-    fn ensure_rt_firefly_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_rt_firefly_scratch(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.rt_firefly_scratch_width == width
             && self.rt_firefly_scratch_height == height
             && self.rt_firefly_scratch.is_some()
@@ -2431,7 +2550,8 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "node.render_scene RT firefly-clamp scratch (BUG-mkgh)",
             mip_levels: 1,
         }));
@@ -2509,9 +2629,8 @@ impl RenderScene {
         }
         // Dimensions changed or first creation — replace.
         self.denoiser = None;
-        match crate::denoiser::Denoiser::new(
-            device, render_w, render_h, native_w, native_h, false,
-        ) {
+        match crate::denoiser::Denoiser::new(device, render_w, render_h, native_w, native_h, false)
+        {
             Some(d) => {
                 self.denoiser = Some(d);
                 self.denoiser_unavailable_logged = false;
@@ -2534,7 +2653,12 @@ impl RenderScene {
     /// written by a depth-only render pass and never sampled (E2a proves
     /// only the depth-test plumbing; nothing reads this texture in a
     /// shader this phase).
-    fn ensure_opaque_depth_snapshot(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    fn ensure_opaque_depth_snapshot(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.opaque_depth_snapshot_width == width
             && self.opaque_depth_snapshot_height == height
             && self.opaque_depth_snapshot.is_some()
@@ -2582,7 +2706,14 @@ impl RenderScene {
     /// RT-A3a: split into mask and lighting dispatches, each at its own resolution.
     /// Resolution of the mask dispatch (shadow visibility only). Trace-class sized (trace_w/h),
     /// full-class sized (full_w/h) — trace dims change per D4 resolution settings.
-    fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) {
+    fn ensure_rt_masks(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        trace_w: u32,
+        trace_h: u32,
+        full_w: u32,
+        full_h: u32,
+    ) {
         if self.rt_mask_width == full_w
             && self.rt_mask_height == full_h
             && self.rt_mask_trace_w == trace_w
@@ -2606,22 +2737,58 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
-        self.rt_mask_full = Some(make(full_w, full_h, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
+        self.rt_mask_half = Some(make(
+            trace_w,
+            trace_h,
+            "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)",
+        ));
+        self.rt_mask_full = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)",
+        ));
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad — same format and lifecycle.
-        self.rt_mask_half2 = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half2 (RS-A vis)"));
-        self.rt_mask_full2 = Some(make(full_w, full_h, "node.render_scene rt_mask_full2 (RS-A vis)"));
+        self.rt_mask_half2 = Some(make(
+            trace_w,
+            trace_h,
+            "node.render_scene rt_mask_half2 (RS-A vis)",
+        ));
+        self.rt_mask_full2 = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_mask_full2 (RS-A vis)",
+        ));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
-        self.rt_mask_full_b = Some(make(full_w, full_h, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
+        self.rt_mask_full_b = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_mask_full_b (RT-T1-D atrous)",
+        ));
         // RS-A: second sv quad à-trous ping-pong scratch.
-        self.rt_mask_full2_b = Some(make(full_w, full_h, "node.render_scene rt_mask_full2_b (RS-A atrous)"));
+        self.rt_mask_full2_b = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_mask_full2_b (RS-A atrous)",
+        ));
         // RT-TL-C (section 16 TL5): sun-transmission tint — MASK-class
         // (written by the mask dispatch), same format and lifecycle as
         // rt_mask_half/rt_mask_full.
-        self.rt_svt_half = Some(make(trace_w, trace_h, "node.render_scene rt_svt_half (RT-TL-C)"));
-        self.rt_svt_full = Some(make(full_w, full_h, "node.render_scene rt_svt_full (RT-TL-C)"));
+        self.rt_svt_half = Some(make(
+            trace_w,
+            trace_h,
+            "node.render_scene rt_svt_half (RT-TL-C)",
+        ));
+        self.rt_svt_full = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_svt_full (RT-TL-C)",
+        ));
         // RT-TL-C: à-trous ping-pong scratch — mirrors rt_mask_full_b.
-        self.rt_svt_full_b = Some(make(full_w, full_h, "node.render_scene rt_svt_full_b (RT-TL-C atrous)"));
+        self.rt_svt_full_b = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_svt_full_b (RT-TL-C atrous)",
+        ));
         self.rt_mask_width = full_w;
         self.rt_mask_height = full_h;
         self.rt_mask_trace_w = trace_w;
@@ -2636,7 +2803,14 @@ impl RenderScene {
     /// undefined until the caller's next `accumulate_irradiance` call,
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
-    fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) -> bool {
+    fn ensure_rt_irradiance(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        trace_w: u32,
+        trace_h: u32,
+        full_w: u32,
+        full_h: u32,
+    ) -> bool {
         if self.rt_irr_width == full_w
             && self.rt_irr_height == full_h
             && self.rt_irr_trace_w == trace_w
@@ -2662,100 +2836,275 @@ impl RenderScene {
         };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         // Lighting textures (irradiance, reflection, normal) at trace resolution.
-        self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
-        self.rt_irr_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        self.rt_irr_half = Some(make(
+            trace_w,
+            trace_h,
+            rgba16,
+            "node.render_scene rt_irr_half (RT-P2)",
+        ));
+        self.rt_irr_full = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_irr_full (RT-P2)",
+        ));
         // RT-R1 (section 9.3): trace-res reflection-radiance output — same lifecycle
         // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
         // inert/bind-only until then).
-        self.rt_refl_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        self.rt_refl_half = Some(make(
+            trace_w,
+            trace_h,
+            rgba16,
+            "node.render_scene rt_refl_half (RT-R1)",
+        ));
         // RT-R1 (section 9.3): full-res reflection-radiance output target & atrous
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
-        self.rt_refl_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
-        self.rt_refl_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
+        self.rt_refl_full = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_refl_full (RT-R1)",
+        ));
+        self.rt_refl_full_b = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_refl_full_b (RT-R1 atrous)",
+        ));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
-        self.rt_normal_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
-        self.rt_normal_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
+        self.rt_normal_half = Some(make(
+            trace_w,
+            trace_h,
+            rgba16,
+            "node.render_scene rt_normal_half (RT-T1-C)",
+        ));
+        self.rt_normal_full = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_normal_full (RT-T1-C)",
+        ));
         // RT-T1-D: second full-res scratch set for the à-trous filter's
         // ping-pong (same lifecycle as irradiance/normal above — not
         // persistent history, rewritten fresh every RT-ready frame).
-        self.rt_irr_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_full_b (RT-T1-D atrous)"));
-        self.rt_normal_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_normal_full_b (RT-T1-D atrous)"));
+        self.rt_irr_full_b = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_irr_full_b (RT-T1-D atrous)",
+        ));
+        self.rt_normal_full_b = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_normal_full_b (RT-T1-D atrous)",
+        ));
         // RT-T1-C: ping-pong history pairs (irradiance, depth, normal) —
         // see this struct's field doc comment for why two textures each.
         self.rt_irr_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_irr_history_a (RT-T1-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_irr_history_b (RT-T1-C)",
+            ),
         ]
         .map(Some);
         // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
         // same reset rule as rt_irr_history (I-R2: one reset path, one flip).
         self.rt_refl_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_refl_history_a (RT-R2)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_refl_history_b (RT-R2)",
+            ),
         ]
         .map(Some);
         // SV-ACCUM: shadow-visibility history pair — same lifecycle, reset
         // rule, and ping clock as rt_irr_history/rt_refl_history.
         self.rt_sv_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_history_a (SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_history_b (SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_history_a (SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_history_b (SV-ACCUM)",
+            ),
         ]
         .map(Some);
         // SV-ACCUM moments: per-channel first/second visibility moments.
         self.rt_sv_m1_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m1_a (SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m1_b (SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_m1_a (SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_m1_b (SV-ACCUM)",
+            ),
         ]
         .map(Some);
         self.rt_sv_m2_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_m2_a (SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_m2_b (SV-ACCUM)",
+            ),
         ]
         .map(Some);
         self.rt_sv_hold_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_hold_a (SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv_hold_b (SV-ACCUM)",
+            ),
         ]
         .map(Some);
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
         // independent sigma-gate per quad, same flip clock and lifecycle.
         self.rt_sv2_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_history_a (RS-A SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_history_b (RS-A SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_history_a (RS-A SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_history_b (RS-A SV-ACCUM)",
+            ),
         ]
         .map(Some);
         self.rt_sv2_m1_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m1_a (RS-A SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m1_b (RS-A SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_m1_a (RS-A SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_m1_b (RS-A SV-ACCUM)",
+            ),
         ]
         .map(Some);
         self.rt_sv2_m2_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m2_a (RS-A SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_m2_b (RS-A SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_m2_a (RS-A SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_m2_b (RS-A SV-ACCUM)",
+            ),
         ]
         .map(Some);
         self.rt_sv2_hold_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)",
+            ),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
         // same lifecycle, reset rule, and ping clock as rt_irr_history.
         // Full res, Rgba16Float (same as every other history pair).
         self.rt_svt_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_svt_history_a (RT-TL-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_svt_history_b (RT-TL-C)",
+            ),
         ]
         .map(Some);
         self.rt_depth_history = [
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::R32Float,
+                "node.render_scene rt_depth_history_a (RT-T1-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::R32Float,
+                "node.render_scene rt_depth_history_b (RT-T1-C)",
+            ),
         ]
         .map(Some);
         self.rt_normal_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_normal_history_a (RT-T1-C)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_normal_history_a (RT-T1-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_normal_history_b (RT-T1-C)",
+            ),
         ]
         .map(Some);
         // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rgba32Float`
@@ -2766,15 +3115,35 @@ impl RenderScene {
         // temporally-accumulated ao (`accumulate_irradiance`'s `history_write.a`
         // is the frame count, so the ao rides here).
         self.rt_moments_history = [
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::Rgba32Float,
+                "node.render_scene rt_moments_history_a (RT-T1-D)",
+            ),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::Rgba32Float,
+                "node.render_scene rt_moments_history_b (RT-T1-D)",
+            ),
         ]
         .map(Some);
         // RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
         // pair — same full-res rgba16 + usage lifecycle as `rt_irr_history`.
         // The composite binds whichever was last written by `atrous_post`.
-        self.rt_irr_filtered = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered (RT-Stage-3 P4)"));
-        self.rt_irr_filtered_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered_b (RT-Stage-3 P4)"));
+        self.rt_irr_filtered = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_irr_filtered (RT-Stage-3 P4)",
+        ));
+        self.rt_irr_filtered_b = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_irr_filtered_b (RT-Stage-3 P4)",
+        ));
         self.rt_moments_valid = false;
         self.rt_history_ping = 0;
         self.rt_irr_width = full_w;
@@ -2791,27 +3160,27 @@ impl RenderScene {
     /// the light data a later frame's draw call might still be reading).
     fn ensure_rt_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_params_buffer.is_none() {
-            self.rt_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
-            ));
+            self.rt_params_buffer = Some(device.create_buffer_shared(std::mem::size_of::<
+                manifold_gpu::raytrace::ShadowRayParams,
+            >() as u64));
         }
         // RT-A3a: the mask dispatch needs its own (see the field's doc
         // comment — a shared buffer races the two encode-time uploads).
         if self.rt_mask_params_buffer.is_none() {
-            self.rt_mask_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
-            ));
+            self.rt_mask_params_buffer = Some(device.create_buffer_shared(std::mem::size_of::<
+                manifold_gpu::raytrace::ShadowRayParams,
+            >() as u64));
         }
     }
-
 
     /// RT-P2: CPU-mapped `AccumulateParams` upload buffer — separate from
     /// `rt_params_buffer` (see the field's doc comment).
     fn ensure_rt_accumulate_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_accumulate_params_buffer.is_none() {
-            self.rt_accumulate_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::AccumulateParams>() as u64,
-            ));
+            self.rt_accumulate_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::AccumulateParams,
+                >() as u64));
         }
     }
 
@@ -2819,9 +3188,10 @@ impl RenderScene {
     /// the other two params buffers above (same non-clobbering reason).
     fn ensure_rt_atrous_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_atrous_params_buffer.is_none() {
-            self.rt_atrous_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::AtrousParams>() as u64,
-            ));
+            self.rt_atrous_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::AtrousParams,
+                >() as u64));
         }
     }
 
@@ -2830,9 +3200,10 @@ impl RenderScene {
     /// non-clobbering reason).
     fn ensure_rt_firefly_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_firefly_params_buffer.is_none() {
-            self.rt_firefly_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::FireflyClampParams>() as u64,
-            ));
+            self.rt_firefly_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::FireflyClampParams,
+                >() as u64));
         }
     }
 
@@ -2841,9 +3212,10 @@ impl RenderScene {
     /// reason).
     fn ensure_rt_atrous_post_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_atrous_post_params_buffer.is_none() {
-            self.rt_atrous_post_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::AtrousPostParams>() as u64,
-            ));
+            self.rt_atrous_post_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::AtrousPostParams,
+                >() as u64));
         }
     }
 
@@ -2903,8 +3275,7 @@ impl RenderScene {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0, 0.0, 0.0, 0.0],
             };
-            let buf =
-                device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+            let buf = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
             unsafe {
                 buf.write(0, bytemuck::bytes_of(&stub));
             }
@@ -2922,7 +3293,8 @@ impl RenderScene {
     /// whether `envmap` is wired or any object is PBR.
     fn ensure_ibl_resources(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.prefiltered_specular.is_none() {
-            self.prefiltered_specular = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            self.prefiltered_specular =
+                Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: PREFILTER_BASE_WIDTH,
                 height: PREFILTER_BASE_HEIGHT,
                 depth: 1,
@@ -2993,7 +3365,6 @@ impl RenderScene {
                 "node.render_scene ibl brdf lut",
             ));
         }
-
     }
 
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: run the split-sum IBL convolution
@@ -3058,7 +3429,10 @@ impl RenderScene {
                         binding: 0,
                         data: bytemuck::bytes_of(&uniforms),
                     },
-                    GpuBinding::Texture { binding: 1, texture: lut },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: lut,
+                    },
                 ],
                 [BRDF_LUT_SIZE.div_ceil(16), BRDF_LUT_SIZE.div_ceil(16), 1],
                 "node.render_scene ibl brdf lut",
@@ -3106,11 +3480,24 @@ impl RenderScene {
                         binding: 0,
                         data: bytemuck::bytes_of(&uniforms),
                     },
-                    GpuBinding::Texture { binding: 1, texture: envmap },
-                    GpuBinding::Sampler { binding: 2, sampler },
-                    GpuBinding::Texture { binding: 3, texture: irradiance },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: envmap,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: irradiance,
+                    },
                 ],
-                [IRRADIANCE_WIDTH.div_ceil(8), IRRADIANCE_HEIGHT.div_ceil(8), 1],
+                [
+                    IRRADIANCE_WIDTH.div_ceil(8),
+                    IRRADIANCE_HEIGHT.div_ceil(8),
+                    1,
+                ],
                 "node.render_scene ibl irradiance",
             );
         }
@@ -3145,9 +3532,18 @@ impl RenderScene {
                             binding: 0,
                             data: bytemuck::bytes_of(&uniforms),
                         },
-                        GpuBinding::Texture { binding: 1, texture: envmap },
-                        GpuBinding::Sampler { binding: 2, sampler },
-                        GpuBinding::Texture { binding: 3, texture: &view },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: envmap,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 2,
+                            sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 3,
+                            texture: &view,
+                        },
                     ],
                     [mip_w.div_ceil(16), mip_h.div_ceil(16), 1],
                     "node.render_scene ibl prefilter mip",
@@ -3316,7 +3712,7 @@ impl RenderScene {
         &'static [manifold_gpu::GpuTextureFormat],
         &'static str,
     )> {
-        use manifold_gpu::GpuTextureFormat::{R16Float, R8Unorm, Rg16Float, Rgba16Float};
+        use manifold_gpu::GpuTextureFormat::{R8Unorm, R16Float, Rg16Float, Rgba16Float};
         match (emit_velocity, emit_ao_mask, emit_denoise_feed) {
             (false, false, false) => None,
             (true, false, false) => Some((
@@ -3344,13 +3740,27 @@ impl RenderScene {
             // Denoise + velocity.
             (true, false, true) => Some((
                 Self::DENOISE_VELOCITY_SPECIALIZATIONS,
-                &[Rg16Float, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
+                &[
+                    Rg16Float,
+                    Rgba16Float,
+                    R16Float,
+                    Rgba16Float,
+                    Rgba16Float,
+                    R16Float,
+                ],
                 "node.render_scene.velocity.denoise",
             )),
             // Denoise + ao_mask.
             (false, true, true) => Some((
                 Self::DENOISE_AO_MASK_SPECIALIZATIONS,
-                &[R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
+                &[
+                    R8Unorm,
+                    Rgba16Float,
+                    R16Float,
+                    Rgba16Float,
+                    Rgba16Float,
+                    R16Float,
+                ],
                 "node.render_scene.ao_mask.denoise",
             )),
             // Denoise + velocity + ao_mask. 7 aux + color = 8 attachments,
@@ -3358,7 +3768,15 @@ impl RenderScene {
             // output to this variant without dropping one.
             (true, true, true) => Some((
                 Self::DENOISE_VELOCITY_AO_MASK_SPECIALIZATIONS,
-                &[Rg16Float, R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
+                &[
+                    Rg16Float,
+                    R8Unorm,
+                    Rgba16Float,
+                    R16Float,
+                    Rgba16Float,
+                    Rgba16Float,
+                    R16Float,
+                ],
                 "node.render_scene.velocity.ao_mask.denoise",
             )),
         }
@@ -3409,7 +3827,11 @@ impl RenderScene {
         self.pipelines
             .entry((kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend))
             .or_insert_with(|| {
-                let blend_state = if blend { Some(Self::blend_state()) } else { None };
+                let blend_state = if blend {
+                    Some(Self::blend_state())
+                } else {
+                    None
+                };
                 if let Some((specs, aux_formats, label)) =
                     Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
                 {
@@ -3696,8 +4118,7 @@ fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     let mut out = [[0.0f32; 3]; 3];
     for col in 0..3 {
         for row in 0..3 {
-            out[col][row] =
-                a[0][row] * b[col][0] + a[1][row] * b[col][1] + a[2][row] * b[col][2];
+            out[col][row] = a[0][row] * b[col][0] + a[1][row] * b[col][1] + a[2][row] * b[col][2];
         }
     }
     out
@@ -3977,7 +4398,8 @@ impl EffectNode for RenderScene {
         port: &str,
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
-        let temporal_upscale = matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        let temporal_upscale =
+            matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
         let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
         let is_denoise_feed_port = port == "normals"
             || port == "roughness"
@@ -4025,8 +4447,7 @@ impl EffectNode for RenderScene {
         let rt_enabled = matches!(params.get("rt_enabled"), Some(ParamValue::Bool(true)));
         let temporal_upscale =
             matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        let denoise_feed =
-            matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
+        let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
         if denoise_feed {
             &[
                 "depth",
@@ -4243,21 +4664,33 @@ impl EffectNode for RenderScene {
         // is the point". `native_width`/`native_height` are kept for the
         // two things that must stay at the TRUE canvas size: the
         // upscaler's dst dims and the final blit destination.
-        let temporal_upscale_param = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        let temporal_upscale_param = matches!(
+            ctx.params.get("temporal_upscale"),
+            Some(ParamValue::Bool(true))
+        );
         // A live toggle cannot resize the compiled depth/velocity attachments
         // (see PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
         // dimensions, rather than the pending parameter, determine whether
         // this frame uses MetalFX's reduced-resolution render path.
         let reduced_dims = (
-            scale_dim(width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
-            scale_dim(height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN),
+            scale_dim(
+                width,
+                RT_TEMPORAL_RENDER_SCALE_NUM,
+                RT_TEMPORAL_RENDER_SCALE_DEN,
+            ),
+            scale_dim(
+                height,
+                RT_TEMPORAL_RENDER_SCALE_NUM,
+                RT_TEMPORAL_RENDER_SCALE_DEN,
+            ),
         );
         // A live toggle does not resize the compiled graph's attachments.
         // Keep drawing at their committed resolution until the host rebuilds,
         // in BOTH directions (native -> reduced and reduced -> native).
         let temporal_upscale = (temporal_upscale_param || reduced_dims != (width, height))
             && ["depth", "velocity"].iter().all(|port| {
-                ctx.outputs.texture_2d(port)
+                ctx.outputs
+                    .texture_2d(port)
                     .is_some_and(|t| (t.width, t.height) == reduced_dims)
             });
         if temporal_upscale_param != temporal_upscale && !self.rt_temporal_unavailable_logged {
@@ -4269,12 +4702,20 @@ impl EffectNode for RenderScene {
         let native_width = width;
         let native_height = height;
         let width = if temporal_upscale {
-            scale_dim(native_width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
+            scale_dim(
+                native_width,
+                RT_TEMPORAL_RENDER_SCALE_NUM,
+                RT_TEMPORAL_RENDER_SCALE_DEN,
+            )
         } else {
             width
         };
         let height = if temporal_upscale {
-            scale_dim(native_height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
+            scale_dim(
+                native_height,
+                RT_TEMPORAL_RENDER_SCALE_NUM,
+                RT_TEMPORAL_RENDER_SCALE_DEN,
+            )
         } else {
             height
         };
@@ -4318,22 +4759,28 @@ impl EffectNode for RenderScene {
         // gated on rt_enabled — inert when RT is off entirely. Default ON
         // (Q3). T5 fine-tunes the spp/roughness-band constants.
         let rt_reflections = rt_enabled
-            && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true)));
+            && matches!(
+                ctx.params.get("rt_reflections"),
+                Some(ParamValue::Bool(true))
+            );
         // RT term toggles — per-term card params. Each defaults ON = today's
         // behavior. Inert when rt_enabled is false. Live-flip detection routes
         // through rt_irr_needs_reset to avoid the old term smearing.
-        let rt_shadows_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_shadows"), Some(ParamValue::Bool(true)));
-        let rt_ao_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
-        let rt_gi_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
+        let rt_shadows_enabled =
+            rt_enabled && matches!(ctx.params.get("rt_shadows"), Some(ParamValue::Bool(true)));
+        let rt_ao_enabled =
+            rt_enabled && matches!(ctx.params.get("rt_ao"), Some(ParamValue::Bool(true)));
+        let rt_gi_enabled =
+            rt_enabled && matches!(ctx.params.get("rt_gi"), Some(ParamValue::Bool(true)));
         // RT-Stage-3 P1 (BUG-mkgh): pre-blur firefly clamp toggle. Default
         // ON. Read once here (folded with rt_enabled like the other terms)
         // so the tail can gate the clamp dispatch without a second param
         // lookup after the `ctx` mutable borrows below.
         let rt_firefly_clamp_enabled = rt_enabled
-            && matches!(ctx.params.get("rt_firefly_clamp"), Some(ParamValue::Bool(true)));
+            && matches!(
+                ctx.params.get("rt_firefly_clamp"),
+                Some(ParamValue::Bool(true))
+            );
         // RT_QUALITY_SETTINGS_DESIGN.md D5/D6: the active quality column,
         // resolved per frame by the compositor from project settings.
         // Copied out of ctx here — the dispatch code below runs after
@@ -4347,19 +4794,24 @@ impl EffectNode for RenderScene {
         let denoise_iterations = rtq.denoise_iterations;
         // Trace dispatch dims (D4): one ray-resolution fraction for both
         // dispatches, truncating u64 math per output_canvas_scale discipline.
-        let rt_trace_w = ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
-        let rt_trace_h = ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
+        let rt_trace_w =
+            ((width as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
+        let rt_trace_h =
+            ((height as u64 * rtq.ray_res_num as u64 / rtq.ray_res_den as u64) as u32).max(1);
         // Detect toggle flips: any term that was on last frame and is now off
         // (or vice versa) needs history reset so the old signal doesn't
         // trail. Routed through rt_irr_needs_reset — the ONE existing path
         // (the negative-rg gate). First frame (None = no prior state) only
         // fires the TemporalResetDetector; toggles only matter on flip.
-        let toggle_flipped = rt_enabled && (
-            self.rt_prev_toggle_shadows.is_some_and(|p| p != rt_shadows_enabled)
+        let toggle_flipped = rt_enabled
+            && (self
+                .rt_prev_toggle_shadows
+                .is_some_and(|p| p != rt_shadows_enabled)
             || self.rt_prev_toggle_ao.is_some_and(|p| p != rt_ao_enabled)
             || self.rt_prev_toggle_gi.is_some_and(|p| p != rt_gi_enabled)
-            || self.rt_prev_toggle_refl.is_some_and(|p| p != rt_reflections)
-        );
+                || self
+                    .rt_prev_toggle_refl
+                    .is_some_and(|p| p != rt_reflections));
         self.rt_prev_toggle_shadows = Some(rt_shadows_enabled);
         self.rt_prev_toggle_ao = Some(rt_ao_enabled);
         self.rt_prev_toggle_gi = Some(rt_gi_enabled);
@@ -4385,7 +4837,7 @@ impl EffectNode for RenderScene {
                 .as_ref()
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         }
-        let rt_ready = self.rt_accel_built;
+        let mut rt_ready = self.rt_accel_built && !self.rt_topology_rejected;
         // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2, section 8.2 D22 (T2-B): the ONE
         // `detect_reset` call site for every temporal consumer in this node
         // (negative-`rg` gate: no second reset path). Unconditional, once
@@ -4399,7 +4851,9 @@ impl EffectNode for RenderScene {
         // via the `*_just_resumed` latches below — that used to fall out of
         // the gated detector's time-jump.
         let will_rt_accumulate_this_frame = rt_enabled && rt_ready;
-        let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time);
+        let reset_decision = self
+            .rt_reset_detector
+            .detect_reset(ctx.owner_key, &ctx.time);
         // A cut/seek means this node's velocity history is stale too: clear
         // it so the first post-cut frame takes the "no history yet"
         // zero-velocity seeding instead of ndc deltas measured across two
@@ -4459,8 +4913,10 @@ impl EffectNode for RenderScene {
         // diffuse/specular albedo as additional MRT outputs. Same D1 lazy
         // enabling: `force_consumed_outputs` gates plan allocation, and the
         // pipeline selection below gates which shader variant runs.
-        let denoise_feed =
-            matches!(ctx.params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
+        let denoise_feed = matches!(
+            ctx.params.get("rt_denoise_feed"),
+            Some(ParamValue::Bool(true))
+        );
         // RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): specular hit-distance
         // output — extracted early so the hit-dist extraction dispatch in
         // the RT section below can reference it without borrowing ctx.
@@ -4515,7 +4971,11 @@ impl EffectNode for RenderScene {
                 [0.0, 0.0, 1.0, 0.0],
                 [world_offset[0], world_offset[1], world_offset[2], 1.0],
             ];
-            if world_offset == [0.0; 3] { previous } else { mat4_mul(previous, translation) }
+            if world_offset == [0.0; 3] {
+                previous
+            } else {
+                mat4_mul(previous, translation)
+            }
         });
         self.prev_view_proj = Some(view_proj);
         // Camera-motion magnitude for the accumulator's change gates
@@ -4541,7 +5001,9 @@ impl EffectNode for RenderScene {
             None => 0.0,
         };
         self.prev_cam_state = Some(cam);
-        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
+        if std::env::var_os("MANIFOLD_PROBE").is_some()
+            && self.jitter_frame_index.is_multiple_of(60)
+        {
             eprintln!(
                 "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
                 cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
@@ -4556,7 +5018,10 @@ impl EffectNode for RenderScene {
             jitter_px.0 * 2.0 / width as f32,
             jitter_px.1 * 2.0 / height as f32,
         );
-        let prev_jitter_ndc = self.prev_jitter_ndc.replace(jitter_ndc).unwrap_or(jitter_ndc);
+        let prev_jitter_ndc = self
+            .prev_jitter_ndc
+            .replace(jitter_ndc)
+            .unwrap_or(jitter_ndc);
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
@@ -4730,7 +5195,9 @@ impl EffectNode for RenderScene {
             // these lookups don't hold `ctx` borrowed (`ctx.error`/
             // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
             let inputs = ctx.inputs;
-            let base_color_map = object.base_color_map.and_then(|s| inputs.texture_2d_slot(s));
+            let base_color_map = object
+                .base_color_map
+                .and_then(|s| inputs.texture_2d_slot(s));
             // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
             // per-object texture ports.
             let normal_map = object.normal_map.and_then(|s| inputs.texture_2d_slot(s));
@@ -4738,26 +5205,40 @@ impl EffectNode for RenderScene {
             let occlusion_map = object.occlusion_map.and_then(|s| inputs.texture_2d_slot(s));
             let emissive_map = object.emissive_map.and_then(|s| inputs.texture_2d_slot(s));
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
-            let sheen_color_map = object.sheen_color_map.and_then(|s| inputs.texture_2d_slot(s));
-            let sheen_roughness_map =
-                object.sheen_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
-            let iridescence_map = object.iridescence_map.and_then(|s| inputs.texture_2d_slot(s));
-            let iridescence_thickness_map =
-                object.iridescence_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
-            let anisotropy_map = object.anisotropy_map.and_then(|s| inputs.texture_2d_slot(s));
+            let sheen_color_map = object
+                .sheen_color_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let sheen_roughness_map = object
+                .sheen_roughness_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let iridescence_map = object
+                .iridescence_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let iridescence_thickness_map = object
+                .iridescence_thickness_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let anisotropy_map = object
+                .anisotropy_map
+                .and_then(|s| inputs.texture_2d_slot(s));
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
             // completion sweep).
             let clearcoat_map = object.clearcoat_map.and_then(|s| inputs.texture_2d_slot(s));
-            let clearcoat_roughness_map =
-                object.clearcoat_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
-            let clearcoat_normal_map =
-                object.clearcoat_normal_map.and_then(|s| inputs.texture_2d_slot(s));
+            let clearcoat_roughness_map = object
+                .clearcoat_roughness_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let clearcoat_normal_map = object
+                .clearcoat_normal_map
+                .and_then(|s| inputs.texture_2d_slot(s));
             let specular_map = object.specular_map.and_then(|s| inputs.texture_2d_slot(s));
-            let specular_color_map =
-                object.specular_color_map.and_then(|s| inputs.texture_2d_slot(s));
-            let transmission_map = object.transmission_map.and_then(|s| inputs.texture_2d_slot(s));
-            let volume_thickness_map =
-                object.volume_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let specular_color_map = object
+                .specular_color_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let transmission_map = object
+                .transmission_map
+                .and_then(|s| inputs.texture_2d_slot(s));
+            let volume_thickness_map = object
+                .volume_thickness_map
+                .and_then(|s| inputs.texture_2d_slot(s));
 
             // `object.transform` already defaults to `Transform::default()`
             // (identity) when scene_object's own `transform` input is
@@ -4835,13 +5316,21 @@ impl EffectNode for RenderScene {
             // toggled off), so the old gate read a stale rt_sun_tint with RT
             // off or with the shadow kernel disabled — a zeroed texture
             // zeroed the sun's entire direct contribution.
-            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready { rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            uniforms.rt_flags[2] = if rt_shadows_enabled && rt_ready {
+                rt_svt_slot(&casters).map(|s| s as f32 + 1.0).unwrap_or(0.0)
+            } else {
+                0.0
+            };
             // RT term toggles: rt_flags.w = RT shadow mask read gate. When
             // rt_shadows is off, shadow_factor falls through to raster shadow
             // maps. The kernel still dispatches (for AO/GI/refl), but the sv
             // textures are not written (shadow_spp=0 gated in-kernel) and the
             // WGSL never reads them (gated here).
-            uniforms.rt_flags[3] = if rt_shadows_enabled && rt_ready { 1.0 } else { 0.0 };
+            uniforms.rt_flags[3] = if rt_shadows_enabled && rt_ready {
+                1.0
+            } else {
+                0.0
+            };
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
             // clip varyings. Zero whenever temporal_upscale is off.
@@ -4861,8 +5350,8 @@ impl EffectNode for RenderScene {
             // occlusion instead of reading the unwritten RT AO channel).
             // Same reserved-slot reuse doctrine as `scene_params.w` above.
             // Written unconditionally — non-mask pipelines never read it.
-            uniforms.fog_params[2] =
-                if material.kind == MaterialKind::Unlit || (rt_enabled && rt_ready && rt_ao_enabled)
+            uniforms.fog_params[2] = if material.kind == MaterialKind::Unlit
+                || (rt_enabled && rt_ready && rt_ao_enabled)
                 {
                     0.0
                 } else {
@@ -4981,7 +5470,14 @@ impl EffectNode for RenderScene {
 
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired, ao_mask_wired, denoise_aux_ready, is_blend)
+                self.pipeline_for(
+                    gpu.device,
+                    material.kind,
+                    velocity_wired,
+                    ao_mask_wired,
+                    denoise_aux_ready,
+                    is_blend,
+                )
                     .clone()
             };
 
@@ -5041,9 +5537,13 @@ impl EffectNode for RenderScene {
         // RT + glass scene hit it too).
         if has_transmission && (velocity_wired || ao_mask_wired) {
             let gpu = ctx.gpu_encoder();
-            for draw in draws.iter_mut().filter(|d| d.alpha_mode == AlphaMode::Blend) {
-                draw.pipeline =
-                    self.pipeline_for(gpu.device, draw.kind, false, false, false, true).clone();
+            for draw in draws
+                .iter_mut()
+                .filter(|d| d.alpha_mode == AlphaMode::Blend)
+            {
+                draw.pipeline = self
+                    .pipeline_for(gpu.device, draw.kind, false, false, false, true)
+                    .clone();
             }
         }
 
@@ -5053,8 +5553,9 @@ impl EffectNode for RenderScene {
         // `gpu_encoder()` block below, whose live `&mut GpuEncoder` borrows
         // `ctx` for the whole block and would conflict with a `ctx.outputs`
         // access from inside it.
-        let opaque_scene_color_target_format =
-            has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
+        let opaque_scene_color_target_format = has_transmission
+            .then(|| ctx.outputs.texture_2d("color").map(|t| t.format))
+            .flatten();
 
         // ---- Ensure cached GPU resources (mutable phase). ----
         let has_casters = !casters.is_empty();
@@ -5118,8 +5619,13 @@ impl EffectNode for RenderScene {
             // mismatch.
             if temporal_upscale {
                 self.ensure_rt_temporal_color_scratch(gpu.device, width, height);
-                temporal_upscale_active =
-                    self.ensure_rt_temporal_upscaler(gpu.device, width, height, native_width, native_height);
+                temporal_upscale_active = self.ensure_rt_temporal_upscaler(
+                    gpu.device,
+                    width,
+                    height,
+                    native_width,
+                    native_height,
+                );
             }
             // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: denoiser takes
             // priority over the plain temporal scaler on RT scenes (DN2).
@@ -5129,7 +5635,8 @@ impl EffectNode for RenderScene {
             // When the denoiser is active but temporal_upscale is off (1:1
             // denoise), the forward pass renders into a native-res scratch
             // so the denoiser's input and output don't alias.
-            let denoise_wanted = rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
+            let denoise_wanted =
+                rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
             // Gate-block diagnostic (2026-08-08, Peter's "does nothing"
             // report): the conditions fail silently — name the blocker
             // once per transition instead of leaving the feature inert.
@@ -5213,9 +5720,7 @@ impl EffectNode for RenderScene {
             if has_transmission || rt_enabled {
                 self.ensure_opaque_depth_snapshot(gpu.device, width, height);
             }
-            if has_transmission
-                && let Some(format) = opaque_scene_color_target_format
-            {
+            if has_transmission && let Some(format) = opaque_scene_color_target_format {
                 self.ensure_opaque_scene_color(gpu.device, width, height, format);
             }
             // BUG-310: the tracer's 3 raw-MSL pipeline compiles (~30ms)
@@ -5231,7 +5736,8 @@ impl EffectNode for RenderScene {
             if rt_enabled {
                 self.ensure_rt_masks(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
-                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
+                let irr_reallocated =
+                    self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
                 // RT-Stage-3 P1 (BUG-mkgh): firefly-clamp params buffer +
@@ -5281,8 +5787,7 @@ impl EffectNode for RenderScene {
             }
             self.light_frame = (self.light_frame + 1) % FRAMES_IN_FLIGHT;
             unsafe {
-                self.light_buffers[self.light_frame]
-                    .write(0, bytemuck::cast_slice(&light_data));
+                self.light_buffers[self.light_frame].write(0, bytemuck::cast_slice(&light_data));
             }
         }
 
@@ -5300,7 +5805,13 @@ impl EffectNode for RenderScene {
             let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
-            self.run_ibl_convolution(gpu, &sampler, envmap_wired, envmap_generation, rebuild_epoch);
+            self.run_ibl_convolution(
+                gpu,
+                &sampler,
+                envmap_wired,
+                envmap_generation,
+                rebuild_epoch,
+            );
             gpu.checkpoint();
         }
 
@@ -5358,8 +5869,11 @@ impl EffectNode for RenderScene {
             // ONLY place `cast_shadows == false` removes an object from —
             // it stays in `opaque_draws` (and therefore the prepass/accel
             // above and below) unchanged.
-            let caster_draws: Vec<&ObjectDraw> =
-                opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
+            let caster_draws: Vec<&ObjectDraw> = opaque_draws
+                .iter()
+                .copied()
+                .filter(|d| d.cast_shadows)
+                .collect();
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
             for (slot, l) in casters.iter().enumerate() {
@@ -5476,7 +5990,11 @@ impl EffectNode for RenderScene {
         // (zero-transmission = zero extra passes, same lazy contract as the
         // shaft/velocity features above). ----
         if has_transmission || rt_enabled {
-            let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
+            let opaque_depth_pipeline = self
+                .shadow_pipeline
+                .as_ref()
+                .expect("ensured above")
+                .clone();
             let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
             let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
@@ -5570,12 +6088,11 @@ impl EffectNode for RenderScene {
                     // 16 = 32).
                     uv_offset: 32,
                     alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                    // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): nonzero
-                    // translucency also leaves the BLAS opaque fast path.
-                    // Read from the SAME material uniform the raster forward
-                    // term and the GiMaterial factor below read — one source
-                    // of truth. Folded into the topo key so a live 0→nonzero
-                    // flip triggers the bounded async rebuild (D17).
+                        // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): read
+                        // from the SAME material uniform the raster forward term
+                        // and GiMaterial factor below read. Visibility rays select
+                        // non-opaque traversal per query; geometry rays keep the
+                        // hardware opaque fast path, so this is not BLAS topology.
                     translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
                     alpha_cutoff: d.uniforms.alpha_params[1],
                     base_color_texture: d.base_color_map,
@@ -5619,8 +6136,16 @@ impl EffectNode for RenderScene {
                     } else {
                         0
                     },
-                    instances_buffer: if rt_instances_wired { d.instances } else { None },
-                    instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
+                        instances_buffer: if rt_instances_wired {
+                            d.instances
+                        } else {
+                            None
+                        },
+                        instance_slots: if rt_instances_wired {
+                            d.instance_count
+                        } else {
+                            1
+                        },
                 }
                 })
                 .collect();
@@ -5684,11 +6209,12 @@ impl EffectNode for RenderScene {
             for o in &objects {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
-                // RT-TL-B (TL6): BLAS opacity is baked at build time, so a
-                // translucency 0↔nonzero flip needs a full rebuild, not a
-                // refit — the flag rides the TOPO key (BUG-308's one-frame
-                // defer gives the bounded raster-presenting transition).
-                hasher.write_u8(o.translucent as u8);
+                // Alpha masking is baked into BLAS opacity, so a live mode
+                // change must rebuild. Translucency deliberately does not
+                // ride this key: visibility rays override opacity per query,
+                // while geometry rays always treat translucent surfaces as
+                // opaque blockers.
+                hasher.write_u8(o.alpha_mask as u8);
                 // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
                 // CAPACITY is topology — the TLAS slot count is baked at
                 // build time, so a capacity change rebuilds through
@@ -5739,7 +6265,27 @@ impl EffectNode for RenderScene {
             }
             let content_key = content_hasher.finish();
 
+            let topology_time = ctx.time;
             let gpu = ctx.gpu_encoder();
+            // Validate the resident AS before any frame-local RT table or
+            // source upload. A mismatch enters the normal deferred rebuild
+            // path and cannot use the stale readiness latch.
+            let topology_valid = self.rt_accel.as_ref().is_none_or(|accel| match accel.check_topology(&objects) {
+                Ok(()) => true,
+                Err(mismatch) => {
+                    let first_rejection = reject_topology(
+                        &mut self.rt_accel_topo_key, &mut self.rt_accel_key, &mut self.rt_accel_content_key,
+                        &mut self.rt_accel_pending_key, &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                        &mut self.rt_topology_rejected,
+                    );
+                    rt_ready = false;
+                    if first_rejection && !self.rt_topology_mismatch_logged {
+                        log::warn!("node.render_scene: RT topology mismatch: object={} category={:?} time={:?}", mismatch.object, mismatch.category, topology_time);
+                        self.rt_topology_mismatch_logged = true;
+                    }
+                    false
+                }
+            });
             // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
             // buffers above are ensured before `opaque_draws`'
@@ -5754,7 +6300,13 @@ impl EffectNode for RenderScene {
             // slot.
             let rt_gi_slot_count: usize = objects
                 .iter()
-                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
+                .map(|o| {
+                    if o.instances_addr != 0 {
+                        o.instance_slots.max(1) as usize
+                    } else {
+                        1
+                    }
+                })
                 .sum::<usize>()
                 + objects.len();
             ensure_rt_gi_materials(
@@ -5782,7 +6334,8 @@ impl EffectNode for RenderScene {
             // BUG-wytp: the same returned list now also carries normal-map
             // textures (and MR maps, since R3), indexed by
             // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
-            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
+            let alpha_textures: Vec<&manifold_gpu::GpuTexture> =
+                manifold_gpu::raytrace::ensure_normal_sources(
                 &mut self.rt_normal_sources,
                 &mut self.rt_normal_sources_capacity,
                 gpu.device,
@@ -5816,15 +6369,20 @@ impl EffectNode for RenderScene {
             // accel_key changes under an UNCHANGED topo key) fires only
             // when neither trigger has work to do — a content rebuild
             // subsumes any pending refit.
-            let mut build_this_frame = false;
-            let mut content_trigger_fired = false;
-
-            // ── Topo trigger ──
-            if self.rt_accel_topo_key != Some(topo_key) {
-                if self.rt_accel_pending_key == Some(topo_key) {
-                    build_this_frame = true;
-                } else {
-                    self.rt_accel_pending_key = Some(topo_key);
+            let (build_this_frame, content_trigger_fired) = match rt_deferred_build_decision(
+                self.rt_accel_topo_key,
+                self.rt_accel_content_key,
+                &mut self.rt_accel_pending_key,
+                &mut self.rt_accel_content_pending_key,
+                topo_key,
+                content_key,
+            ) {
+                RtBuildDecision::Defer => (false, false),
+                RtBuildDecision::Build {
+                    content_trigger_fired,
+                } => (true, content_trigger_fired),
+            };
+            /*
                     // BUG-oqta repro knob (probe-only, production-inert):
                     // stretch the one-frame defer's WALL time so async mesh
                     // content lands inside the window on any machine — the
@@ -5838,28 +6396,22 @@ impl EffectNode for RenderScene {
                         eprintln!("MANIFOLD_PROBE_RT_ACCEL: defer-window sleep {ms}ms");
                         std::thread::sleep(std::time::Duration::from_millis(ms));
                     }
-                }
-            }
-            // ── Content-settle trigger (only when topo is stable) ──
-            if self.rt_accel_topo_key == Some(topo_key)
-                && self.rt_accel_content_key != Some(content_key)
-            {
-                if self.rt_accel_content_pending_key == Some(content_key) {
-                    build_this_frame = true;
-                    content_trigger_fired = true;
-                } else {
-                    self.rt_accel_content_pending_key = Some(content_key);
-                }
-            }
+            */
 
             if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 // Q1 probe: what did build_accel see?
                 if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
-                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
+                    eprintln!(
+                        "MANIFOLD_PROBE_RT_ACCEL: build called with {} objects",
+                        objects.len()
+                    );
                     for (i, o) in objects.iter().enumerate() {
                         let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
-                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
+                        eprintln!(
+                            "  object[{}]: triangle_count={}, vertices_generation={:?}",
+                            i, o.triangle_count, vgen
+                        );
                     }
                 }
                 // The old accel is dropped here — safe: `RtAccel`'s
@@ -5881,10 +6433,11 @@ impl EffectNode for RenderScene {
                 // before tracing resumes — the old accel is dropped
                 // (self-retiring Drop) and no longer traced against.
                 self.rt_accel_built = false;
+                self.rt_topology_rejected = false;
                 log::info!(
                     "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"
                 );
-            } else if self.rt_accel_key != Some(accel_key) {
+            } else if rt_refit_eligible(topology_valid, self.rt_accel_key, accel_key) {
                 // BUG-320: same topology, moved transforms — refit the
                 // TLAS in place. Safe same-frame (transforms are
                 // CPU-authored; no upstream GPU write to race — the
@@ -5901,8 +6454,29 @@ impl EffectNode for RenderScene {
                     && accel.ready.load(std::sync::atomic::Ordering::Acquire)
                 {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    tracer.refit_accel(gpu.device, accel, &objects);
+                    if let Err(mismatch) = tracer.refit_accel(gpu.device, accel, &objects) {
+                        let first_rejection = reject_topology(
+                            &mut self.rt_accel_topo_key,
+                            &mut self.rt_accel_key,
+                            &mut self.rt_accel_content_key,
+                            &mut self.rt_accel_pending_key,
+                            &mut self.rt_accel_content_pending_key,
+                            &mut self.rt_accel_built,
+                            &mut self.rt_topology_rejected,
+                        );
+                        rt_ready = false;
+                        if first_rejection && !self.rt_topology_mismatch_logged {
+                            log::warn!(
+                                "node.render_scene: RT topology mismatch before refit: object={} category={:?}",
+                                mismatch.object,
+                                mismatch.category
+                            );
+                            self.rt_topology_mismatch_logged = true;
+                        }
+                    } else {
                     self.rt_accel_key = Some(accel_key);
+                        self.rt_topology_mismatch_logged = false;
+                    }
                 }
             }
 
@@ -5928,13 +6502,15 @@ impl EffectNode for RenderScene {
             // the raster shadow-map path serves the transition.
             // The resident content key must match too: a deferred settle
             // build serves raster while current geometry is not resident.
-            if rt_trace_gate(
+            if topology_valid
+                && rt_trace_gate(
                 rt_ready,
                 self.rt_accel_topo_key,
                 topo_key,
                 self.rt_accel_content_key,
                 content_key,
-            ) {
+                )
+            {
                 // RS-B: thread the emissive table's mean power (firefly-cap
                 // anchor) through the params — 0.0 when the scene has no
                 // emissive geometry. Hoisted to the evaluate scope (mut
@@ -5963,7 +6539,8 @@ impl EffectNode for RenderScene {
                     .map(|t| t.entry_count)
                     .unwrap_or(0);
                 // RS-C test-only gate: force the sampler kernel block off.
-                let emissive_table_entry_count = if std::env::var("MANIFOLD_DISABLE_EMISSIVE_SAMPLER").as_deref() == Ok("1") {
+                let emissive_table_entry_count =
+                    if std::env::var("MANIFOLD_DISABLE_EMISSIVE_SAMPLER").as_deref() == Ok("1") {
                     0u32
                 } else {
                     emissive_table_entry_count
@@ -5992,9 +6569,9 @@ impl EffectNode for RenderScene {
                             ),
                             crate::node_graph::light::LightMode::Point => {
                                 let light_size = match l.shadow_softness {
-                                    crate::node_graph::light::ShadowSoftness::Contact { light_size } => {
-                                        light_size
-                                    }
+                                    crate::node_graph::light::ShadowSoftness::Contact {
+                                        light_size,
+                                    } => light_size,
                                     _ => 0.0,
                                 };
                                 (l.pos, light_size, 1u32)
@@ -6036,8 +6613,7 @@ impl EffectNode for RenderScene {
                     (1, 1)
                 };
                 let (light_half_w, light_half_h) = (trace_w, trace_h);
-                let mask_sizes_differ =
-                    mask_half_w != light_half_w || mask_half_h != light_half_h;
+                let mask_sizes_differ = mask_half_w != light_half_w || mask_half_h != light_half_h;
 
                 // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
                 // longer enters the kernel (`ShadowRayParams` has no
@@ -6048,14 +6624,18 @@ impl EffectNode for RenderScene {
 
                 // RT-TL-C (section 16 TL5): find the ONE sun caster whose
                 // rgb tint fills out_svt — SVT_SLOT_NONE when no sun exists.
-                let svt_slot = rt_svt_slot(&casters)
-                    .unwrap_or(manifold_gpu::raytrace::SVT_SLOT_NONE);
+                let svt_slot =
+                    rt_svt_slot(&casters).unwrap_or(manifold_gpu::raytrace::SVT_SLOT_NONE);
 
                 // RT-A3a: mask params — built for the split case when trace
                 // sizes differ. When sizes match, unused (shadow folded into
                 // lighting dispatch). Gated on rt_shadows_enabled: if shadows
                 // are off, this dispatch is skipped entirely.
-                let mask_shadow_spp: u32 = if rt_shadows_enabled { rtq.shadow_spp } else { 0 };
+                let mask_shadow_spp: u32 = if rt_shadows_enabled {
+                    rtq.shadow_spp
+                } else {
+                    0
+                };
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     mask_shadow_spp,
@@ -6087,8 +6667,11 @@ impl EffectNode for RenderScene {
                 // sizes match (one fused dispatch at monolithic perf); 0 when
                 // split (separate mask dispatch handles shadow at its own size).
                 // Gated on rt_shadows_enabled.
-                let lighting_shadow_spp: u32 =
-                    if rt_shadows_enabled && !mask_sizes_differ { rtq.shadow_spp } else { 0 };
+                let lighting_shadow_spp: u32 = if rt_shadows_enabled && !mask_sizes_differ {
+                    rtq.shadow_spp
+                } else {
+                    0
+                };
                 // RT_QUALITY_SETTINGS_DESIGN.md D5: per-frame spp from the
                 // quality column, gated on the per-term toggles — off → 0
                 // (kernel skips the gather). I2: a tier is never 0.
@@ -6155,13 +6738,20 @@ impl EffectNode for RenderScene {
                         )
                     };
                     unsafe {
-                        std::ptr::copy_nonoverlapping(canonical_bytes.as_ptr(), ptr, canonical_bytes.len());
+                        std::ptr::copy_nonoverlapping(
+                            canonical_bytes.as_ptr(),
+                            ptr,
+                            canonical_bytes.len(),
+                        );
                     }
                     // Slot region [N, N+Σ): per-slot duplicates.
                     let mut slot_row = 0usize;
                     for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
-                        let slots =
-                            if o.instances_addr != 0 { o.instance_slots.max(1) } else { 1 };
+                        let slots = if o.instances_addr != 0 {
+                            o.instance_slots.max(1)
+                        } else {
+                            1
+                        };
                         for _ in 0..slots {
                             unsafe {
                                 std::ptr::copy_nonoverlapping(
@@ -6208,9 +6798,13 @@ impl EffectNode for RenderScene {
                     }
                 }
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
+                let accel = self
+                    .rt_accel
+                    .as_ref()
+                    .expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
-                let mask_params_buffer = self.rt_mask_params_buffer.as_ref().expect("ensured above");
+                let mask_params_buffer =
+                    self.rt_mask_params_buffer.as_ref().expect("ensured above");
                 let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
@@ -6290,12 +6884,20 @@ impl EffectNode for RenderScene {
                     // RS-C: pass the real emissive table buffers when
                     // available (the kernel guards on entry_count > 0);
                     // fall back to dummy when no emissive geometry exists.
-                    accel.emissive_table.as_ref()
+                    accel
+                        .emissive_table
+                        .as_ref()
                         .map(|t| &t.triangles)
-                        .unwrap_or_else(|| self.dummy_emissive_buffer.as_ref().expect("ensured above")),
-                    accel.emissive_table.as_ref()
+                        .unwrap_or_else(|| {
+                            self.dummy_emissive_buffer.as_ref().expect("ensured above")
+                        }),
+                    accel
+                        .emissive_table
+                        .as_ref()
                         .map(|t| &t.aliases)
-                        .unwrap_or_else(|| self.dummy_emissive_buffer.as_ref().expect("ensured above")),
+                        .unwrap_or_else(|| {
+                            self.dummy_emissive_buffer.as_ref().expect("ensured above")
+                        }),
                     self.rt_has_translucency,
                     "node.render_scene RT-A3a lighting dispatch (AO+GI+reflection+normal)",
                 );
@@ -6328,7 +6930,8 @@ impl EffectNode for RenderScene {
                 // frame the pre-flip plan has no hit-dist target, so
                 // denoise_aux_ready is false and this block idles one frame.
                 if denoise_aux_ready {
-                    let hit_dist_target = spec_hit_dist_out.expect("denoise_aux_ready implies Some");
+                    let hit_dist_target =
+                        spec_hit_dist_out.expect("denoise_aux_ready implies Some");
                     // COMPILE_CONTRACT_DESIGN P2: hit_dist_extract pipeline is prewarmed
                     // at startup, but use lazy creation as fallback if prewarm hasn't run.
                     if self.hit_dist_extract_pipeline.is_none() {
@@ -6338,14 +6941,21 @@ impl EffectNode for RenderScene {
                             "node.render_scene hit_dist_extract",
                         ));
                     }
-                    let hit_dist_pipeline = self.hit_dist_extract_pipeline
+                    let hit_dist_pipeline = self
+                        .hit_dist_extract_pipeline
                         .as_ref()
                         .expect("just created or prewarmed");
                     gpu.native_enc.dispatch_compute(
                         hit_dist_pipeline,
                         &[
-                            GpuBinding::Texture { binding: 0, texture: refl_full },
-                            GpuBinding::Texture { binding: 1, texture: hit_dist_target },
+                            GpuBinding::Texture {
+                                binding: 0,
+                                texture: refl_full,
+                            },
+                            GpuBinding::Texture {
+                                binding: 1,
+                                texture: hit_dist_target,
+                            },
                         ],
                         [width.div_ceil(16), height.div_ceil(16), 1],
                         "node.render_scene hit_dist extract",
@@ -6366,8 +6976,13 @@ impl EffectNode for RenderScene {
                 const ATROUS_ITERATIONS: u32 = 3;
                 let read_idx = self.rt_history_ping;
                 let write_idx = 1 - read_idx;
-                let moments_read = self.rt_moments_history[read_idx].as_ref().expect("ensured above");
-                let atrous_params_buffer = self.rt_atrous_params_buffer.as_ref().expect("ensured above");
+                let moments_read = self.rt_moments_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let atrous_params_buffer = self
+                    .rt_atrous_params_buffer
+                    .as_ref()
+                    .expect("ensured above");
                 let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
                 let mask_full2_b = self.rt_mask_full2_b.as_ref().expect("ensured above");
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
@@ -6385,13 +7000,54 @@ impl EffectNode for RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, src_refl, src_svt, dst_sv, dst_irr, dst_n, dst_refl, dst_svt, src_sv2, dst_sv2) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, refl_full, svt_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full2, mask_full2_b)
+                    let (
+                        src_sv,
+                        src_irr,
+                        src_n,
+                        src_refl,
+                        src_svt,
+                        dst_sv,
+                        dst_irr,
+                        dst_n,
+                        dst_refl,
+                        dst_svt,
+                        src_sv2,
+                        dst_sv2,
+                    ) = if pass % 2 == 0 {
+                        (
+                            mask_full,
+                            irr_full,
+                            normal_full,
+                            refl_full,
+                            svt_full,
+                            mask_full_b,
+                            irr_full_b,
+                            normal_full_b,
+                            refl_full_b,
+                            svt_full_b,
+                            mask_full2,
+                            mask_full2_b,
+                        )
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full, irr_full, normal_full, refl_full, svt_full, mask_full2_b, mask_full2)
+                        (
+                            mask_full_b,
+                            irr_full_b,
+                            normal_full_b,
+                            refl_full_b,
+                            svt_full_b,
+                            mask_full,
+                            irr_full,
+                            normal_full,
+                            refl_full,
+                            svt_full,
+                            mask_full2_b,
+                            mask_full2,
+                        )
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
-                        [width, height], step, history_valid,
+                        [width, height],
+                        step,
+                        history_valid,
                         opaque_draws.len() as u32,
                     );
                     tracer.atrous_pass(
@@ -6444,10 +7100,12 @@ impl EffectNode for RenderScene {
                 // geometry-only sub-key (caster position/direction/cone/kind
                 // + svt slot). Gesture detection: two consecutive changes arm
                 // a hold counter.
-                let lighting_key =
-                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_generation);
-                let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
-                    gesture_detect(
+                let lighting_key = compute_rt_lighting_key(
+                    &rt_casters,
+                    &atmosphere.ambient_tint,
+                    envmap_generation,
+                );
+                let (lighting_changed, lighting_gesture, _new_prev, new_gesture) = gesture_detect(
                         self.rt_lighting_key,
                         lighting_key,
                         self.rt_lighting_prev_changed,
@@ -6458,8 +7116,7 @@ impl EffectNode for RenderScene {
                 self.rt_lighting_gesture = new_gesture;
 
                 let geo_key = compute_rt_lighting_geo_key(&rt_casters, svt_slot);
-                let (geo_changed, geo_gesture, _geo_prev, new_geo_gesture) =
-                    gesture_detect(
+                let (geo_changed, geo_gesture, _geo_prev, new_geo_gesture) = gesture_detect(
                         self.rt_lighting_geo_key,
                         geo_key,
                         self.rt_lighting_geo_prev_changed,
@@ -6496,53 +7153,109 @@ impl EffectNode for RenderScene {
                 // frame's beauty, our temporal history caps drop to
                 // near-raw — the network's history replaces ours.
                 .with_denoise_near_raw(denoise_active);
-                let accumulate_params_buffer =
-                    self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
+                let accumulate_params_buffer = self
+                    .rt_accumulate_params_buffer
+                    .as_ref()
+                    .expect("ensured above");
                 // RT-T1-C: ping-pong — read last frame's write slot (same
                 // `read_idx`/`write_idx` the à-trous pass above already
                 // used for `moments_read`), write the OTHER (stale-from-
                 // two-frames-ago, about to be fully overwritten) slot, then
                 // flip so next frame reads what was just written.
-                let irr_history_read = self.rt_irr_history[read_idx].as_ref().expect("ensured above");
-                let irr_history_write = self.rt_irr_history[write_idx].as_ref().expect("ensured above");
-                let depth_history_read = self.rt_depth_history[read_idx].as_ref().expect("ensured above");
-                let depth_history_write = self.rt_depth_history[write_idx].as_ref().expect("ensured above");
-                let normal_history_read = self.rt_normal_history[read_idx].as_ref().expect("ensured above");
-                let normal_history_write = self.rt_normal_history[write_idx].as_ref().expect("ensured above");
-                let moments_write = self.rt_moments_history[write_idx].as_ref().expect("ensured above");
+                let irr_history_read = self.rt_irr_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let irr_history_write = self.rt_irr_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let depth_history_read = self.rt_depth_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let depth_history_write = self.rt_depth_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let normal_history_read = self.rt_normal_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let normal_history_write = self.rt_normal_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let moments_write = self.rt_moments_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
                 // RT-R2 (RD6): reflection history ping-pong — same read/write
                 // indexing as the irradiance/depth/normal pairs above, sharing
                 // the same `rt_history_ping` flip (I-R2: no second flip clock).
-                let refl_history_read = self.rt_refl_history[read_idx].as_ref().expect("ensured above");
-                let refl_history_write = self.rt_refl_history[write_idx].as_ref().expect("ensured above");
+                let refl_history_read = self.rt_refl_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let refl_history_write = self.rt_refl_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
                 // SV-ACCUM: shadow-visibility history — same read/write
                 // indexing and the same flip clock as every other pair.
                 // `mask_full` is the atrous-filtered current frame (the
                 // even atrous pass count lands it there — see the
                 // ATROUS_ITERATIONS comment above).
-                let sv_history_read = self.rt_sv_history[read_idx].as_ref().expect("ensured above");
-                let sv_history_write = self.rt_sv_history[write_idx].as_ref().expect("ensured above");
-                let sv_m1_read = self.rt_sv_m1_history[read_idx].as_ref().expect("ensured above");
-                let sv_m1_write = self.rt_sv_m1_history[write_idx].as_ref().expect("ensured above");
-                let sv_m2_read = self.rt_sv_m2_history[read_idx].as_ref().expect("ensured above");
-                let sv_m2_write = self.rt_sv_m2_history[write_idx].as_ref().expect("ensured above");
-                let sv_hold_read = self.rt_sv_hold_history[read_idx].as_ref().expect("ensured above");
-                let sv_hold_write = self.rt_sv_hold_history[write_idx].as_ref().expect("ensured above");
+                let sv_history_read = self.rt_sv_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_history_write = self.rt_sv_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_m1_read = self.rt_sv_m1_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_m1_write = self.rt_sv_m1_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_m2_read = self.rt_sv_m2_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_m2_write = self.rt_sv_m2_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_hold_read = self.rt_sv_hold_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv_hold_write = self.rt_sv_hold_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
                 // RS-A (caster cap 4 -> 8): second SV-ACCUM channel — same
                 // read/write indexing, same flip clock, independent sigma-gate.
-                let sv2_history_read = self.rt_sv2_history[read_idx].as_ref().expect("ensured above");
-                let sv2_history_write = self.rt_sv2_history[write_idx].as_ref().expect("ensured above");
-                let sv2_m1_read = self.rt_sv2_m1_history[read_idx].as_ref().expect("ensured above");
-                let sv2_m1_write = self.rt_sv2_m1_history[write_idx].as_ref().expect("ensured above");
-                let sv2_m2_read = self.rt_sv2_m2_history[read_idx].as_ref().expect("ensured above");
-                let sv2_m2_write = self.rt_sv2_m2_history[write_idx].as_ref().expect("ensured above");
-                let sv2_hold_read = self.rt_sv2_hold_history[read_idx].as_ref().expect("ensured above");
-                let sv2_hold_write = self.rt_sv2_hold_history[write_idx].as_ref().expect("ensured above");
+                let sv2_history_read = self.rt_sv2_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_history_write = self.rt_sv2_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_m1_read = self.rt_sv2_m1_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_m1_write = self.rt_sv2_m1_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_m2_read = self.rt_sv2_m2_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_m2_write = self.rt_sv2_m2_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_hold_read = self.rt_sv2_hold_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let sv2_hold_write = self.rt_sv2_hold_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
                 // RT-TL-C (TL8): svt history gets the same read/write indices
                 // as the irradiance channel (svt blends with irr alpha, not sv
                 // sigma-gate).
-                let svt_history_read = self.rt_svt_history[read_idx].as_ref().expect("ensured above");
-                let svt_history_write = self.rt_svt_history[write_idx].as_ref().expect("ensured above");
+                let svt_history_read = self.rt_svt_history[read_idx]
+                    .as_ref()
+                    .expect("ensured above");
+                let svt_history_write = self.rt_svt_history[write_idx]
+                    .as_ref()
+                    .expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -6610,22 +7323,21 @@ impl EffectNode for RenderScene {
                 // separate test needed (the bypass is trivially correct by
                 // code inspection).
                 if denoise_iterations > 0 && !denoise_active {
-                    let params_buffer = self.rt_atrous_post_params_buffer
-                        .as_ref().expect("ensured above");
-                    let filtered_a = self.rt_irr_filtered
-                        .as_ref().expect("ensured above");
-                    let filtered_b = self.rt_irr_filtered_b
-                        .as_ref().expect("ensured above");
+                    let params_buffer = self
+                        .rt_atrous_post_params_buffer
+                        .as_ref()
+                        .expect("ensured above");
+                    let filtered_a = self.rt_irr_filtered.as_ref().expect("ensured above");
+                    let filtered_b = self.rt_irr_filtered_b.as_ref().expect("ensured above");
                     // Depth/normal guides: the RT block's opaque_depth_snapshot
                     // (the ALWAYS-ENSURED internal depth — NOT the later MSAA
                     // depth_tex at old line 6349), rt_normal_full (current
                     // frame), and moments_write (the just-written moments slot).
-                    let depth_guide = self.opaque_depth_snapshot
-                        .as_ref().expect("ensured above");
-                    let normal_guide = self.rt_normal_full
-                        .as_ref().expect("ensured above");
+                    let depth_guide = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+                    let normal_guide = self.rt_normal_full.as_ref().expect("ensured above");
                     let moments_src = self.rt_moments_history[write_idx]
-                        .as_ref().expect("ensured above");
+                        .as_ref()
+                        .expect("ensured above");
 
                     // Ping-pong: source for pass 0 = the just-written
                     // history slot; later passes read from the previous
@@ -6634,7 +7346,8 @@ impl EffectNode for RenderScene {
                     // point). The write-set is ONLY rt_irr_filtered* —
                     // rt_irr_history is never a write target (I2).
                     let mut src = self.rt_irr_history[self.rt_history_ping]
-                        .as_ref().expect("ensured above");
+                        .as_ref()
+                        .expect("ensured above");
                     for pass in 0..denoise_iterations {
                         let step = 1u32 << pass;
                         let post_params = manifold_gpu::raytrace::AtrousPostParams::new(
@@ -6702,18 +7415,60 @@ impl EffectNode for RenderScene {
                     let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
                     let refl_write = self.rt_history_ping;
                     let refl_read = 1 - refl_write;
-                    if let Some(ref t) = self.rt_refl_full { q.push(RtCaptureSlot {
-                        label: "refl_raw".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
-                    if let Some(ref t) = self.rt_refl_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "refl_history_write".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
-                    if let Some(ref t) = self.rt_refl_history[refl_read] { q.push(RtCaptureSlot {
-                        label: "refl_history_read".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
-                    if let Some(ref t) = self.rt_irr_full { q.push(RtCaptureSlot {
-                        label: "irr_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    if let Some(ref t) = self.rt_refl_full {
+                        q.push(RtCaptureSlot {
+                            label: "refl_raw".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
+                    if let Some(ref t) = self.rt_refl_half {
+                        q.push(RtCaptureSlot {
+                            label: "refl_trace".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
+                    if let Some(ref t) = self.rt_normal_half {
+                        q.push(RtCaptureSlot {
+                            label: "normal_trace".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
+                    if let Some(ref t) = self.rt_refl_history[refl_write] {
+                        q.push(RtCaptureSlot {
+                            label: "refl_history_write".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
+                    if let Some(ref t) = self.rt_refl_history[refl_read] {
+                        q.push(RtCaptureSlot {
+                            label: "refl_history_read".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
+                    if let Some(ref t) = self.rt_irr_full {
+                        q.push(RtCaptureSlot {
+                            label: "irr_full".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
                     // RT-Stage-3 P4 (BUG-eytk): the post-filtered irradiance
                     // capture — taps `rt_irr_filtered` when the filter ran
                     // this frame, falls back to the raw history slot when
@@ -6721,39 +7476,75 @@ impl EffectNode for RenderScene {
                     // the PRE-accumulation signal — never moved by the
                     // filter; this slot is the POST-accumulation output.
                     if irr_filtered_valid {
-                        if let Some(ref t) = self.rt_irr_filtered { q.push(RtCaptureSlot {
-                            label: "irr_accum".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                        });}
+                        if let Some(ref t) = self.rt_irr_filtered {
+                            q.push(RtCaptureSlot {
+                                label: "irr_accum".into(),
+                                tex: t.clone(),
+                                frame: 0,
+                                w: t.width,
+                                h: t.height,
+                            });
+                        }
                     } else {
-                        if let Some(ref t) = self.rt_irr_history[refl_write] { q.push(RtCaptureSlot {
-                            label: "irr_accum".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                        });}
+                        if let Some(ref t) = self.rt_irr_history[refl_write] {
+                            q.push(RtCaptureSlot {
+                                label: "irr_accum".into(),
+                                tex: t.clone(),
+                                frame: 0,
+                                w: t.width,
+                                h: t.height,
+                            });
+                        }
                     }
-                    if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    if let Some(ref t) = self.rt_moments_history[refl_write] {
+                        q.push(RtCaptureSlot {
+                            label: "moments".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
                     // SV-ACCUM: the `mask` channel dumps the ACCUMULATED
                     // visibility (the texture binding 41 actually feeds the
                     // fragment shader) — the gate must measure what the show
                     // consumes, not the pre-accumulation atrous output.
                     // `rt_mask_full` stays in the chain (atrous scratch) but
                     // is no longer the consumed mask.
-                    if let Some(ref t) = self.rt_sv_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "mask".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    if let Some(ref t) = self.rt_sv_history[refl_write] {
+                        q.push(RtCaptureSlot {
+                            label: "mask".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
                     // BUG-fh95: the RAW pre-upsample/pre-denoise trace output
                     // (out_sv at trace res, R=vis G=ao) — the texture the
                     // original open-plane 0/0 was read from; the full-res
                     // mask above can't see it (post-atrous).
-                    if let Some(ref t) = self.rt_mask_half { q.push(RtCaptureSlot {
-                        label: "mask_half".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    if let Some(ref t) = self.rt_mask_half {
+                        q.push(RtCaptureSlot {
+                            label: "mask_half".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
                     // BUG-tr5o: the sv snap-HOLD counter — the direct
                     // observable of gate re-trips under camera motion
                     // (sustained >0 on penumbra = re-tripping; ~0 = healthy).
-                    if let Some(ref t) = self.rt_sv_hold_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "sv_hold".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    if let Some(ref t) = self.rt_sv_hold_history[refl_write] {
+                        q.push(RtCaptureSlot {
+                            label: "sv_hold".into(),
+                            tex: t.clone(),
+                            frame: 0,
+                            w: t.width,
+                            h: t.height,
+                        });
+                    }
                 }
             }
         }
@@ -6779,13 +7570,17 @@ impl EffectNode for RenderScene {
         // real `native_color` texture is only touched again at this fn's
         // very end.
         let target: &manifold_gpu::GpuTexture = if temporal_upscale {
-            self.rt_temporal_color_scratch.as_ref().expect("ensured above")
+            self.rt_temporal_color_scratch
+                .as_ref()
+                .expect("ensured above")
         } else if denoise_active {
             // 1:1 denoise: render into the native-res scratch so the
             // denoiser can read color from it and write to native_color
             // without aliasing (the scratch was ensured at native dims
             // in the ensure block above).
-            self.rt_temporal_color_scratch.as_ref().expect("ensured above")
+            self.rt_temporal_color_scratch
+                .as_ref()
+                .expect("ensured above")
         } else {
             native_color
         };
@@ -6797,9 +7592,8 @@ impl EffectNode for RenderScene {
         // `target` IS that scratch and the clamp's source/destination would
         // alias. Gated on RT having actually rendered this frame AND the
         // param AND not `denoise_active` (the denoiser owns the tail then).
-        let firefly_clamp_active = rt_rendered_this_frame
-            && rt_firefly_clamp_enabled
-            && !denoise_active;
+        let firefly_clamp_active =
+            rt_rendered_this_frame && rt_firefly_clamp_enabled && !denoise_active;
         let resolve_target: &manifold_gpu::GpuTexture = if firefly_clamp_active {
             self.rt_firefly_scratch.as_ref().expect("ensured above")
         } else {
@@ -6821,8 +7615,11 @@ impl EffectNode for RenderScene {
         // unwired". When `depth` IS wired, the graph's own resolve target
         // is used for BOTH the graph consumer and the march (one resolve,
         // two readers).
-        let depth_resolve_target = graph_depth_resolve_target
-            .or(if wants_shafts_now { self.shaft_depth_internal.as_ref() } else { None });
+        let depth_resolve_target = graph_depth_resolve_target.or(if wants_shafts_now {
+            self.shaft_depth_internal.as_ref()
+        } else {
+            None
+        });
         // GBUFFER_DESIGN.md section 2 D1/D5 (P2): same lazy rule as `depth` —
         // `None` when unwired, costing zero new bytes (I1).
         let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
@@ -6875,13 +7672,17 @@ impl EffectNode for RenderScene {
             // Every object had zero drawable vertices — clear so stale
             // pool contents don't leak through (matches render_mesh's
             // vertex_count == 0 fallback).
-            ctx.gpu_encoder().native_enc.clear_texture(resolve_target, 0.0, 0.0, 0.0, 0.0);
+            ctx.gpu_encoder()
+                .native_enc
+                .clear_texture(resolve_target, 0.0, 0.0, 0.0, 0.0);
             if firefly_clamp_active {
                 // Zero-vertex + clamp: RT didn't render (no geometry), so
                 // this branch is unreachable with the clamp armed — but
                 // clear `target` too so a future gate change can't strand
                 // a stale `target` behind an un-run clamp.
-                ctx.gpu_encoder().native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+                ctx.gpu_encoder()
+                    .native_enc
+                    .clear_texture(target, 0.0, 0.0, 0.0, 0.0);
             }
             return;
         }
@@ -6912,12 +7713,16 @@ impl EffectNode for RenderScene {
         // the `rt_irr_tex` discipline below. Before SV-ACCUM this bound
         // the raw post-atrous `rt_mask_full` — the only RT channel with
         // no temporal amortization, and the penumbra boil Peter reported.
-        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy);
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad binding
         // — the accumulated history for caster slots 4-7 (same format and
         // ABI-stub discipline as `rt_mask_tex`). Always bound; dummy when RT
         // isn't active.
-        let rt_mask_tex2 = self.rt_sv2_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_mask_tex2 = self.rt_sv2_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy);
         // RAYTRACING_DESIGN.md section 5.2 P2, extended RT-T1-C: the temporally-
         // accumulated demodulated-irradiance history — `rt_history_ping`
         // always indexes whichever ping-pong slot `accumulate_irradiance`
@@ -6929,7 +7734,9 @@ impl EffectNode for RenderScene {
         let rt_irr_tex = if irr_filtered_valid {
             self.rt_irr_filtered.as_ref().unwrap_or(dummy)
         } else {
-            self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy)
+            self.rt_irr_history[self.rt_history_ping]
+                .as_ref()
+                .unwrap_or(dummy)
         };
         // RAYTRACING_DESIGN.md section 9 RD1: the accumulated specular history
         // texture fs_pbr SUBSTITUTES for its prefiltered-env fetch when
@@ -6938,10 +7745,14 @@ impl EffectNode for RenderScene {
         // unreachable then). `rt_history_ping` indexes the most recent
         // write from `accumulate_irradiance` (RT-R2: swapped every frame
         // by the same ping-pong clock as `rt_irr_history`).
-        let rt_refl_tex = self.rt_refl_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_refl_tex = self.rt_refl_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy);
         // RT-TL-C (section 16 TL5): accumulated svt history — the just-written
         // slot after the ping flip, same ABI-stub discipline as rt_refl_tex.
-        let rt_svt_tex = self.rt_svt_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_svt_tex = self.rt_svt_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy);
         let binding_sets: Vec<[GpuBinding; 46]> = draws
             .iter()
             .map(|draw| {
@@ -7278,15 +8089,24 @@ impl EffectNode for RenderScene {
             (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
             _ => None,
         };
-        let roughness_pair = match (self.denoise_roughness_msaa.as_ref(), roughness_resolve_target) {
+        let roughness_pair = match (
+            self.denoise_roughness_msaa.as_ref(),
+            roughness_resolve_target,
+        ) {
             (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
             _ => None,
         };
-        let diffuse_albedo_pair = match (self.denoise_diffuse_albedo_msaa.as_ref(), diffuse_albedo_resolve_target) {
+        let diffuse_albedo_pair = match (
+            self.denoise_diffuse_albedo_msaa.as_ref(),
+            diffuse_albedo_resolve_target,
+        ) {
             (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
             _ => None,
         };
-        let specular_albedo_pair = match (self.denoise_specular_albedo_msaa.as_ref(), specular_albedo_resolve_target) {
+        let specular_albedo_pair = match (
+            self.denoise_specular_albedo_msaa.as_ref(),
+            specular_albedo_resolve_target,
+        ) {
             (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
             _ => None,
         };
@@ -7328,7 +8148,15 @@ impl EffectNode for RenderScene {
         let aux_storage_one: [manifold_gpu::AuxColorAttachment; 1];
         // DN-L: the reactive attachment (`rm`) joins the denoise four's
         // all-or-none group — every arm that carries n/r/da/sa carries rm.
-        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (velocity_att, ao_mask_att, n_att, r_att, da_att, sa_att, rm_att) {
+        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (
+            velocity_att,
+            ao_mask_att,
+            n_att,
+            r_att,
+            da_att,
+            sa_att,
+            rm_att,
+        ) {
             (Some(v), Some(a), Some(n), Some(r), Some(da), Some(sa), Some(rm)) => {
                 aux_storage_seven = [v, a, n, r, da, sa, rm];
                 &aux_storage_seven
@@ -7365,7 +8193,9 @@ impl EffectNode for RenderScene {
             resolve_target,
             msaa_depth: depth_tex,
             depth_resolve: depth_resolve_target.map(|_| {
-                self.depth_resolve_scratch.as_ref().expect("depth consumer ensured native resolve")
+                self.depth_resolve_scratch
+                    .as_ref()
+                    .expect("depth consumer ensured native resolve")
             }),
             aux_color,
             depth_stencil_state: depth_stencil,
@@ -7377,7 +8207,10 @@ impl EffectNode for RenderScene {
 
         if let Some(output) = depth_resolve_target {
             ctx.gpu_encoder().native_enc.copy_depth_to_float(
-                self.depth_resolve_scratch.as_ref().expect("native resolve ensured"), output,
+                self.depth_resolve_scratch
+                    .as_ref()
+                    .expect("native resolve ensured"),
+                output,
             );
         }
 
@@ -7400,8 +8233,13 @@ impl EffectNode for RenderScene {
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
             let blend_depth_stencil = self.blend_depth_stencil.as_ref().expect("ensured");
             let gpu = ctx.gpu_encoder();
-            gpu.native_enc
-                .copy_texture_to_texture(resolve_target, opaque_scene_color, width, height, 1);
+            gpu.native_enc.copy_texture_to_texture(
+                resolve_target,
+                opaque_scene_color,
+                width,
+                height,
+                1,
+            );
             // E2b: level 0 is fresh from the blit above; levels 1.. are
             // stale until regenerated (same "regen on every write" rule
             // `node.gltf_texture_source` step 8 follows) — `fs_pbr`'s
@@ -7437,17 +8275,29 @@ impl EffectNode for RenderScene {
             let full_depth = depth_resolve_target.expect("ensured above: wants_shafts_now => Some");
             let half_depth = self.shaft_depth_half.as_ref().expect("ensured above");
             let inscatter = self.shaft_inscatter.as_ref().expect("ensured above");
-            let downsample_pipeline = self.shaft_downsample_pipeline.as_ref().expect("ensured above");
+            let downsample_pipeline = self
+                .shaft_downsample_pipeline
+                .as_ref()
+                .expect("ensured above");
             let march_pipeline = self.shaft_march_pipeline.as_ref().expect("ensured above");
-            let composite_pipeline = self.shaft_composite_pipeline.as_ref().expect("ensured above");
+            let composite_pipeline = self
+                .shaft_composite_pipeline
+                .as_ref()
+                .expect("ensured above");
 
             {
                 let gpu = ctx.gpu_encoder();
                 gpu.native_enc.dispatch_compute(
                     downsample_pipeline,
                     &[
-                        GpuBinding::Texture { binding: 0, texture: full_depth },
-                        GpuBinding::Texture { binding: 1, texture: half_depth },
+                        GpuBinding::Texture {
+                            binding: 0,
+                            texture: full_depth,
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: half_depth,
+                        },
                     ],
                     [half_w.div_ceil(16), half_h.div_ceil(16), 1],
                     "node.render_scene shaft downsample",
@@ -7502,17 +8352,50 @@ impl EffectNode for RenderScene {
                 gpu.native_enc.dispatch_compute(
                     march_pipeline,
                     &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
-                        GpuBinding::Texture { binding: 1, texture: half_depth },
-                        GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
-                        GpuBinding::Bytes { binding: 3, data: caster_bytes },
-                        GpuBinding::Texture { binding: 4, texture: shadow_0 },
-                        GpuBinding::Texture { binding: 5, texture: shadow_1 },
-                        GpuBinding::Texture { binding: 6, texture: shadow_2 },
-                        GpuBinding::Texture { binding: 7, texture: shadow_3 },
-                        GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
-                        GpuBinding::Texture { binding: 9, texture: inscatter },
-                        GpuBinding::Texture { binding: 10, texture: rt_mask_tex },
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&march_uniforms),
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: half_depth,
+                        },
+                        GpuBinding::Bytes {
+                            binding: 2,
+                            data: shaft_light_bytes,
+                        },
+                        GpuBinding::Bytes {
+                            binding: 3,
+                            data: caster_bytes,
+                        },
+                        GpuBinding::Texture {
+                            binding: 4,
+                            texture: shadow_0,
+                        },
+                        GpuBinding::Texture {
+                            binding: 5,
+                            texture: shadow_1,
+                        },
+                        GpuBinding::Texture {
+                            binding: 6,
+                            texture: shadow_2,
+                        },
+                        GpuBinding::Texture {
+                            binding: 7,
+                            texture: shadow_3,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 8,
+                            sampler: shadow_sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 9,
+                            texture: inscatter,
+                        },
+                        GpuBinding::Texture {
+                            binding: 10,
+                            texture: rt_mask_tex,
+                        },
                     ],
                     [half_w.div_ceil(16), half_h.div_ceil(16), 1],
                     "node.render_scene shaft march",
@@ -7531,9 +8414,18 @@ impl EffectNode for RenderScene {
                         binding: 0,
                         data: bytemuck::bytes_of(&composite_uniforms),
                     },
-                    GpuBinding::Texture { binding: 1, texture: inscatter },
-                    GpuBinding::Texture { binding: 2, texture: half_depth },
-                    GpuBinding::Texture { binding: 3, texture: full_depth },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: inscatter,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: half_depth,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: full_depth,
+                    },
                 ],
                 3,
                 1,
@@ -7626,7 +8518,15 @@ impl EffectNode for RenderScene {
             // leaves `output` holding last frame's upscale — the copy below
             // then presents that stale frame (one-frame freeze), the same
             // degradation the denoiser's MTL4 skip path documents.
-            upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, reset);
+            upscaler.upscale(
+                gpu,
+                target,
+                depth_src,
+                velocity_src,
+                jitter_px.0,
+                jitter_px.1,
+                reset,
+            );
             // BUG-om0v: MetalFX Temporal does not preserve the source's alpha
             // channel — it writes an opaque (or otherwise undefined) alpha into
             // `upscaler.output`, so blitting it straight into `native_color`
@@ -7647,17 +8547,30 @@ impl EffectNode for RenderScene {
                     "node.render_scene upscale_alpha_combine",
                 ));
             }
-            let combine_pipeline = self.upscale_alpha_combine_pipeline
+            let combine_pipeline = self
+                .upscale_alpha_combine_pipeline
                 .as_ref()
                 .expect("just created or prewarmed");
             let combine_sampler = gpu.device.linear_sampler();
             gpu.native_enc.dispatch_compute(
                 combine_pipeline,
                 &[
-                    GpuBinding::Texture { binding: 0, texture: &upscaler.output.texture },
-                    GpuBinding::Texture { binding: 1, texture: target },
-                    GpuBinding::Sampler { binding: 2, sampler: combine_sampler },
-                    GpuBinding::Texture { binding: 3, texture: native_color },
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: &upscaler.output.texture,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: target,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: combine_sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: native_color,
+                    },
                 ],
                 [native_width.div_ceil(16), native_height.div_ceil(16), 1],
                 "node.render_scene upscale alpha combine",
@@ -7679,9 +8592,16 @@ impl EffectNode for RenderScene {
             // denoiser feeds in the plan's consumed set whenever
             // `denoise_feed` is on — same BUG-317 class guard as the
             // temporal path.
-            let (Some(depth_src), Some(velocity_src), Some(normal_src),
-                 Some(roughness_src), Some(diffuse_src), Some(specular_src),
-                 Some(hit_dist_src), Some(reactive_src)) = (
+            let (
+                Some(depth_src),
+                Some(velocity_src),
+                Some(normal_src),
+                Some(roughness_src),
+                Some(diffuse_src),
+                Some(specular_src),
+                Some(hit_dist_src),
+                Some(reactive_src),
+            ) = (
                 depth_resolve_target,
                 velocity_resolve_target,
                 normals_resolve_target,
@@ -7690,7 +8610,8 @@ impl EffectNode for RenderScene {
                 specular_albedo_resolve_target,
                 spec_hit_dist_out,
                 reactive_resolve_target,
-            ) else {
+            )
+            else {
                 if !self.denoiser_unavailable_logged {
                     self.denoiser_unavailable_logged = true;
                     log::error!(
@@ -7754,7 +8675,15 @@ impl EffectNode for RenderScene {
                     // Same MTL4 skip semantics as the main T2-B path:
                     // false leaves `output` stale and the copy below
                     // presents last frame's upscale.
-                    upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, false);
+                    upscaler.upscale(
+                        gpu,
+                        target,
+                        depth_src,
+                        velocity_src,
+                        jitter_px.0,
+                        jitter_px.1,
+                        false,
+                    );
                     gpu.native_enc.copy_texture_to_texture(
                         &upscaler.output.texture,
                         native_color,
@@ -7818,11 +8747,21 @@ impl EffectNode for RenderScene {
             let before_denoise_ms = pre_instant.duration_since(t0).as_secs_f64() * 1000.0;
             let denoise_encode_ms = now.duration_since(pre_instant).as_secs_f64() * 1000.0;
             let total_ms = now.duration_since(t0).as_secs_f64() * 1000.0;
-            let (input_w, input_h) = if temporal_upscale { (width, height) } else { (native_width, native_height) };
+            let (input_w, input_h) = if temporal_upscale {
+                (width, height)
+            } else {
+                (native_width, native_height)
+            };
             eprintln!(
                 "[DENOISE_PROBE] f={} input={}x{} output={}x{} total_ms={:.2} before_denoise_ms={:.2} denoise_encode_ms={:.2}",
-                self.jitter_frame_index, input_w, input_h, native_width, native_height,
-                total_ms, before_denoise_ms, denoise_encode_ms
+                self.jitter_frame_index,
+                input_w,
+                input_h,
+                native_width,
+                native_height,
+                total_ms,
+                before_denoise_ms,
+                denoise_encode_ms
             );
         }
         // ── RT capture: composited output snapshot ──
@@ -7859,6 +8798,67 @@ mod tests {
     use crate::node_graph::transform::Transform;
 
     #[test]
+    fn rt_topology_rejection_and_deferred_keys_are_one_shot() {
+        let mut scene = RenderScene::new();
+        scene.rt_accel_topo_key = Some(1);
+        scene.rt_accel_key = Some(2);
+        scene.rt_accel_content_key = Some(3);
+        scene.rt_accel_pending_key = Some(4);
+        scene.rt_accel_content_pending_key = Some(5);
+        scene.rt_accel_built = true;
+        assert!(reject_topology(
+            &mut scene.rt_accel_topo_key,
+            &mut scene.rt_accel_key,
+            &mut scene.rt_accel_content_key,
+            &mut scene.rt_accel_pending_key,
+            &mut scene.rt_accel_content_pending_key,
+            &mut scene.rt_accel_built,
+            &mut scene.rt_topology_rejected
+        ));
+        assert!(!scene.rt_accel_built && scene.rt_topology_rejected);
+        assert!(scene.rt_accel_topo_key.is_none() && scene.rt_accel_pending_key.is_none());
+        scene.rt_accel_pending_key = Some(9);
+        assert!(!reject_topology(
+            &mut scene.rt_accel_topo_key,
+            &mut scene.rt_accel_key,
+            &mut scene.rt_accel_content_key,
+            &mut scene.rt_accel_pending_key,
+            &mut scene.rt_accel_content_pending_key,
+            &mut scene.rt_accel_built,
+            &mut scene.rt_topology_rejected
+        ));
+        assert_eq!(scene.rt_accel_pending_key, Some(9));
+    }
+
+    #[test]
+    fn rt_deferred_decision_settles_topology_and_content() {
+        let mut pt = None;
+        let mut pc = None;
+        assert_eq!(
+            rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2),
+            RtBuildDecision::Defer
+        );
+        assert_eq!(
+            rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2),
+            RtBuildDecision::Build {
+                content_trigger_fired: false
+            }
+        );
+        pt = None;
+        pc = None;
+        assert_eq!(
+            rt_deferred_build_decision(Some(1), Some(2), &mut pt, &mut pc, 1, 3),
+            RtBuildDecision::Defer
+        );
+        assert_eq!(
+            rt_deferred_build_decision(Some(1), Some(2), &mut pt, &mut pc, 1, 3),
+            RtBuildDecision::Build {
+                content_trigger_fired: true
+            }
+        );
+    }
+
+    #[test]
     fn warmup_pending_includes_deferred_accel_builds() {
         let mut scene = RenderScene::new();
 
@@ -7885,6 +8885,12 @@ mod tests {
         assert!(rt_trace_gate(true, Some(7), 7, Some(11), 11));
     }
 
+    #[test]
+    fn rejected_topology_cannot_enter_refit() {
+        assert!(!rt_refit_eligible(false, Some(1), 2));
+        assert!(rt_refit_eligible(true, Some(1), 2));
+    }
+
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
     /// false, and a fresh `RenderScene` must never have called any
@@ -7897,9 +8903,15 @@ mod tests {
             !wants_shafts(&Atmosphere::default()),
             "shaft_intensity 0 (default) must not want shafts"
         );
-        let hot = Atmosphere { shaft_intensity: 1.0, ..Atmosphere::default() };
+        let hot = Atmosphere {
+            shaft_intensity: 1.0,
+            ..Atmosphere::default()
+        };
         assert!(wants_shafts(&hot), "shaft_intensity > 0 must want shafts");
-        let still_off = Atmosphere { shaft_intensity: 0.0, ..Atmosphere::default() };
+        let still_off = Atmosphere {
+            shaft_intensity: 0.0,
+            ..Atmosphere::default()
+        };
         assert!(!wants_shafts(&still_off));
 
         let scene = RenderScene::new();
@@ -7913,7 +8925,9 @@ mod tests {
     /// first Sun-mode caster under the RT caster cap, None otherwise.
     /// Tested against the production fn (never a duplicated copy — a copy
     /// drifts silently).
-    fn svt_test_light(mode: crate::node_graph::light::LightMode) -> crate::node_graph::light::Light {
+    fn svt_test_light(
+        mode: crate::node_graph::light::LightMode,
+    ) -> crate::node_graph::light::Light {
         crate::node_graph::light::Light {
             mode,
             pos: [0.0, 0.0, 0.0],
@@ -7931,14 +8945,20 @@ mod tests {
     #[test]
     fn rt_svt_slot_sun_first_is_zero() {
         use crate::node_graph::light::LightMode;
-        let casters = [svt_test_light(LightMode::Sun), svt_test_light(LightMode::Point)];
+        let casters = [
+            svt_test_light(LightMode::Sun),
+            svt_test_light(LightMode::Point),
+        ];
         assert_eq!(rt_svt_slot(&casters), Some(0));
     }
 
     #[test]
     fn rt_svt_slot_point_only_is_none() {
         use crate::node_graph::light::LightMode;
-        let casters = [svt_test_light(LightMode::Point), svt_test_light(LightMode::Point)];
+        let casters = [
+            svt_test_light(LightMode::Point),
+            svt_test_light(LightMode::Point),
+        ];
         assert_eq!(rt_svt_slot(&casters), None);
     }
 
@@ -8065,7 +9085,9 @@ mod tests {
             "ibl_strength heuristic must be fully deleted, not left dead/commented"
         );
         assert!(
-            src.contains("prefiltered_specular") && src.contains("irradiance_map") && src.contains("brdf_lut"),
+            src.contains("prefiltered_specular")
+                && src.contains("irradiance_map")
+                && src.contains("brdf_lut"),
             "fs_pbr must consume the split-sum IBL bindings"
         );
     }
@@ -8083,7 +9105,10 @@ mod tests {
             naga::valid::Capabilities::all(),
         );
         if let Err(e) = validator.validate(&module) {
-            panic!("render_scene.wgsl validation failed:\n{}", e.emit_to_string(src));
+            panic!(
+                "render_scene.wgsl validation failed:\n{}",
+                e.emit_to_string(src)
+            );
         }
         assert!(
             src.contains("tangent: vec4<f32>") && src.contains("fn tbn_for"),
@@ -8130,7 +9155,10 @@ mod tests {
 
         let access = "u.texture_flags2";
         let total = src.matches(access).count();
-        assert!(total > 0, "expected at least one texture_flags2 read (sanity check on the scan itself)");
+        assert!(
+            total > 0,
+            "expected at least one texture_flags2 read (sanity check on the scan itself)"
+        );
 
         let inside: usize = [
             "fn resolve_mr(",
@@ -8250,7 +9278,10 @@ mod tests {
         let z_full = 100.0f32;
         let z_tap = 5.0f32; // huge relative jump on all 4 taps
         let w = bilateral_weight(z_full, z_tap);
-        assert!(w < 1e-4, "all four taps must collapse under the 1e-4 fallback threshold, got {w}");
+        assert!(
+            w < 1e-4,
+            "all four taps must collapse under the 1e-4 fallback threshold, got {w}"
+        );
 
         // The committed fallback (D3): plain bilinear, weights sum to 1 by
         // construction, so a 4-tap bilinear blend of equal-color taps must
@@ -8260,13 +9291,22 @@ mod tests {
         let bilinear_ws = [0.09f32, 0.21, 0.21, 0.49]; // arbitrary, sums to 1
         assert!((bilinear_ws.iter().sum::<f32>() - 1.0).abs() < 1e-6);
         let plain_bilinear: f32 = colors.iter().zip(&bilinear_ws).map(|(c, bw)| c * bw).sum();
-        assert!((plain_bilinear - 1.0).abs() < 1e-6, "plain bilinear of identical-color taps must reproduce that color");
+        assert!(
+            (plain_bilinear - 1.0).abs() < 1e-6,
+            "plain bilinear of identical-color taps must reproduce that color"
+        );
     }
 
     fn params_with(objects: f32, lights: f32) -> ParamValues {
         let mut p = ParamValues::default();
-        p.insert(std::borrow::Cow::Borrowed("objects"), ParamValue::Float(objects));
-        p.insert(std::borrow::Cow::Borrowed("lights"), ParamValue::Float(lights));
+        p.insert(
+            std::borrow::Cow::Borrowed("objects"),
+            ParamValue::Float(objects),
+        );
+        p.insert(
+            std::borrow::Cow::Borrowed("lights"),
+            ParamValue::Float(lights),
+        );
         p
     }
 
@@ -8279,9 +9319,19 @@ mod tests {
         // (mesh_n/material_n/17 maps/transform_n/instances_n).
         assert_eq!(s.inputs().len(), 3 + 1 + 2);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
-        assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
+        assert!(
+            !s.inputs()
+                .iter()
+                .find(|p| p.name == "atmosphere")
+                .unwrap()
+                .required
+        );
         assert_eq!(
-            s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().ty,
+            s.inputs()
+                .iter()
+                .find(|p| p.name == "atmosphere")
+                .unwrap()
+                .ty,
             PortType::Atmosphere
         );
         let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
@@ -8315,7 +9365,11 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 10, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(
+            node.parameters().len(),
+            10,
+            "object count never grows the fixed scene-level toggle set"
+        );
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -8332,19 +9386,31 @@ mod tests {
         // not a UI convenience — a producer that would exceed it must error
         // at import time rather than rely on this silent clamp).
         let last_obj = OBJECT_SAFETY_MAX - 1;
-        assert!(node.inputs().iter().any(|p| p.name == format!("object_{last_obj}")));
-        assert!(!node
+        assert!(
+            node.inputs()
+                .iter()
+                .any(|p| p.name == format!("object_{last_obj}"))
+        );
+        assert!(
+            !node
             .inputs()
             .iter()
-            .any(|p| p.name == format!("object_{OBJECT_SAFETY_MAX}")));
+                .any(|p| p.name == format!("object_{OBJECT_SAFETY_MAX}"))
+        );
         // Lights clamp to LIGHT_SLIDER_MAX — a soft UI bound now, NOT a
         // structural cap (lights ride a runtime-sized storage buffer).
         let last_light = LIGHT_SLIDER_MAX - 1;
-        assert!(node.inputs().iter().any(|p| p.name == format!("light_{last_light}")));
-        assert!(!node
+        assert!(
+            node.inputs()
+                .iter()
+                .any(|p| p.name == format!("light_{last_light}"))
+        );
+        assert!(
+            !node
             .inputs()
             .iter()
-            .any(|p| p.name == format!("light_{LIGHT_SLIDER_MAX}")));
+                .any(|p| p.name == format!("light_{LIGHT_SLIDER_MAX}"))
+        );
     }
 
     #[test]
@@ -8547,7 +9613,12 @@ mod tests {
     /// `FinalOutput`; `depth` wired to a second `FinalOutput` iff
     /// `wire_depth`. Returns the compiled plan plus the scene node's id so
     /// the caller can inspect its step's `outputs` list.
-    fn compile_scene(wire_depth: bool) -> (crate::node_graph::ExecutionPlan, crate::node_graph::NodeInstanceId) {
+    fn compile_scene(
+        wire_depth: bool,
+    ) -> (
+        crate::node_graph::ExecutionPlan,
+        crate::node_graph::NodeInstanceId,
+    ) {
         use crate::node_graph::primitives::scene_object::SceneObjectNode;
         use crate::node_graph::{FinalOutput, Graph, compile};
 
@@ -8557,7 +9628,10 @@ mod tests {
             "stub.mesh",
             PortType::Array(ArrayType::of_known::<MeshVertex>()),
         )));
-        let mat = graph.add_node(Box::new(StubProducer::new("stub.material", PortType::Material)));
+        let mat = graph.add_node(Box::new(StubProducer::new(
+            "stub.material",
+            PortType::Material,
+        )));
         let scene_object = graph.add_node(Box::new(SceneObjectNode::new()));
 
         // `Graph::add_node` (via `NodeInstance::new`) reconfigures the node
@@ -8575,17 +9649,27 @@ mod tests {
             .expect("lights param exists");
 
         let color_sink = graph.add_node(Box::new(FinalOutput::new()));
-        graph.connect((cam, "out"), (scene_id, "camera")).expect("camera wires");
-        graph.connect((mesh, "out"), (scene_object, "vertices")).expect("mesh wires");
-        graph.connect((mat, "out"), (scene_object, "material")).expect("material wires");
+        graph
+            .connect((cam, "out"), (scene_id, "camera"))
+            .expect("camera wires");
+        graph
+            .connect((mesh, "out"), (scene_object, "vertices"))
+            .expect("mesh wires");
+        graph
+            .connect((mat, "out"), (scene_object, "material"))
+            .expect("material wires");
         graph
             .connect((scene_object, "object"), (scene_id, "object_0"))
             .expect("object wires");
-        graph.connect((scene_id, "color"), (color_sink, "in")).expect("color wires");
+        graph
+            .connect((scene_id, "color"), (color_sink, "in"))
+            .expect("color wires");
 
         if wire_depth {
             let depth_sink = graph.add_node(Box::new(FinalOutput::new()));
-            graph.connect((scene_id, "depth"), (depth_sink, "in")).expect("depth wires");
+            graph
+                .connect((scene_id, "depth"), (depth_sink, "in"))
+                .expect("depth wires");
         }
 
         let plan = compile(&graph).expect("stub scene graph must compile");
@@ -8624,7 +9708,10 @@ mod tests {
             .iter()
             .find(|(name, _)| *name == "depth")
             .map(|(_, res)| *res);
-        assert!(depth_res.is_some(), "wired depth must get a step-output binding");
+        assert!(
+            depth_res.is_some(),
+            "wired depth must get a step-output binding"
+        );
         assert_eq!(
             plan.resource_format(depth_res.unwrap()),
             Some(manifold_gpu::GpuTextureFormat::R32Float),
@@ -8719,8 +9806,10 @@ mod tests {
 
     #[test]
     fn geo_key_ignores_color() {
-        let c1 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
-        let c2 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
+        let c1 =
+            manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
+        let c2 =
+            manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
         assert_eq!(
             compute_rt_lighting_geo_key(&[c1], 0),
             compute_rt_lighting_geo_key(&[c2], 0),
@@ -8730,8 +9819,10 @@ mod tests {
 
     #[test]
     fn geo_key_flips_on_position_change() {
-        let c1 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
-        let c2 = manifold_gpu::raytrace::RtCasterParams::new([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c1 =
+            manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c2 =
+            manifold_gpu::raytrace::RtCasterParams::new([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
         assert_ne!(
             compute_rt_lighting_geo_key(&[c1], 0),
             compute_rt_lighting_geo_key(&[c2], 0),
@@ -8801,8 +9892,9 @@ mod gpu_tests {
             label,
             mip_levels: 1,
         });
-        let bytes =
-            unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), std::mem::size_of_val(raw)) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), std::mem::size_of_val(raw))
+        };
         device.upload_texture(&tex, bytes);
         tex
     }
@@ -8914,7 +10006,11 @@ mod gpu_tests {
             scale3(up, ndc_y * tan_half_fov * view_z),
         );
         let ray_length = len3(ray);
-        let ray_dir = if ray_length > 1e-6 { scale3(ray, 1.0 / ray_length) } else { fwd };
+        let ray_dir = if ray_length > 1e-6 {
+            scale3(ray, 1.0 / ray_length)
+        } else {
+            fwd
+        };
 
         let seg = ray_length / steps as f32;
         let t0 = (hash01([x as f32, y as f32]) - 0.5) * seg;
@@ -8955,7 +10051,11 @@ mod gpu_tests {
                     let to_light = sub3(light.pos, px);
                     let d_sq = dot3(to_light, to_light);
                     let r_sq = light.range * light.range;
-                    let att = if r_sq < 1e-10 { 0.0 } else { 1.0 / (1.0 + d_sq / r_sq) };
+                    let att = if r_sq < 1e-10 {
+                        0.0
+                    } else {
+                        1.0 / (1.0 + d_sq / r_sq)
+                    };
                     let d = d_sq.max(1e-12).sqrt();
                     (scale3(to_light, -1.0 / d), att)
                 } else {
@@ -9103,20 +10203,40 @@ mod gpu_tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let shadow_uniforms = ShadowUniforms { light_view_proj: vp, model: IDENTITY4 };
+        let shadow_uniforms = ShadowUniforms {
+            light_view_proj: vp,
+            model: IDENTITY4,
+        };
         let shadow_bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&shadow_uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&shadow_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &vbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &ibuf,
+                offset: 0,
+            },
         ];
         let shadow_draw =
             manifold_gpu::GpuEncoder::depth_msaa_draw(&shadow_pipeline, &shadow_bindings, 6, 1);
         let mut shadow_enc = device.create_encoder("shaft-test-shadow-pass");
-        shadow_enc.draw_instanced_depth_only_batch(&shadow_map, &shadow_ds, &[shadow_draw], "shaft-test-shadow");
+        shadow_enc.draw_instanced_depth_only_batch(
+            &shadow_map,
+            &shadow_ds,
+            &[shadow_draw],
+            "shaft-test-shadow",
+        );
         shadow_enc.commit_and_wait_completed();
 
         let bias = light.shadow_bias;
-        let mut caster_table: Vec<[f32; 4]> = vec![[0.0f32; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
+        let mut caster_table: Vec<[f32; 4]> =
+            vec![[0.0f32; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
         caster_table[0] = vp[0];
         caster_table[1] = vp[1];
         caster_table[2] = vp[2];
@@ -9133,8 +10253,18 @@ mod gpu_tests {
             [-light.dir[0], -light.dir[1], -light.dir[2], 0.0],
             [light.color[0], light.color[1], light.color[2], 0.0],
             [light.range, 0.0, 0.0, 0.0],
-            [point_light.pos[0], point_light.pos[1], point_light.pos[2], 1.0],
-            [point_light.color[0], point_light.color[1], point_light.color[2], -1.0],
+            [
+                point_light.pos[0],
+                point_light.pos[1],
+                point_light.pos[2],
+                1.0,
+            ],
+            [
+                point_light.color[0],
+                point_light.color[1],
+                point_light.color[2],
+                -1.0,
+            ],
             [point_light.range, 0.0, 0.0, 0.0],
         ];
         let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
@@ -9196,16 +10326,46 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
-                GpuBinding::Texture { binding: 1, texture: &half_depth },
-                GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
-                GpuBinding::Bytes { binding: 3, data: caster_bytes },
-                GpuBinding::Texture { binding: 4, texture: &shadow_map },
-                GpuBinding::Texture { binding: 5, texture: &dummy_depth },
-                GpuBinding::Texture { binding: 6, texture: &dummy_depth },
-                GpuBinding::Texture { binding: 7, texture: &dummy_depth },
-                GpuBinding::Sampler { binding: 8, sampler: &shadow_sampler },
-                GpuBinding::Texture { binding: 9, texture: &out_tex },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&march_uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &half_depth,
+                },
+                GpuBinding::Bytes {
+                    binding: 2,
+                    data: shaft_light_bytes,
+                },
+                GpuBinding::Bytes {
+                    binding: 3,
+                    data: caster_bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &shadow_map,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: &dummy_depth,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: &dummy_depth,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: &dummy_depth,
+                },
+                GpuBinding::Sampler {
+                    binding: 8,
+                    sampler: &shadow_sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 9,
+                    texture: &out_tex,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "shaft-march-dispatch",
@@ -9233,7 +10393,11 @@ mod gpu_tests {
                 pos: point_light.pos,
                 dir: point_light.dir,
                 range: point_light.range,
-                color: [point_light.color[0], point_light.color[1], point_light.color[2]],
+                color: [
+                    point_light.color[0],
+                    point_light.color[1],
+                    point_light.color[2],
+                ],
                 slot: -1.0,
             },
         ];
@@ -9241,9 +10405,29 @@ mod gpu_tests {
         for y in 0..h {
             for x in 0..w {
                 let cpu = cpu_march_reference(
-                    x, y, w, h, raw_depth, near, far, cam_pos, right, up, fwd, fov_y, aspect,
-                    fog_density, height_falloff, g, shaft_intensity, steps, exposure_ev,
-                    &march_lights, vp, bias, occluder_ndc_z,
+                    x,
+                    y,
+                    w,
+                    h,
+                    raw_depth,
+                    near,
+                    far,
+                    cam_pos,
+                    right,
+                    up,
+                    fwd,
+                    fov_y,
+                    aspect,
+                    fog_density,
+                    height_falloff,
+                    g,
+                    shaft_intensity,
+                    steps,
+                    exposure_ev,
+                    &march_lights,
+                    vp,
+                    bias,
+                    occluder_ndc_z,
                 );
                 let idx = (y * w + x) as usize;
                 let gpu = gpu_out[idx];
@@ -9308,7 +10492,14 @@ mod gpu_tests {
                     (false, true, true),
                     (true, true, true),
                 ] {
-                    scene.pipeline_for(&device, kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend);
+                    scene.pipeline_for(
+                        &device,
+                        kind,
+                        emit_velocity,
+                        emit_ao_mask,
+                        emit_denoise_feed,
+                        blend,
+                    );
                     assert_eq!(
                         device.render_pipeline_cache_len(),
                         cache_before_use,
@@ -9408,15 +10599,31 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         tex: &manifold_gpu::GpuTexture,
         sampler: &manifold_gpu::GpuSampler,
     ) -> Vec<[f32; 4]> {
-        let pipeline = device.create_compute_pipeline(ANISO_TEST_WGSL, "cs_main", "aniso-test-sample");
+        let pipeline =
+            device.create_compute_pipeline(ANISO_TEST_WGSL, "cs_main", "aniso-test-sample");
         let out_buf = device.create_buffer_shared(u64::from(ANISO_TEST_ROW_LEN) * 16);
         let bindings = [
-            GpuBinding::Texture { binding: 0, texture: tex },
-            GpuBinding::Sampler { binding: 1, sampler },
-            GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+            GpuBinding::Texture {
+                binding: 0,
+                texture: tex,
+            },
+            GpuBinding::Sampler {
+                binding: 1,
+                sampler,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &out_buf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("aniso-test-dispatch");
-        enc.dispatch_compute(&pipeline, &bindings, [ANISO_TEST_ROW_LEN / 64, 1, 1], "aniso-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [ANISO_TEST_ROW_LEN / 64, 1, 1],
+            "aniso-test",
+        );
         enc.commit_and_wait_completed();
         let ptr = out_buf.mapped_ptr().expect("shared output buffer");
         let floats: &[f32] = unsafe {
@@ -9527,8 +10734,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // rt_enabled only (D14): forces depth+velocity only, never denoise feeds.
         params.insert("rt_enabled".into(), ParamValue::Bool(true));
         let forced = s.force_consumed_outputs(&params);
-        assert_eq!(forced, &["depth", "velocity"],
-            "rt_enabled must force depth/velocity only, not denoise feeds");
+        assert_eq!(
+            forced,
+            &["depth", "velocity"],
+            "rt_enabled must force depth/velocity only, not denoise feeds"
+        );
     }
 
     /// DN-E: `rt_denoise_feed=true` forces the eight G-buffer outputs
@@ -9540,31 +10750,59 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         params.insert("rt_denoise_feed".into(), ParamValue::Bool(true));
         let forced = s.force_consumed_outputs(&params);
         let expected: &[&str] = &[
-            "depth", "velocity", "normals", "roughness",
-            "diffuse_albedo", "specular_albedo", "specular_hit_distance",
+            "depth",
+            "velocity",
+            "normals",
+            "roughness",
+            "diffuse_albedo",
+            "specular_albedo",
+            "specular_hit_distance",
             "reactive_mask",
         ];
-        assert_eq!(forced, expected,
-            "rt_denoise_feed=true must force all 8 denoiser G-buffer outputs");
+        assert_eq!(
+            forced, expected,
+            "rt_denoise_feed=true must force all 8 denoiser G-buffer outputs"
+        );
     }
 
     /// DN-E: output_format maps all 5 new ports to their correct formats.
     #[test]
     fn rt_denoise_feed_output_formats_are_correct() {
         let s = RenderScene::new();
-        assert_eq!(s.output_format("normals"), Some(manifold_gpu::GpuTextureFormat::Rgba16Float));
-        assert_eq!(s.output_format("roughness"), Some(manifold_gpu::GpuTextureFormat::R16Float));
-        assert_eq!(s.output_format("diffuse_albedo"), Some(manifold_gpu::GpuTextureFormat::Rgba16Float));
-        assert_eq!(s.output_format("specular_albedo"), Some(manifold_gpu::GpuTextureFormat::Rgba16Float));
-        assert_eq!(s.output_format("specular_hit_distance"), Some(manifold_gpu::GpuTextureFormat::R16Float));
-        assert_eq!(s.output_format("reactive_mask"), Some(manifold_gpu::GpuTextureFormat::R16Float));
+        assert_eq!(
+            s.output_format("normals"),
+            Some(manifold_gpu::GpuTextureFormat::Rgba16Float)
+        );
+        assert_eq!(
+            s.output_format("roughness"),
+            Some(manifold_gpu::GpuTextureFormat::R16Float)
+        );
+        assert_eq!(
+            s.output_format("diffuse_albedo"),
+            Some(manifold_gpu::GpuTextureFormat::Rgba16Float)
+        );
+        assert_eq!(
+            s.output_format("specular_albedo"),
+            Some(manifold_gpu::GpuTextureFormat::Rgba16Float)
+        );
+        assert_eq!(
+            s.output_format("specular_hit_distance"),
+            Some(manifold_gpu::GpuTextureFormat::R16Float)
+        );
+        assert_eq!(
+            s.output_format("reactive_mask"),
+            Some(manifold_gpu::GpuTextureFormat::R16Float)
+        );
     }
 
     /// DN-E: the `rt_denoise_feed` param exists, defaults to false, and is a Bool.
     #[test]
     fn rt_denoise_feed_param_exists_with_correct_default() {
         let s = RenderScene::new();
-        let param = s.parameters().iter().find(|p| p.name == "rt_denoise_feed")
+        let param = s
+            .parameters()
+            .iter()
+            .find(|p| p.name == "rt_denoise_feed")
             .expect("rt_denoise_feed param must exist");
         assert_eq!(param.name, "rt_denoise_feed");
         assert_eq!(param.default, ParamValue::Bool(false));
@@ -9620,9 +10858,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // The full 9-element subset (center included) of a hot-center
         // firefly: median is the 5th-smallest (a dim neighbor), not the
         // outlier — which is exactly what lets the clamp engage.
-        assert_eq!(median(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0]), 1.0);
+        assert_eq!(
+            median(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0]),
+            1.0
+        );
         // Neighbors 1..8 + center 100 => median 5 (the 5th-smallest).
-        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 100.0]), 5.0);
+        assert_eq!(
+            median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 100.0]),
+            5.0
+        );
         // Even n: index n/2 (the upper of the two middles), matching the MSL
         // `mid = n / 2` convention.
         assert_eq!(median(&[1.0, 2.0, 3.0, 4.0]), 3.0);

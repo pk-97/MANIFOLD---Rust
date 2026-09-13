@@ -2423,13 +2423,13 @@ impl GpuEncoder {
                         (code, desc)
                     }
                 };
-                super::gpu_fault::record_fault(&desc);
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
                     label,
                     code,
                     desc,
                 );
+                super::gpu_fault::record_fault(&desc);
             }
         });
         unsafe {
@@ -2469,6 +2469,7 @@ impl GpuEncoder {
         if super::gpu_fault::diagnostics_enabled() {
             log::info!("[GPU-DIAG] submitting buffer={label} scopes={scopes:?}");
         }
+        super::gpu_fault::track_submission();
         let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             let cb = unsafe { buf.as_ref() };
             let status = unsafe { cb.status() };
@@ -2483,7 +2484,6 @@ impl GpuEncoder {
                         (code, desc)
                     }
                 };
-                super::gpu_fault::record_fault(&desc);
                 if scopes.is_empty() {
                     log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
                 } else {
@@ -2493,7 +2493,11 @@ impl GpuEncoder {
                         scopes.join(" | ")
                     );
                 }
+                // Publish only after this callback's complete evidence is in
+                // the log. Export exits as soon as it observes FAULT_COUNT.
+                super::gpu_fault::record_fault(&desc);
             }
+            super::gpu_fault::finish_submission();
         });
         unsafe {
             self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));

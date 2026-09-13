@@ -1991,11 +1991,13 @@ pub(crate) fn retire_on_queue<T: 'static>(
     // retain/release is thread-safe) or plain data.
     unsafe impl<T> Send for Pin<T> {}
     let pin = Pin(obj);
+    super::gpu_fault::track_submission();
     let block = block2::RcBlock::new(move |_buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
         // Held by reference: the object drops when the block is released
         // after firing — the RcBlock closure is Fn, not FnOnce, same
         // pattern as raytrace.rs's completion pins.
         let _hold = &pin;
+        super::gpu_fault::finish_submission();
     });
     unsafe {
         cb.addCompletedHandler(block2::RcBlock::as_ptr(&block));
