@@ -1621,6 +1621,74 @@ mod scene_card_convergence_tests {
             }
         }
 
+        #[test]
+        fn automation_live_preview_keeps_content_lane_for_collision_undo() {
+            use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+            use manifold_core::{Beats, GraphTarget, Seconds};
+            use manifold_playback::engine::{PlaybackEngine, TickContext};
+            use manifold_ui::view::{UiGraphTarget, UiSegmentShape};
+
+            let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+            fx.init_defaults();
+            let target = GraphTarget::Effect(fx.id.clone());
+            let ui_target = UiGraphTarget::Effect(fx.id.clone());
+            let pid = manifold_core::effects::ParamId::from("amount");
+            let original = vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Hold },
+            ];
+            fx.automation_lanes = Some(vec![AutomationLane {
+                param_id: pid.clone(), enabled: true, points: original.clone(),
+            }]);
+            let mut project = Project::default();
+            project.settings.master_effects = vec![fx];
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(project.clone());
+            engine.seek_to(Seconds(2.0));
+            let mut rig = ClipRig::new(project);
+            let preview = [(Beats(4.0), 0.35, UiSegmentShape::Linear)];
+            rig.host().set_automation_lane_preview(&ui_target, &pid, &preview);
+            let mut commands = rig.drain();
+            assert_eq!(commands.len(), 1);
+            let ContentCommand::PreviewAutomationLane { target: t, param_id, points } = commands.remove(0)
+                else { panic!("preview must use the runtime command"); };
+            engine.set_automation_lane_preview(t, param_id, points);
+            let tick = engine.tick(TickContext::default());
+            assert!(tick.compositor_dirty);
+            let inst = engine.project().unwrap().preset_instance(&target).unwrap();
+            assert!((inst.params.get("amount").unwrap().value - 0.35).abs() < 1e-6);
+            assert_eq!(inst.automation_lanes.as_ref().unwrap()[0].points, original);
+
+            rig.host().clear_automation_previews();
+            rig.host().commit_automation_point_move(
+                &ui_target, &pid,
+                (Beats(0.0), 0.2, UiSegmentShape::Linear), preview[0],
+            );
+            let mut service = EditingService::new();
+            let mut commits = 0;
+            for command in rig.drain() {
+                match command {
+                    ContentCommand::ClearAutomationPreviews => engine.clear_automation_previews(),
+                    ContentCommand::Execute(command) => {
+                        service.execute(command, engine.project_mut().unwrap());
+                        commits += 1;
+                    }
+                    _ => panic!("unexpected preview completion command"),
+                }
+            }
+            assert_eq!(commits, 1);
+            let committed = engine.project().unwrap().preset_instance(&target).unwrap()
+                .automation_lanes.as_ref().unwrap()[0].points.clone();
+            assert_eq!(committed.len(), 1);
+            assert_eq!(committed[0].value, 0.35);
+            assert!(service.undo(engine.project_mut().unwrap()));
+            assert_eq!(engine.project().unwrap().preset_instance(&target).unwrap()
+                .automation_lanes.as_ref().unwrap()[0].points, original);
+            assert!(service.redo(engine.project_mut().unwrap()));
+            assert_eq!(engine.project().unwrap().preset_instance(&target).unwrap()
+                .automation_lanes.as_ref().unwrap()[0].points, committed);
+        }
+
         /// One video layer + one clip [4..8] created through the REAL host
         /// path; both the rig's project and the returned content side carry it.
         fn clip_project() -> (ClipRig, ContentSide, manifold_core::ClipId) {

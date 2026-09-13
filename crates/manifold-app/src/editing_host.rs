@@ -112,6 +112,23 @@ pub struct AppEditingHost<'a> {
 }
 
 impl<'a> AppEditingHost<'a> {
+    /// Send the edited envelope once per input event, leaving the content
+    /// project's authoritative points available to the undoable commit.
+    fn send_automation_preview(&self, target: &GraphTarget, param_id: &str) {
+        let Some(lane) = self.project.preset_instance(target)
+            .and_then(|inst| inst.automation_lanes.as_ref())
+            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == param_id))
+        else { return; };
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::PreviewAutomationLane {
+                target: target.clone(),
+                param_id: lane.param_id.clone(),
+                points: lane.points.clone(),
+            },
+        );
+    }
+
     pub fn new(
         project: &'a mut manifold_core::project::Project,
         content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
@@ -810,6 +827,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
+        self.send_automation_preview(&target, param_id);
     }
 
     fn commit_automation_point_move(
@@ -830,9 +848,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             value: new.1,
             shape: to_segment_shape(new.2),
         };
-        // Already applied locally by `set_automation_lane_preview` during the
-        // drag — this only registers the undo entry, mirroring
-        // `record_move`'s "commands already applied" comment.
+        // The UI already displays the draft, but content still owns the original
+        // lane. Execute captures that complete lane for collision-safe undo.
         let cmd = MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
         crate::content_command::ContentCommand::send(
             self.content_tx,
@@ -880,6 +897,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         {
             p.shape = SegmentShape::Curved(bend);
         }
+        self.send_automation_preview(&target, param_id);
     }
 
     fn set_automation_segment_drag_preview(
@@ -904,6 +922,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 p.value = right_value;
             }
         }
+        self.send_automation_preview(&target, param_id);
     }
 
     fn commit_automation_segment_drag(
@@ -926,11 +945,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 new_point,
             )) as Box<dyn Command>
         };
-        // Already applied live by `set_automation_segment_drag_preview` during
-        // the drag — this only registers the undo entry. `ExecuteBatch`
-        // wraps both moves in a `CompositeCommand` on the content thread so
-        // they land as ONE undo/redo unit (existing infra — see
-        // `EditingService::execute_batch`).
+        // Apply both moves to the authoritative lane as one undo/redo unit.
+        // Runtime previews never replace the source these commands snapshot.
         let commands = vec![
             make(left.0, left.1, left.2, left.3),
             make(right.0, right.1, right.2, right.3),
@@ -968,10 +984,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 )) as Box<dyn Command>
             })
             .collect();
-        // Already applied live (per-point, via repeated
-        // `set_automation_point_preview` calls) — `ExecuteBatch` batches all
-        // of them into ONE undo/redo unit (same existing infra as the
-        // segment-drag commit above).
+        // Apply the previewed group to content as one undo/redo unit.
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
@@ -1007,7 +1020,33 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         param_id: &ParamId,
         points: &[(Beats, f32, UiSegmentShape)],
     ) {
+        self.restore_automation_lane_preview(target, param_id, Some(points));
+        self.send_automation_preview(&to_graph_target(target), param_id.as_ref());
+    }
+
+    fn clear_automation_previews(&mut self) {
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::ClearAutomationPreviews,
+        );
+    }
+
+    fn restore_automation_lane_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        points: Option<&[(Beats, f32, UiSegmentShape)]>,
+    ) {
         let target = to_graph_target(target);
+        let Some(points) = points else {
+            if let Some(inst) = self.project.preset_instance_mut(&target)
+                && let Some(lanes) = inst.automation_lanes.as_mut()
+            {
+                lanes.retain(|lane| lane.param_id != *param_id);
+                if lanes.is_empty() { inst.automation_lanes = None; }
+            }
+            return;
+        };
         let param_id_str = param_id.as_ref();
         if let Some(inst) = self.project.preset_instance_mut(&target) {
             let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
@@ -1046,10 +1085,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         let new_converted = convert(new_points);
         let old_converted = old_points.map(convert);
-        // Already applied live by `set_automation_lane_preview` during the
-        // stroke — this only registers the undo entry, reusing the SAME
-        // command section 5's Automation Arm recording commits with
-        // (`CommitRecordedGestureCommand`).
+        // Install the draft on content using the same undoable lane replacement
+        // as recording; the runtime preview left the original lane untouched.
         let cmd = CommitRecordedGestureCommand::new(graph_target, param_id_str, new_converted, old_converted);
         crate::content_command::ContentCommand::send(
             self.content_tx,

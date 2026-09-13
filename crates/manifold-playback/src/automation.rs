@@ -50,7 +50,7 @@
 
 use ahash::AHashMap;
 
-use manifold_core::effects::{AutomationPoint, PresetInstance, SegmentShape};
+use manifold_core::effects::{AutomationLane, AutomationPoint, PresetInstance, SegmentShape};
 use manifold_core::project::Project;
 use manifold_core::{Beats, EffectId, GraphTarget};
 use manifold_editing::command::Command;
@@ -106,6 +106,22 @@ pub struct GestureState {
 /// Runtime-only in-flight recording gestures, keyed like [`AutomationLatches`].
 /// Owned by `PlaybackEngine`.
 pub type AutomationGestures = AHashMap<(EffectId, ParamId), GestureState>;
+
+/// Runtime-only automation curve being previewed by an editor gesture.
+///
+/// Preview points live outside the authoritative project lane so the editor
+/// can render a draft without making an undoable project mutation. The base
+/// value is captured before the first preview write and restored when the
+/// preview is cleared, unless a real hand has taken ownership in the
+/// meantime.
+#[derive(Debug)]
+pub struct AutomationLanePreview {
+    pub lane: AutomationLane,
+    pub original_base: f32,
+}
+
+/// Runtime-only previews keyed by their graph target and parameter id.
+pub type AutomationLanePreviews = AHashMap<(GraphTarget, ParamId), AutomationLanePreview>;
 
 /// Controls whether automation sampling may mutate recording state.
 ///
@@ -197,6 +213,71 @@ pub fn evaluate_all_automation_with_mode(
     let commits = close_expired_gestures(gestures, current_beat);
 
     (any_wrote, commits)
+}
+
+/// Evaluate runtime-only automation previews after arrangement automation and
+/// before modulation. Preview writes use the same range constraint and base
+/// writer as arrangement automation, but never set `touched` or create a
+/// recording gesture. A live touch, latch, or recording gesture retains the
+/// existing manual/recording semantics and suppresses the preview for that
+/// parameter.
+pub fn evaluate_automation_previews(
+    project: &mut Project,
+    current_beat: Beats,
+    previews: &mut AutomationLanePreviews,
+    latches: &AutomationLatches,
+    gestures: &AutomationGestures,
+) -> bool {
+    let mut any_wrote = false;
+
+    for ((target, param_id), preview) in previews.iter_mut() {
+        let Some(wrote) = project.preset_instance_mut(target).map(|fx| {
+            if !fx.enabled {
+                return false;
+            }
+            if preview.lane.points.is_empty() {
+                return false;
+            }
+
+            // A disabled arrangement lane remains disabled while a preview is
+            // active. The draft must not silently turn an explicitly disabled
+            // lane back on.
+            if fx
+                .automation_lanes
+                .as_ref()
+                .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == *param_id))
+                .is_some_and(|lane| !lane.enabled)
+            {
+                return false;
+            }
+
+            let Some(param) = fx.params.get(param_id.as_ref()) else {
+                return false;
+            };
+            if param.touched
+                || contains_automation_key(latches, &fx.id, param_id)
+                || contains_automation_key(gestures, &fx.id, param_id)
+            {
+                return false;
+            }
+
+            let raw = preview.lane.value_at(current_beat);
+            let value = manifold_core::params::constrain_to_range(
+                raw,
+                param.spec.min,
+                param.spec.max,
+                param.spec.wraps,
+            );
+            let changed = param.base != value || param.value != value;
+            fx.set_base_param_from_automation(param_id.as_ref(), value);
+            changed
+        }) else {
+            continue;
+        };
+        any_wrote |= wrote;
+    }
+
+    any_wrote
 }
 
 /// Allocation-free inspection walk used by stopped and paused ticks. This is
@@ -291,7 +372,7 @@ fn evaluate_instance_automation_inspection(
 }
 
 #[inline]
-fn contains_automation_key<T>(
+pub(crate) fn contains_automation_key<T>(
     map: &AHashMap<(EffectId, ParamId), T>,
     fx_id: &EffectId,
     param_id: &ParamId,

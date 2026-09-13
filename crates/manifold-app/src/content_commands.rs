@@ -708,7 +708,14 @@ impl ContentThread {
             }
 
             // ── Editing ────────────────────────────────────────────
+            ContentCommand::PreviewAutomationLane { target, param_id, points } => {
+                self.engine.set_automation_lane_preview(target, param_id, points);
+            }
+            ContentCommand::ClearAutomationPreviews => {
+                self.engine.clear_automation_previews();
+            }
             ContentCommand::Execute(cmd) => {
+                self.engine.clear_automation_previews();
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute(cmd, p);
                 }
@@ -726,6 +733,7 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
+                self.engine.clear_automation_previews();
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute_batch(cmds, desc, p);
                 }
@@ -736,6 +744,7 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Undo => {
+                self.engine.clear_automation_previews();
                 // Capture pre-undo settings so we can detect resolution/FPS changes.
                 // Port of Unity WorkspaceController.OnUndoRedo() which calls
                 // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
@@ -795,6 +804,7 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Redo => {
+                self.engine.clear_automation_previews();
                 // Same pre/post settings detection as Undo.
                 let pre = self.engine.project().map(|p| {
                     (

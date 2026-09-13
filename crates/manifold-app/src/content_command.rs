@@ -20,6 +20,13 @@ pub enum ContentCommand {
     // ── Editing (commands cross thread boundary) ───────────────────
     Execute(Box<dyn Command + Send>),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
+    /// Runtime envelope preview; never installs points into the project.
+    PreviewAutomationLane {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        points: Vec<manifold_core::effects::AutomationPoint>,
+    },
+    ClearAutomationPreviews,
     Undo,
     Redo,
     /// Reset editing service (clear undo, clipboard) after project load.
