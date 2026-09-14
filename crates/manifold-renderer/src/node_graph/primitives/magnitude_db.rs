@@ -54,7 +54,7 @@ crate::primitive! {
     ],
     depth_rule: Inherit,
     composition_notes: "The output is in dB, not normalized: `20*log10(max(magnitude, 1e-6) / reference)` clamped to `floor_db`. For a -60..0 palette, follow with node.scale_offset_image (scale 0.0166667, offset 1), node.clamp (0..1), and node.gradient or node.color_lut. Scalar inputs shadow their params for live control.",
-    examples: ["preset.effect.spectrogram"],
+    examples: ["preset.generator.spectrogram"],
     picker: { label: "Magnitude → dB", category: Atom },
     summary: "Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes.",
     category: MathAndConvert,

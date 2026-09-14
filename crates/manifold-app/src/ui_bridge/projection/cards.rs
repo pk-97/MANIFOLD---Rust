@@ -126,7 +126,7 @@ pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_
         c.audio.send_labels = labels.clone();
         c.audio.send_ids = ids.clone();
         for sp in &mut c.string_params {
-            if c.kind != ParamCardKind::Effect || sp.key != "audioSend" || !sp.use_dropdown {
+            if sp.key != "audioSend" || !sp.use_dropdown {
                 continue;
             }
             let (choices, display) = audio_send_string_state(&sp.value, setup);
@@ -193,7 +193,7 @@ fn find_string_node<'a>(
     })
 }
 
-fn effect_string_param_value(
+fn graph_string_param_value(
     inst: &PresetInstance,
     sp_def: &manifold_core::preset_definition_registry::StringParamDef,
 ) -> (String, Option<String>) {
@@ -462,8 +462,9 @@ fn param_surface(
     }
     let audio = build_audio_card_state(inst, n, |id| row_index_of.get(id).copied());
 
-    // String params are sourced from the registry def. Effects currently use
-    // the same surface for graph-backed audio-send selectors.
+    // String params are sourced from the registry def. Graph-backed audio-send
+    // selectors use the instance graph for both effects and generators; other
+    // generator strings retain their clip-owned value path.
     let string_params: Vec<ParamCardStringInfo> = match kind {
         PresetKind::Generator => reg_def
             .as_deref()
@@ -471,10 +472,14 @@ fn param_surface(
                 def.string_param_defs
                     .iter()
                     .map(|sp_def| {
-                        let value = clip_string_params
-                            .and_then(|m| m.get(sp_def.key))
-                            .cloned()
-                            .unwrap_or_else(|| sp_def.default_value.to_string());
+                        let value = if sp_def.key == "audioSend" {
+                            graph_string_param_value(inst, sp_def).0
+                        } else {
+                            clip_string_params
+                                .and_then(|m| m.get(sp_def.key))
+                                .cloned()
+                                .unwrap_or_else(|| sp_def.default_value.to_string())
+                        };
                         ParamCardStringInfo {
                             name: sp_def.name.to_string(),
                             key: sp_def.key.to_string(),
@@ -495,7 +500,7 @@ fn param_surface(
                 def.string_param_defs
                     .iter()
                     .map(|sp_def| {
-                        let (value, binding_id) = effect_string_param_value(inst, sp_def);
+                        let (value, binding_id) = graph_string_param_value(inst, sp_def);
                         ParamCardStringInfo {
                             name: sp_def.name.to_string(),
                             key: sp_def.key.to_string(),
@@ -873,6 +878,57 @@ mod audio_send_projection_tests {
         setup.sends.clear();
         let (_, missing_display) = audio_send_string_state(&selected, &setup);
         assert_eq!(missing_display, "Missing send");
+    }
+
+    #[test]
+    fn generator_audio_send_surface_reads_graph_value_and_display() {
+        let mut generator = PresetInstance::new_generator(
+            manifold_core::PresetTypeId::from_string("Oscilloscope".to_string()),
+        );
+        generator.init_defaults();
+        let mut graph = manifold_renderer::node_graph::bundled_preset_def(generator.effect_type())
+            .expect("Oscilloscope generator preset is bundled")
+            .clone();
+        let first = AudioSend::new("Music");
+        let second = AudioSend::new("Music");
+        let selected_id = second.id.to_string();
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id.as_str() == "waveform")
+            .expect("Oscilloscope waveform node")
+            .params
+            .insert(
+                "send".to_string(),
+                manifold_core::effect_graph_def::SerializedParamValue::String {
+                    value: selected_id.clone(),
+                },
+            );
+        generator.graph = Some(graph);
+
+        let mut setup = AudioSetup::default();
+        setup.sends = vec![first, second];
+        let mut config = param_surface(
+            &generator,
+            manifold_core::preset_def::PresetKind::Generator,
+            0,
+            OscScope::Layer("oscilloscope-layer"),
+            None,
+            &[],
+            SurfaceVisibility::CuratedCard,
+            (manifold_core::Bpm(120.0), 0.0),
+        )
+        .expect("generator surface");
+        attach_audio_sends(std::slice::from_mut(&mut config), &setup);
+
+        let audio_send = config
+            .string_params
+            .iter()
+            .find(|param| param.key == "audioSend")
+            .expect("Audio Send string row");
+        assert_eq!(audio_send.value, selected_id);
+        assert_eq!(audio_send.display_value.as_deref(), Some("2 · Music"));
+        assert_eq!(audio_send.dropdown_choices[2].value, audio_send.value);
     }
 }
 

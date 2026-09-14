@@ -50,13 +50,12 @@ fn find_effect_string_node(
     None
 }
 
-fn effect_string_binding_target(
+fn string_binding_target(
     project: &manifold_core::project::Project,
-    effect_id: &manifold_core::EffectId,
+    target: &GraphTarget,
     binding_id: &str,
 ) -> Option<(u32, String, Vec<u32>, manifold_core::effect_graph_def::EffectGraphDef)> {
-    let target = GraphTarget::Effect(effect_id.clone());
-    let instance = project.preset_instance(&target)?;
+    let instance = project.preset_instance(target)?;
     let catalog_default = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())?.clone();
     let graph = instance.graph.as_ref().unwrap_or(&catalog_default);
     let metadata = graph
@@ -565,12 +564,12 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
         ParamsAction::EffectStringParamSelected(effect_id, binding_id, selected_value) => {
+            let target = GraphTarget::Effect(effect_id.clone());
             let Some((node_id, param_name, scope_path, catalog_default)) =
-                effect_string_binding_target(ctx.project, effect_id, binding_id)
+                string_binding_target(ctx.project, &target, binding_id)
             else {
                 return DispatchResult::handled();
             };
-            let target = GraphTarget::Effect(effect_id.clone());
             let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
                 target,
                 node_id,
@@ -599,6 +598,29 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 if let Some(def) = manifold_core::preset_definition_registry::try_get(gen_type)
                     && let Some(sp_def) = def.string_param_defs.get(*sp_idx)
                 {
+                    if sp_def.key == "audioSend" {
+                        let target = GraphTarget::Generator(layer.layer_id.clone());
+                        let Some((node_id, param_name, scope_path, catalog_default)) =
+                            string_binding_target(ctx.project, &target, sp_def.key)
+                        else {
+                            return DispatchResult::handled();
+                        };
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            target,
+                            node_id,
+                            param_name,
+                            SerializedParamValue::String {
+                                value: selected_value.clone(),
+                            },
+                            catalog_default,
+                        )
+                        .with_scope(scope_path);
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::ExecuteOnContent(Box::new(cmd)),
+                        );
+                        return DispatchResult::structural();
+                    }
                     let key = sp_def.key.to_string();
                     let new_value: Option<String> = if selected_value.is_empty() {
                         None
@@ -961,22 +983,11 @@ mod audio_send_dispatch_tests {
     use manifold_editing::service::EditingService;
     use manifold_ui::{PanelAction, ParamsAction};
 
-    fn oscilloscope_project() -> (manifold_core::project::Project, manifold_core::EffectId) {
-        let mut project = manifold_core::project::Project::default();
-        let mut effect = PresetInstance::new(manifold_core::PresetTypeId::from_string(
-            "Oscilloscope".to_string(),
-        ));
-        effect.init_defaults();
-        let effect_id = effect.id.clone();
-        project.settings.master_effects.push(effect);
-        (project, effect_id)
-    }
-
     fn waveform_send(
         project: &manifold_core::project::Project,
-        effect_id: &manifold_core::EffectId,
+        target: &GraphTarget,
     ) -> Option<String> {
-        let instance = project.preset_instance(&GraphTarget::Effect(effect_id.clone()))?;
+        let instance = project.preset_instance(target)?;
         let catalog = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())?;
         let graph = instance.graph.as_ref().unwrap_or(catalog);
         let node = graph.nodes.iter().find(|node| node.node_id.as_str() == "waveform")?;
@@ -987,18 +998,31 @@ mod audio_send_dispatch_tests {
     }
 
     #[test]
-    fn audio_send_selection_executes_and_round_trips_serialized_source() {
-        let (mut project, effect_id) = oscilloscope_project();
+    fn generator_audio_send_selection_uses_graph_binding_and_round_trips_undo() {
+        let mut project = manifold_core::project::Project::default();
+        let layer_id = manifold_core::LayerId::new("oscilloscope-layer");
+        let mut layer = manifold_core::layer::Layer::new_generator(
+            "Oscilloscope".to_string(),
+            manifold_core::PresetTypeId::from_string("Oscilloscope".to_string()),
+            0,
+        );
+        layer.layer_id = layer_id.clone();
+        layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats(0.0),
+            manifold_core::Beats(16.0),
+        ));
+        project.timeline.layers.push(layer);
+
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let content_state = crate::content_state::ContentState::default();
         let mut ui = crate::ui_root::UIRoot::new();
         let mut selection = manifold_ui::UIState::new();
-        let mut active_layer = None;
+        selection.select_layer(layer_id.clone());
+        let mut active_layer = Some(layer_id.clone());
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = crate::ui_bridge::ScrubState::default();
-        let action = PanelAction::Params(ParamsAction::EffectStringParamSelected(
-            effect_id.clone(),
-            "audioSend".to_string(),
+        let action = PanelAction::Params(ParamsAction::GenStringParamSelected(
+            0,
             "send-2".to_string(),
         ));
 
@@ -1022,13 +1046,14 @@ mod audio_send_dispatch_tests {
             crate::content_command::ContentCommand::ExecuteOnContent(command) => command,
             _ => panic!("expected ExecuteOnContent"),
         };
+        let target = GraphTarget::Generator(layer_id);
         let mut service = EditingService::new();
         service.execute(command, &mut project);
-        assert_eq!(waveform_send(&project, &effect_id).as_deref(), Some("send-2"));
+        assert_eq!(waveform_send(&project, &target).as_deref(), Some("send-2"));
 
         assert!(service.undo(&mut project));
-        assert_eq!(waveform_send(&project, &effect_id), None);
+        assert_eq!(waveform_send(&project, &target), None);
         assert!(service.redo(&mut project));
-        assert_eq!(waveform_send(&project, &effect_id).as_deref(), Some("send-2"));
+        assert_eq!(waveform_send(&project, &target).as_deref(), Some("send-2"));
     }
 }

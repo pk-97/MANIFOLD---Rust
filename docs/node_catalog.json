@@ -13500,11 +13500,9 @@
         "Mirror",
         "MotionMosh",
         "OilyFluid",
-        "Oscilloscope",
         "ParticleText",
         "QuadMirror",
         "SoftFocus",
-        "Spectrogram",
         "StarField",
         "StylizedFeedback",
         "VoronoiPrism",
@@ -23776,8 +23774,7 @@
       "category": "Math & Convert",
       "examples": [
         "BlobTracking",
-        "FilmGrain",
-        "Oscilloscope"
+        "FilmGrain"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -26893,11 +26890,13 @@
         "MriVolume",
         "NestedCubes",
         "OilyFluid",
+        "Oscilloscope",
         "ParticleText",
         "Plasma",
         "SceneStarter",
         "SceneStrobe",
         "Skin",
+        "Spectrogram",
         "StarField",
         "StrangeAttractor",
         "Strobe",
@@ -27103,10 +27102,8 @@
         "MaskRectangle",
         "Mirror",
         "MotionMosh",
-        "Oscilloscope",
         "QuadMirror",
         "SoftFocus",
-        "Spectrogram",
         "Strobe",
         "StylizedFeedback",
         "Transform",
@@ -34766,16 +34763,9 @@
       "category": "Audio",
       "id": "Oscilloscope",
       "is_line_based": true,
-      "kind": "effect",
+      "kind": "generator",
       "name": "Oscilloscope",
       "params": [
-        {
-          "default": "1",
-          "id": "amount",
-          "max": "1",
-          "min": "0",
-          "name": "Amount"
-        },
         {
           "default": "1",
           "id": "gain",
@@ -37008,16 +36998,9 @@
       "category": "Audio",
       "id": "Spectrogram",
       "is_line_based": false,
-      "kind": "effect",
+      "kind": "generator",
       "name": "Spectrogram",
       "params": [
-        {
-          "default": "1",
-          "id": "amount",
-          "max": "1",
-          "min": "0",
-          "name": "Amount"
-        },
         {
           "default": "0.5",
           "id": "history",
