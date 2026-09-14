@@ -287,6 +287,9 @@ impl ParamCardPanel {
                 }
             }
         }
+        for _ in &self.string_param_info {
+            h += ROW_HEIGHT + ROW_SPACING;
+        }
         h + self.relight_block_height()
     }
 
@@ -1380,6 +1383,34 @@ impl ParamCardPanel {
         }
         }
 
+        // Effect string rows (currently graph-backed audio-send selectors)
+        // share the generator card's text-row geometry and click routing.
+        for (si, sp) in self.string_param_info.iter().enumerate() {
+            let value = sp.display_value.as_deref().unwrap_or(&sp.value);
+            let display = if value.is_empty() {
+                format!("{}: (empty)", sp.name)
+            } else {
+                format!("{}: {}", sp.name, value)
+            };
+            self.string_param_btn_ids[si] = Some(tree.add_button(
+                Some(parent),
+                x + PADDING,
+                cy,
+                w - PADDING * 2.0,
+                ROW_HEIGHT,
+                UIStyle {
+                    bg_color: color::INSPECTOR_BG,
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    corner_radius: color::SMALL_RADIUS,
+                    ..UIStyle::default()
+                },
+                &display,
+            ));
+            cy += ROW_HEIGHT + ROW_SPACING;
+        }
+
         // ── "3D Shading" relight rows (docs/DEPTH_RELIGHT_DESIGN.md P5b) —
         // always drawn, greyed when the header toggle is off (no-
         // conditionally-visible-ui). Never on a modifier card (see
@@ -1826,10 +1857,11 @@ impl ParamCardPanel {
 
             // ── String param rows (clickable text fields) ──
             for (si, sp) in self.string_param_info.iter().enumerate() {
-                let display = if sp.value.is_empty() {
+                let value = sp.display_value.as_deref().unwrap_or(&sp.value);
+                let display = if value.is_empty() {
                     format!("{}: (empty)", sp.name)
                 } else {
-                    format!("{}: {}", sp.name, sp.value)
+                    format!("{}: {}", sp.name, value)
                 };
                 self.string_param_btn_ids[si] = Some(tree.add_button(
                     None,
@@ -2219,10 +2251,11 @@ impl ParamCardPanel {
         if let Some(sp) = self.string_param_info.get_mut(index) {
             sp.value = value.to_string();
             if let Some(Some(btn_id)) = self.string_param_btn_ids.get(index).copied() {
-                let display = if value.is_empty() {
+                let display_value = sp.display_value.as_deref().unwrap_or(value);
+                let display = if display_value.is_empty() {
                     format!("{}: (empty)", sp.name)
                 } else {
-                    format!("{}: {}", sp.name, value)
+                    format!("{}: {}", sp.name, display_value)
                 };
                 tree.set_text(btn_id, &display);
             }

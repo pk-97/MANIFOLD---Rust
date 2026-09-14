@@ -1950,6 +1950,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         frame_count: u64,
         export_mode: bool,
         data_version: u64,
+        audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         let _t_frame = std::time::Instant::now();
 
@@ -2001,6 +2002,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 _poll_ms,
                 export_mode,
                 data_version,
+                audio_visuals,
             );
         }
 
@@ -2039,6 +2041,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         _poll_ms: f64,
         export_mode: bool,
         data_version: u64,
+        audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // One-shot graph dump: consume the request as a local so the borrow of
         // `self.pending_graph_dump` ends here. The compositor captures during
@@ -2227,6 +2230,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     GpuEncoder::new(&mut gen_enc, native_device)
                 };
                 gpu_gen.chunking_enabled = !self.profiling_enabled;
+                gpu_gen.audio_visuals = audio_visuals;
 
                 for renderer in renderers.iter_mut() {
                     if let Some(gen_renderer) =
@@ -2548,6 +2552,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 GpuEncoder::new(&mut native_enc, native_device)
             };
             gpu_comp.chunking_enabled = !self.profiling_enabled;
+            gpu_comp.audio_visuals = audio_visuals;
 
             // Forward the authoring-time node-output preview request so the
             // chain holding the watched effect preserves the selected node's
@@ -2669,6 +2674,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     GpuEncoder::new(&mut native_enc, native_device)
                 };
+                gpu_cold.audio_visuals = audio_visuals;
                 if let Some(gen_r) = renderers
                     .iter_mut()
                     .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>())

@@ -95,6 +95,22 @@ impl ParamCardPanel {
                 if self.cog_btn_id == Some(id) {
                     return vec![PanelAction::Root(RootAction::OpenGraphEditor(ei))];
                 }
+                for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
+                    if btn_id == Some(id)
+                        && let Some(sp) = self.string_param_info.get(si)
+                        && sp.use_dropdown
+                        && let (Some(effect_id), Some(binding_id)) =
+                            (&sp.effect_id, &sp.binding_id)
+                    {
+                        return vec![PanelAction::Params(
+                            ParamsAction::EffectStringParamDropdownClicked(
+                                effect_id.clone(),
+                                binding_id.clone(),
+                                si,
+                            ),
+                        )];
+                    }
+                }
                 if self.border_id == Some(id)
                     || self.header_bg_id == Some(id)
                     || self.inner_bg_id == Some(id)

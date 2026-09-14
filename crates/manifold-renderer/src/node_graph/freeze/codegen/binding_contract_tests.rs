@@ -141,9 +141,9 @@ fn dispatch_tail_census_is_stable() {
         let shape: Vec<String> = sig.iter().map(|(b, r)| format!("{b}:{r:?}")).collect();
         eprintln!("{} [{}] {}", if *q { "QUALIFY" } else { "manual " }, shape.join(" "), id);
     }
-    // Ratchet: the codemod's qualifying set (measured 2026-09-14: 180
-    // standalone atoms, 90 canonical texture-path). BlockSample adds one
-    // canonical texture atom and its full-resolution block-centre sampler.
+    // Ratchet: the codemod's qualifying set (measured 2026-09-14: 181
+    // standalone atoms, 91 canonical texture-path). The Math View sampler is
+    // a new buffer atom, so the canonical texture population is unchanged.
     // A new atom landing here is
     // fine — it gets the helper by construction — but a drop means an atom's
     // kernel shape drifted out from under already-rewritten call sites.
@@ -156,9 +156,11 @@ fn dispatch_tail_census_is_stable() {
     // analytic_echo_instances, mesh_spatial_mask and mesh_stagger_envelope.
     // Math View adds sample_triangle_grid and sample_mesh_triangles, buffer
     // sources (not texture-path).
-    assert_eq!(total, 180, "standalone atom census drifted");
+    // Audio visualization adds magnitude_db; mosh adds block_sample.
+    // Both are canonical texture atoms.
+    assert_eq!(total, 181, "standalone atom census drifted");
     assert_eq!(
-        qualifying, 90,
+        qualifying, 91,
         "canonical texture-path population drifted"
     );
 }

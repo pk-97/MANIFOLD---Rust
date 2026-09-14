@@ -501,6 +501,13 @@ pub enum ParamsAction {
     GenStringParamClicked(usize), // string_param_index — open text input
     GenStringParamDropdownClicked(usize), // string_param_index — open dropdown selector
     GenStringParamSelected(usize, String), // string_param_index, selected value
+    /// Open an effect graph-backed string dropdown. The effect and binding ids
+    /// are stable; the index is only the card-local anchor slot.
+    EffectStringParamDropdownClicked(manifold_foundation::EffectId, String, usize),
+    /// Commit an effect graph-backed string selection by stable effect/binding
+    /// identity. The selected value is the stable payload (for audio sends,
+    /// `AudioSendId`).
+    EffectStringParamSelected(manifold_foundation::EffectId, String, String),
     GenCollapseToggle,
     GenCardClicked,
     CopyGenerator,

@@ -27,8 +27,18 @@ pub enum CardContext {
     Author,
 }
 
-/// A generator string parameter — rendered as a clickable text-field row
-/// below the slider rows. Generator-only; effects carry an empty list.
+/// One choice in a string parameter dropdown. The value is the stable payload
+/// sent to the owning graph binding; labels are presentation only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamCardStringChoice {
+    pub label: String,
+    pub value: String,
+    pub disabled: bool,
+}
+
+/// A string parameter — rendered as a clickable text-field row below sliders.
+/// Effects use the optional identity fields for graph-backed dropdowns;
+/// generators leave them empty and retain the existing clip string flow.
 #[derive(Debug, Clone)]
 pub struct ParamCardStringInfo {
     pub name: String,
@@ -36,6 +46,12 @@ pub struct ParamCardStringInfo {
     pub value: String,
     /// If true, clicking this param opens a dropdown instead of text input.
     pub use_dropdown: bool,
+    pub effect_id: Option<EffectId>,
+    pub binding_id: Option<String>,
+    pub dropdown_choices: Vec<ParamCardStringChoice>,
+    /// Optional display text for values whose payload is a stable id (audio
+    /// sends), including empty/default and missing-source states.
+    pub display_value: Option<String>,
 }
 
 /// Config for the "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`

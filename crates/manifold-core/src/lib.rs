@@ -3,6 +3,7 @@
 pub mod ableton_mapping;
 pub mod audio_clip_detection;
 pub mod audio_features;
+pub mod audio_visual;
 pub mod audio_mod;
 pub mod audio_setup;
 pub mod audio_trigger;

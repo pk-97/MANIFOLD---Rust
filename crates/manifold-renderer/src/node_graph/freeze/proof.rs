@@ -39,6 +39,8 @@ use manifold_gpu::{
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
+mod audio_visual;
+
 /// The section 7.4 "out-of-loop ≈ulp" precision-contract tolerance (freeze section 7,
 /// `docs/FREEZE_COMPILER_MAP.md`): the shared per-texel (abs, rel) bound for
 /// every out-of-loop texture-region fusion proof — f16-round-trip drift

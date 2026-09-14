@@ -33,6 +33,20 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
+        "audiovisualizers" => {
+            let mut scene = inspector_scene();
+            let mut spectrogram = effect("Spectrogram");
+            spectrogram.collapsed = true;
+            scene.project.timeline.layers[1].effects = Some(vec![
+                effect("Oscilloscope"), spectrogram,
+            ]);
+            scene.project.audio_setup.sends.clear();
+            scene.project.audio_setup.sends.extend([
+                manifold_core::audio_setup::AudioSend::new("Music"),
+                manifold_core::audio_setup::AudioSend::new("Music"),
+            ]);
+            Some(scene)
+        }
         "modifiergroup" => {
             let mut scene = inspector_scene();
             // Duplicate source names must remain distinguishable in the mask picker.

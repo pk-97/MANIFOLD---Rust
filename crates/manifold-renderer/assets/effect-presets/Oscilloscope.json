@@ -1,0 +1,568 @@
+{
+  "version": 2,
+  "name": "Oscilloscope",
+  "presetMetadata": {
+    "id": "Oscilloscope",
+    "displayName": "Oscilloscope",
+    "category": "Audio",
+    "oscPrefix": "oscilloscope",
+    "available": true,
+    "isLineBased": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "gain",
+        "name": "Gain",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "window_ms",
+        "name": "Window (ms)",
+        "min": 5.0,
+        "max": 100.0,
+        "defaultValue": 25.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "trigger",
+        "name": "Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "thickness",
+        "name": "Thickness",
+        "min": 0.1,
+        "max": 10.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "color_r",
+        "name": "Color R",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "color_g",
+        "name": "Color G",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.85,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "color_b",
+        "name": "Color B",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "color_a",
+        "name": "Color A",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "position_x",
+        "name": "Position X",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "position_y",
+        "name": "Position Y",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "size",
+        "name": "Size",
+        "min": 0.1,
+        "max": 5.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mix",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "gain",
+        "label": "Gain",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wave_gain",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "window_ms",
+        "label": "Window",
+        "defaultValue": 25.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "waveform",
+          "param": "window_ms"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "trigger",
+        "label": "Trigger",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "waveform",
+          "param": "trigger"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "thickness",
+        "label": "Thickness",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "thickness_scale",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "color_r",
+        "label": "Color R",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "lines",
+          "param": "color_r"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "color_g",
+        "label": "Color G",
+        "defaultValue": 0.85,
+        "target": {
+          "kind": "node",
+          "nodeId": "lines",
+          "param": "color_g"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "color_b",
+        "label": "Color B",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "lines",
+          "param": "color_b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "color_a",
+        "label": "Color A",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "lines",
+          "param": "color_a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "position_x",
+        "label": "Position X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "transform",
+          "param": "translate_x"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "position_y",
+        "label": "Position Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "transform",
+          "param": "translate_y"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "size",
+        "label": "Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "transform",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "stringParams": [
+      {
+        "id": "audioSend",
+        "name": "Audio Send",
+        "defaultValue": "",
+        "useDropdown": true
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "audioSend",
+        "label": "Audio Send",
+        "defaultValue": "",
+        "target": {
+          "kind": "node",
+          "nodeId": "waveform",
+          "param": "send"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "nodeId": "waveform",
+      "typeId": "node.audio_waveform",
+      "handle": "waveform"
+    },
+    {
+      "id": 2,
+      "nodeId": "range",
+      "typeId": "node.range",
+      "handle": "range",
+      "params": {
+        "start": {
+          "type": "Float",
+          "value": -1.0
+        },
+        "end": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 512
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "wave_gain",
+      "typeId": "node.array_math",
+      "handle": "wave_gain",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 6
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "points",
+      "typeId": "node.combine_xy",
+      "handle": "points",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 2.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "lines",
+      "typeId": "node.draw_lines",
+      "handle": "lines",
+      "params": {
+        "closed_loop": {
+          "type": "Bool",
+          "value": false
+        },
+        "show_verts": {
+          "type": "Bool",
+          "value": false
+        },
+        "edge_thickness": {
+          "type": "Float",
+          "value": 0.002
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.85
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_a": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "thickness_scale",
+      "typeId": "node.math",
+      "handle": "thickness_scale",
+      "params": {
+        "b": {
+          "type": "Float",
+          "value": 0.001
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        },
+        "a": {
+          "type": "Float",
+          "value": 2.0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "dimensions",
+      "typeId": "node.texture_size",
+      "handle": "dimensions"
+    },
+    {
+      "id": 8,
+      "nodeId": "x_aspect",
+      "typeId": "node.array_math",
+      "handle": "x_aspect",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "transform",
+      "typeId": "node.transform",
+      "handle": "transform",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "mix",
+      "typeId": "node.mix",
+      "handle": "mix",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "y"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "edge_thickness"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "aspect",
+      "toNode": 8,
+      "toPort": "scale"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "color",
+      "toNode": 9,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    }
+  ]
+}

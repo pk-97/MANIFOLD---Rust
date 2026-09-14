@@ -837,6 +837,7 @@ impl ContentThread {
             self.frame_count,
             false,
             self.editing_service.data_version(),
+            Some(self.audio_mod_runtime.visuals()),
         );
         let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 

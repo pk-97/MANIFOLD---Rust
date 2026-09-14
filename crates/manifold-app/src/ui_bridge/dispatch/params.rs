@@ -23,11 +23,54 @@ use manifold_editing::commands::effects::{
     SetRelightHeightFromCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
 use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
-use manifold_ui::{InspectorTab, ParamsAction};
+use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
 
 use super::super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read};
 use super::resolve::{resolve_graph_target, resolve_preset_target};
+
+fn find_effect_string_node(
+    nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+    stable_id: &manifold_core::NodeId,
+    scope: &mut Vec<u32>,
+) -> Option<(u32, Vec<u32>)> {
+    for node in nodes {
+        if node.node_id == *stable_id {
+            return Some((node.id, scope.clone()));
+        }
+        if let Some(group) = &node.group {
+            scope.push(node.id);
+            let found = find_effect_string_node(&group.nodes, stable_id, scope);
+            scope.pop();
+            if found.is_some() {
+                return found;
+            }
+        }
+    }
+    None
+}
+
+fn effect_string_binding_target(
+    project: &manifold_core::project::Project,
+    effect_id: &manifold_core::EffectId,
+    binding_id: &str,
+) -> Option<(u32, String, Vec<u32>, manifold_core::effect_graph_def::EffectGraphDef)> {
+    let target = GraphTarget::Effect(effect_id.clone());
+    let instance = project.preset_instance(&target)?;
+    let catalog_default = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())?.clone();
+    let graph = instance.graph.as_ref().unwrap_or(&catalog_default);
+    let metadata = graph
+        .preset_metadata
+        .as_ref()
+        .or(catalog_default.preset_metadata.as_ref())?;
+    let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } =
+        &metadata.string_bindings.iter().find(|binding| binding.id == binding_id)?.target
+    else {
+        return None;
+    };
+    let (node_id, scope_path) = find_effect_string_node(&graph.nodes, node_id, &mut Vec::new())?;
+    Some((node_id, param.clone(), scope_path, catalog_default))
+}
 
 pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
@@ -475,6 +518,72 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
 
         // ── Generator card actions ─────────────────────────────────
+        ParamsAction::EffectStringParamDropdownClicked(effect_id, binding_id, index) => {
+            let Some(info) = ctx
+                .ui
+                .inspector
+                .effect_string_param(effect_id, binding_id, *index)
+                .cloned()
+            else {
+                return DispatchResult::handled();
+            };
+            let Some(rect) = ctx.ui.inspector.effect_string_param_rect(
+                &ctx.ui.tree,
+                effect_id,
+                binding_id,
+                *index,
+            ) else {
+                return DispatchResult::handled();
+            };
+            let items = if info.dropdown_choices.is_empty() {
+                vec![manifold_ui::panels::dropdown::DropdownItem::disabled(
+                    "No audio sends",
+                )]
+            } else {
+                info.dropdown_choices
+                    .iter()
+                    .map(|choice| {
+                        if choice.disabled {
+                            manifold_ui::panels::dropdown::DropdownItem::disabled(&choice.label)
+                        } else {
+                            manifold_ui::panels::dropdown::DropdownItem::new(&choice.label)
+                                .with_action(PanelAction::Params(
+                                    ParamsAction::EffectStringParamSelected(
+                                        effect_id.clone(),
+                                        binding_id.clone(),
+                                        choice.value.clone(),
+                                    ),
+                                ))
+                        }
+                    })
+                    .collect()
+            };
+            ctx.ui.open_dropdown_typed(
+                items,
+                manifold_ui::node::Rect::new(rect.x, rect.y, rect.width, rect.height),
+            );
+            DispatchResult::handled()
+        }
+        ParamsAction::EffectStringParamSelected(effect_id, binding_id, selected_value) => {
+            let Some((node_id, param_name, scope_path, catalog_default)) =
+                effect_string_binding_target(ctx.project, effect_id, binding_id)
+            else {
+                return DispatchResult::handled();
+            };
+            let target = GraphTarget::Effect(effect_id.clone());
+            let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                target,
+                node_id,
+                param_name,
+                SerializedParamValue::String {
+                    value: selected_value.clone(),
+                },
+                catalog_default,
+            )
+            .with_scope(scope_path);
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+            DispatchResult::structural()
+        }
         ParamsAction::GenStringParamClicked(_) | ParamsAction::GenStringParamDropdownClicked(_) => {
             // Intercepted in app_render.rs to open text input / dropdown.
             DispatchResult::handled()
@@ -843,5 +952,83 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
 
         // ── Macro mapping ─────────────────────────────────────────
+    }
+}
+
+#[cfg(test)]
+mod audio_send_dispatch_tests {
+    use super::*;
+    use manifold_editing::service::EditingService;
+    use manifold_ui::{PanelAction, ParamsAction};
+
+    fn oscilloscope_project() -> (manifold_core::project::Project, manifold_core::EffectId) {
+        let mut project = manifold_core::project::Project::default();
+        let mut effect = PresetInstance::new(manifold_core::PresetTypeId::from_string(
+            "Oscilloscope".to_string(),
+        ));
+        effect.init_defaults();
+        let effect_id = effect.id.clone();
+        project.settings.master_effects.push(effect);
+        (project, effect_id)
+    }
+
+    fn waveform_send(
+        project: &manifold_core::project::Project,
+        effect_id: &manifold_core::EffectId,
+    ) -> Option<String> {
+        let instance = project.preset_instance(&GraphTarget::Effect(effect_id.clone()))?;
+        let catalog = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())?;
+        let graph = instance.graph.as_ref().unwrap_or(catalog);
+        let node = graph.nodes.iter().find(|node| node.node_id.as_str() == "waveform")?;
+        match node.params.get("send") {
+            Some(SerializedParamValue::String { value }) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn audio_send_selection_executes_and_round_trips_serialized_source() {
+        let (mut project, effect_id) = oscilloscope_project();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = None;
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let action = PanelAction::Params(ParamsAction::EffectStringParamSelected(
+            effect_id.clone(),
+            "audioSend".to_string(),
+            "send-2".to_string(),
+        ));
+
+        let result = {
+            let mut ctx = crate::ui_bridge::DispatchCtx {
+                project: &mut project,
+                content_tx: &content_tx,
+                content_state: &content_state,
+                ui: &mut ui,
+                selection: &mut selection,
+                active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs,
+                editor_target: None,
+                scrub: &mut scrub,
+            };
+            crate::ui_bridge::dispatch(&action, &mut ctx)
+        };
+        assert!(result.structural_change);
+
+        let command = match content_rx.try_recv().expect("selection queues a command") {
+            crate::content_command::ContentCommand::ExecuteOnContent(command) => command,
+            _ => panic!("expected ExecuteOnContent"),
+        };
+        let mut service = EditingService::new();
+        service.execute(command, &mut project);
+        assert_eq!(waveform_send(&project, &effect_id).as_deref(), Some("send-2"));
+
+        assert!(service.undo(&mut project));
+        assert_eq!(waveform_send(&project, &effect_id), None);
+        assert!(service.redo(&mut project));
+        assert_eq!(waveform_send(&project, &effect_id).as_deref(), Some("send-2"));
     }
 }

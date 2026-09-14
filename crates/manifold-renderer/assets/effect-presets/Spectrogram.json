@@ -1,0 +1,433 @@
+{
+  "version": 2,
+  "name": "Spectrogram",
+  "presetMetadata": {
+    "id": "Spectrogram",
+    "displayName": "Spectrogram",
+    "category": "Audio",
+    "oscPrefix": "spectrogram",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "history",
+        "name": "History (s)",
+        "min": 0.1,
+        "max": 2.5,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "gain",
+        "name": "Gain",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 0.5,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "position_x",
+        "name": "Position X",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "position_y",
+        "name": "Position Y",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "size",
+        "name": "Size",
+        "min": 0.1,
+        "max": 5.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mix",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "history",
+        "label": "History",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "spectrum",
+          "param": "seconds"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "gain",
+        "label": "Gain",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "palette",
+          "param": "contrast"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "position_x",
+        "label": "Position X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "transform",
+          "param": "translate_x"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "position_y",
+        "label": "Position Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "transform",
+          "param": "translate_y"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "size",
+        "label": "Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "transform",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "stringParams": [
+      {
+        "id": "audioSend",
+        "name": "Audio Send",
+        "defaultValue": "",
+        "useDropdown": true
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "audioSend",
+        "label": "Audio Send",
+        "defaultValue": "",
+        "target": {
+          "kind": "node",
+          "nodeId": "spectrum",
+          "param": "send"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "nodeId": "spectrum",
+      "typeId": "node.audio_spectrum",
+      "handle": "spectrum"
+    },
+    {
+      "id": 2,
+      "nodeId": "magnitude",
+      "typeId": "node.magnitude_db",
+      "handle": "magnitude",
+      "params": {
+        "floor_db": {
+          "type": "Float",
+          "value": -60.0
+        },
+        "reference": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "range",
+      "typeId": "node.scale_offset_image",
+      "handle": "range",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 0.0166666667
+        },
+        "offset": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "clamp",
+      "typeId": "node.clamp",
+      "handle": "clamp",
+      "params": {
+        "min": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "max": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "gradient",
+      "typeId": "node.gradient",
+      "handle": "gradient",
+      "params": {
+        "stops": {
+          "type": "Table",
+          "rows": [
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.25,
+              0.0,
+              0.1,
+              0.8
+            ],
+            [
+              0.55,
+              0.0,
+              0.9,
+              1.0
+            ],
+            [
+              0.8,
+              1.0,
+              0.8,
+              0.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "palette",
+      "typeId": "node.color_lut",
+      "handle": "palette",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "contrast": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "gain",
+      "typeId": "node.exposure",
+      "handle": "gain",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "transform",
+      "typeId": "node.transform",
+      "handle": "transform",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "mix",
+      "typeId": "node.mix",
+      "handle": "mix",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "lut"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    }
+  ]
+}

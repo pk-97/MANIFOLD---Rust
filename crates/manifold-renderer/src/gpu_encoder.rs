@@ -19,6 +19,9 @@ pub struct GpuEncoder<'a> {
     /// [`Self::checkpoint`]. Always false for profiled frames so per-buffer
     /// dispatch timestamps stay monolithic (UI_RESPONSIVENESS_UNDER_LOAD D5).
     pub chunking_enabled: bool,
+    /// Live per-send audio histories used by audio-reactive graph sources.
+    /// The registry is content-thread owned and only borrowed for this frame.
+    pub audio_visuals: Option<&'a manifold_core::audio_visual::AudioVisualRegistry>,
 }
 
 // Safety: GpuEncoder is only used within a single frame on the content thread.
@@ -35,6 +38,7 @@ impl<'a> GpuEncoder<'a> {
             pool: None,
             uniform_arena: None,
             chunking_enabled: false,
+            audio_visuals: None,
         }
     }
 
@@ -50,6 +54,7 @@ impl<'a> GpuEncoder<'a> {
             pool: Some(pool),
             uniform_arena: None,
             chunking_enabled: false,
+            audio_visuals: None,
         }
     }
 

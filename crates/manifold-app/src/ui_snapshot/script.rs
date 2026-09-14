@@ -136,6 +136,7 @@ pub fn run(scene: &str, script_path: &str) {
     let mut ui = UIRoot::new();
     ui.resize(super::LOGICAL_W, super::LOGICAL_H);
     if scene == "inspector"
+        || scene == "audiovisualizers"
         || scene == "modifiergroup"
         || scene == "bug060"
         || scene == "bug060heavy"
