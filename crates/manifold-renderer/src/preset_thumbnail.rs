@@ -441,8 +441,8 @@ fn render_effect(
         .map(|n| n.id)
         .ok_or_else(|| "preset has no system.final_output node".to_string())?;
 
-    let source_out = output_resource(&plan, source_id, "out")
-        .ok_or_else(|| "system.source has no `out` resource in plan".to_string())?;
+    // Coverage graphs may produce their output without reading the input image.
+    let source_out = output_resource(&plan, source_id, "out");
     let final_in = plan
         .steps()
         .iter()
@@ -452,13 +452,15 @@ fn render_effect(
         .ok_or_else(|| "system.final_output has no bound `in`".to_string())?;
 
     let mut backend = MetalBackend::new(std::sync::Arc::clone(device), width, height, format);
-    let input_target = build_test_card_input(device, width, height, format);
-    let source_slot = backend.pre_bind_texture_2d(source_out, input_target);
+    let source_slot = source_out.map(|resource| {
+        let input_target = build_test_card_input(device, width, height, format);
+        backend.pre_bind_texture_2d(resource, input_target)
+    });
     // A degenerate passthrough graph (Source wired straight to FinalOutput,
     // no processing nodes) shares ONE resource for both boundaries — bind it
     // once and read the same slot back rather than double-binding.
-    let output_slot = if final_in == source_out {
-        source_slot
+    let output_slot = if Some(final_in) == source_out {
+        source_slot.expect("source resource was bound")
     } else {
         let out_target = RenderTarget::new(device, width, height, format, "preset-thumb-fx-out");
         backend.pre_bind_texture_2d(final_in, out_target)

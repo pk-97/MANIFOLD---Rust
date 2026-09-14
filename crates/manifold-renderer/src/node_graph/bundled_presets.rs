@@ -481,7 +481,7 @@ mod tests {
         use crate::node_graph::chain_spec::splice_def_into_chain;
         use crate::node_graph::effect_node::FrameTime;
         use crate::node_graph::execution::Executor;
-        use crate::node_graph::execution_plan::{ResourceId, compile};
+        use crate::node_graph::execution_plan::compile;
         use crate::node_graph::graph::Graph;
         use crate::node_graph::metal_backend::MetalBackend;
         use crate::node_graph::state_store::StateStore;
@@ -535,26 +535,22 @@ mod tests {
                 }
             };
 
-            // Pre-bind the source texture. Intermediate textures auto-
-            // allocate inside MetalBackend on first acquire.
+            // Pre-bind the source texture when this preset consumes the
+            // chain source. Source-independent masks intentionally leave the
+            // pruned system.source node out of the execution plan; their
+            // intermediate textures still auto-allocate on first acquire.
             let r_src = plan
                 .steps()
                 .iter()
                 .find(|s| s.node == src)
                 .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
-                .map(|(_, id)| *id)
-                .unwrap_or(ResourceId(u32::MAX));
-            if r_src.0 == u32::MAX {
-                failures.push(format!(
-                    "{preset_id}: Source.out resource not found in plan",
-                ));
-                continue;
-            }
-
-            let src_target =
-                RenderTarget::new(&device, w, h, format, "first-frame-test-src");
+                .map(|(_, id)| *id);
             let mut backend = MetalBackend::new(device.arc(), w, h, format);
-            backend.pre_bind_texture_2d(r_src, src_target);
+            if let Some(r_src) = r_src {
+                let src_target =
+                    RenderTarget::new(&device, w, h, format, "first-frame-test-src");
+                backend.pre_bind_texture_2d(r_src, src_target);
+            }
 
             let mut exec = Executor::new(Box::new(backend));
             let mut state = StateStore::new();

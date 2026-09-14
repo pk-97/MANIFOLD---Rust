@@ -11,7 +11,8 @@ layer/generator. "This gives us some very cool sidechain options too."
 - `preset_runtime/build.rs::OpenGroup` captures the dry input;
   `close_mix_group` already closes the branch with a mix.
 - `primitives/masked_mix.rs` blends using mask red times amount and supports fusion.
-- `primitives/layer_source.rs` reads the previous frame's post-effect layer output.
+- `primitives/layer_source.rs` supplies layer output. Audit found retained render
+  targets were mutable across frames; this slice adds owned pixel snapshots.
 - `PresetInstance` already provides graph overrides, manifests, modulation and
   stable EffectId editing. Inspector controls use `param_surface.rs`.
 - Cmd+G reaches `input_host.rs::handle_effect_group`; the current inspector lacks
@@ -64,7 +65,12 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
   tests and layer clone tests enforce this.
 - Zero/full/partial coverage, group wet/dry and preserved alpha have GPU numerical
   proofs. Shape motion updates values without changing topology.
-- Cross-layer reads use the existing previous-frame registry, including loops.
+- Cross-layer reads use owned snapshots, published after master effects. Grouped
+  children remain addressable. GPU tests cover target reuse and stale sources.
+- Snapshot storage is reused; each rendered source costs one texture and one copy
+  per frame. Projects containing masks conservatively disable occlusion render-skip
+  so potential sidechain sources advance. Narrow dependency tracking is a future
+  optimization; presentation still skips occluded pixels.
 - `inspector-add-mask.json` covers the context menu, group header and undo after
   card exit animation. `group_mask_circle_moves_over_infrared_without_rebuild`
   checks moving shape coverage against the standalone Infrared output and emits

@@ -12,14 +12,16 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-/// Previous-frame layer textures, content-thread only.
-///
-/// Owned by the compositor; graph execution receives a borrowed reference for
-/// the current frame. No shared-state wrapper — the content thread is the
-/// sole writer and reader, and the borrow checker enforces the frame
-/// lifetime.
+struct LayerSkin {
+    texture: GpuTexture,
+    owned_snapshot: bool,
+    visible: bool,
+}
+
+/// Previous-frame layer textures, owned and accessed by the content thread.
+/// Production publication copies pixels after all graph readers finish.
 pub struct LayerSkinRegistry {
-    textures: AHashMap<LayerId, GpuTexture>,
+    textures: AHashMap<LayerId, LayerSkin>,
     fallback: GpuTexture,
     /// Metal texture contents are undefined at creation — the fallback is
     /// cleared to transparent black once, lazily, at the first publish
@@ -64,12 +66,67 @@ impl LayerSkinRegistry {
     /// clone (one atomic refcount bump), so the original can continue to live
     /// in the compositor's ping-pong or effect chain.
     pub fn publish(&mut self, layer_id: LayerId, texture: GpuTexture) {
-        self.textures.insert(layer_id, texture);
+        self.textures.insert(layer_id, LayerSkin {
+            texture,
+            owned_snapshot: false,
+            visible: true,
+        });
+    }
+
+    /// Begin end-of-frame publication while keeping reusable snapshot storage.
+    /// No graph may read the registry until `finish_snapshots` completes.
+    pub(crate) fn begin_snapshots(&mut self) {
+        for entry in self.textures.values_mut() {
+            entry.visible = false;
+        }
+    }
+
+    /// Freeze pixels, rather than retaining a render target that the next
+    /// frame will overwrite. Allocation occurs only for a new layer or size.
+    pub(crate) fn publish_snapshot(
+        &mut self,
+        gpu: &mut crate::gpu_encoder::GpuEncoder,
+        layer_id: &LayerId,
+        source: &GpuTexture,
+    ) {
+        let needs_texture = self.textures.get(layer_id).is_none_or(|entry| {
+            !entry.owned_snapshot
+                || entry.texture.width != source.width
+                || entry.texture.height != source.height
+                || entry.texture.format != source.format
+        });
+        if needs_texture {
+            let texture = gpu.device.create_texture(&GpuTextureDesc {
+                width: source.width,
+                height: source.height,
+                depth: 1,
+                format: source.format,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::SHADER_READ,
+                label: "Layer source snapshot",
+                mip_levels: 1,
+            });
+            self.textures.insert(layer_id.clone(), LayerSkin {
+                texture,
+                owned_snapshot: true,
+                visible: true,
+            });
+        }
+        let entry = self.textures.get_mut(layer_id).expect("snapshot storage exists");
+        gpu.copy_texture_to_texture(source, &entry.texture, source.width, source.height);
+        entry.visible = true;
+    }
+
+    /// Drop sources which did not render this frame, including deleted layers.
+    pub(crate) fn finish_snapshots(&mut self) {
+        self.textures.retain(|_, entry| entry.visible);
     }
 
     /// Borrow the texture for `layer_id`, or the fallback if absent.
     pub fn get(&self, layer_id: &LayerId) -> &GpuTexture {
-        self.textures.get(layer_id).unwrap_or(&self.fallback)
+        self.textures.get(layer_id)
+            .filter(|entry| entry.visible)
+            .map_or(&self.fallback, |entry| &entry.texture)
     }
 
     /// Discard all stored layer textures. The fallback is preserved.
@@ -203,4 +260,25 @@ mod tests {
         assert_eq!(registry.len(), 0);
         assert_eq!(registry.get(&layer_id).width, 1);
     }
+    #[test]
+    fn group_mask_published_source_survives_target_reuse() {
+        let device = test_device();
+        let id = LayerId::new("reused-source");
+        let mut registry = LayerSkinRegistry::new(&device, GpuTextureFormat::Rgba16Float);
+        let target = crate::render_target::RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "reused source");
+        let mut encoder = device.create_encoder("previous frame source proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            gpu.clear_texture(&target.texture, 0.25, 0.0, 0.0, 1.0);
+            registry.begin_snapshots();
+            registry.publish_snapshot(&mut gpu, &id, &target.texture);
+            registry.finish_snapshots();
+            gpu.clear_texture(&target.texture, 0.75, 0.0, 0.0, 1.0);
+        }
+        encoder.commit_and_wait_completed();
+        let raw = crate::headless_readback::readback_raw_halves(&device, registry.get(&id), 4, 4);
+        let red = half::f16::from_bits(u16::from_le_bytes([raw[0], raw[1]])).to_f32();
+        assert!((red - 0.25).abs() < 0.001, "published frame changed when source was reused: {red}");
+    }
+
 }

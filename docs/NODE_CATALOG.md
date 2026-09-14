@@ -412,7 +412,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (78)
+### Effect & generator presets (83)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -467,6 +467,11 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
+| `MaskCircle` | Mask Circle | effect | Spatial | 8 |
+| `MaskGradient` | Mask Gradient | effect | Spatial | 6 |
+| `MaskImage` | Mask Image | effect | Spatial | 3 |
+| `MaskLayer` | Mask Layer | effect | Spatial | 3 |
+| `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
