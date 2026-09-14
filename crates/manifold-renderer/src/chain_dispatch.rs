@@ -158,6 +158,7 @@ pub fn dispatch_chain<'a>(
     scope: &str,
     profiling: bool,
     rt_quality: crate::node_graph::RtQuality,
+    layer_sources: &crate::layer_skin::LayerSkinRegistry,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
         return None;
@@ -243,6 +244,7 @@ pub fn dispatch_chain<'a>(
     // rebuild swaps the executor, so per-call re-application keeps the value
     // from going stale.
     cg.set_rt_quality(rt_quality);
+    cg.set_layer_skin_registry(Some(layer_sources));
     let t0 = std::time::Instant::now();
     let ran = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
     if ran {

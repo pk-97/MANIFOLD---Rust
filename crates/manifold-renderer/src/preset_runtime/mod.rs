@@ -125,6 +125,10 @@ pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 mod multi_segment_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/group_mask.rs"]
+mod group_mask_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/binding_seed.rs"]
 mod binding_seed_tests;
 

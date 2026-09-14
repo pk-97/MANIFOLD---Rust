@@ -1,12 +1,30 @@
 use crate::command::Command;
-use crate::commands::effect_target::{EffectTarget, with_effects_mut};
-use manifold_core::{EffectId, GraphTarget};
+use crate::commands::effect_target::{EffectTarget, with_effects, with_effects_mut};
 use manifold_core::effects::{
-    PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParameterDriver,
-    UserParamBinding, RelightField,
+    ParamConvert, ParamEnvelope, ParamId, ParameterDriver, PresetInstance, RelightField,
+    UserParamBinding,
 };
 use manifold_core::params::Param;
 use manifold_core::project::Project;
+use manifold_core::{EffectGroupId, EffectId, GraphTarget};
+
+pub(crate) fn masked_groups_contiguous(
+    effects: &[PresetInstance],
+    groups: &[manifold_core::effects::EffectGroup],
+) -> bool {
+    groups.iter().filter(|group| group.mask_effect_id.is_some()).all(|group| {
+        let positions: Vec<usize> = effects
+            .iter()
+            .enumerate()
+            .filter(|(_, effect)| effect.group_id.as_ref() == Some(&group.id))
+            .map(|(index, _)| index)
+            .collect();
+        positions.len() <= 1
+            || positions
+                .windows(2)
+                .all(|window| window[1] == window[0] + 1)
+    })
+}
 
 // ── Addressing model ──────────────────────────────────────────────────
 //
@@ -29,6 +47,8 @@ pub struct AddEffectCommand {
     target: EffectTarget,
     effect: PresetInstance,
     insert_index: usize,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl AddEffectCommand {
@@ -37,29 +57,61 @@ impl AddEffectCommand {
             target,
             effect,
             insert_index,
+            applied: false,
+            rejection: None,
         }
     }
 }
 
 impl Command for AddEffectCommand {
     fn execute(&mut self, project: &mut Project) {
-        with_effects_mut(project, &self.target, |effects, _groups| {
+        self.applied = false;
+        self.rejection = None;
+        with_effects_mut(project, &self.target, |effects, groups| {
             let idx = self.insert_index.min(effects.len());
+            if groups.iter().any(|group| {
+                let members: Vec<usize> = effects
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, effect)| effect.group_id.as_ref() == Some(&group.id))
+                    .map(|(index, _)| index)
+                    .collect();
+                group.mask_effect_id.is_some()
+                    && members.len() > 1
+                    && idx > members[0]
+                    && idx <= members[members.len() - 1]
+            }) {
+                self.rejection = Some("an effect cannot split a masked group");
+                return;
+            }
             effects.insert(idx, self.effect.clone());
+            self.applied = true;
         });
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         with_effects_mut(project, &self.target, |effects, _groups| {
             let idx = self.insert_index.min(effects.len().saturating_sub(1));
             if idx < effects.len() {
                 effects.remove(idx);
             }
         });
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Add Effect"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -69,6 +121,7 @@ pub struct RemoveEffectCommand {
     target: EffectTarget,
     effect: Option<PresetInstance>,
     removed_index: usize,
+    cleared_mask_groups: Vec<EffectGroupId>,
 }
 
 impl RemoveEffectCommand {
@@ -77,17 +130,34 @@ impl RemoveEffectCommand {
             target,
             effect: Some(effect),
             removed_index,
+            cleared_mask_groups: Vec::new(),
         }
     }
 }
 
 impl Command for RemoveEffectCommand {
     fn execute(&mut self, project: &mut Project) {
-        with_effects_mut(project, &self.target, |effects, _groups| {
+        let removed = with_effects_mut(project, &self.target, |effects, _groups| {
             if self.removed_index < effects.len() {
                 self.effect = Some(effects.remove(self.removed_index));
+                true
+            } else {
+                false
             }
-        });
+        })
+        .unwrap_or(false);
+        self.cleared_mask_groups.clear();
+        if removed && let Some(effect) = self.effect.as_ref() {
+            let effect_id = effect.id.clone();
+            with_effects_mut(project, &self.target, |_effects, groups| {
+                for group in groups.iter_mut() {
+                    if group.mask_effect_id.as_ref() == Some(&effect_id) {
+                        group.mask_effect_id = None;
+                        self.cleared_mask_groups.push(group.id.clone());
+                    }
+                }
+            });
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -98,6 +168,17 @@ impl Command for RemoveEffectCommand {
                 let insert_idx = idx.min(effects.len());
                 effects.insert(insert_idx, effect);
             });
+            let groups_to_restore = self.cleared_mask_groups.clone();
+            let mask_id = self.effect.as_ref().map(|effect| effect.id.clone());
+            if let Some(mask_id) = mask_id {
+                with_effects_mut(project, &self.target, |_effects, groups| {
+                    for group in groups {
+                        if groups_to_restore.iter().any(|id| id == &group.id) {
+                            group.mask_effect_id = Some(mask_id.clone());
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -112,6 +193,9 @@ pub struct ReorderEffectCommand {
     target: EffectTarget,
     from_index: usize,
     to_index: usize,
+    old_effects: Option<Vec<PresetInstance>>,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl ReorderEffectCommand {
@@ -120,38 +204,96 @@ impl ReorderEffectCommand {
             target,
             from_index,
             to_index,
+            old_effects: None,
+            applied: false,
+            rejection: None,
         }
     }
 }
 
 impl Command for ReorderEffectCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
         let from = self.from_index;
         let to = self.to_index;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if from < effects.len() {
-                let effect = effects.remove(from);
+        with_effects_mut(project, &self.target, |effects, groups| {
+            if from >= effects.len() {
+                self.rejection = Some("effect index is invalid");
+                return;
+            }
+            let effect_id = effects[from].id.clone();
+            if groups
+                .iter()
+                .any(|group| group.mask_effect_id.as_ref() == Some(&effect_id))
+            {
+                self.rejection = Some("a mask must move with its group");
+                return;
+            }
+            let mut reordered = effects.clone();
+            let is_masked_group = effects[from]
+                .group_id
+                .as_ref()
+                .and_then(|group_id| groups.iter().find(|group| &group.id == group_id))
+                .is_some_and(|group| group.mask_effect_id.is_some());
+            if is_masked_group {
+                // Masked groups move as one block, so a mask can never be
+                // separated from its colour members by a card reorder.
+                let group_id = effects[from].group_id.clone().unwrap();
+                let member_indices: Vec<usize> = reordered
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, effect)| effect.group_id.as_ref() == Some(&group_id))
+                    .map(|(idx, _)| idx)
+                    .collect();
+                let removed_before = member_indices.iter().filter(|&&idx| idx < to).count();
+                let members: Vec<PresetInstance> = member_indices
+                    .iter()
+                    .rev()
+                    .map(|&idx| reordered.remove(idx))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                let insert_at = to.saturating_sub(removed_before).min(reordered.len());
+                for (offset, member) in members.into_iter().enumerate() {
+                    reordered.insert(insert_at + offset, member);
+                }
+            } else {
+                let effect = reordered.remove(from);
                 // After remove, indices shift: if to > from, the target shifted down by 1
                 let insert_idx = if to > from { to - 1 } else { to };
-                let insert_idx = insert_idx.min(effects.len());
-                effects.insert(insert_idx, effect);
+                let insert_idx = insert_idx.min(reordered.len());
+                reordered.insert(insert_idx, effect);
             }
+            if !masked_groups_contiguous(&reordered, groups) {
+                self.rejection = Some("an effect cannot split a masked group");
+                return;
+            }
+            self.old_effects = Some(effects.clone());
+            *effects = reordered;
+            self.applied = true;
         });
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let from = self.from_index;
-        let to = self.to_index;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            // Reverse of execute: the item is now at adjusted_to
-            let adjusted_to = if to > from { to - 1 } else { to };
-            let adjusted_to = adjusted_to.min(effects.len().saturating_sub(1));
-            if adjusted_to < effects.len() {
-                let effect = effects.remove(adjusted_to);
-                let insert_idx = from.min(effects.len());
-                effects.insert(insert_idx, effect);
-            }
-        });
+        if !self.applied {
+            return;
+        }
+        if let Some(old_effects) = self.old_effects.clone() {
+            with_effects_mut(project, &self.target, |effects, _groups| {
+                *effects = old_effects;
+            });
+        }
+        self.applied = false;
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 
     fn description(&self) -> &str {
@@ -203,6 +345,8 @@ pub struct ReorderEffectGroupCommand {
     old_effects: Vec<PresetInstance>,
     /// Snapshot of the entire effects vec after the reorder.
     new_effects: Vec<PresetInstance>,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl ReorderEffectGroupCommand {
@@ -216,25 +360,82 @@ impl ReorderEffectGroupCommand {
             target,
             old_effects,
             new_effects,
+            applied: false,
+            rejection: None,
         }
     }
 }
 
 impl Command for ReorderEffectGroupCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
+        if self.old_effects.len() != self.new_effects.len() {
+            self.rejection = Some("effect reorder changed the list length");
+            return;
+        }
+        // A reorder is a permutation of the existing cards. Group ids stay
+        // attached to their cards; only masked groups additionally require a
+        // contiguous run because the renderer rejects split mask membership.
+        for old_effect in &self.old_effects {
+            let Some(new_effect) = self
+                .new_effects
+                .iter()
+                .find(|effect| effect.id == old_effect.id)
+            else {
+                self.rejection = Some("effect reorder changed group membership");
+                return;
+            };
+            if new_effect.group_id != old_effect.group_id {
+                self.rejection = Some("effect reorder changed group membership");
+                return;
+            }
+        }
+        if self
+            .old_effects
+            .iter()
+            .any(|effect| self.new_effects.iter().filter(|candidate| candidate.id == effect.id).count() != 1)
+            || self
+                .new_effects
+                .iter()
+                .any(|effect| self.old_effects.iter().filter(|candidate| candidate.id == effect.id).count() != 1)
+        {
+            self.rejection = Some("effect reorder changed card identities");
+            return;
+        }
+        let applied_groups = with_effects(project, &self.target, |_, groups| {
+            crate::commands::effects::masked_groups_contiguous(&self.new_effects, groups)
+        });
+        if applied_groups != Some(true) {
+            self.rejection = Some("group members must remain contiguous");
+            return;
+        }
         with_effects_mut(project, &self.target, |effects, _groups| {
             *effects = self.new_effects.clone();
         });
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         with_effects_mut(project, &self.target, |effects, _groups| {
             *effects = self.old_effects.clone();
         });
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Reorder Effects"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 

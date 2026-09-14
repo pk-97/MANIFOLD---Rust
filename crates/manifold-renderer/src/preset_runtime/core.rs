@@ -474,6 +474,21 @@ impl PresetRuntime {
             height,
             preview_effect,
         } = inputs;
+        for group in groups {
+            if let Some(mask_id) = &group.mask_effect_id {
+                let member = effects.iter().find(|fx| &fx.id == mask_id);
+                if !member.is_some_and(|fx| fx.group_id.as_ref() == Some(&group.id)) {
+                    eprintln!("[chain-build-fail] group {} has missing mask member {}", group.id, mask_id);
+                    return None;
+                }
+                let first = effects.iter().position(|fx| fx.group_id.as_ref() == Some(&group.id))?;
+                let last = effects.iter().rposition(|fx| fx.group_id.as_ref() == Some(&group.id))?;
+                if effects[first..=last].iter().any(|fx| fx.group_id.as_ref() != Some(&group.id)) {
+                    eprintln!("[chain-build-fail] masked group {} is not contiguous", group.id);
+                    return None;
+                }
+            }
+        }
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
         // (replaces the previous AHashMap<EffectId, &PresetInstance>
@@ -833,6 +848,10 @@ impl PresetRuntime {
                         pre_node: prev_node,
                         pre_port: prev_out_port,
                         wet_dry: group.wet_dry,
+                        mask_expected: group.mask_effect_id.as_ref().is_some_and(|id| {
+                            effects.iter().any(|member| &member.id == id && member.enabled)
+                        }),
+                        mask_output: None,
                     });
                 }
             }
@@ -889,9 +908,16 @@ impl PresetRuntime {
             } else {
                 fx.relight_active().then_some(&fx.relight_params)
             };
+            let is_mask = fx_group.is_some_and(|group| group.mask_effect_id.as_ref() == Some(&fx.id));
+            let card_input = if is_mask {
+                let group = open_group.as_ref()?;
+                (group.pre_node, group.pre_port)
+            } else {
+                (prev_node, prev_out_port)
+            };
             let splice_result = match splice_def_into_chain(
                 &mut graph,
-                (prev_node, prev_out_port),
+                card_input,
                 splice_def,
                 primitives,
                 relight_params,
@@ -909,7 +935,7 @@ impl PresetRuntime {
                     }
                     match splice_def_into_chain(
                         &mut graph,
-                        (prev_node, prev_out_port),
+                        card_input,
                         &base_view.canonical_def,
                         primitives,
                         relight_params,
@@ -1151,8 +1177,12 @@ impl PresetRuntime {
                 card_prefix: String::new(),
                 relight_writes,
             });
-            prev_node = output.0;
-            prev_out_port = output.1;
+            if is_mask {
+                open_group.as_mut()?.mask_output = Some(output);
+            } else {
+                prev_node = output.0;
+                prev_out_port = output.1;
+            }
         }
 
         // Close any still-open partial-wet-dry group at chain end.

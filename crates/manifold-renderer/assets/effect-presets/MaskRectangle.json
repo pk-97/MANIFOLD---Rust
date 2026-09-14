@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "name": "MaskRectangle",
+  "presetMetadata": {
+    "id": "MaskRectangle",
+    "displayName": "Mask Rectangle",
+    "category": "Spatial",
+    "oscPrefix": "maskRectangle",
+    "available": false,
+    "isLineBased": false,
+    "params": [
+      { "id": "position_x", "name": "Position X", "min": -1.0, "max": 2.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
+      { "id": "position_y", "name": "Position Y", "min": -1.0, "max": 2.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
+      { "id": "size_x", "name": "Size X", "min": 0.0, "max": 4.0, "defaultValue": 0.25, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
+      { "id": "size_y", "name": "Size Y", "min": 0.0, "max": 4.0, "defaultValue": 0.25, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
+      { "id": "rotation", "name": "Rotation", "min": -6.2831855, "max": 6.2831855, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F1", "isAngle": true },
+      { "id": "feather", "name": "Feather", "min": 0.0, "max": 2.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
+      { "id": "invert", "name": "Invert", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": true, "isTrigger": false, "formatString": "F0" },
+      { "id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" }
+    ],
+    "bindings": [
+      { "id": "position_x", "label": "Position X", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "rectangle", "param": "cx" }, "convert": { "type": "Float" } },
+      { "id": "position_y", "label": "Position Y", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "rectangle", "param": "cy" }, "convert": { "type": "Float" } },
+      { "id": "size_x", "label": "Size X", "defaultValue": 0.25, "target": { "kind": "node", "nodeId": "rectangle", "param": "half_width" }, "convert": { "type": "Float" } },
+      { "id": "size_y", "label": "Size Y", "defaultValue": 0.25, "target": { "kind": "node", "nodeId": "rectangle", "param": "half_height" }, "convert": { "type": "Float" } },
+      { "id": "rotation", "label": "Rotation", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "rectangle", "param": "rotation" }, "convert": { "type": "Float" } },
+      { "id": "feather", "label": "Feather", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "rectangle", "param": "softness" }, "convert": { "type": "Float" } },
+      { "id": "invert", "label": "Invert", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "invert", "param": "intensity" }, "convert": { "type": "Float" } },
+      { "id": "amount", "label": "Amount", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "amount", "param": "scale" }, "convert": { "type": "Float" } }
+    ]
+  },
+  "nodes": [
+    { "id": 0, "nodeId": "source", "typeId": "system.source", "handle": "source", "title": "Source" },
+    { "id": 1, "nodeId": "rectangle", "typeId": "node.rectangle_mask", "handle": "rectangle", "params": { "cx": { "type": "Float", "value": 0.5 }, "cy": { "type": "Float", "value": 0.5 }, "half_width": { "type": "Float", "value": 0.25 }, "half_height": { "type": "Float", "value": 0.25 }, "rotation": { "type": "Float", "value": 0.0 }, "softness": { "type": "Float", "value": 0.0 } }, "title": "Rectangle" },
+    { "id": 2, "nodeId": "invert", "typeId": "node.invert", "handle": "invert", "params": { "intensity": { "type": "Float", "value": 0.0 } }, "title": "Invert" },
+    { "id": 3, "nodeId": "amount", "typeId": "node.scale_offset_image", "handle": "amount", "params": { "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 0.0 } }, "title": "Amount" },
+    { "id": 4, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output", "title": "Output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+  ]
+}

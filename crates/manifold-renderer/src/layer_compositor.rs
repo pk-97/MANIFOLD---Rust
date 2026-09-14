@@ -969,6 +969,7 @@ impl LayerCompositor {
                     &scope,
                     false,
                     crate::node_graph::RtQuality::default(),
+                    &self.layer_skin_registry,
                 );
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
@@ -1103,6 +1104,7 @@ impl LayerCompositor {
                 &ctx,
                 &scope,
                 budget,
+                &self.layer_skin_registry,
             );
             match outcome {
                 WarmupOutcome::GpuFailed => return WarmupOutcome::GpuFailed,
@@ -1154,6 +1156,7 @@ impl LayerCompositor {
         ctx: &PresetContext,
         scope: &str,
         budget: WarmupBudget,
+        layer_sources: &crate::layer_skin::LayerSkinRegistry,
     ) -> WarmupOutcome {
         let start = std::time::Instant::now();
         let mut outcome = WarmupOutcome::BudgetExhausted {
@@ -1187,6 +1190,7 @@ impl LayerCompositor {
                     scope,
                     false,
                     crate::node_graph::RtQuality::default(),
+                    layer_sources,
                 );
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
@@ -1267,6 +1271,7 @@ impl LayerCompositor {
             &ctx,
             "master",
             budget,
+            &self.layer_skin_registry,
         );
 
         let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
@@ -1314,6 +1319,7 @@ impl LayerCompositor {
             &led_ctx,
             "led:master",
             budget,
+            &self.layer_skin_registry,
         );
 
         scratch.resize(device, width, height);
@@ -1393,6 +1399,7 @@ impl LayerCompositor {
                 &ctx,
                 &scope,
                 budget,
+                &self.layer_skin_registry,
             );
             if outcome != WarmupOutcome::Quiescent {
                 any_exhausted = true;
@@ -1440,6 +1447,7 @@ impl LayerCompositor {
                 &led_ctx,
                 &led_scope,
                 budget,
+                &self.layer_skin_registry,
             );
             if led_outcome != WarmupOutcome::Quiescent {
                 any_exhausted = true;
@@ -1652,6 +1660,7 @@ impl LayerCompositor {
         scope: &str,
         profiling: bool,
         rt_quality: crate::node_graph::RtQuality,
+        layer_sources: &crate::layer_skin::LayerSkinRegistry,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -1664,6 +1673,7 @@ impl LayerCompositor {
             scope,
             profiling,
             rt_quality,
+            layer_sources,
         )
     }
 
@@ -1960,6 +1970,7 @@ impl LayerCompositor {
                         &fx_scope(ld.layer_id),
                         self.profiling_enabled,
                         self.rt_quality,
+                        &self.layer_skin_registry,
                     )
                 } else {
                     None
@@ -2299,6 +2310,7 @@ impl LayerCompositor {
                                 &led_scope(group.layer_id),
                                 self.profiling_enabled,
                                 self.rt_quality,
+                                &self.layer_skin_registry,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -2530,6 +2542,7 @@ impl LayerCompositor {
                     &fx_scope(group_id),
                     self.profiling_enabled,
                     self.rt_quality,
+                    &self.layer_skin_registry,
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -3000,6 +3013,7 @@ impl Compositor for LayerCompositor {
                 "master",
                 self.profiling_enabled,
                 self.rt_quality,
+                &self.layer_skin_registry,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -3072,6 +3086,7 @@ impl Compositor for LayerCompositor {
                 "led:master",
                 self.profiling_enabled,
                 self.rt_quality,
+                &self.layer_skin_registry,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,

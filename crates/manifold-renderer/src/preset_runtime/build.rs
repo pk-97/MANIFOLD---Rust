@@ -64,6 +64,7 @@ pub(super) fn compute_topology_hash(
     for g in groups {
         g.id.as_str().hash(&mut h);
         g.enabled.hash(&mut h);
+        g.mask_effect_id.hash(&mut h);
     }
     width.hash(&mut h);
     height.hash(&mut h);
@@ -80,6 +81,8 @@ pub(super) struct OpenGroup {
     pub(super) pre_node: NodeInstanceId,
     pub(super) pre_port: &'static str,
     pub(super) wet_dry: f32,
+    pub(super) mask_expected: bool,
+    pub(super) mask_output: Option<(NodeInstanceId, &'static str)>,
 }
 
 /// Emit the Mix sub-graph for a closing partial-wet-dry group:
@@ -91,10 +94,20 @@ pub(super) fn close_mix_group(
     closing: &OpenGroup,
     last_effect: (NodeInstanceId, &'static str),
 ) -> Option<(NodeInstanceId, &'static str)> {
-    let mix_id = graph.add_node(Box::new(Mix::new()));
+    let mix_id = if closing.mask_expected {
+        let mask = closing.mask_output?;
+        let id = graph.add_node(Box::new(
+            crate::node_graph::primitives::MaskedMix::new(),
+        ));
+        graph.connect(mask, (id, "mask")).ok()?;
+        id
+    } else {
+        let id = graph.add_node(Box::new(Mix::new()));
+        graph.set_param(id, "mode", ParamValue::Enum(0)).ok()?;
+        id
+    };
     // Mode = Lerp (0) — matches legacy `WetDryLerpPipeline`'s
     // `lerp(dry, wet, wet_dry)`.
-    graph.set_param(mix_id, "mode", ParamValue::Enum(0)).ok()?;
     graph
         .set_param(mix_id, "amount", ParamValue::Float(closing.wet_dry))
         .ok()?;

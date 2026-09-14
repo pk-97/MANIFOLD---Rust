@@ -46,6 +46,7 @@
             collapsed: false,
             wet_dry: 0.5,
             parent_group_id: None,
+            mask_effect_id: None,
         };
 
         let result =
@@ -89,6 +90,7 @@
             collapsed: false,
             wet_dry: 0.5,
             parent_group_id: None,
+            mask_effect_id: None,
         };
 
         let result =
@@ -122,6 +124,7 @@
             collapsed: false,
             wet_dry: 0.3,
             parent_group_id: None,
+            mask_effect_id: None,
         };
 
         let result = PresetRuntime::try_build(ChainBuildInputs { effects: &[e1, e2, e3, e4, e5], groups: &[g1], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);

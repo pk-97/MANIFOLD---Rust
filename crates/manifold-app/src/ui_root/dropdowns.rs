@@ -1311,6 +1311,43 @@ impl UIRoot {
                 // Typed (2b.11): each item carries its action keyed by the card's
                 // target, so the dispatch runs one path for effects + generators.
                 let mut items = Vec::new();
+                if let GraphParamTarget::Effect(clicked_idx) = gpt {
+                    let selected = self.inspector.get_selected_effect_indices();
+                    let selected_indices = if selected.contains(clicked_idx) {
+                        selected
+                    } else {
+                        vec![*clicked_idx]
+                    };
+                    for (label, preset_id) in [
+                        ("Add Mask — Circle", "MaskCircle"),
+                        ("Add Mask — Rectangle", "MaskRectangle"),
+                        ("Add Mask — Gradient", "MaskGradient"),
+                        ("Add Mask — Image", "MaskImage"),
+                    ] {
+                        items.push(DropdownItem::new(label).with_action(
+                            PanelAction::Params(ParamsAction::AddMask {
+                                target: gpt.clone(),
+                                selected_indices: selected_indices.clone(),
+                                preset_id: preset_id.to_string(),
+                                source_layer: None,
+                            }),
+                        ));
+                    }
+                    if self.clip_detect_layers.is_empty() {
+                        items.push(DropdownItem::disabled("Add Mask — Layer (no visual layers)"));
+                    } else {
+                        for (layer_id, layer_name) in &self.clip_detect_layers {
+                            items.push(DropdownItem::new(&format!("Add Mask — Layer: {layer_name}")).with_action(
+                                PanelAction::Params(ParamsAction::AddMask {
+                                    target: gpt.clone(),
+                                    selected_indices: selected_indices.clone(),
+                                    preset_id: "MaskLayer".to_string(),
+                                    source_layer: Some(layer_id.clone()),
+                                }),
+                            ));
+                        }
+                    }
+                }
                 if matches!(gpt, GraphParamTarget::Generator) {
                     if let Some(layer) = self.inspector.modifier_scope_id().cloned()
                         && self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0)

@@ -1,8 +1,8 @@
 //! Effect rack groups (`EffectGroup`). Extracted from effects.rs (P2-E, D4).
 
-use serde::{Deserialize, Serialize};
-use crate::id::EffectGroupId;
 use super::{default_one, default_true};
+use crate::id::{EffectGroupId, EffectId};
+use serde::{Deserialize, Serialize};
 
 // ─── Effect Group ───
 
@@ -21,6 +21,11 @@ pub struct EffectGroup {
     pub wet_dry: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_group_id: Option<EffectGroupId>,
+    /// The effect instance that supplies coverage for this group's mask.
+    /// The referenced effect remains an ordinary member of the group's effect
+    /// list and is serialized by its stable `EffectId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_effect_id: Option<EffectId>,
 }
 
 impl EffectGroup {
@@ -32,6 +37,7 @@ impl EffectGroup {
             collapsed: false,
             wet_dry: 1.0,
             parent_group_id: None,
+            mask_effect_id: None,
         }
     }
 
@@ -44,4 +50,35 @@ impl EffectGroup {
 
 fn default_group_name() -> String {
     "Group".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_mask_old_project_defaults_to_none() {
+        let group: EffectGroup = serde_json::from_str(
+            r#"{"id":"group-1","name":"Group","enabled":true,"collapsed":false,"wetDry":1.0}"#,
+        )
+        .unwrap();
+
+        assert_eq!(group.mask_effect_id, None);
+        let json = serde_json::to_value(&group).unwrap();
+        assert!(json.get("maskEffectId").is_none());
+    }
+
+    #[test]
+    fn group_mask_roundtrips_identity() {
+        let mut group = EffectGroup::new("Masked".to_string());
+        group.parent_group_id = Some(EffectGroupId::new("parent"));
+        group.mask_effect_id = Some(EffectId::new("mask"));
+
+        let reloaded: EffectGroup =
+            serde_json::from_value(serde_json::to_value(&group).unwrap()).unwrap();
+
+        assert_eq!(reloaded.id, group.id);
+        assert_eq!(reloaded.parent_group_id, group.parent_group_id);
+        assert_eq!(reloaded.mask_effect_id, group.mask_effect_id);
+    }
 }
