@@ -4,6 +4,20 @@
 
 use super::*;
 
+/// The production chain-topology key, exposed for load-time clip-topology
+/// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
+/// chains against the exact inputs `is_compatible` hashes, so a warmed
+/// topology is precisely one the stage dispatch reuses.
+pub fn chain_topology_hash(
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    width: u32,
+    height: u32,
+    preview_effect: Option<&EffectId>,
+) -> u64 {
+    compute_topology_hash(effects, groups, width, height, preview_effect)
+}
+
 /// Topology hash — captures only the layout-affecting fields of
 /// `effects` + `groups`. Per-frame param values, drivers,
 /// envelopes, AND continuous wet/dry values are EXCLUDED so live

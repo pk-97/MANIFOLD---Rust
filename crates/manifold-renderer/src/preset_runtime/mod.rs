@@ -84,6 +84,7 @@ pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
 mod build;
+pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};
 
 mod groups;
@@ -93,20 +94,6 @@ mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
-
-/// The production chain-topology key, exposed for load-time clip-topology
-/// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
-/// chains against the exact inputs `is_compatible` hashes, so a warmed
-/// topology is precisely one the stage dispatch reuses.
-pub fn chain_topology_hash(
-    effects: &[PresetInstance],
-    groups: &[EffectGroup],
-    width: u32,
-    height: u32,
-    preview_effect: Option<&EffectId>,
-) -> u64 {
-    compute_topology_hash(effects, groups, width, height, preview_effect)
-}
 
 mod core;
 pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
