@@ -4,6 +4,20 @@
 
 use super::*;
 
+/// The production chain-topology key, exposed for load-time clip-topology
+/// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
+/// chains against the exact inputs `is_compatible` hashes, so a warmed
+/// topology is precisely one the stage dispatch reuses.
+pub fn chain_topology_hash(
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    width: u32,
+    height: u32,
+    preview_effect: Option<&EffectId>,
+) -> u64 {
+    compute_topology_hash(effects, groups, width, height, preview_effect)
+}
+
 /// Topology hash — captures only the layout-affecting fields of
 /// `effects` + `groups`. Per-frame param values, drivers,
 /// envelopes, AND continuous wet/dry values are EXCLUDED so live
@@ -64,50 +78,11 @@ pub(super) fn compute_topology_hash(
     for g in groups {
         g.id.as_str().hash(&mut h);
         g.enabled.hash(&mut h);
+        g.mask_effect_id.hash(&mut h);
     }
     width.hash(&mut h);
     height.hash(&mut h);
     h.finish()
-}
-
-/// State tracked for an open partial-wet-dry group during
-/// `try_build`'s walk over active effects. Captures the pre-group
-/// node + port so the Mix's `a` (dry) input wires from the same
-/// source as the group's first effect, and the group's `wet_dry`
-/// value so the Mix's `amount` param can be set at build time.
-pub(super) struct OpenGroup {
-    pub(super) group_id: EffectGroupId,
-    pub(super) pre_node: NodeInstanceId,
-    pub(super) pre_port: &'static str,
-    pub(super) wet_dry: f32,
-}
-
-/// Emit the Mix sub-graph for a closing partial-wet-dry group:
-/// `dry = pre_group_output`, `wet = last_effect_output`,
-/// `out = lerp(dry, wet, wet_dry)`. Returns the Mix node id and
-/// its output port (`"out"`).
-pub(super) fn close_mix_group(
-    graph: &mut Graph,
-    closing: &OpenGroup,
-    last_effect: (NodeInstanceId, &'static str),
-) -> Option<(NodeInstanceId, &'static str)> {
-    let mix_id = graph.add_node(Box::new(Mix::new()));
-    // Mode = Lerp (0) — matches legacy `WetDryLerpPipeline`'s
-    // `lerp(dry, wet, wet_dry)`.
-    graph.set_param(mix_id, "mode", ParamValue::Enum(0)).ok()?;
-    graph
-        .set_param(mix_id, "amount", ParamValue::Float(closing.wet_dry))
-        .ok()?;
-    // Mix.a = dry (pre-group input). Already wired into the
-    // group's first effect via this same output port — output
-    // ports can fan out to many input ports, so adding a second
-    // consumer is legal.
-    graph
-        .connect((closing.pre_node, closing.pre_port), (mix_id, "a"))
-        .ok()?;
-    // Mix.b = wet (post-group result).
-    graph.connect(last_effect, (mix_id, "b")).ok()?;
-    Some((mix_id, "out"))
 }
 
 /// Result of `assign_texture2d_slots`: one physical slot per logical

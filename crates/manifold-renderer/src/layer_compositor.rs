@@ -496,6 +496,8 @@ pub struct LayerCompositor {
     /// Cleared and populated each frame by generate_layers
     /// to avoid per-frame heap allocation.
     layer_outputs_scratch: Vec<LayerOutput>,
+    // Retain leaf outputs before group folding removes their descriptors.
+    source_outputs_scratch: Vec<(i32, GpuTexture)>,
     /// section 24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
     /// texture`, populated only for SINGLE-clip layers (where the layer output IS
     /// that clip's full look — generator/video + layer effects). Multi-clip layers
@@ -683,6 +685,7 @@ impl LayerCompositor {
             plugin_warmups: crate::plugin_prewarm::prewarm_all(device),
             tonemap: TonemapPipeline::new(device, width, height),
             layer_outputs_scratch: Vec::new(),
+            source_outputs_scratch: Vec::new(),
             clip_post_fx_scratch: Vec::new(),
             group_bufs: AHashMap::default(),
             group_buf_last_used_frame: AHashMap::default(),
@@ -969,6 +972,7 @@ impl LayerCompositor {
                     &scope,
                     false,
                     crate::node_graph::RtQuality::default(),
+                    &self.layer_skin_registry,
                 );
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
@@ -1103,6 +1107,7 @@ impl LayerCompositor {
                 &ctx,
                 &scope,
                 budget,
+                &self.layer_skin_registry,
             );
             match outcome {
                 WarmupOutcome::GpuFailed => return WarmupOutcome::GpuFailed,
@@ -1154,6 +1159,7 @@ impl LayerCompositor {
         ctx: &PresetContext,
         scope: &str,
         budget: WarmupBudget,
+        layer_sources: &crate::layer_skin::LayerSkinRegistry,
     ) -> WarmupOutcome {
         let start = std::time::Instant::now();
         let mut outcome = WarmupOutcome::BudgetExhausted {
@@ -1187,6 +1193,7 @@ impl LayerCompositor {
                     scope,
                     false,
                     crate::node_graph::RtQuality::default(),
+                    layer_sources,
                 );
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
@@ -1267,6 +1274,7 @@ impl LayerCompositor {
             &ctx,
             "master",
             budget,
+            &self.layer_skin_registry,
         );
 
         let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
@@ -1314,6 +1322,7 @@ impl LayerCompositor {
             &led_ctx,
             "led:master",
             budget,
+            &self.layer_skin_registry,
         );
 
         scratch.resize(device, width, height);
@@ -1393,6 +1402,7 @@ impl LayerCompositor {
                 &ctx,
                 &scope,
                 budget,
+                &self.layer_skin_registry,
             );
             if outcome != WarmupOutcome::Quiescent {
                 any_exhausted = true;
@@ -1440,6 +1450,7 @@ impl LayerCompositor {
                 &led_ctx,
                 &led_scope,
                 budget,
+                &self.layer_skin_registry,
             );
             if led_outcome != WarmupOutcome::Quiescent {
                 any_exhausted = true;
@@ -1652,6 +1663,7 @@ impl LayerCompositor {
         scope: &str,
         profiling: bool,
         rt_quality: crate::node_graph::RtQuality,
+        layer_sources: &crate::layer_skin::LayerSkinRegistry,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -1664,6 +1676,7 @@ impl LayerCompositor {
             scope,
             profiling,
             rt_quality,
+            layer_sources,
         )
     }
 
@@ -1960,6 +1973,7 @@ impl LayerCompositor {
                         &fx_scope(ld.layer_id),
                         self.profiling_enabled,
                         self.rt_quality,
+                        &self.layer_skin_registry,
                     )
                 } else {
                     None
@@ -2299,6 +2313,7 @@ impl LayerCompositor {
                                 &led_scope(group.layer_id),
                                 self.profiling_enabled,
                                 self.rt_quality,
+                                &self.layer_skin_registry,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -2530,6 +2545,7 @@ impl LayerCompositor {
                     &fx_scope(group_id),
                     self.profiling_enabled,
                     self.rt_quality,
+                    &self.layer_skin_registry,
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -2558,28 +2574,25 @@ impl LayerCompositor {
         }
     }
 
-    /// SCENE_FX P4a (section 3.3): publish every surviving layer's composite
-    /// into the layer-skin registry. Called from `render` after the blend —
-    /// all layer renders and the group fold are done, so what sits in
-    /// `layer_outputs_scratch` is each layer's (or folded group's) final
-    /// post-effect texture. Graph execution reads the registry next frame,
-    /// which is what makes layer→layer skins one-frame-delay feedback
-    /// instead of a render-order hazard.
+    /// Snapshot outputs after all frame readers, including master effects.
+    /// Leaf references are retained before folding removes grouped children.
     fn publish_layer_skins(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         self.layer_skin_registry.ensure_fallback_cleared(gpu);
-        self.layer_skin_registry.clear();
+        self.layer_skin_registry.begin_snapshots();
+        for (layer_index, texture) in &self.source_outputs_scratch {
+            if let Some(desc) = frame.find_layer(*layer_index) {
+                self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, texture);
+            }
+        }
         for output in &self.layer_outputs_scratch {
             let Some(desc) = frame.find_layer(output.layer_index) else {
                 continue;
             };
-            // The scratch holds raw pointers into chain/layer-buf textures
-            // that are valid for this frame's encoder scope; cloning keeps
-            // each texture alive into next frame without copying pixels
-            // (the design's "no new allocation" rule).
-            let texture = unsafe { (*output.texture).clone() };
-            self.layer_skin_registry
-                .publish(desc.layer_id.clone(), texture);
+            if desc.is_group {
+                self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, output.texture());
+            }
         }
+        self.layer_skin_registry.finish_snapshots();
     }
 
     /// Serial composite path: single encoder for all work.
@@ -2598,6 +2611,10 @@ impl LayerCompositor {
             unsafe { std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len) };
         self.blend_layers_to_led(gpu, pre_fold_outputs, frame);
 
+        self.source_outputs_scratch.clear();
+        self.source_outputs_scratch.extend(
+            self.layer_outputs_scratch.iter().map(|output| (output.layer_index, output.texture().clone())),
+        );
         self.fold_groups(gpu, frame);
         gpu.checkpoint();
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
@@ -2904,7 +2921,10 @@ impl Compositor for LayerCompositor {
         // below (forces it unfused). Computed before the `&mut self` chain
         // borrows so it doesn't conflict.
         let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
+        self.layer_skin_registry.ensure_fallback_cleared(gpu);
         if frame.clips.is_empty() {
+            self.layer_skin_registry.clear();
+            self.source_outputs_scratch.clear();
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
@@ -2938,12 +2958,6 @@ impl Compositor for LayerCompositor {
         // frames light enough not to need it, and the duplicated layer loop
         // drifted from this one twice (clip-mute black-out class).
         self.composite_serial(gpu, frame);
-
-        // SCENE_FX P4a: publish every layer's post-effect output into the
-        // layer-skin registry so next frame's graph execution can read it.
-        // This runs after all layer renders complete and before tonemap /
-        // master effects overwrite `main.source`.
-        self.publish_layer_skins(gpu, frame);
 
         // Tonemap the composited scene (before master glow effects).
         self.tonemap
@@ -3000,6 +3014,7 @@ impl Compositor for LayerCompositor {
                 "master",
                 self.profiling_enabled,
                 self.rt_quality,
+                &self.layer_skin_registry,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -3072,6 +3087,7 @@ impl Compositor for LayerCompositor {
                 "led:master",
                 self.profiling_enabled,
                 self.rt_quality,
+                &self.layer_skin_registry,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,
@@ -3092,6 +3108,10 @@ impl Compositor for LayerCompositor {
         // If the LED path is active but exit_index == 0 (pre-tonemap tap),
         // master FX sits warm for the next time the user flips exit_index
         // back to -1.
+
+        // Publish only after every consumer, including master and LED effects,
+        // has read the previous frame. Snapshots also retain grouped children.
+        self.publish_layer_skins(gpu, frame);
 
         // Flush uniform arena (recreates buffer if capacity grew).
         // On native path, arena buffer is not read by GPU dispatches (uses inline
@@ -4205,6 +4225,25 @@ mod led_composite_pixel_tests {
             parent: None,
             color: None,
         }
+    }
+
+    #[test]
+    fn group_mask_sources_include_folded_children_and_remove_stale_layers() {
+        let device = crate::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let parent = LayerId::from("parent");
+        render_layers(&mut comp, &device, &[
+            group_spec("parent", 0),
+            mirror_spec("child", 1, Some(parent.clone()), SRC),
+        ], &[]);
+        for id in [parent, LayerId::from("child")] {
+            let texture = comp.layer_skin_registry.get(&id);
+            assert_eq!(texture.width, COMP_W, "{id}: source lost during folding");
+            let pixels = readback_raw_halves(&device, texture, COMP_W, COMP_H);
+            assert_solid(&decode_halves(&pixels), "published source");
+        }
+        render_layers(&mut comp, &device, &[], &[]);
+        assert!(comp.layer_skin_registry.is_empty());
     }
 
     #[test]

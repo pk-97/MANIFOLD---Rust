@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "name": "MaskImage",
+  "presetMetadata": {
+    "id": "MaskImage",
+    "displayName": "Mask Image",
+    "category": "Spatial",
+    "oscPrefix": "maskImage",
+    "available": false,
+    "isLineBased": false,
+    "params": [
+      { "id": "channel", "name": "Channel", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "valueLabels": ["Brightness", "Alpha"], "formatString": "F0" },
+      { "id": "invert", "name": "Invert", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": true, "isTrigger": false, "formatString": "F0" },
+      { "id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" }
+    ],
+    "bindings": [
+      { "id": "channel", "label": "Channel", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "channel_select", "param": "selector" }, "convert": { "type": "Float" } },
+      { "id": "invert", "label": "Invert", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "invert", "param": "intensity" }, "convert": { "type": "Float" } },
+      { "id": "amount", "label": "Amount", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "amount", "param": "scale" }, "convert": { "type": "Float" } }
+    ]
+  },
+  "nodes": [
+    { "id": 0, "nodeId": "source", "typeId": "system.source", "handle": "source", "title": "Source" },
+    { "id": 1, "nodeId": "brightness", "typeId": "node.channel_mixer", "handle": "brightness", "params": { "row0": { "type": "Vec4", "value": [0.2126, 0.7152, 0.0722, 0.0] }, "row1": { "type": "Vec4", "value": [0.2126, 0.7152, 0.0722, 0.0] }, "row2": { "type": "Vec4", "value": [0.2126, 0.7152, 0.0722, 0.0] }, "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] } }, "title": "Brightness" },
+    { "id": 2, "nodeId": "alpha", "typeId": "node.channel_mixer", "handle": "alpha", "params": { "row0": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }, "row1": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }, "row2": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }, "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] } }, "title": "Alpha" },
+    { "id": 3, "nodeId": "channel_select", "typeId": "node.switch_texture", "handle": "channel_select", "params": { "num_inputs": { "type": "Int", "value": 2 }, "selector": { "type": "Float", "value": 0.0 } }, "title": "Channel" },
+    { "id": 4, "nodeId": "invert", "typeId": "node.invert", "handle": "invert", "params": { "intensity": { "type": "Float", "value": 0.0 } }, "title": "Invert" },
+    { "id": 5, "nodeId": "amount", "typeId": "node.scale_offset_image", "handle": "amount", "params": { "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 0.0 } }, "title": "Amount" },
+    { "id": 6, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output", "title": "Output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in_0" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in_1" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+  ]
+}

@@ -81,6 +81,8 @@ const CEILINGS: &[(&str, usize)] = &[
     // D3 named ceiling (+5%): PresetRuntime is one type; core ~2k is Peter-sanctioned
     ("crates/manifold-renderer/src/preset_runtime/core.rs", 2200),
     ("crates/manifold-renderer/src/preset_runtime/build.rs", 750),
+    // Effect masks: group membership and Mix assembly form one build facet.
+    ("crates/manifold-renderer/src/preset_runtime/groups.rs", 250),
     ("crates/manifold-renderer/src/preset_runtime/errors.rs", 300),
     ("crates/manifold-renderer/src/preset_runtime/segments.rs", 200),
     ("crates/manifold-renderer/src/preset_runtime/bindings.rs", 200),

@@ -462,6 +462,15 @@ pub enum ParamsAction {
     PasteGenerator,
     /// Right-click on a preset card header → open its context menu.
     CardRightClicked(GraphParamTarget),
+    /// Add a composable mask to the clicked effect's group. The UI captures
+    /// the selection and optional source layer while the menu is open so the
+    /// command remains anchored to the original card.
+    AddMask {
+        target: GraphParamTarget,
+        selected_indices: Vec<usize>,
+        preset_id: String,
+        source_layer: Option<LayerId>,
+    },
     /// Fork the targeted preset into a project-embedded copy and retarget the
     /// instance to it ("make unique"), so a per-instance recalibration becomes
     /// a named, shareable variant.

@@ -89,6 +89,22 @@ fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -
     panic!("no output `{port}` on node {node:?}");
 }
 
+fn try_resource_for_output(
+    plan: &ExecutionPlan,
+    node: NodeInstanceId,
+    port: &str,
+) -> Option<ResourceId> {
+    plan.steps()
+        .iter()
+        .find(|step| step.node == node)
+        .and_then(|step| {
+            step.outputs
+                .iter()
+                .find(|(name, _)| *name == port)
+                .map(|(_, resource)| *resource)
+        })
+}
+
 /// CPU-built RGBA gradient as a CPU-uploadable source texture — spatially
 /// varying so a pointwise fusion bug that's invisible on a flat fill can't
 /// hide. R ramps in x, G in y, B fixed, A = 1.
@@ -1090,10 +1106,16 @@ fn every_fused_preset_executes_one_frame() {
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let mut graph = fused.def.into_graph(&registry).expect("fused def builds a graph");
             let plan = compile(&graph).expect("fused graph compiles");
-            let r_src = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
-            let src_target = RenderTarget::new(&device, w, h, FMT, "fused-smoke-src");
+            let r_src = try_resource_for_output(
+                &plan,
+                find_node(&graph, "system.source"),
+                "out",
+            );
             let mut backend = MetalBackend::new(device.arc(), w, h, FMT);
-            backend.pre_bind_texture_2d(r_src, src_target);
+            if let Some(r_src) = r_src {
+                let src_target = RenderTarget::new(&device, w, h, FMT, "fused-smoke-src");
+                backend.pre_bind_texture_2d(r_src, src_target);
+            }
             let mut exec = Executor::new(Box::new(backend));
             let mut state = StateStore::new();
             let mut native_enc = device.create_encoder("fused-smoke");

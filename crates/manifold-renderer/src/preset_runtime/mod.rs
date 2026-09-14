@@ -84,32 +84,22 @@ pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
 mod build;
-use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, OpenGroup};
+pub use build::chain_topology_hash;
+use build::{assign_texture2d_slots, compute_topology_hash};
+
+mod groups;
+use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
 
 mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
 
-/// The production chain-topology key, exposed for load-time clip-topology
-/// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
-/// chains against the exact inputs `is_compatible` hashes, so a warmed
-/// topology is precisely one the stage dispatch reuses.
-pub fn chain_topology_hash(
-    effects: &[PresetInstance],
-    groups: &[EffectGroup],
-    width: u32,
-    height: u32,
-    preview_effect: Option<&EffectId>,
-) -> u64 {
-    compute_topology_hash(effects, groups, width, height, preview_effect)
-}
-
 mod core;
 pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
-use core::{EffectSlot, PresetIo, chain_active_effects};
+use core::{EffectSlot, PresetIo};
 #[cfg(test)]
 use core::assert_manifest_gate;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -123,6 +113,10 @@ pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/multi_segment.rs"]
 mod multi_segment_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/group_mask.rs"]
+mod group_mask_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/binding_seed.rs"]

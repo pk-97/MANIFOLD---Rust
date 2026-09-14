@@ -328,31 +328,6 @@ impl EffectSlot {
     }
 }
 
-/// The active (enabled, group-enabled) effects of a chain, with their original
-/// indices into `effects`. Shared between the chain build and the project-load
-/// segment prewarm so both walk the identical card list.
-pub(super) fn chain_active_effects<'a>(
-    effects: &'a [PresetInstance],
-    groups: &[EffectGroup],
-) -> Vec<(usize, &'a PresetInstance)> {
-    effects
-        .iter()
-        .enumerate()
-        .filter(|(_, fx)| {
-            if !fx.enabled {
-                return false;
-            }
-            if let Some(gid) = fx.group_id.as_deref()
-                && let Some(group) = groups.iter().find(|g| g.id.as_str() == gid)
-                && !group.enabled
-            {
-                return false;
-            }
-            true
-        })
-        .collect()
-}
-
 /// BUG-080 seam: a provisional manifest (built against an incomplete
 /// registry, not yet reconciled) reaching chain build means a load/ingest
 /// path skipped `reconcile_param_manifests()`. Loud in dev (panics), throttled
@@ -474,6 +449,7 @@ impl PresetRuntime {
             height,
             preview_effect,
         } = inputs;
+        validate_mask_groups(effects, groups)?;
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
         // (replaces the previous AHashMap<EffectId, &PresetInstance>
@@ -833,6 +809,10 @@ impl PresetRuntime {
                         pre_node: prev_node,
                         pre_port: prev_out_port,
                         wet_dry: group.wet_dry,
+                        mask_expected: group.mask_effect_id.as_ref().is_some_and(|id| {
+                            effects.iter().any(|member| &member.id == id && member.enabled)
+                        }),
+                        mask_output: None,
                     });
                 }
             }
@@ -889,9 +869,16 @@ impl PresetRuntime {
             } else {
                 fx.relight_active().then_some(&fx.relight_params)
             };
+            let is_mask = fx_group.is_some_and(|group| group.mask_effect_id.as_ref() == Some(&fx.id));
+            let card_input = if is_mask {
+                let group = open_group.as_ref()?;
+                (group.pre_node, group.pre_port)
+            } else {
+                (prev_node, prev_out_port)
+            };
             let splice_result = match splice_def_into_chain(
                 &mut graph,
-                (prev_node, prev_out_port),
+                card_input,
                 splice_def,
                 primitives,
                 relight_params,
@@ -909,7 +896,7 @@ impl PresetRuntime {
                     }
                     match splice_def_into_chain(
                         &mut graph,
-                        (prev_node, prev_out_port),
+                        card_input,
                         &base_view.canonical_def,
                         primitives,
                         relight_params,
@@ -1151,8 +1138,12 @@ impl PresetRuntime {
                 card_prefix: String::new(),
                 relight_writes,
             });
-            prev_node = output.0;
-            prev_out_port = output.1;
+            if is_mask {
+                open_group.as_mut()?.mask_output = Some(output);
+            } else {
+                prev_node = output.0;
+                prev_out_port = output.1;
+            }
         }
 
         // Close any still-open partial-wet-dry group at chain end.

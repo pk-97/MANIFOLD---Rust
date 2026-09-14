@@ -2177,7 +2177,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             layers,
             &self.occluded_layers_scratch,
             &self.hidden_layer_indices_scratch,
-            self.occlusion_render_skip_enabled,
+            // Masks can reference any layer. Preserve potential sidechain
+            // sources until dependency tracking can narrow the render set.
+            self.occlusion_render_skip_enabled
+                && !layers.iter().any(|layer| {
+                    layer.effect_groups.as_deref().unwrap_or(&[]).iter()
+                        .any(|group| group.mask_effect_id.is_some())
+                        || layer.clips.iter().any(|clip| {
+                            clip.effect_groups.as_deref().unwrap_or(&[]).iter()
+                                .any(|group| group.mask_effect_id.is_some())
+                        })
+                })
+                && !project.is_some_and(|project| {
+                    project.settings.master_effect_groups.as_deref().unwrap_or(&[]).iter()
+                        .any(|group| group.mask_effect_id.is_some())
+                }),
             preview_active,
             &mut self.render_skip_scratch,
         );

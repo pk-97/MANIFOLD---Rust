@@ -2231,6 +2231,266 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
+=== effect:MaskCircle node:5 ===
+struct Params {
+    n0_cx: f32,
+    n0_cy: f32,
+    n0_radius_x: f32,
+    n0_radius_y: f32,
+    n0_rotation: f32,
+    n0_softness: f32,
+    n1_intensity: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, radius_x: f32, radius_y: f32, rotation: f32, softness: f32) -> vec4<f32> {
+    let p = uv - vec2<f32>(cx, cy);
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let p_rot = vec2<f32>(p.x * c + p.y * s, -p.x * s + p.y * c);
+    let rx = max(radius_x, 1e-6);
+    let ry = max(radius_y, 1e-6);
+    let n = p_rot / vec2<f32>(rx, ry);
+    let dist = length(n);
+    let soft = max(softness, 0.0);
+    let edge_lo = max(1.0 - soft, 0.0);
+    let edge_hi = 1.0 + soft;
+    let mask = 1.0 - smoothstep(edge_lo, edge_hi, dist);
+    return vec4<f32>(mask, mask, mask, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_radius_x, params.n0_radius_y, params.n0_rotation, params.n0_softness);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_intensity);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    textureStore(dst, coord, r2);
+}
+
+=== effect:MaskGradient node:5 ===
+struct Params {
+    n0_cx: f32,
+    n0_cy: f32,
+    n0_rotation: f32,
+    n0_softness: f32,
+    n1_intensity: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, rotation: f32, softness: f32) -> vec4<f32> {
+    let p = uv - vec2<f32>(cx, cy);
+    let dir = vec2<f32>(cos(rotation), sin(rotation));
+    let t = dot(p, dir);
+    let half_soft = max(softness * 0.5, 1e-6);
+    let mask = smoothstep(-half_soft, half_soft, t);
+    return vec4<f32>(mask, mask, mask, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_rotation, params.n0_softness);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_intensity);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    textureStore(dst, coord, r2);
+}
+
+=== effect:MaskImage node:7 ===
+// @input_access: src_0 coincident
+struct Params {
+    n0_intensity: f32,
+    n1_scale: f32,
+    n1_offset: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_intensity);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_scale, params.n1_offset);
+    textureStore(dst, coord, r1);
+}
+
+=== effect:MaskLayer node:8 ===
+// @input_access: src_0 coincident
+struct Params {
+    n0_intensity: f32,
+    n1_scale: f32,
+    n1_offset: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_intensity);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_scale, params.n1_offset);
+    textureStore(dst, coord, r1);
+}
+
+=== effect:MaskRectangle node:5 ===
+struct Params {
+    n0_cx: f32,
+    n0_cy: f32,
+    n0_half_width: f32,
+    n0_half_height: f32,
+    n0_rotation: f32,
+    n0_softness: f32,
+    n1_intensity: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, half_width: f32, half_height: f32, rotation: f32, softness: f32) -> vec4<f32> {
+    let p = uv - vec2<f32>(cx, cy);
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let p_rot = vec2<f32>(p.x * c + p.y * s, -p.x * s + p.y * c);
+    let hw = max(half_width, 1e-6);
+    let hh = max(half_height, 1e-6);
+    let n_abs = abs(p_rot) / vec2<f32>(hw, hh);
+    let dist = max(n_abs.x, n_abs.y);
+    let soft = max(softness, 0.0);
+    let edge_lo = max(1.0 - soft, 0.0);
+    let edge_hi = 1.0 + soft;
+    let mask = 1.0 - smoothstep(edge_lo, edge_hi, dist);
+    return vec4<f32>(mask, mask, mask, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_cx, params.n0_cy, params.n0_half_width, params.n0_half_height, params.n0_rotation, params.n0_softness);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_intensity);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    textureStore(dst, coord, r2);
+}
+
 === effect:Mirror node:5 ===
 // @input_access: src_0 gather
 struct Params {

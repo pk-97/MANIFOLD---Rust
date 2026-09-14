@@ -14,7 +14,7 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::{UITree, ZTier};
-use manifold_foundation::EffectId;
+use manifold_foundation::{EffectGroupId, EffectId};
 use manifold_foundation::LayerId;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -43,6 +43,17 @@ const SCROLLBAR_STYLE: ScrollbarStyle = ScrollbarStyle {
 };
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
+
+/// Structural rack projection for one effect group. Membership is inferred by
+/// the app from each effect's stable group id; the inspector only needs the
+/// ordered member ids to add the header and indentation without touching the
+/// parameter surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RackGroupConfig {
+    pub id: EffectGroupId,
+    pub name: String,
+    pub member_ids: Vec<EffectId>,
+}
 
 // ── Tab strip ───────────────────────────────────────────────────
 const TAB_STRIP_HEIGHT: f32 = 24.0;
@@ -178,6 +189,7 @@ pub struct InspectorCompositePanel {
     /// (or, when it genuinely needs both scopes at once, `self.effects[..]`
     /// directly) instead of duplicating a match arm per touchpoint.
     effects: [Vec<ParamCardPanel>; 2],
+    rack_groups: [Vec<RackGroupConfig>; 2],
     gen_params: Option<ParamCardPanel>,
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the layer scope's modifier
     /// cards — applied scene-modifier kinds only, in slot order, below the
@@ -413,6 +425,7 @@ impl InspectorCompositePanel {
             layer_chrome: LayerChromePanel::new(),
             clip_chrome: ClipChromePanel::new(),
             effects: [Vec::new(), Vec::new()],
+            rack_groups: [Vec::new(), Vec::new()],
             gen_params: None,
             modifier_cards: Vec::new(),
             modifier_scope_id: None,

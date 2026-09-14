@@ -401,7 +401,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn handle_effect_group(&mut self) -> bool {
         let tab = self.ui_root.inspector.last_effect_tab();
         let indices = self.ui_root.inspector.get_selected_effect_indices();
-        if indices.len() < 2 {
+        if indices.is_empty() {
             return false;
         }
         let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
@@ -410,11 +410,10 @@ impl TimelineInputHost for AppInputHost<'_> {
             indices,
             "Group".to_string(),
         );
-        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-        boxed.execute(self.project);
+        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
         ContentCommand::send(
             self.content_tx,
-            crate::content_command::ContentCommand::Execute(boxed),
+            crate::content_command::ContentCommand::ExecuteOnContent(boxed),
         );
         *self.needs_rebuild = true;
         true
@@ -436,11 +435,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(gid) = group_id {
             let cmd =
                 manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(target, gid);
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(self.project);
+            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             ContentCommand::send(
                 self.content_tx,
-                crate::content_command::ContentCommand::Execute(boxed),
+                crate::content_command::ContentCommand::ExecuteOnContent(boxed),
             );
             *self.needs_rebuild = true;
             true
