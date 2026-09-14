@@ -22,6 +22,7 @@ struct MeshStaggerEnvelopeUniforms {
     hold_beats: f32,
     release_beats: f32,
     stagger_beats: f32,
+    amount: f32,
     yaw: f32,
     pitch: f32,
     scale: f32,
@@ -31,13 +32,12 @@ struct MeshStaggerEnvelopeUniforms {
     weights_len: u32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
     name: MeshStaggerEnvelope,
     type_id: "node.mesh_stagger_envelope",
-    purpose: "Generate an attack/hold/release weight envelope ordered by scene-relative mesh position. Order is clamp(0.5 + 0.5 * dot((sample_position + source_offset) / scene_radius, direction), 0, 1), where direction is the rotated Y axis; stagger_beats delays later positions. Vertex or triangle-centroid sampling is selectable, and an optional incoming weights array multiplies the result.",
+    purpose: "Generate an attack/hold/release weight envelope ordered by scene-relative mesh position. Order is clamp(0.5 + 0.5 * dot((sample_position + source_offset) / scene_radius, direction), 0, 1), where direction is the rotated Y axis; stagger_beats delays later positions. Vertex or triangle-centroid sampling is selectable, amount blends from identity to the envelope, and an optional incoming weights array multiplies the result.",
     inputs: {
         in: Array(MeshVertex) required,
         weights: Array(f32) optional,
@@ -46,6 +46,7 @@ crate::primitive! {
         hold_beats: ScalarF32 optional,
         release_beats: ScalarF32 optional,
         stagger_beats: ScalarF32 optional,
+        amount: ScalarF32 optional,
         yaw: ScalarF32 optional,
         pitch: ScalarF32 optional,
         scale: ScalarF32 optional,
@@ -61,6 +62,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("hold_beats"), label: "Hold Beats", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("release_beats"), label: "Release Beats", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("stagger_beats"), label: "Stagger Beats", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("amount"), label: "Amount", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("yaw"), label: "Yaw", ty: ParamType::Angle, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("pitch"), label: "Pitch", ty: ParamType::Angle, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("scale"), label: "Scene Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.000001, 1000.0)), enum_values: &[] },
@@ -69,7 +71,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("source_offset_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use this after node.mesh_spatial_mask or node.mesh_ramp to gate a geometry response in a deterministic directional order. elapsed_beats < 0 is an explicit idle state. Attack, hold, and release are linear and treat each zero-duration segment exactly. `sample_mode=Triangle Centroid` duplicates one envelope value across each triangle's three corners. The operation has no internal clock; elapsed_beats is a direct scalar input.",
+    composition_notes: "Use this after node.mesh_spatial_mask or node.mesh_ramp to gate a geometry response in a deterministic directional order. `amount=0` preserves incoming weights (one when unwired), including the explicit idle state `elapsed_beats < 0`; `amount=1` applies the full envelope and intermediate values blend between them. Attack, hold, and release are linear and treat each zero-duration segment exactly. `sample_mode=Triangle Centroid` duplicates one envelope value across each triangle's three corners. The operation has no internal clock; elapsed_beats is a direct scalar input. All float controls are scalar-shadowed.",
     examples: [],
     picker: { label: "Mesh Stagger Envelope", category: Atom },
     summary: "Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order.",
@@ -109,6 +111,7 @@ impl Primitive for MeshStaggerEnvelope {
         let hold_beats = ctx.scalar_or_param("hold_beats", 0.0);
         let release_beats = ctx.scalar_or_param("release_beats", 1.0);
         let stagger_beats = ctx.scalar_or_param("stagger_beats", 0.0);
+        let amount = ctx.scalar_or_param("amount", 1.0);
         let yaw = ctx.scalar_or_param("yaw", 0.0);
         let pitch = ctx.scalar_or_param("pitch", 0.0);
         let scale = ctx.scalar_or_param("scale", 1.0);
@@ -138,6 +141,7 @@ impl Primitive for MeshStaggerEnvelope {
             hold_beats,
             release_beats,
             stagger_beats,
+            amount,
             yaw,
             pitch,
             scale,
@@ -147,7 +151,6 @@ impl Primitive for MeshStaggerEnvelope {
             weights_len,
             dispatch_count: count,
             _pad0: 0,
-            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -206,6 +209,7 @@ mod tests {
             "hold_beats",
             "release_beats",
             "stagger_beats",
+            "amount",
             "yaw",
             "pitch",
             "scale",
@@ -321,6 +325,15 @@ mod gpu_tests {
         stagger_beats: f32,
         weights_len: u32,
     ) -> MeshStaggerEnvelopeUniforms {
+        uniforms_with_amount(1.0, sample_mode, elapsed_beats, stagger_beats, weights_len)
+    }
+    fn uniforms_with_amount(
+        amount: f32,
+        sample_mode: u32,
+        elapsed_beats: f32,
+        stagger_beats: f32,
+        weights_len: u32,
+    ) -> MeshStaggerEnvelopeUniforms {
         MeshStaggerEnvelopeUniforms {
             sample_mode,
             elapsed_beats,
@@ -328,6 +341,7 @@ mod gpu_tests {
             hold_beats: 0.0,
             release_beats: 1.0,
             stagger_beats,
+            amount,
             yaw: 0.0,
             pitch: 0.0,
             scale: 1.0,
@@ -337,7 +351,6 @@ mod gpu_tests {
             weights_len,
             dispatch_count: 6,
             _pad0: 0,
-            _pad1: 0,
         }
     }
 
@@ -361,6 +374,14 @@ mod gpu_tests {
             "envelope-idle",
         );
         assert!(idle.iter().all(|v| *v == 0.0));
+        let idle_passthrough = dispatch(
+            &wgsl,
+            &src,
+            Some(&[0.25, 0.5, 0.75, 1.0, 0.125, 0.875]),
+            uniforms_with_amount(0.0, 0, -1.0, 1.0, 6),
+            "envelope-idle-passthrough",
+        );
+        assert_eq!(idle_passthrough, vec![0.25, 0.5, 0.75, 1.0, 0.125, 0.875]);
         let ordered = dispatch(
             &wgsl,
             &src,
@@ -370,6 +391,23 @@ mod gpu_tests {
         );
         assert!(ordered[0] > 0.0 && ordered[0] < 1.0);
         assert_eq!(ordered[3], 0.0);
+        let full = dispatch(
+            &wgsl,
+            &src,
+            None,
+            uniforms_with_amount(1.0, 0, 0.5, 1.0, 0),
+            "envelope-full",
+        );
+        let half = dispatch(
+            &wgsl,
+            &src,
+            None,
+            uniforms_with_amount(0.5, 0, 0.5, 1.0, 0),
+            "envelope-half",
+        );
+        for (full, half) in full.iter().zip(half) {
+            assert!((half - 0.5 * (1.0 + full)).abs() < 2e-5);
+        }
         let centroid = dispatch(
             &wgsl,
             &src,

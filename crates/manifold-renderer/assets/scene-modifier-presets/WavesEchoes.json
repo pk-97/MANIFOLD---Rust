@@ -6,7 +6,7 @@
     "displayName": "Waves + Echoes",
     "category": "Geometry",
     "oscPrefix": "waves_echoes",
-    "available": true,
+    "available": false,
     "params": [
       {
         "id": "amplitude",

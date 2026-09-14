@@ -6,7 +6,7 @@
     "displayName": "Surface Peel - Clip Hit",
     "category": "Geometry",
     "oscPrefix": "surface_peel_hit",
-    "available": true,
+    "available": false,
     "params": [
       {
         "id": "lift",

@@ -6,7 +6,7 @@
     "displayName": "Surface Peel \u2014 Masked",
     "category": "Geometry",
     "oscPrefix": "masked_peel",
-    "available": true,
+    "available": false,
     "params": [
       {
         "id": "lift",

@@ -255,7 +255,13 @@ mod tests {
             assert!(ids.iter().any(|id| id == expected), "missing {expected}");
         }
         let metadata = loaded_scene_modifier_presets_from_bundled();
-        assert!(metadata.iter().all(|m| m.available));
+        for id in ["SurfacePeelHit", "OrderedReconHit", "MaskedPeel", "WavesEchoes"] {
+            assert!(!metadata.iter().find(|m| m.id.as_str() == id).unwrap().available,
+                "{id} is retained only for saved-project compatibility");
+        }
+        for id in ["SurfacePeel", "OrderedRecon", "SurfaceWaves", "SpatialEchoes"] {
+            assert!(metadata.iter().find(|m| m.id.as_str() == id).unwrap().available);
+        }
     }
 
     #[test]

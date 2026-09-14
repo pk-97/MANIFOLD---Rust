@@ -1,4 +1,6 @@
 // node.mesh_stagger_envelope — current mesh gather body, returning f32.
+// `amount` blends the envelope against identity, so amount=0 preserves the
+// incoming weight (or one when unwired), including while the envelope is idle.
 fn rotate_basis(v: vec3<f32>, yaw: f32, pitch: f32) -> vec3<f32> {
     let cp = cos(pitch);
     let sp = sin(pitch);
@@ -20,8 +22,14 @@ fn envelope(age: f32, attack: f32, hold: f32, release: f32) -> f32 {
     return 0.0;
 }
 
-fn body(idx: u32, count: u32, sample_mode: u32, elapsed_beats: f32, attack_beats: f32, hold_beats: f32, release_beats: f32, stagger_beats: f32, yaw: f32, pitch: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32, weights_len: u32) -> f32 {
-    if elapsed_beats < 0.0 { return 0.0; }
+fn body(idx: u32, count: u32, sample_mode: u32, elapsed_beats: f32, attack_beats: f32, hold_beats: f32, release_beats: f32, stagger_beats: f32, amount: f32, yaw: f32, pitch: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32, weights_len: u32) -> f32 {
+    var incoming = 1.0;
+    if idx < weights_len { incoming = buf_weights[idx]; }
+    let blend_amount = clamp(amount, 0.0, 1.0);
+    if elapsed_beats < 0.0 {
+        if blend_amount <= 0.0 { return incoming; }
+        return incoming * select(mix(1.0, 0.0, blend_amount), 0.0, blend_amount >= 1.0);
+    }
     let base = (idx / 3u) * 3u;
     var sample_position = buf_in[idx].position;
     if sample_mode == 1u && base + 2u < count {
@@ -32,7 +40,8 @@ fn body(idx: u32, count: u32, sample_mode: u32, elapsed_beats: f32, attack_beats
     let world = (sample_position + vec3<f32>(source_offset_x, source_offset_y, source_offset_z)) / safe_scale;
     let order = clamp(0.5 + 0.5 * dot(world, direction), 0.0, 1.0);
     let age = elapsed_beats - stagger_beats * order;
-    var incoming = 1.0;
-    if idx < weights_len { incoming = buf_weights[idx]; }
-    return incoming * envelope(age, attack_beats, hold_beats, release_beats);
+    let envelope_weight = envelope(age, attack_beats, hold_beats, release_beats);
+    if blend_amount <= 0.0 { return incoming; }
+    if blend_amount >= 1.0 { return incoming * envelope_weight; }
+    return incoming * mix(1.0, envelope_weight, blend_amount);
 }
