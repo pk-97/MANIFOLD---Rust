@@ -488,6 +488,7 @@ pub(crate) fn modifier_picker_entries(
         if !catalog.is_browser_visible(&id) { return None; }
         let recipe: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&json).ok()?;
         let metadata = recipe.preset_metadata.as_ref()?;
+        if !metadata.available { return None; }
         let attachment = metadata.scene_modifier.as_ref()?;
         let disabled = if vm.multiple_scenes {
             Some("Select a graph with one scene".to_string())
@@ -851,5 +852,22 @@ mod sync_card_values_tests {
             effect_card.rows[0].spec.max, 100.0,
             "sync_card_values must update the built row's spec.max to match the manifest edit"
         );
+    }
+}
+
+#[cfg(test)]
+mod consolidation_tests {
+    #[test]
+    fn modifier_picker_omits_retired_factory_combinations() {
+        let def = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"))).unwrap();
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+        let entries = super::modifier_picker_entries(&def, &vm);
+        for id in ["SurfacePeel", "OrderedRecon", "SurfaceWaves", "SpatialEchoes"] {
+            assert!(entries.iter().any(|entry| entry.preset_id == id), "missing {id}");
+        }
+        for id in ["SurfacePeelHit", "OrderedReconHit", "MaskedPeel", "WavesEchoes"] {
+            assert!(!entries.iter().any(|entry| entry.preset_id == id), "retired {id} still in picker");
+        }
     }
 }

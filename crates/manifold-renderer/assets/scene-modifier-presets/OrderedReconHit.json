@@ -6,7 +6,7 @@
     "displayName": "Ordered Recon \u2014 Clip Gesture",
     "category": "Geometry",
     "oscPrefix": "ordered_recon_hit",
-    "available": true,
+    "available": false,
     "params": [
       {
         "id": "progress",

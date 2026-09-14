@@ -1,4 +1,4 @@
-//! CPU conformance for an authored Surface Peel clip-hit-return variation.
+//! CPU conformance for the consolidated Surface Peel clip-trigger toggle.
 //!
 //! The promoted stock file proves that file loading, scene attachment,
 //! canonical preparation, and the mock runtime carry a clip edge through the
@@ -30,8 +30,8 @@ const MUSHROOM_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/gltf/cc0___mushroom.glb"
 );
-const SURFACE_PEEL_HIT_ID: &str = "SurfacePeelHit";
-const SURFACE_PEEL_HIT: &str = include_str!("../assets/scene-modifier-presets/SurfacePeelHit.json");
+const SURFACE_PEEL_ID: &str = "SurfacePeel";
+const SURFACE_PEEL: &str = include_str!("../assets/scene-modifier-presets/SurfacePeel.json");
 
 static CATALOG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -48,15 +48,15 @@ fn install_recipe_in_catalog() -> CatalogGuard {
         Vec::new(),
         Vec::new(),
         vec![(
-            SURFACE_PEEL_HIT_ID.to_string(),
-            SURFACE_PEEL_HIT.to_string(),
+            SURFACE_PEEL_ID.to_string(),
+            SURFACE_PEEL.to_string(),
             EmbeddedOrigin::Saved,
         )],
     );
     assert!(
         SCENE_MODIFIER_CATALOG
             .load()
-            .json(SURFACE_PEEL_HIT_ID)
+            .json(SURFACE_PEEL_ID)
             .is_some(),
         "project scene-modifier catalog must expose authored fixture"
     );
@@ -64,11 +64,11 @@ fn install_recipe_in_catalog() -> CatalogGuard {
 }
 
 fn recipe() -> EffectGraphDef {
-    let id = PresetTypeId::from_string(SURFACE_PEEL_HIT_ID.to_string());
+    let id = PresetTypeId::from_string(SURFACE_PEEL_ID.to_string());
     let json = SCENE_MODIFIER_CATALOG
         .load()
         .json(id.as_str())
-        .expect("SurfacePeelHit resolves from the project catalog");
+        .expect("SurfacePeel resolves from the project catalog");
     serde_json::from_str(&json).expect("catalog recipe parses")
 }
 
@@ -261,7 +261,7 @@ fn frame(
 }
 
 #[test]
-fn authored_hit_fixture_loads_attaches_and_routes_two_stage_event_path() {
+fn consolidated_peel_loads_attaches_and_routes_two_stage_event_path() {
     let _lock = CATALOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _catalog = install_recipe_in_catalog();
     let attached = attached_host();
@@ -431,7 +431,7 @@ fn authored_hit_fixture_loads_attaches_and_routes_two_stage_event_path() {
         &[("lift", 0.31), ("curl", 0.80), ("clip_trigger", 0.0)],
     );
     runtime.apply_param_values(&manifest);
-    frame(&mut runtime, &mut events, 0.50, true, false);
+    frame(&mut runtime, &mut events, 0.30, true, false);
     assert_all(&runtime, 0.31, 0.80);
 
     // Re-enabling and retriggering produces a fresh burst from the nonzero

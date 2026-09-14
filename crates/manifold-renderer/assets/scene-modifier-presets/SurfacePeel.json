@@ -72,6 +72,29 @@
         "isToggle": true
       },
       {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "isToggle": true,
+        "isTriggerGate": true
+      },
+      {
+        "id": "burst_strength",
+        "name": "Burst Strength",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.35
+      },
+      {
+        "id": "burst_duration",
+        "name": "Burst Duration (beats)",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.5
+      },
+      {
         "id": "mask_amount",
         "name": "Mask Amount",
         "min": 0.0,
@@ -159,8 +182,8 @@
         "defaultValue": 0.18,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "separation"
+          "nodeId": "lift_base",
+          "param": "value"
         }
       },
       {
@@ -169,8 +192,8 @@
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "patch",
-          "param": "rotation"
+          "nodeId": "curl_base",
+          "param": "value"
         }
       },
       {
@@ -231,6 +254,39 @@
           "kind": "node",
           "nodeId": "patch",
           "param": "enabled"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_gate",
+          "param": "enable"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "burst_strength",
+        "label": "Burst Strength",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_strength",
+          "param": "value"
+        }
+      },
+      {
+        "id": "burst_duration",
+        "label": "Burst Duration",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "hit_envelope",
+          "param": "window_beats"
         }
       },
       {
@@ -335,6 +391,16 @@
           "nodeId": "mask",
           "param": "pitch"
         }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "burst_gate",
+          "param": "b"
+        }
       }
     ],
     "sceneModifier": {
@@ -342,6 +408,29 @@
       "singleton": false,
       "enabledParam": "enabled",
       "stages": [
+        {
+          "group": "hit_control_stage",
+          "scope": "scene",
+          "inputs": [
+            {
+              "port": "trigger_count",
+              "source": {
+                "context": {
+                  "value": "triggerCount"
+                }
+              }
+            },
+            {
+              "port": "trigger_baseline",
+              "source": {
+                "context": {
+                  "value": "triggerBaseline"
+                }
+              }
+            }
+          ],
+          "outputs": []
+        },
         {
           "group": "peel_stage",
           "scope": "eachObject",
@@ -393,6 +482,15 @@
                   "value": "sourceOffsetZ"
                 }
               }
+            },
+            {
+              "port": "burst",
+              "source": {
+                "stageOutput": {
+                  "stage": "hit_control_stage",
+                  "port": "burst"
+                }
+              }
             }
           ],
           "outputs": [
@@ -406,6 +504,182 @@
     }
   },
   "nodes": [
+    {
+      "id": 2,
+      "nodeId": "hit_control_stage",
+      "typeId": "group",
+      "handle": "SurfacePeelHitControl",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "trigger_count",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "trigger_baseline",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "burst",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 10,
+            "nodeId": "group_trigger",
+            "typeId": "system.group_input",
+            "handle": "trigger_count"
+          },
+          {
+            "id": 11,
+            "nodeId": "group_initial_count",
+            "typeId": "system.group_input",
+            "handle": "trigger_baseline"
+          },
+          {
+            "id": 12,
+            "nodeId": "hit_gate",
+            "typeId": "node.trigger_gate",
+            "handle": "hitGate",
+            "params": {
+              "enable": {
+                "type": "Bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "hit_envelope",
+            "typeId": "node.envelope_beats",
+            "handle": "hitEnvelope",
+            "params": {
+              "window_beats": {
+                "type": "Float",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": 14,
+            "nodeId": "hit_strength",
+            "typeId": "node.value",
+            "handle": "hitStrength",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.35
+              }
+            }
+          },
+          {
+            "id": 15,
+            "nodeId": "hit_scale",
+            "typeId": "node.math",
+            "handle": "hitScale",
+            "params": {
+              "b": {
+                "type": "Float",
+                "value": 0.35
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 21,
+            "nodeId": "hit_group_output",
+            "typeId": "system.group_output",
+            "handle": "burst"
+          },
+          {
+            "id": 16,
+            "nodeId": "hit_zero_baseline",
+            "typeId": "node.value",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 22,
+            "nodeId": "burst_gate",
+            "typeId": "node.math",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 10,
+            "fromPort": "trigger_count",
+            "toNode": 12,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "trigger_baseline",
+            "toNode": 12,
+            "toPort": "initial_count"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "trigger"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "initial_count"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "burst"
+          }
+        ],
+        "tint": null
+      }
+    },
     {
       "id": 1,
       "nodeId": "peel_stage",
@@ -436,6 +710,10 @@
             },
             {
               "name": "sourceOffsetZ",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "burst",
               "portType": "Scalar(F32)"
             }
           ],
@@ -552,6 +830,60 @@
             "nodeId": "group_output",
             "typeId": "system.group_output",
             "handle": "output"
+          },
+          {
+            "id": 16,
+            "nodeId": "lift_base",
+            "typeId": "node.value",
+            "handle": "liftBase",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.18
+              }
+            }
+          },
+          {
+            "id": 17,
+            "nodeId": "curl_base",
+            "typeId": "node.value",
+            "handle": "curlBase",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 18,
+            "nodeId": "lift_add",
+            "typeId": "node.math",
+            "handle": "liftAdd",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 19,
+            "nodeId": "curl_add",
+            "typeId": "node.math",
+            "handle": "curlAdd",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 20,
+            "nodeId": "group_burst",
+            "typeId": "system.group_input",
+            "handle": "burst"
           },
           {
             "id": 10,
@@ -674,6 +1006,42 @@
             "fromPort": "sourceOffsetZ",
             "toNode": 3,
             "toPort": "source_offset_z"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "separation"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "rotation"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "burst",
+            "toNode": 18,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "burst",
+            "toNode": 19,
+            "toPort": "b"
           },
           {
             "fromNode": 1,
