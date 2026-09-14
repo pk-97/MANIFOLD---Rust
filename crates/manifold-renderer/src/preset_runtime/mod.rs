@@ -188,3 +188,7 @@ mod math_view_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/blob_grain_probe.rs"]
 mod blob_grain_probe_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/mosh.rs"]
+mod mosh_tests;

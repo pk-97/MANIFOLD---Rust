@@ -50,6 +50,13 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
+        source: "block_sample.rs",
+        rust_struct: "BlockSampleUniforms",
+        type_id: "node.block_sample",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    TextureAbiCase {
         source: "blur_3d_separable.rs",
         rust_struct: "Blur3DUniforms",
         type_id: "node.blur_3d",
