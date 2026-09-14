@@ -90,6 +90,10 @@ impl Command for AddAutomationPointCommand {
             prior_lane = found.map(|(_, lane)| lane.clone());
             prior_index = found.map(|(idx, _)| idx);
             lanes_were_none = inst.automation_lanes.is_none();
+            // A pre-automation slider edit is not an override of a future lane.
+            if prior_lane.is_none() && let Some(param) = inst.params.get_mut(&param_id) {
+                param.touched = false;
+            }
             let lanes = inst.automation_lanes_mut();
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) {
                 Some(lane) => {
@@ -510,6 +514,7 @@ pub struct CommitRecordedGestureCommand {
     /// mirroring `AddAutomationPointCommand`'s `created_lane` behavior.
     /// `Some(points)` carries the pre-gesture point set to restore exactly.
     old_points: Option<Vec<AutomationPoint>>,
+    previous_lanes_were_none: bool,
 }
 
 impl CommitRecordedGestureCommand {
@@ -524,6 +529,7 @@ impl CommitRecordedGestureCommand {
             param_id: param_id.into(),
             new_points,
             old_points,
+            previous_lanes_were_none: false,
         }
     }
 }
@@ -533,6 +539,11 @@ impl Command for CommitRecordedGestureCommand {
         let param_id = self.param_id.clone();
         let points = self.new_points.clone();
         project.with_preset_graph_mut(&self.target, |inst| {
+            self.previous_lanes_were_none = inst.automation_lanes.is_none();
+            let new_lane = !inst.automation_lanes.as_ref().is_some_and(|lanes| lanes.iter().any(|lane| lane.param_id.as_ref() == param_id));
+            if new_lane && let Some(param) = inst.params.get_mut(&param_id) {
+                param.touched = false;
+            }
             let lanes = inst.automation_lanes_mut();
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) {
                 Some(lane) => lane.points = points,
@@ -552,6 +563,7 @@ impl Command for CommitRecordedGestureCommand {
                 project.with_preset_graph_mut(&self.target, |inst| {
                     if let Some(lanes) = inst.automation_lanes.as_mut() {
                         lanes.retain(|l| l.param_id.as_ref() != param_id);
+                        if lanes.is_empty() && self.previous_lanes_were_none { inst.automation_lanes = None; }
                     }
                 });
             }
@@ -605,6 +617,19 @@ mod tests {
         let mut project = Project::default();
         project.timeline.layers = vec![layer];
         (project, fx_id)
+    }
+
+    #[test]
+    fn first_authored_automation_does_not_inherit_an_old_slider_touch() {
+        let (mut project, fx_id) = project_with_effect();
+        project.find_effect_by_id_mut(&fx_id).unwrap().set_base_param("amount", 0.7);
+        let mut command = AddAutomationPointCommand::new(GraphTarget::Effect(fx_id.clone()), "amount", point(0.0, 0.2));
+        command.execute(&mut project);
+        assert!(!project.find_effect_by_id(&fx_id).unwrap().params.get("amount").unwrap().touched);
+        // Subsequent authored points must not erase a real manual touch on an existing lane.
+        project.find_effect_by_id_mut(&fx_id).unwrap().set_base_param("amount", 0.9);
+        AddAutomationPointCommand::new(GraphTarget::Effect(fx_id.clone()), "amount", point(4.0, 0.5)).execute(&mut project);
+        assert!(project.find_effect_by_id(&fx_id).unwrap().params.get("amount").unwrap().touched);
     }
 
     fn point(beat: f64, value: f32) -> AutomationPoint {

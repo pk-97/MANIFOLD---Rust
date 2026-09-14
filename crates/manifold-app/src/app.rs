@@ -35,6 +35,8 @@ use crate::user_prefs::UserPrefs;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 use crate::workspace::{Workspace, WorkspaceKind};
 
+pub(crate) mod automation_point_input;
+
 /// Re-export UIState as the selection state.
 /// UIState is the 1:1 port of Unity's UIState.cs with proper Ableton semantics:
 /// - SelectionVersion for dirty-checking
@@ -1138,6 +1140,9 @@ impl Application {
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                     self.needs_rebuild = true;
                 }
+            }
+            TextInputField::AutomationPointValue | TextInputField::AutomationPointTime => {
+                crate::app::automation_point_input::commit(self, field, text);
             }
             TextInputField::DriverFreePeriod => {
                 if let Some(ctx) = self.text_input.driver_free_period.take() {
@@ -2830,6 +2835,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.selection.hovered_clip_id = None;
                         self.scroll_dirty.visual = true;
                     }
+                    if self.selection.automation_feedback.take().is_some() {
+                        self.scroll_dirty.visual = true;
+                    }
+                    // Keep the frame/present hover pass from re-deriving an
+                    // automation affordance at the last in-window point.
+                    self.cursor_pos = Vec2::new(-1.0, -1.0);
                 }
             }
             WindowEvent::CursorEntered { .. } => {}

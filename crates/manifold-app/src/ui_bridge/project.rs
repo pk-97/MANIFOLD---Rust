@@ -1023,6 +1023,16 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::ContextRestoreAutomationLane(target, param_id) => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::AutomationResumeParameter(
+                    crate::editing_host::to_graph_target(target),
+                    param_id.clone(),
+                ),
+            );
+            DispatchResult::handled()
+        }
 
         // UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): expose the
         // scene row's inner param on the layer's generator card via the SAME

@@ -763,6 +763,10 @@ impl ContentThread {
                 self.engine.automation_back_to_arrangement();
                 self.engine.mark_compositor_dirty_now();
             }
+            ContentCommand::AutomationResumeParameter(target, param_id) => {
+                self.engine.automation_resume_parameter(&target, &param_id);
+                self.engine.mark_compositor_dirty_now();
+            }
             // ── Automation recording arm (P3) ───────────────────────
             ContentCommand::AutomationSetArmed(armed) => {
                 self.engine.set_automation_armed(armed);

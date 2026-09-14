@@ -361,7 +361,9 @@ impl Application {
                 // but don't run the timeline InteractionOverlay or background
                 // cursor-shape feedback (split-handle, resize, etc.).
                 self.cursor_manager.set_default();
-                self.selection.automation_feedback = None;
+                if self.selection.automation_feedback.take().is_some() {
+                    self.scroll_dirty.visual = true;
+                }
             } else {
                 // Route hover through InteractionOverlay (port of Unity OnPointerMove).
                 // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap

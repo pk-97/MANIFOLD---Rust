@@ -285,6 +285,11 @@ mod tests {
         for dot in &mut dots { dot.y = graph.y + graph.height * ((dot.y - strip_rect.y) / strip_rect.height); }
         AutomationLaneScreen {
             strip_rect,
+            pixels_per_beat: 48.0,
+            visible_beat_start: 0.0,
+            grid_step: 0.25,
+            beats_per_bar: 4.0,
+            bar_skip: 1,
             label: "Test: amount".into(),
             overridden: false,
             polyline: Vec::new(),

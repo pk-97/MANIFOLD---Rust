@@ -319,6 +319,16 @@ impl InspectorCompositePanel {
         ranges
     }
 
+    /// Only real layer-owned parameters currently have timeline lane editors.
+    pub fn set_layer_automation_entry_supported(&mut self, supported: bool) {
+        for card in &mut self.effects[Self::SCOPE_LAYER] {
+            card.set_automation_entry_supported(supported);
+        }
+        if let Some(card) = self.gen_params.as_mut() {
+            card.set_automation_entry_supported(supported);
+        }
+    }
+
     pub fn configure_master_effects(&mut self, configs: &[ParamSurface]) {
         let existing = std::mem::take(&mut self.effects[Self::SCOPE_MASTER]);
         self.effects[Self::SCOPE_MASTER] =

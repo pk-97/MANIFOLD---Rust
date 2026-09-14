@@ -18,7 +18,10 @@
 // they're dead; the handler in `app.rs` was left untouched. Converting
 // in place will require dropping `Copy` from the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code, reason = "arms revive when the app.rs handler converts usize→ParamId per the phase-2 wire-format rule (comment above); un-suppress: that migration")]
+#[expect(
+    dead_code,
+    reason = "arms revive when the app.rs handler converts usize→ParamId per the phase-2 wire-format rule (comment above); un-suppress: that migration"
+)]
 pub enum TextInputField {
     Bpm,
     Fps,
@@ -127,6 +130,12 @@ pub enum TextInputField {
     /// `AudioSendGainDragChanged` action the live drag uses DOES clamp to
     /// the trim range, which type-in must not).
     AudioSendGainParam,
+    /// Automation point value type-in. The stable point address rides on
+    /// [`TextInputState::automation_point_edit`].
+    AutomationPointValue,
+    /// Automation point time type-in in `bar.beat.fraction` notation. The
+    /// stable point address rides on [`TextInputState::automation_point_edit`].
+    AutomationPointTime,
 }
 
 impl TextInputField {
@@ -226,6 +235,20 @@ pub struct SceneNumericParamCtx {
 #[derive(Debug, Clone)]
 pub struct AudioSendGainParamCtx {
     pub send_id: manifold_core::AudioSendId,
+}
+
+/// Context for an in-flight automation point value/time type-in. The point is
+/// addressed by its stable lane target, parameter id, and source beat captured
+/// when the session opens; selection changes cannot redirect the eventual edit.
+#[derive(Debug, Clone)]
+pub struct AutomationPointEditCtx {
+    pub target: manifold_ui::view::UiGraphTarget,
+    pub param_id: manifold_core::effects::ParamId,
+    pub original_beat: manifold_core::Beats,
+    pub param_min: f32,
+    pub param_max: f32,
+    pub whole_numbers: bool,
+    pub beats_per_bar: u32,
 }
 
 /// Which library door a [`TextInputField::SavePresetName`] session is headed
@@ -355,6 +378,8 @@ pub struct TextInputState {
     /// Context for `AudioSendGainParam` (the send id). Set right after
     /// `begin()`, read on commit (P4).
     pub audio_send_gain_param: Option<AudioSendGainParamCtx>,
+    /// Context for an in-flight automation point value/time type-in.
+    pub automation_point_edit: Option<AutomationPointEditCtx>,
     /// Context for `SavePresetName` (kind + effective def + destination). Set
     /// right after `begin()`, read (and taken) on commit.
     pub save_preset: Option<SavePresetCtx>,
@@ -397,6 +422,7 @@ impl TextInputState {
             graph_numeric_param: None,
             scene_numeric_param: None,
             audio_send_gain_param: None,
+            automation_point_edit: None,
             save_preset: None,
             rename_preset: None,
             dragging: false,
@@ -459,6 +485,7 @@ impl TextInputState {
         self.graph_numeric_param = None;
         self.scene_numeric_param = None;
         self.audio_send_gain_param = None;
+        self.automation_point_edit = None;
         self.save_preset = None;
         self.rename_preset = None;
         self.dragging = false;
@@ -519,6 +546,7 @@ impl TextInputState {
         self.graph_numeric_param = None;
         self.scene_numeric_param = None;
         self.audio_send_gain_param = None;
+        self.automation_point_edit = None;
         self.save_preset = None;
         self.rename_preset = None;
         self.dragging = false;

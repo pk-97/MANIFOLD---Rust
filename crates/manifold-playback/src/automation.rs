@@ -590,7 +590,9 @@ pub fn finish_all_gestures(gestures: &mut AutomationGestures) -> Vec<Box<dyn Com
 /// Replace the recorded closed interval while keeping the old curve outside it.
 /// Adjacent representable beats encode the two discontinuities without duplicate
 /// point identities. Restricted curve shapes preserve interpolation on both tails.
-fn punch_recorded_points(original: &[AutomationPoint], recorded: &[AutomationPoint]) -> Vec<AutomationPoint> {
+/// Replace a beat span while retaining the sampled curve on either side.
+/// Shared by recorded gestures and authored pattern insertion.
+pub fn punch_recorded_points(original: &[AutomationPoint], recorded: &[AutomationPoint]) -> Vec<AutomationPoint> {
     let (Some(first), Some(last)) = (recorded.first(), recorded.last()) else { return original.to_vec(); };
     if original.is_empty() { return recorded.to_vec(); }
     let old = AutomationLane { param_id: "punch".into(), enabled: true, points: original.to_vec() };

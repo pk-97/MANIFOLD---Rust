@@ -99,6 +99,7 @@
     ]
   },
   "flows": {
+    "automation-clipboard-shapes": "automation",
     "automation-show-parameter": "inspector",
     "automation-resize-lane": "automation",
     "scene-photoscan-modifiers": "gltfscene",

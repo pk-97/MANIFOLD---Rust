@@ -77,9 +77,13 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 next = layer.parent_layer_id.clone();
             }
             let ui_target = crate::editing_host::to_ui_graph_target(&target);
-            if !ctx.selection.automation_lane_heights.contains_key(&(ui_target.clone(), param_id.clone())) {
-                ctx.selection.set_automation_lane_height(ui_target.clone(), param_id.clone(), 96.0);
+            let min_height = ctx.ui.layout.track_header_height()
+                + manifold_ui::color::AUTOMATION_LANE_STRIP_HEIGHT + 60.0;
+            if ctx.ui.layout.timeline_body().height < min_height {
+                let content = ctx.ui.layout.content_area();
+                ctx.ui.layout.update_split_from_drag(content.y_max() - min_height);
             }
+            ctx.ui.pending_automation_reveal = Some((ui_target.clone(), param_id.clone()));
             ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
             ctx.selection.automation_mode_visible = true;
             ctx.selection.clear_automation_selection();

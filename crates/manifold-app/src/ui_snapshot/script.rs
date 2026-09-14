@@ -1067,8 +1067,10 @@ impl Runner {
         // just discard them. Take them before `host`'s borrow of
         // `data.project` ends, then dispatch through the same real bridge
         // every other `PanelAction` here goes through.
-        let pending = std::mem::take(&mut host.pending_actions);
+        let mut pending = std::mem::take(&mut host.pending_actions);
         drop(host);
+        // Match the live application pass for overlay-generated context menus.
+        ui.intercept_overlay_actions(&mut pending);
         if rebuild_flag {
             self.needs_structural_sync = true;
         }

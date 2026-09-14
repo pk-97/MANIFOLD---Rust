@@ -948,6 +948,9 @@ pub(crate) const ROW_ROLE_DRAWER_CLIP: u64 = 13 << 4;
 
 pub(crate) const ROW_ROLE_TOGGLE_LABEL: u64 = 14 << 4;
 
+/// Explicit automation-entry button in the parameter label cell.
+pub(crate) const ROW_ROLE_AUTOMATION: u64 = 15 << 4;
+
 
 /// A row's identity-derived key base (D4): every interactive node the row
 /// builds flat-parented (siblings of every other row's controls, under the
@@ -1761,6 +1764,8 @@ pub(crate) fn build_param_row(
     // inspector passes the default; the graph editor's wide lane passes a
     // larger value so friendly names ("Particle Count") don't clip.
     label_width: f32,
+    // Whether this card supports direct automation entry.
+    automation_entry_supported: bool,
     // Which config the modulation drawer shows when ≥2 are active (the panel's
     // stored per-param choice). Ignored when 0–1 configs are active.
     active_tab: ModTab,
@@ -1808,6 +1813,7 @@ pub(crate) fn build_param_row(
         // Overwritten with the real driver/audio buttons below.
         driver_btn: NodeId::PLACEHOLDER,
         audio_btn: NodeId::PLACEHOLDER,
+        automation_btn: None,
         envelope_config: None,
         driver_config: None,
         ableton_config: None,
@@ -1938,6 +1944,34 @@ pub(crate) fn build_param_row(
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
     if let Some(label_id) = slider.label {
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
+    }
+
+    // Explicit automation entry lives in the label cell so it cannot alter the
+    // slider track/value geometry. It is keyed by the row identity and routed
+    // through RowHost like the other row controls; no value write is emitted.
+    if automation_entry_supported {
+        const AUTOMATION_BTN_W: f32 = 30.0;
+        const AUTOMATION_BTN_H: f32 = 18.0;
+        if let Some(label) = slider.label {
+            let mut bounds = tree.get_node(label).expect("slider label exists").bounds;
+            bounds.width = (bounds.width - AUTOMATION_BTN_W - 4.0).max(0.0);
+            tree.set_bounds(label, bounds);
+        }
+        let automation_active = mod_state.automation_active.get(i).copied().unwrap_or(false);
+        let automation_selected = mod_state.automation_selected.get(i).copied().unwrap_or(false);
+        let automation_btn = add_row_button(
+            tree,
+            parent,
+            x + (label_width - AUTOMATION_BTN_W).max(0.0),
+            cy + (ROW_HEIGHT - AUTOMATION_BTN_H) * 0.5,
+            AUTOMATION_BTN_W,
+            AUTOMATION_BTN_H,
+            de_btn_style(automation_active || automation_selected, color::AUTOMATION_LINE_COLOR),
+            "AUTO",
+            row_key_base,
+            ROW_ROLE_AUTOMATION,
+        );
+        ids.automation_btn = Some(automation_btn);
     }
 
     // "Automated" indicator (P4 section 7 last bullet, Live's red dot): a small,
@@ -2106,6 +2140,9 @@ pub(crate) fn build_param_row(
     }
     if let Some(trigger_btn) = ids.envelope_btn {
         tree.set_name(trigger_btn, format!("param_row.{pid}.trigger_btn"));
+    }
+    if let Some(automation_btn) = ids.automation_btn {
+        tree.set_name(automation_btn, format!("param_automation.{pid}"));
     }
     tree.set_name(ids.driver_btn, format!("param_row.{pid}.driver_btn"));
 

@@ -732,12 +732,11 @@ impl InteractionOverlay {
                     let end = point_index.and_then(|i| lane.dots.get(i + 1)).map(|p| p.beat)
                         .filter(|_| matches!(operation, AutomationOperation::Segment | AutomationOperation::Bend));
                     let hint = match operation {
-                        AutomationOperation::Point => "Drag point · Shift: fine · Cmd: unsnap · Double-click: delete",
+                        AutomationOperation::Point => "Drag point · Shift: select/fine · Cmd: unsnap · Delete: remove",
                         AutomationOperation::Segment if lane.whole_numbers => "Drag segment vertically · Stepped values · Click: insert",
                         AutomationOperation::Segment => "Drag segment vertically · Alt: bend · Click: insert",
                         AutomationOperation::Bend => "Alt-drag to bend curve · Click: insert",
-                        AutomationOperation::Insert if !lane.dots.is_empty() => "Double-click: add point · Drag: select points · Cmd: unsnap",
-                        AutomationOperation::Insert => "Click: add first point · Drag: select points · Cmd: unsnap",
+                        AutomationOperation::Insert => "Click: add point · Drag: select · Shift-click: deselect",
                         AutomationOperation::Draw => "Drag to draw points · Cmd: unsnap",
                         AutomationOperation::Resize => "Drag to resize lane",
                         AutomationOperation::Header => "Layer arrangement automation · Right-click for lane options",
@@ -849,8 +848,8 @@ impl InteractionOverlay {
     ) {
         // P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` section 7): a click inside an
         // automation lane strip is handled entirely here — click-on-line adds
-        // a breakpoint, click-on-dot selects it, double-click-on-dot deletes
-        // it — and never falls through to clip/region logic below.
+        // a breakpoint and click-on-dot selects it. It never falls through
+        // to clip/region logic below.
         //
         // a right-click on a lane (strip, segment, or dot) opens the
         // lane's context menu (Clear Automation / Remove Lane) instead of
@@ -866,6 +865,21 @@ impl InteractionOverlay {
                     | AutomationHit::Strip { lane_index } => lane_index,
                 };
                 let lane = &lanes[lane_index];
+                let same_lane = |p: &UiAutomationPointRef| p.target == lane.target && p.param_id == lane.param_id;
+                ui_state.selected_automation_points.retain(same_lane);
+                if ui_state.selected_automation_point.as_ref().is_some_and(|p| !same_lane(p)) {
+                    ui_state.selected_automation_point = None;
+                }
+                if let AutomationHit::Dot { dot_index, .. } = hit {
+                    let point = UiAutomationPointRef {
+                        target: lane.target.clone(), param_id: lane.param_id.clone(), beat: lane.dots[dot_index].beat,
+                    };
+                    if !ui_state.automation_point_selected(&point.target, &point.param_id, point.beat) {
+                        ui_state.selected_automation_points.clear();
+                        ui_state.selected_automation_point = Some(point);
+                    }
+                }
+                ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
                 host.on_automation_lane_right_click(&lane.target, &lane.param_id, pos);
                 return;
             }
@@ -982,14 +996,14 @@ impl InteractionOverlay {
     /// return without falling through to clip/region logic).
     ///
     /// - Click on an existing dot → select it (Delete key removes it later).
-    /// - Double-click on an existing dot → remove it immediately.
+    /// - Repeated clicks on an existing dot retain it; Shift toggles selection.
     /// - Click (or double-click) on bare strip → add a breakpoint at the
     ///   clicked beat/value (grid-snapped unless Cmd is held; `Hold` shape
     ///   for whole-numbers params, `Linear` otherwise — section 8).
     fn handle_automation_click(
         &mut self,
         pos: Vec2,
-        click_count: u32,
+        _click_count: u32,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
@@ -1006,24 +1020,25 @@ impl InteractionOverlay {
             AutomationHit::Dot { lane_index, dot_index } => {
                 let lane = &lanes[lane_index];
                 let dot = lane.dots[dot_index];
-                if click_count >= 2 {
-                    host.remove_automation_point(&lane.target, &lane.param_id, dot.beat);
-                    ui_state.selected_automation_points.retain(|point| {
-                        point.target != lane.target || point.param_id != lane.param_id || point.beat != dot.beat
-                    });
-                    if ui_state.selected_automation_point.as_ref().is_some_and(|s| {
-                        s.target == lane.target && s.param_id == lane.param_id && s.beat.0 == dot.beat.0
-                    }) {
-                        ui_state.selected_automation_point = None;
+                let point = UiAutomationPointRef {
+                    target: lane.target.clone(), param_id: lane.param_id.clone(), beat: dot.beat,
+                };
+                if self.modifiers.shift {
+                    if let Some(single) = ui_state.selected_automation_point.take()
+                        && !ui_state.selected_automation_points.contains(&single)
+                    {
+                        ui_state.selected_automation_points.push(single);
+                    }
+                    if let Some(index) = ui_state.selected_automation_points.iter().position(|p| p == &point) {
+                        ui_state.selected_automation_points.remove(index);
+                    } else {
+                        ui_state.selected_automation_points.push(point);
                     }
                 } else {
                     ui_state.selected_automation_points.clear();
-                    ui_state.selected_automation_point = Some(UiAutomationPointRef {
-                        target: lane.target.clone(),
-                        param_id: lane.param_id.clone(),
-                        beat: dot.beat,
-                    });
+                    ui_state.selected_automation_point = Some(point);
                 }
+                ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
             }
             // A plain CLICK (no drag) on a segment inserts a new breakpoint
             // there, same as clicking bare strip — Ableton's "click the line
@@ -1032,11 +1047,9 @@ impl InteractionOverlay {
             AutomationHit::Strip { lane_index } | AutomationHit::Segment { lane_index, .. } => {
                 let lane = &lanes[lane_index];
                 ui_state.clear_automation_selection();
-                if matches!(hit, AutomationHit::Strip { .. })
-                    && !lane.dots.is_empty() && click_count < 2 && !ui_state.automation_draw_mode
-                {
-                    return true;
-                }
+                ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
+                // Shift-click is explicit deselection; a bare drag remains marquee.
+                if self.modifiers.shift { return true; }
                 let raw_beat = viewport.pixel_to_beat(pos.x);
                 let beat = if self.modifiers.command {
                     raw_beat
@@ -1776,7 +1789,7 @@ impl InteractionOverlay {
             }
         }
         ui_state.hovered_clip_id = None;
-        ui_state.automation_feedback = None;
+        if ui_state.automation_feedback.take().is_some() { host.mark_dirty(); }
         host.set_cursor(TimelineCursor::Default);
     }
 
@@ -3733,6 +3746,28 @@ mod p1_4_gesture_integrity_tests {
     }
 
     #[test]
+    fn automation_clicks_select_and_shift_toggles_without_inserting() {
+        let panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.handle_automation_click(dot_pos(&panel, 0), 2, &mut host, &mut state, &panel);
+        assert_eq!(state.selected_automation_point.as_ref().unwrap().beat, Beats(4.0));
+        overlay.set_modifiers(Modifiers { shift: true, ..Modifiers::NONE });
+        overlay.handle_automation_click(dot_pos(&panel, 1), 1, &mut host, &mut state, &panel);
+        assert_eq!(state.selected_automation_points.len(), 2);
+        overlay.handle_automation_click(dot_pos(&panel, 0), 1, &mut host, &mut state, &panel);
+        assert_eq!(state.selected_automation_points.len(), 1);
+        assert_eq!(state.selected_automation_points[0].beat, Beats(8.0));
+        let lanes = panel.automation_lane_screens(&[]);
+        let pos = Vec2::new(lanes[0].curve_rect().x + 33.0, lanes[0].y_at_norm(0.1));
+        overlay.handle_automation_click(pos, 1, &mut host, &mut state, &panel);
+        assert!(state.selected_automation_points.is_empty());
+        assert!(state.selected_automation_point.is_none());
+        assert!(host.automation_added.is_empty());
+    }
+
+    #[test]
     fn automation_feedback_matches_snapped_insertion_and_protects_chrome() {
         let panel = build_viewport_with_automation();
         let lanes = panel.automation_lane_screens(&[]);
@@ -3745,11 +3780,9 @@ mod p1_4_gesture_integrity_tests {
         overlay.refresh_automation_feedback(pos, &lanes, &mut state, &panel);
         let feedback = state.automation_feedback.clone().unwrap();
         assert_eq!(feedback.operation, AutomationOperation::Insert);
-        assert!(feedback.hint.starts_with("Double-click"));
+        assert!(feedback.hint.starts_with("Click: add point"));
         assert_eq!(feedback.beat, panel.snap_to_grid(panel.pixel_to_beat(pos.x)));
         overlay.handle_automation_click(pos, 1, &mut host, &mut state, &panel);
-        assert!(host.automation_added.is_empty());
-        overlay.handle_automation_click(pos, 2, &mut host, &mut state, &panel);
         assert_eq!(host.automation_added, vec![(feedback.beat, feedback.value)]);
         for y in [lane.header_rect().y + 3.0, lane.strip_rect.y_max() - 12.0] {
             let chrome = Vec2::new(pos.x, y);
@@ -3967,10 +4000,9 @@ mod p1_4_gesture_integrity_tests {
         overlay.on_pointer_click(pos, false, false, 1, true, &mut host, &mut ui_state, &panel);
 
         assert_eq!(host.automation_lane_right_clicks.len(), 1, "exactly one lane right-click recorded");
-        assert!(
-            ui_state.selected_automation_point.is_none(),
-            "a right-click must never select/mutate a point — only the left-click path does"
-        );
+        assert_eq!(ui_state.selected_automation_point.as_ref().unwrap().beat, Beats(4.0),
+            "the context menu must address the point that was right-clicked");
+        assert!(host.automation_added.is_empty());
     }
 
     #[test]

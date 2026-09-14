@@ -310,6 +310,7 @@ pub fn push_state(
         // LANES button (view-only toggle, no content-thread state behind it).
         ui.transport
             .set_automation_mode_visible(selection.automation_mode_visible);
+        ui.transport.set_automation_draw_mode(selection.automation_draw_mode);
 
         // Save dirty state is shown by the "•" in the window/header project name
         // (set above); the transport SAVE button moved to the File menu. HDR /

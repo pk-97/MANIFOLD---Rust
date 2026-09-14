@@ -1806,6 +1806,19 @@ impl PlaybackEngine {
         self.automation_latches.clear();
     }
 
+    /// Restore only the addressed lane; another manually overridden control stays live.
+    pub fn automation_resume_parameter(&mut self, target: &GraphTarget, param_id: &manifold_core::effects::ParamId) {
+        let id = self.project().and_then(|p| p.preset_instance(target)).map(|instance| instance.id.clone());
+        if let Some(id) = id {
+            self.automation_latches.remove(&(id, param_id.clone()));
+            if let Some(project) = self.project_mut() {
+                project.with_preset_graph_mut(target, |instance| {
+                    if let Some(param) = instance.params.get_mut(param_id.as_ref()) { param.touched = false; }
+                });
+            }
+        }
+    }
+
     /// Read-only access to the automation override latch (UI snapshot: the
     /// "lit red" Back to Arrangement affordance, and per-lane overridden
     /// state — P4).
@@ -3218,6 +3231,34 @@ mod tests {
         assert!((amount.value - 0.8).abs() < 1e-6);
         assert!(result.modulation_active);
         assert!(result.compositor_dirty);
+    }
+
+    #[test]
+    fn restoring_one_automation_lane_preserves_other_overrides() {
+        let mut project = Project::default();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
+            ids.push(fx.id.clone());
+            fx.automation_lanes = Some(vec![AutomationLane {
+                param_id: "amount".into(), enabled: true,
+                points: vec![AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear }],
+            }]);
+            project.settings.master_effects.push(fx);
+        }
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        for id in &ids {
+            engine.project_mut().unwrap().find_effect_by_id_mut(id).unwrap().set_base_param("amount", 0.8);
+        }
+        let _ = engine.tick(TickContext::default());
+        assert_eq!(engine.automation_latches.len(), 2);
+        engine.automation_resume_parameter(&GraphTarget::Effect(ids[0].clone()), &"amount".into());
+        let _ = engine.tick(TickContext::default());
+        assert_eq!(engine.automation_latches.len(), 1);
+        let project = engine.project().unwrap();
+        assert_eq!(project.find_effect_by_id(&ids[0]).unwrap().get_base_param("amount"), 0.2);
+        assert_eq!(project.find_effect_by_id(&ids[1]).unwrap().get_base_param("amount"), 0.8);
     }
 
     #[test]
