@@ -1334,7 +1334,7 @@ impl UIRoot {
                 let items = mask_menu_items("Mask", &self.clip_detect_layers, |preset_id, source_layer| {
                     ParamsAction::AddEffectGroupMask { group_id: group_id.clone(), preset_id, source_layer }
                 });
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::Params(ParamsAction::CardRightClicked(gpt)) => {
