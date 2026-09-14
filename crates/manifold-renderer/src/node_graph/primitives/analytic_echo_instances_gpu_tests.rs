@@ -127,9 +127,8 @@ fn structured_modifier_echo_gpu_preserves_source_and_coherent_slots() {
         dispatch_count: (source.len() * ECHO_CAPACITY as usize) as u32,
     };
     let got = dispatch(&source, uniforms);
-    for echo_idx in 0..ECHO_CAPACITY as usize {
+    for (echo_idx, actual) in got.iter().take(ECHO_CAPACITY as usize).enumerate() {
         let expected = cpu_echo(source[0], echo_idx, uniforms);
-        let actual = got[echo_idx];
         for axis in 0..4 {
             assert!(
                 (actual.pos_scale[axis] - expected.pos_scale[axis]).abs() < 1e-5,
