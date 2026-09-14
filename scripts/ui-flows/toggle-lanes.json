@@ -8,7 +8,7 @@
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "LANES", "type": "Button" } },
+      "target": { "Query": { "text": "AUTOMATION", "type": "Button" } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },
@@ -21,7 +21,7 @@
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "LANES", "type": "Button" } },
+      "target": { "Query": { "text": "AUTOMATION", "type": "Button" } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },

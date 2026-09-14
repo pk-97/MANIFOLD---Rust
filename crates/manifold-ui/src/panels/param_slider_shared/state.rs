@@ -725,6 +725,8 @@ pub(crate) struct ParamRowIds {
     pub(crate) driver_btn: NodeId,
     /// The "A" audio-modulation button (right of the driver button).
     pub(crate) audio_btn: NodeId,
+    /// Explicit automation-entry button in the parameter label cell.
+    pub(crate) automation_btn: Option<NodeId>,
     /// Envelope drawer (the single "Decay" slider).
     pub(crate) envelope_config: Option<EnvelopeConfigIds>,
     pub(crate) driver_config: Option<crate::panels::drawer::DrawerIds>,

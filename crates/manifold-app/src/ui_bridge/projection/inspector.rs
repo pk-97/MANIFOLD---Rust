@@ -1276,6 +1276,7 @@ pub fn sync_inspector_data(
             let layer_id = layer.layer_id.clone();
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
+            ui.inspector.set_layer_automation_entry_supported(!layer.is_group());
 
             // Stable instances own cards; the catalog supplies the picker.
             {

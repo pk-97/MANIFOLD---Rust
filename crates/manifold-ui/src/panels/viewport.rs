@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::{MarkerAction, TransportAction};
 use super::{Panel, PanelAction};
 use crate::bitmap_painter;
 use crate::color;
@@ -11,6 +9,8 @@ use crate::node::*;
 use crate::snap;
 use crate::tree::UITree;
 use crate::view::{UiAutomationLane, UiMarker};
+#[cfg(test)]
+use crate::{MarkerAction, TransportAction};
 use manifold_foundation::{Beats, ClipId, EffectId, LayerId, MarkerId, ParamId};
 
 // ── Layout constants ────────────────────────────────────────────
@@ -45,11 +45,11 @@ mod render;
 // shared hit-tester) and surfaced here so viewport consumers and the click/drag
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
+use coordinate::GridSubdivision;
 pub use model::{
     AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion,
     TimelineOverlays, TrackInfo, ViewportAutomationLane, ViewportClip, clip_zones,
 };
-use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 // `zone_widths` is the trim-rule core `clip_zones` wraps — `clip_hit_tester`
 // (a sibling top-level module, not a `viewport` submodule) needs the exact
@@ -265,11 +265,16 @@ struct SplitFlickState {
 enum ViewportDrag {
     RulerScrub,
     OverviewScrub,
-    MarkerDrag { marker_id: MarkerId, start_beat: Beats },
+    MarkerDrag {
+        marker_id: MarkerId,
+        start_beat: Beats,
+    },
     /// Pointer-to-thumb-left offset captured at drag start, so the thumb
     /// tracks the pointer 1:1 instead of snapping its left edge under the
     /// cursor.
-    ScrollbarHDrag { grab_dx: f32 },
+    ScrollbarHDrag {
+        grab_dx: f32,
+    },
 }
 
 /// B13 — dirty-checked bars.beats formatter for the live drag/trim readout.
@@ -401,7 +406,11 @@ impl TimelineViewportPanel {
     pub fn fire_split_flick(&mut self, left_id: ClipId, right_id: ClipId) {
         let mut flick = crate::anim::Transient::default();
         flick.fire(color::MOTION_MED_MS);
-        self.split_flick = Some(SplitFlickState { left_id, right_id, flick });
+        self.split_flick = Some(SplitFlickState {
+            left_id,
+            right_id,
+            flick,
+        });
         self.split_flick_last_tick = None;
     }
 
@@ -575,7 +584,8 @@ impl TimelineViewportPanel {
     /// Cache the resolved per-lane geometry once per structural sync. The
     /// mapper totals and individual strips derive from these same heights.
     pub fn set_automation_lane_layout(&mut self, heights: &[Vec<f32>]) {
-        self.automation_lane_heights.resize_with(heights.len(), Vec::new);
+        self.automation_lane_heights
+            .resize_with(heights.len(), Vec::new);
         for (cached, resolved) in self.automation_lane_heights.iter_mut().zip(heights) {
             cached.clone_from(resolved);
         }
@@ -642,6 +652,100 @@ impl TimelineViewportPanel {
                 self.automation_lanes_by_layer[entry.layer_index].push(entry.lane);
             }
         }
+    }
+
+    /// Resolve the current viewport before clamping scroll or building headers.
+    pub fn prepare_layout(&mut self, layout: &ScreenLayout) {
+        let body = layout.timeline_body();
+        let tracks = layout.timeline_tracks();
+        let tracks_x = tracks.x;
+        let tracks_w = tracks.width;
+        let header_h = layout.track_header_height();
+        let sb_h = color::TIMELINE_SCROLLBAR_HEIGHT;
+        self.viewport_rect = Rect::new(tracks_x, body.y, tracks_w, body.height);
+        self.ruler_rect = Rect::new(
+            tracks_x,
+            body.y + color::OVERVIEW_STRIP_HEIGHT,
+            tracks_w,
+            RULER_HEIGHT,
+        );
+        self.tracks_rect = Rect::new(
+            tracks_x,
+            body.y + header_h,
+            tracks_w,
+            (body.height - header_h - sb_h).max(0.0),
+        );
+        self.scrollbar_h_rect = Rect::new(tracks_x, body.y + body.height - sb_h, tracks_w, sb_h);
+
+        self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
+    }
+
+    pub fn has_visible_automation_lane(&self, target: &crate::view::UiGraphTarget, param_id: &ParamId) -> bool {
+        self.automation_lanes_by_layer.iter().enumerate().any(|(index, lanes)| {
+            self.mapper.get_layer_height(index) > 0.0
+                && lanes.iter().any(|lane| &lane.target == target && &lane.param_id == param_id)
+        })
+    }
+
+    /// Scroll just enough to reveal an automation lane selected by a chooser
+    /// or inspector action. The lane is addressed by the same target + param
+    /// identity used by point editing; no screen-space hit-test is involved,
+    /// so a lane can be found while it is currently below the viewport.
+    ///
+    /// Returns `true` when the vertical scroll changed. Horizontal position is
+    /// preserved. A lane taller than the viewport is aligned to its top.
+    pub fn reveal_automation_lane(
+        &mut self,
+        target: &crate::view::UiGraphTarget,
+        param_id: &ParamId,
+    ) -> bool {
+        let Some((layer_index, lane_index)) = self
+            .automation_lanes_by_layer
+            .iter()
+            .enumerate()
+            .find_map(|(layer_index, lanes)| {
+                lanes
+                    .iter()
+                    .position(|lane| &lane.target == target && &lane.param_id == param_id)
+                    .map(|lane_index| (layer_index, lane_index))
+            })
+        else {
+            return false;
+        };
+
+        let viewport_height = self.tracks_rect.height;
+        if viewport_height <= 0.0 {
+            return false;
+        }
+        let track_height = self.mapper.get_layer_height(layer_index);
+        if track_height <= 0.0 {
+            return false;
+        }
+        let lane_height = self
+            .automation_lane_heights
+            .get(layer_index)
+            .and_then(|heights| heights.get(lane_index))
+            .copied()
+            .unwrap_or(color::AUTOMATION_LANE_STRIP_HEIGHT)
+            .max(0.0);
+        let lane_offset = color::TRACK_HEIGHT
+            + self
+                .automation_lane_heights
+                .get(layer_index)
+                .into_iter()
+                .flat_map(|heights| heights.iter().take(lane_index))
+                .copied()
+                .sum::<f32>();
+        let lane_top = self.mapper.get_layer_y_offset(layer_index) + lane_offset;
+        let current_scroll = self.scroll_y_px;
+        let desired_scroll = if lane_height >= viewport_height {
+            lane_top
+        } else {
+            let min_scroll = (lane_top + lane_height - viewport_height).max(0.0);
+            let max_scroll = lane_top.max(0.0);
+            current_scroll.clamp(min_scroll, max_scroll)
+        };
+        self.set_scroll(self.scroll_x_beats.as_f32(), desired_scroll)
     }
 
     /// Force a specific layer's bitmap to repaint on the next frame.
@@ -819,7 +923,11 @@ impl TimelineViewportPanel {
     /// binding, not drag state). Called every frame from `Panel::update`.
     fn tick_region_alpha(&mut self) {
         self.region_alpha
-            .set_target(if self.selection_region.is_some() { 1.0 } else { 0.0 });
+            .set_target(if self.selection_region.is_some() {
+                1.0
+            } else {
+                0.0
+            });
         if !self.region_alpha.is_animating() {
             self.region_alpha_last_tick = None;
             return;
@@ -893,7 +1001,10 @@ impl TimelineViewportPanel {
                 if h <= 0.0 {
                     return None;
                 }
-                Some((Rect::new(x, y, INSERT_CURSOR_WIDTH, h), color::INSERT_CURSOR_BLUE))
+                Some((
+                    Rect::new(x, y, INSERT_CURSOR_WIDTH, h),
+                    color::INSERT_CURSOR_BLUE,
+                ))
             })
         } else {
             None
@@ -931,6 +1042,13 @@ impl TimelineViewportPanel {
         let ty0 = self.tracks_rect.y;
         let ty1 = self.tracks_rect.y + self.tracks_rect.height;
         let (min_beat, max_beat) = self.visible_beat_range();
+        // Keep lane timing geometry sourced from the same mapper/grid policy as
+        // the ruler and layer bitmap. The renderer consumes these scalars while
+        // walking its bounded grid loop; it must not invent a second snap grid.
+        let pixels_per_beat = self.mapper.pixels_per_beat();
+        let grid_step = self.grid_step();
+        let beats_per_bar = self.beats_per_bar as f32;
+        let bar_skip = self.bar_skip();
 
         for (i, lanes) in self.automation_lanes_by_layer.iter().enumerate() {
             if lanes.is_empty() || self.is_group_layer(i) {
@@ -947,11 +1065,13 @@ impl TimelineViewportPanel {
             let base_h = color::TRACK_HEIGHT;
             let mut strip_y = track_y + base_h;
             for (lane_index, lane) in lanes.iter().enumerate() {
-                let lane_h = self.automation_lane_heights.get(i)
-                    .and_then(|heights| heights.get(lane_index)).copied()
+                let lane_h = self
+                    .automation_lane_heights
+                    .get(i)
+                    .and_then(|heights| heights.get(lane_index))
+                    .copied()
                     .unwrap_or(color::AUTOMATION_LANE_STRIP_HEIGHT);
-                let strip_rect =
-                    Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), lane_h);
+                let strip_rect = Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), lane_h);
                 strip_y += lane_h;
                 let overridden = latched
                     .iter()
@@ -1008,6 +1128,11 @@ impl TimelineViewportPanel {
 
                 out.push(AutomationLaneScreen {
                     strip_rect,
+                    pixels_per_beat,
+                    visible_beat_start: min_beat,
+                    grid_step,
+                    beats_per_bar,
+                    bar_skip,
                     label: lane.label.clone(),
                     overridden,
                     polyline,
@@ -1090,7 +1215,9 @@ impl TimelineViewportPanel {
 
         let frac_visible = (visible_beats / content_beats).clamp(0.0, 1.0);
         let min_thumb = color::TIMELINE_SCROLLBAR_MIN_THUMB.min(track_inner_w);
-        let thumb_w = (track_inner_w * frac_visible).max(min_thumb).min(track_inner_w);
+        let thumb_w = (track_inner_w * frac_visible)
+            .max(min_thumb)
+            .min(track_inner_w);
 
         let scroll_frac = (self.scroll_x_beats.as_f32() / scrollable_beats).clamp(0.0, 1.0);
         let thumb_x = track_inner_x + scroll_frac * (track_inner_w - thumb_w);
@@ -1122,7 +1249,10 @@ impl TimelineViewportPanel {
     /// True while the horizontal scrollbar thumb is being dragged (app.rs uses it
     /// to draw the thumb in its active colour).
     pub fn scrollbar_h_dragging(&self) -> bool {
-        matches!(self.drag.payload(), Some(ViewportDrag::ScrollbarHDrag { .. }))
+        matches!(
+            self.drag.payload(),
+            Some(ViewportDrag::ScrollbarHDrag { .. })
+        )
     }
 
     /// Set scroll position (clamped). Returns true if the value actually changed.
@@ -1155,8 +1285,7 @@ impl TimelineViewportPanel {
     /// once `grace` elapses with no further user scroll, this returns to
     /// `false` and the very next `check_auto_scroll` call resumes following.
     pub fn user_scroll_x_recent(&self, grace: std::time::Duration) -> bool {
-        self.last_user_scroll_x
-            .is_some_and(|t| t.elapsed() < grace)
+        self.last_user_scroll_x.is_some_and(|t| t.elapsed() < grace)
     }
 
     /// Edge zone width, in screen px, where a drag pointer triggers autoscroll (B11).
@@ -1351,7 +1480,11 @@ impl TimelineViewportPanel {
     /// Capture the current zoom + scroll as the zoom-back target (B14 `Z`).
     /// Overwrites any prior snapshot — one level, not a stack.
     pub fn store_zoom_back(&mut self) {
-        self.zoom_back = Some((self.pixels_per_beat(), self.scroll_x_beats(), self.scroll_y_px));
+        self.zoom_back = Some((
+            self.pixels_per_beat(),
+            self.scroll_x_beats(),
+            self.scroll_y_px,
+        ));
     }
 
     /// Take the stored zoom-back snapshot, if any (B14 `Shift+Z`). Consumes it —
@@ -1404,7 +1537,6 @@ impl TimelineViewportPanel {
     pub fn is_group_layer(&self, layer_index: usize) -> bool {
         self.tracks.get(layer_index).is_some_and(|t| t.is_group)
     }
-
 }
 
 impl Panel for TimelineViewportPanel {
@@ -1436,29 +1568,7 @@ impl Panel for TimelineViewportPanel {
             return;
         }
 
-        // Header stack: overview strip + ruler + optional waveform/stem lanes.
-        // `track_header_height()` is the single source for this offset — both the
-        // viewport and `layer_header` read it, so the layer controls cannot drift
-        // out of vertical alignment with their tracks (nothing recomputes it).
-        let header_h = layout.track_header_height();
-        // Reserve a slim strip at the very bottom of the timeline body for the
-        // horizontal scrollbar (section 24 5e). It sits OUTSIDE `tracks_rect`, so a drag
-        // there never reaches the clip-marquee InteractionOverlay.
-        let sb_h = color::TIMELINE_SCROLLBAR_HEIGHT;
-        self.viewport_rect = Rect::new(tracks_x, body.y, tracks_w, body.height);
-        self.ruler_rect = Rect::new(
-            tracks_x,
-            body.y + color::OVERVIEW_STRIP_HEIGHT,
-            tracks_w,
-            RULER_HEIGHT,
-        );
-        self.tracks_rect = Rect::new(
-            tracks_x,
-            body.y + header_h,
-            tracks_w,
-            (body.height - header_h - sb_h).max(0.0),
-        );
-        self.scrollbar_h_rect = Rect::new(tracks_x, body.y + body.height - sb_h, tracks_w, sb_h);
+        self.prepare_layout(layout);
 
         // Background
         self.bg_panel_id = Some(tree.add_panel(
@@ -1649,10 +1759,20 @@ mod tests {
     }
 
     fn drag_begin(origin: Vec2) -> UIEvent {
-        UIEvent::DragBegin { node_id: None, pos: origin, origin, modifiers: Modifiers::NONE }
+        UIEvent::DragBegin {
+            node_id: None,
+            pos: origin,
+            origin,
+            modifiers: Modifiers::NONE,
+        }
     }
     fn drag(pos: Vec2) -> UIEvent {
-        UIEvent::Drag { node_id: None, pos, delta: Vec2::ZERO, modifiers: Modifiers::NONE }
+        UIEvent::Drag {
+            node_id: None,
+            pos,
+            delta: Vec2::ZERO,
+            modifiers: Modifiers::NONE,
+        }
     }
     fn drag_end(pos: Vec2) -> UIEvent {
         UIEvent::DragEnd { node_id: None, pos }
@@ -1665,10 +1785,22 @@ mod tests {
         let origin = Vec2::new(r.x + 20.0, r.y + r.height * 0.5);
 
         let began = vp.on_timeline_event(&drag_begin(origin));
-        assert!(matches!(began.as_slice(), [PanelAction::Transport(TransportAction::Seek(_))]), "ruler drag-begin must Seek");
+        assert!(
+            matches!(
+                began.as_slice(),
+                [PanelAction::Transport(TransportAction::Seek(_))]
+            ),
+            "ruler drag-begin must Seek"
+        );
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(r.x + 80.0, origin.y)));
-        assert!(matches!(moved.as_slice(), [PanelAction::Transport(TransportAction::Seek(_))]), "ruler drag continuation must Seek");
+        assert!(
+            matches!(
+                moved.as_slice(),
+                [PanelAction::Transport(TransportAction::Seek(_))]
+            ),
+            "ruler drag continuation must Seek"
+        );
 
         let ended = vp.on_timeline_event(&drag_end(Vec2::new(r.x + 80.0, origin.y)));
         assert!(ended.is_empty(), "ruler scrub end emits nothing further");
@@ -1676,7 +1808,10 @@ mod tests {
         // A drag AFTER end must not still be routed as a ruler scrub (the
         // controller must have gone idle).
         let stray = vp.on_timeline_event(&drag(Vec2::new(r.x + 120.0, origin.y)));
-        assert!(stray.is_empty(), "no drag session should remain armed after DragEnd");
+        assert!(
+            stray.is_empty(),
+            "no drag session should remain armed after DragEnd"
+        );
     }
 
     #[test]
@@ -1686,12 +1821,18 @@ mod tests {
         let origin = Vec2::new(ov.x + 5.0, ov.y + ov.height * 0.5);
 
         let began = vp.on_timeline_event(&drag_begin(origin));
-        assert!(matches!(began.as_slice(), [PanelAction::Transport(TransportAction::OverviewScrub(_))]));
+        assert!(matches!(
+            began.as_slice(),
+            [PanelAction::Transport(TransportAction::OverviewScrub(_))]
+        ));
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(ov.x + ov.width * 0.5, origin.y)));
         match moved.as_slice() {
             [PanelAction::Transport(TransportAction::OverviewScrub(norm))] => {
-                assert!((0.4..0.6).contains(norm), "midpoint drag should read ~0.5, got {norm}");
+                assert!(
+                    (0.4..0.6).contains(norm),
+                    "midpoint drag should read ~0.5, got {norm}"
+                );
             }
             other => panic!("expected OverviewScrub, got {other:?}"),
         }
@@ -1701,7 +1842,10 @@ mod tests {
     #[test]
     fn marker_drag_begin_track_end_round_trips_the_grabbed_marker_id() {
         let mut vp = built_viewport();
-        vp.set_markers(vec![UiMarker { id: MarkerId::new("m1"), ..UiMarker::new(Beats::from_f32(4.0)) }]);
+        vp.set_markers(vec![UiMarker {
+            id: MarkerId::new("m1"),
+            ..UiMarker::new(Beats::from_f32(4.0))
+        }]);
         let flag = vp.marker_flag_rect(Beats::from_f32(4.0));
         let origin = Vec2::new(flag.x + flag.width * 0.5, flag.y + flag.height * 0.5);
 
@@ -1751,19 +1895,36 @@ mod tests {
         }]);
         vp.set_zoom(400.0);
         let sb = vp.scrollbar_h_rect;
-        assert!(sb.width > 0.0 && sb.height > 0.0, "scrollbar strip must be laid out");
+        assert!(
+            sb.width > 0.0 && sb.height > 0.0,
+            "scrollbar strip must be laid out"
+        );
         let origin = Vec2::new(sb.x + sb.width * 0.1, sb.y + sb.height * 0.5);
 
         assert!(!vp.scrollbar_h_dragging());
         let began = vp.on_timeline_event(&drag_begin(origin));
-        assert!(!began.is_empty(), "a scrollbar drag-begin over a scrollable thumb must emit a scroll action");
-        assert!(vp.scrollbar_h_dragging(), "scrollbar_h_dragging() must reflect the live session");
+        assert!(
+            !began.is_empty(),
+            "a scrollbar drag-begin over a scrollable thumb must emit a scroll action"
+        );
+        assert!(
+            vp.scrollbar_h_dragging(),
+            "scrollbar_h_dragging() must reflect the live session"
+        );
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
-        assert!(matches!(moved.as_slice(), [PanelAction::Transport(TransportAction::TimelineScrollbarH(_))]));
+        assert!(matches!(
+            moved.as_slice(),
+            [PanelAction::Transport(TransportAction::TimelineScrollbarH(
+                _
+            ))]
+        ));
 
         vp.on_timeline_event(&drag_end(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
-        assert!(!vp.scrollbar_h_dragging(), "drag-end must clear the session");
+        assert!(
+            !vp.scrollbar_h_dragging(),
+            "drag-end must clear the session"
+        );
     }
 
     #[test]
@@ -1954,10 +2115,7 @@ mod tests {
             panel.hit_test_marker_flag(Vec2::new(cx, cy)),
             Some(marker_id)
         );
-        assert_eq!(
-            panel.hit_test_marker_flag(Vec2::new(cx + 200.0, cy)),
-            None
-        );
+        assert_eq!(panel.hit_test_marker_flag(Vec2::new(cx + 200.0, cy)), None);
     }
 
     #[test]
@@ -1997,7 +2155,10 @@ mod tests {
 
         // 2px into a 400px clip → inside the 8px proportional trim handle.
         let trim = panel
-            .hit_test_clip(Vec2::new(panel.beat_to_pixel(Beats::from_f32(0.02)), body_y))
+            .hit_test_clip(Vec2::new(
+                panel.beat_to_pixel(Beats::from_f32(0.02)),
+                body_y,
+            ))
             .expect("trim-left hit");
         assert_eq!(trim.region, HitRegion::TrimLeft);
 
@@ -2103,7 +2264,11 @@ mod tests {
         let mut out = Vec::new();
         panel.visible_clip_rects(&mut out);
 
-        assert_eq!(out.len(), 1, "only the onscreen clip should survive the cull");
+        assert_eq!(
+            out.len(),
+            1,
+            "only the onscreen clip should survive the cull"
+        );
         let rect = &out[0];
         assert_eq!(rect.clip_id, "onscreen-subpixel");
         assert!(
@@ -2180,6 +2345,48 @@ mod tests {
         // Beat 5 should be at x=100
         let px = panel.beat_to_pixel(Beats::from_f32(5.0));
         assert!((px - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn reveal_automation_lane_scrolls_offscreen_lane_once() {
+        use crate::types::LayerType;
+        use crate::view::{UiAutomationLane, UiGraphTarget, UiLayer};
+
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 0.0, 500.0, 200.0);
+        panel.set_tracks(vec![TrackInfo::default(); 3]);
+        let layers = (0..3)
+            .map(|i| UiLayer {
+                layer_id: LayerId::new(format!("L{i}")),
+                parent_layer_id: None,
+                layer_type: LayerType::Video,
+                is_collapsed: false,
+                automation_lane_count: if i == 0 || i == 2 { 2 } else { 0 },
+            })
+            .collect::<Vec<_>>();
+        panel.set_automation_lane_layout(&[vec![112.0, 112.0], Vec::new(), vec![112.0, 112.0]]);
+        panel.rebuild_mapper_layout(&layers);
+        let target = UiGraphTarget::Effect(EffectId::new("fx"));
+        panel.set_automation_lanes(vec![ViewportAutomationLane {
+            layer_index: 2,
+            lane: UiAutomationLane {
+                effect_id: EffectId::new("fx"),
+                param_id: ParamId::from("amount"),
+                target: target.clone(),
+                label: "Fx: amount".into(),
+                points: Vec::new(),
+                param_min: 0.0,
+                param_max: 1.0,
+                whole_numbers: false,
+                placeholder: true,
+            },
+        }]);
+
+        assert!(panel.reveal_automation_lane(&target, &ParamId::from("amount")));
+        let lane = &panel.automation_lane_screens(&[])[0];
+        assert!(lane.strip_rect.y >= panel.tracks_rect.y - 0.001);
+        assert!(lane.strip_rect.y_max() <= panel.tracks_rect.y_max() + 0.001);
+        assert!(!panel.reveal_automation_lane(&target, &ParamId::from("amount")));
     }
 
     // P0.1 gate (D3): a collapse/delete that shrinks content must move the
@@ -2300,7 +2507,10 @@ mod tests {
             &tree,
         );
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Transport(TransportAction::Seek(_))));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Transport(TransportAction::Seek(_))
+        ));
     }
 
     #[test]
@@ -2442,7 +2652,11 @@ mod tests {
         panel.region_alpha.tick(color::MOTION_FAST_MS);
         let overlays = panel.timeline_overlays(None, false, &mut markers);
         let (_, c) = overlays.region.expect("region still exists");
-        assert_eq!(c.a, color::ACCENT_BLUE_SELECTION.a, "settles at full strength");
+        assert_eq!(
+            c.a,
+            color::ACCENT_BLUE_SELECTION.a,
+            "settles at full strength"
+        );
     }
 
     #[test]
@@ -2478,7 +2692,10 @@ mod tests {
             .timeline_overlays(None, false, &mut markers)
             .region
             .expect("still exists after the drag ends");
-        assert_eq!(after.a, before.a, "stays at full strength — no fade-out on drag-end alone");
+        assert_eq!(
+            after.a, before.a,
+            "stays at full strength — no fade-out on drag-end alone"
+        );
     }
 
     // ── P2 motion (D17 "clip split flick") ──────────────────────────
@@ -2495,16 +2712,30 @@ mod tests {
         panel.fire_split_flick(left.clone(), right.clone());
         // Mid-hump (progress != 0/1): left and right move opposite ways by
         // the same magnitude; an unrelated clip id is untouched.
-        panel.split_flick.as_mut().unwrap().flick.tick(color::MOTION_MED_MS * 0.5);
+        panel
+            .split_flick
+            .as_mut()
+            .unwrap()
+            .flick
+            .tick(color::MOTION_MED_MS * 0.5);
         let l = panel.split_flick_offset(&left);
         let r = panel.split_flick_offset(&right);
         assert!(l < 0.0, "left half separates leftward: {l}");
         assert!(r > 0.0, "right half separates rightward: {r}");
         assert!((l + r).abs() < 1e-4, "equal and opposite: {l} vs {r}");
-        assert_eq!(panel.split_flick_offset(&other), 0.0, "unrelated clip untouched");
+        assert_eq!(
+            panel.split_flick_offset(&other),
+            0.0,
+            "unrelated clip untouched"
+        );
 
         // Past the full duration, the hump finishes and ticking drops it.
-        panel.split_flick.as_mut().unwrap().flick.tick(color::MOTION_MED_MS);
+        panel
+            .split_flick
+            .as_mut()
+            .unwrap()
+            .flick
+            .tick(color::MOTION_MED_MS);
         panel.tick_split_flick();
         assert_eq!(panel.split_flick_offset(&left), 0.0, "settles back to zero");
     }

@@ -721,6 +721,7 @@ impl SceneCardState {
         rh.driver_config_ids.resize_with(n, || None);
         rh.ableton_config_ids.resize_with(n, || None);
         rh.audio_btn_ids.resize(n, None);
+        rh.automation_btn_ids.resize(n, None);
         rh.audio_configs.resize_with(n, || None);
         rh.audio_trigger_mode_badge_ids.resize(n, None);
         rh.trim_ids.resize_with(n, || None);
@@ -1902,6 +1903,7 @@ impl ScenePanel {
             color::FONT_LABEL,
             true,
             label_width,
+            false,
             self.properties_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
             true,
             Some((slot as u64) << 8),
@@ -1917,6 +1919,7 @@ impl ScenePanel {
         rh.driver_btn_ids[slot] = Some(built.driver_btn);
         rh.driver_config_ids[slot] = built.driver_config;
         rh.audio_btn_ids[slot] = Some(built.audio_btn);
+        rh.automation_btn_ids[slot] = built.automation_btn;
         rh.audio_configs[slot] = built.audio_config;
         rh.mod_tab_ids[slot] = built.mod_tabs;
         rh.slider_ids[slot] = built.slider;

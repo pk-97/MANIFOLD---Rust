@@ -4,6 +4,7 @@
 //! pure move).
 
 use manifold_ui::{AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
+use manifold_ui::panels::actions::AutomationShape;
 use super::*;
 
 /// One preset menu vocabulary for all card families; addressing is captured by
@@ -22,6 +23,59 @@ fn preset_menu_items(
         ("Export Preset…", Export), ("Import Preset…", Import)]);
     entries.into_iter().map(|(label, kind)| DropdownItem::new(label)
         .with_action(PanelAction::Params(action(kind)))).collect()
+}
+
+fn automation_lane_context_items(
+    target: &manifold_ui::view::UiGraphTarget,
+    param_id: &manifold_core::effects::ParamId,
+    beat: Option<manifold_core::Beats>,
+    point_menu: bool,
+) -> Vec<DropdownItem> {
+    let mut items = Vec::new();
+    if let Some(beat) = beat {
+        items.push(DropdownItem::new("Cut").with_action(PanelAction::Editing(
+            EditingAction::ContextAutomationCut(target.clone(), param_id.clone(), beat),
+        )));
+        items.push(DropdownItem::new("Copy").with_action(PanelAction::Editing(
+            EditingAction::ContextAutomationCopy(target.clone(), param_id.clone(), beat),
+        )));
+        items.push(DropdownItem::new("Paste here").with_action(PanelAction::Editing(
+            EditingAction::ContextAutomationPaste(target.clone(), param_id.clone(), beat),
+        )));
+        items.push(DropdownItem::new("Duplicate").with_separator().with_action(PanelAction::Editing(
+            EditingAction::ContextAutomationDuplicate(target.clone(), param_id.clone(), beat),
+        )));
+    }
+    items.push(DropdownItem::new("Select all points").with_action(PanelAction::Editing(
+        EditingAction::ContextSelectAllAutomation(target.clone(), param_id.clone()),
+    )));
+    items.push(DropdownItem::new("Delete selected points").with_separator().with_action(PanelAction::Editing(
+        EditingAction::ContextDeleteSelectedAutomation(target.clone(), param_id.clone()),
+    )));
+    if let Some(beat) = beat {
+        items.push(DropdownItem::new("Insert shape…").with_separator().with_action(PanelAction::Editing(
+            EditingAction::ContextOpenAutomationShapePicker(target.clone(), param_id.clone(), beat),
+        )));
+    }
+    if point_menu {
+        let beat = beat.expect("point context menu always carries its beat");
+        items.push(DropdownItem::new("Edit point value…").with_action(PanelAction::Editing(
+            EditingAction::AutomationPointEditValue(target.clone(), param_id.clone(), beat),
+        )));
+        items.push(DropdownItem::new("Edit point time…").with_separator().with_action(PanelAction::Editing(
+            EditingAction::AutomationPointEditTime(target.clone(), param_id.clone(), beat),
+        )));
+    }
+    items.push(DropdownItem::new("Restore automation").with_action(PanelAction::Project(
+        ProjectAction::ContextRestoreAutomationLane(target.clone(), param_id.clone()),
+    )));
+    items.push(DropdownItem::new("Clear automation").with_action(PanelAction::Project(
+        ProjectAction::ContextClearAutomationLane(target.clone(), param_id.clone()),
+    )));
+    items.push(DropdownItem::new("Delete lane").with_action(PanelAction::Project(
+        ProjectAction::ContextRemoveAutomationLane(target.clone(), param_id.clone()),
+    )));
+    items
 }
 
 /// Shared mask sources for the card context menu and group modifier picker.
@@ -1097,19 +1151,39 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            // Two-item menu, same typed with_action shape as
-            // ClipRightClicked/TrackRightClicked above.
             PanelAction::Editing(EditingAction::AutomationLaneRightClicked(target, param_id)) => {
-                let items = vec![
-                    DropdownItem::new("Clear Automation").with_action(
-                        PanelAction::Project(ProjectAction::ContextClearAutomationLane(target.clone(), param_id.clone())),
-                    ),
-                    DropdownItem::new("Remove Lane").with_action(
-                        PanelAction::Project(ProjectAction::ContextRemoveAutomationLane(target.clone(), param_id.clone())),
-                    ),
-                ];
-                self.dropdown
-                    .open_context(items, right_click_pos, &mut self.tree);
+                use manifold_ui::automation_hit_tester::{AutomationHit, hit_test_automation};
+                let lanes = self.viewport.automation_lane_screens(&[]);
+                let point_beat = match hit_test_automation(right_click_pos, &lanes) {
+                    Some(AutomationHit::Dot { lane_index, dot_index }) => Some(lanes[lane_index].dots[dot_index].beat),
+                    _ => None,
+                };
+                let beat = point_beat.unwrap_or_else(|| self.viewport.snap_to_grid(
+                    self.viewport.pixel_to_beat(right_click_pos.x)).max(manifold_core::Beats::ZERO));
+                let items = automation_lane_context_items(target, param_id, Some(beat), point_beat.is_some());
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
+            PanelAction::Editing(EditingAction::ContextOpenAutomationShapePicker(target, param_id, beat)) => {
+                let items = [
+                    ("Ramp up", AutomationShape::RampUp),
+                    ("Ramp down", AutomationShape::RampDown),
+                    ("Triangle", AutomationShape::Triangle),
+                    ("Sine", AutomationShape::Sine),
+                    ("Square", AutomationShape::Square),
+                    ("Hold low", AutomationShape::HoldLow),
+                    ("Hold high", AutomationShape::HoldHigh),
+                ]
+                .into_iter()
+                .map(|(label, shape)| {
+                    DropdownItem::new(label).with_action(PanelAction::Editing(
+                        EditingAction::ContextInsertAutomationShape(
+                            target.clone(), param_id.clone(), *beat, shape,
+                        ),
+                    ))
+                })
+                .collect();
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::Editing(EditingAction::LayerHeaderRightClicked(layer_id)) => {

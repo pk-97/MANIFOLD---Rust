@@ -61,6 +61,8 @@ pub(crate) struct RowHost {
     pub(crate) driver_config_ids: Vec<Option<crate::panels::drawer::DrawerIds>>,
     /// Per-param "A" audio-mod button node id.
     pub(crate) audio_btn_ids: Vec<Option<NodeId>>,
+    /// Per-param explicit automation-entry button in the label cell.
+    pub(crate) automation_btn_ids: Vec<Option<NodeId>>,
     /// Per-param audio drawer ids + send count (for click resolution). An
     /// `is_trigger_gate` row's "A" button + drawer live here too (section 9).
     pub(crate) audio_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
@@ -106,6 +108,7 @@ impl RowHost {
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
             audio_btn_ids: Vec::new(),
+            automation_btn_ids: Vec::new(),
             audio_configs: Vec::new(),
             audio_trigger_mode_badge_ids: Vec::new(),
             target_ids: Vec::new(),
@@ -170,6 +173,9 @@ impl RowHost {
         }
         if let Some(b) = self.audio_btn_ids[i] {
             self.row_index.insert(tree.widget_of(b), i, RowRole::AudioBtn);
+        }
+        if let Some(b) = self.automation_btn_ids[i] {
+            self.row_index.insert(tree.widget_of(b), i, RowRole::AutomationBtn);
         }
         if let Some(t) = &self.toggle_ids[i] {
             self.row_index.insert(tree.widget_of(t.button_id), i, RowRole::ToggleBtn);
@@ -568,6 +574,9 @@ impl RowHost {
             RowRole::AudioBtn => {
                 self.focus_mod_tab(mod_active_tab, row, ModTab::Audio);
                 self.audio_toggle_action(target, row, rows, mod_state)
+            }
+            RowRole::AutomationBtn => {
+                vec![PanelAction::Params(ParamsAction::ShowAutomation(target, rows[row].id.clone()))]
             }
             RowRole::ToggleBtn => {
                 let is_trigger = rows.get(row).map(|i| i.spec.is_trigger).unwrap_or(false);

@@ -284,12 +284,12 @@ impl CoordinateMapper {
         if layer.is_collapsed || layer.is_group() || layer.automation_lane_count == 0 {
             return base;
         }
-        let default = color::AUTOMATION_LANE_STRIP_HEIGHT;
+        let minimum = 64.0 * layer.automation_lane_count as f32;
         let lane_extra = self.automation_lane_heights.get(index).copied().unwrap_or(0.0);
         if lane_extra == 0.0 {
             base
         } else {
-            TrackHeight::Normal.px() + lane_extra.max(default)
+            TrackHeight::Normal.px() + lane_extra.max(minimum)
         }
     }
 
