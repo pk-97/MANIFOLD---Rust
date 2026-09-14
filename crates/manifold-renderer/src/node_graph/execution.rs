@@ -655,6 +655,13 @@ impl Executor {
         Self::new(Box::new(MockBackend::new()))
     }
 
+    /// Whether an exported array contains producer content rather than only
+    /// allocated storage. Render views borrow these arrays across executors.
+    pub(crate) fn resource_content_ready(&self, resource: ResourceId) -> bool {
+        self.backend.slot_for(resource).is_some_and(|slot|
+            !self.slot_pending.get(slot.0 as usize).copied().unwrap_or(false))
+    }
+
     pub fn backend(&self) -> &dyn Backend {
         &*self.backend
     }

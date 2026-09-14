@@ -31,6 +31,23 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
     )))
     .unwrap();
     owner.version = 3;
+    // Keep the fixture on the baked scene path used by the native parity
+    // proof before source definition hashes are captured.
+    for container in &mut owner.nodes {
+        let Some(group) = &mut container.group else {
+            continue;
+        };
+        if let Some(material) = group
+            .nodes
+            .iter_mut()
+            .find(|node| node.type_id == "node.pbr_material")
+        {
+            material.params.insert(
+                "baked_look".into(),
+                SerializedParamValue::Bool { value: true },
+            );
+        }
+    }
     let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/scene-modifier-presets/VortexFragments.json"

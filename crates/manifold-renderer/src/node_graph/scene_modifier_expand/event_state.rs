@@ -41,6 +41,11 @@ pub struct PreparedModifierEvents {
 }
 
 impl PreparedModifierEvents {
+    /// Current stream and pre-event baseline, shared by presentation controls.
+    pub(crate) fn counts(&self, modifier: &NodeId) -> Option<(f32,f32)> {
+        let state = &self.modifiers[*self.by_modifier.get(modifier)?];
+        Some((state.count as f32,state.pending_baseline.unwrap_or(state.count) as f32))
+    }
     /// Resolve generated event producers and the host gate macros that own
     /// each modifier's audio stream.
     pub fn prepare(

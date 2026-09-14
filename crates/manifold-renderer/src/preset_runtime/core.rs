@@ -101,6 +101,7 @@ pub struct PresetRuntime {
     pub(super) effect_nodes: Vec<EffectSlot>,
     pub(super) modifier_preview_routes: Vec<crate::node_graph::scene_modifier_expand::SceneModifierNodeRoute>,
     pub(super) math_views: Vec<super::math_view::MathViewRuntime>,
+    pub(super) shared_arrays: Vec<(ResourceId,manifold_gpu::GpuBuffer)>,
     /// One slot per Mix node introduced for a wet/dry group. The
     /// Mix's `amount` param is set to the group's `wet_dry` value
     /// every frame (so dragging a wet/dry slider in the UI doesn't
@@ -1286,6 +1287,7 @@ impl PresetRuntime {
             effect_nodes,
             modifier_preview_routes: Vec::new(),
             math_views: Vec::new(),
+            shared_arrays: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
             modifier_events: None,
@@ -2035,6 +2037,7 @@ impl PresetRuntime {
         }
 
         // 3. Install the host's target as the FinalOutput's source slot.
+        self.tick_math_view_events(Beats(ctx.beat));
         self.install_target(target);
 
         // 4. Run the graph through the state-aware executor entry.
@@ -2060,9 +2063,7 @@ impl PresetRuntime {
             ctx.owner_key,
         );
 
-        for view in &mut self.math_views {
-            view.render(&self.graph, gpu, target, ctx, params);
-        }
+        self.render_math_views(gpu, target, ctx, params);
 
         self.consume_trigger_markers();
         ctx.anim_progress
@@ -2072,6 +2073,7 @@ impl PresetRuntime {
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
         for view in &mut self.math_views {
+            view.events.clear();
             for variant in &mut view.variants { variant.reset_state(_device); }
         }
         self.pending_trigger_baseline = None;
@@ -2106,6 +2108,7 @@ impl PresetRuntime {
     /// `ContentCommand::LoadProject` arms.
     pub fn clear_trigger_state(&mut self) {
         for view in &mut self.math_views {
+            view.events.clear();
             for variant in &mut view.variants { variant.clear_trigger_state(); }
         }
         self.pending_trigger_baseline = None;
@@ -2169,6 +2172,7 @@ impl PresetRuntime {
         else {
             return;
         };
+        for (resource,buffer) in &self.shared_arrays { metal.pre_bind_array(*resource,buffer.clone()); }
         if let Err(e) =
             crate::node_graph::pre_allocate_resources(&self.graph, &self.plan, device, metal)
         {
@@ -2188,7 +2192,7 @@ impl PresetRuntime {
         }
         self.state_store.cleanup_all();
         for view in &mut self.math_views {
-            view.resize(device, width, height, format);
+            view.resize(self.executor.backend(), device, width, height, format);
         }
     }
 

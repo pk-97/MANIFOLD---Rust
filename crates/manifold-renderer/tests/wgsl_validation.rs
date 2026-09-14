@@ -89,6 +89,11 @@ fn all_wgsl_shaders_validate() {
 
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+        // Match the production diagram's composed source; validate the shared
+        // face-index helper with its consumer rather than skipping the shader.
+        let source = if path.file_name().is_some_and(|name| name == "render_mesh_diagram.wgsl") {
+            format!("{}\n{source}", include_str!("../src/node_graph/primitives/shaders/sample_face_common.wgsl"))
+        } else { source };
 
         let relative = path.strip_prefix(shader_dir()).unwrap_or(path);
 

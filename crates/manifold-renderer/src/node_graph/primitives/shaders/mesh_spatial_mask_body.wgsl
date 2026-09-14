@@ -8,21 +8,33 @@ fn rotate_basis(v: vec3<f32>, yaw: f32, pitch: f32) -> vec3<f32> {
     return vec3<f32>(cy * rx.x + sy * rx.z, rx.y, -sy * rx.x + cy * rx.z);
 }
 
-fn body(idx: u32, count: u32, shape: u32, sample_mode: u32, center_x: f32, center_y: f32, center_z: f32, yaw: f32, pitch: f32, width: f32, feather: f32, invert: f32, amount: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32) -> f32 {
+fn body(idx: u32, count: u32, shape: u32, sample_mode: u32, center_x: f32, center_y: f32, center_z: f32, yaw: f32, pitch: f32, width: f32, feather: f32, invert: f32, amount: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32, cell_size: f32, low: f32, high: f32, weights_len: u32) -> f32 {
     let base = (idx / 3u) * 3u;
     var sample_position = buf_in[idx].position;
-    if sample_mode == 1u && base + 2u < count {
+    if (sample_mode == 1u || sample_mode == 2u) && base + 2u < count {
         sample_position = (buf_in[base].position + buf_in[base + 1u].position + buf_in[base + 2u].position) / 3.0;
     }
     let safe_scale = max(abs(scale), 1e-6);
-    let p = (sample_position + vec3<f32>(source_offset_x, source_offset_y, source_offset_z)) / safe_scale - vec3<f32>(center_x, center_y, center_z);
+    let p_center = vec3<f32>(center_x, center_y, center_z);
+    let source_offset = vec3<f32>(source_offset_x, source_offset_y, source_offset_z);
+    var p = (sample_position + source_offset) / safe_scale - p_center;
+    if sample_mode == 2u {
+        p = patch_cell_center((sample_position + source_offset) / safe_scale, cell_size) - p_center;
+    }
     let direction = rotate_basis(vec3<f32>(0.0, 1.0, 0.0), yaw, pitch);
-    let distance = select(abs(dot(p, direction)) - width, length(p) - width, shape == 1u);
+    var distance = abs(dot(p, direction)) - width;
+    if shape == 1u {
+        distance = length(p) - width;
+    } else if shape == 2u {
+        distance = dot(p, direction) - width;
+    }
     let edge = max(feather, 0.0);
     var mask = select(1.0, 0.0, distance > 0.0);
     if edge > 0.0 {
         mask = 1.0 - smoothstep(0.0, edge, distance);
     }
-    mask = mix(mask, 1.0 - mask, clamp(invert, 0.0, 1.0));
-    return mix(1.0, mask, clamp(amount, 0.0, 1.0));
+    let mask_after_invert = mix(mask, 1.0 - mask, clamp(invert, 0.0, 1.0));
+    var incoming = 1.0;
+    if idx < weights_len { incoming = buf_weights[idx]; }
+    return incoming * mix(1.0, mix(low, high, mask_after_invert), clamp(amount, 0.0, 1.0));
 }

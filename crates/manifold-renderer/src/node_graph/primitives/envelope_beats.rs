@@ -20,6 +20,104 @@ use crate::node_graph::primitive::Primitive;
 
 const DEFAULT_WINDOW_BEATS: f32 = 0.25;
 
+#[derive(Clone, Default)]
+pub(crate) struct BeatEnvelopeState {
+    last_count: Option<i32>,
+    hit_beat: manifold_core::Beats,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BeatEnvelopeDurations {
+    pub(crate) window: f32,
+    pub(crate) attack: f32,
+    pub(crate) hold: f32,
+    pub(crate) tail: f32,
+}
+
+impl BeatEnvelopeState {
+    pub(crate) fn step(
+        &mut self,
+        trigger: f32,
+        initial_count: Option<f32>,
+        beat: manifold_core::Beats,
+        durations: BeatEnvelopeDurations,
+    ) -> Option<(f32, f32)> {
+        if !trigger.is_finite() {
+            return None;
+        }
+        let trigger = trigger.round() as i32;
+        let initial_count = initial_count
+            .filter(|value| value.is_finite())
+            .map(|value| value.round() as i32);
+
+        let event = match self.last_count {
+            Some(last) => {
+                let changed = trigger != last;
+                self.last_count = Some(trigger);
+                changed
+            }
+            None => {
+                self.last_count = Some(trigger);
+                initial_count.is_some_and(|baseline| baseline != trigger)
+            }
+        };
+        if event {
+            self.hit_beat = beat;
+            self.active = true;
+        }
+
+        // Durations remain live for an active event. Invalid values settle it
+        // immediately, matching the old window behavior for non-finite input.
+        let durations_valid = durations.window.is_finite()
+            && durations.attack.is_finite()
+            && durations.hold.is_finite()
+            && durations.tail.is_finite();
+        let window = durations.window.max(0.0) as f64;
+        let attack = durations.attack.max(0.0) as f64;
+        let hold = durations.hold.max(0.0) as f64;
+        let tail = durations.tail.max(0.0) as f64;
+        let elapsed = (beat - self.hit_beat).0;
+        if self.active && elapsed < 0.0 {
+            // A backward seek during a live event must not resurrect it with
+            // a negative phase. The next trigger edge can start a new event.
+            self.active = false;
+        }
+
+        let output = if !self.active || !durations_valid {
+            self.active = false;
+            (0.0, -1.0)
+        } else {
+            let release_start = attack + hold;
+            let tail_start = release_start + window;
+            let complete_at = tail_start + tail;
+            if elapsed >= complete_at {
+                self.active = false;
+                (0.0, -1.0)
+            } else if elapsed < attack {
+                let output = if attack <= 0.0 { 1.0 } else { elapsed / attack };
+                (output.clamp(0.0, 1.0), elapsed)
+            } else if elapsed < release_start {
+                (1.0, elapsed)
+            } else if elapsed < tail_start {
+                let output = if window <= 0.0 {
+                    0.0
+                } else {
+                    1.0 - ((elapsed - release_start) / window)
+                };
+                (output.clamp(0.0, 1.0), elapsed)
+            } else {
+                (0.0, elapsed)
+            }
+        };
+        Some((output.0 as f32, output.1 as f32))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 crate::primitive! {
     name: EnvelopeBeats,
     type_id: "node.envelope_beats",
@@ -80,9 +178,7 @@ crate::primitive! {
     aliases: ["beat envelope", "beat pulse", "trigger pulse"],
     boundary_reason: NonGpu,
     extra_fields: {
-        last_count: Option<i32> = None,
-        hit_beat: manifold_core::Beats = manifold_core::Beats::ZERO,
-        active: bool = false,
+        state: BeatEnvelopeState = BeatEnvelopeState::default(),
     },
 }
 
@@ -92,96 +188,34 @@ impl Primitive for EnvelopeBeats {
             .inputs
             .scalar("trigger")
             .and_then(|value| value.as_scalar())
-            .filter(|value| value.is_finite())
         else {
             return;
         };
-        let trigger = trigger_value.round() as i32;
         let initial_count = ctx
             .inputs
             .scalar("initial_count")
-            .and_then(|value| value.as_scalar())
-            .filter(|value| value.is_finite())
-            .map(|value| value.round() as i32);
-        let window_beats = ctx.scalar_or_param("window_beats", DEFAULT_WINDOW_BEATS);
-        let attack_beats = ctx.scalar_or_param("attack_beats", 0.0);
-        let hold_beats = ctx.scalar_or_param("hold_beats", 0.0);
-        let tail_beats = ctx.scalar_or_param("tail_beats", 0.0);
-        let beat = ctx.time.beats;
-
-        let event = match self.last_count {
-            Some(last) => {
-                let changed = trigger != last;
-                self.last_count = Some(trigger);
-                changed
-            }
-            None => {
-                self.last_count = Some(trigger);
-                initial_count.is_some_and(|baseline| baseline != trigger)
-            }
+            .and_then(|value| value.as_scalar());
+        let output = self.state.step(
+            trigger_value,
+            initial_count,
+            ctx.time.beats,
+            BeatEnvelopeDurations {
+                window: ctx.scalar_or_param("window_beats", DEFAULT_WINDOW_BEATS),
+                attack: ctx.scalar_or_param("attack_beats", 0.0),
+                hold: ctx.scalar_or_param("hold_beats", 0.0),
+                tail: ctx.scalar_or_param("tail_beats", 0.0),
+            },
+        );
+        let Some((output, elapsed_output)) = output else {
+            return;
         };
-        if event {
-            self.hit_beat = beat;
-            self.active = true;
-        }
-
-        // Durations remain live for an active event. Invalid values settle it
-        // immediately, matching the old window behavior for non-finite input.
-        let durations_valid = window_beats.is_finite()
-            && attack_beats.is_finite()
-            && hold_beats.is_finite()
-            && tail_beats.is_finite();
-        let window_beats = window_beats.max(0.0) as f64;
-        let attack_beats = attack_beats.max(0.0) as f64;
-        let hold_beats = hold_beats.max(0.0) as f64;
-        let tail_beats = tail_beats.max(0.0) as f64;
-        let elapsed = (beat - self.hit_beat).0;
-        if self.active && elapsed < 0.0 {
-            // A backward seek during a live event must not resurrect it with
-            // a negative phase. The next trigger edge can start a new event.
-            self.active = false;
-        }
-
-        let (output, elapsed_output) = if !self.active || !durations_valid {
-            self.active = false;
-            (0.0, -1.0)
-        } else {
-            let release_start = attack_beats + hold_beats;
-            let tail_start = release_start + window_beats;
-            let complete_at = tail_start + tail_beats;
-            if elapsed >= complete_at {
-                self.active = false;
-                (0.0, -1.0)
-            } else if elapsed < attack_beats {
-                let output = if attack_beats <= 0.0 {
-                    1.0
-                } else {
-                    elapsed / attack_beats
-                };
-                (output.clamp(0.0, 1.0), elapsed)
-            } else if elapsed < release_start {
-                (1.0, elapsed)
-            } else if elapsed < tail_start {
-                let output = if window_beats <= 0.0 {
-                    0.0
-                } else {
-                    1.0 - ((elapsed - release_start) / window_beats)
-                };
-                (output.clamp(0.0, 1.0), elapsed)
-            } else {
-                (0.0, elapsed)
-            }
-        };
+        ctx.outputs.set_scalar("out", ParamValue::Float(output));
         ctx.outputs
-            .set_scalar("out", ParamValue::Float(output as f32));
-        ctx.outputs
-            .set_scalar("elapsed_beats", ParamValue::Float(elapsed_output as f32));
+            .set_scalar("elapsed_beats", ParamValue::Float(elapsed_output));
     }
 
     fn clear_state(&mut self) {
-        self.last_count = None;
-        self.hit_beat = manifold_core::Beats::ZERO;
-        self.active = false;
+        self.state.clear();
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -377,6 +411,29 @@ mod tests {
         assert_eq!(EnvelopeBeats::PARAMS.len(), 4);
         assert_eq!(EnvelopeBeats::PARAMS[0].name, "window_beats");
         assert_eq!(EnvelopeBeats::PARAMS[0].range, Some((0.0, 16.0)));
+    }
+
+    #[test]
+    fn extracted_state_preserves_nonfinite_trigger_and_clear_semantics() {
+        let mut state = BeatEnvelopeState::default();
+        let durations = BeatEnvelopeDurations {
+            window: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(state.step(f32::NAN, None, Beats(0.0), durations), None);
+        assert_eq!(
+            state.step(0.0, None, Beats(0.0), durations),
+            Some((0.0, -1.0))
+        );
+        assert_eq!(
+            state.step(1.0, None, Beats(1.0), durations),
+            Some((1.0, 0.0))
+        );
+        state.clear();
+        assert_eq!(
+            state.step(1.0, None, Beats(1.0), durations),
+            Some((0.0, -1.0))
+        );
     }
 
     #[test]

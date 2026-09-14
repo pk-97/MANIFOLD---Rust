@@ -567,6 +567,9 @@ struct RenderSceneUniforms {
     /// Both RT slots are written per object in the Pass 1 loop; non-mask
     /// pipelines never read `z`, and `w` is inert when RT is off.
     fog_params: [f32; 4],
+    /// Appearance gain and per-vertex-weight presence flag. `x` is gain,
+    /// `y` is 1 when the weights buffer is wired, and `z/w` are reserved.
+    appearance: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
     /// VOLUMETRIC_LIGHT_DESIGN.md D1 (P1 plumbing only — no march kernel
@@ -644,7 +647,7 @@ struct RenderSceneUniforms {
     velocity_jitter: [f32; 4],
 }
 
-// 784 = 49 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
 // GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
 // `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
 // `ior`/`specular_factor` rode existing reserved slots on
@@ -660,7 +663,7 @@ struct RenderSceneUniforms {
 // 768 after the velocity jitter-exclusion quad (D-64's MetalFX audit).
 // 784 after RAYTRACING_DESIGN.md section 16 TL7: diffuse_transmission_params
 // (+16 bytes, one new vec4).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 784);
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 800);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -670,8 +673,10 @@ const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 784);
 struct ShadowUniforms {
     light_view_proj: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
+    /// `(gain, weights_wired, 0, 0)` for the depth visibility discard.
+    appearance: [f32; 4],
 }
-const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 128);
+const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 144);
 
 pub struct RenderScene {
     inputs: Vec<NodeInput>,
@@ -1561,6 +1566,9 @@ fn reject_topology(
 // visible object.
 struct ObjectDraw<'ctx> {
     vertices: &'ctx manifold_gpu::GpuBuffer,
+    /// Optional per-vertex appearance weights. Unwired draws bind `vertices`
+    /// at the weights slot as an unused ABI dummy.
+    weights: Option<&'ctx manifold_gpu::GpuBuffer>,
     uniforms: RenderSceneUniforms,
     pipeline: manifold_gpu::GpuRenderPipeline,
     base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
@@ -1616,6 +1624,10 @@ struct ObjectDraw<'ctx> {
     /// as-is so "unwired" and "wired-then-unwired" both correctly
     /// invalidate any cached key computed under the other state.
     instances_generation: Option<u64>,
+    /// Weight-buffer write generation, folded into shadow dirtiness.
+    weights_generation: Option<u64>,
+    /// Per-object appearance gain, folded into the shadow dirtiness key.
+    gain: f32,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
     /// model — `Blend` routes into the sorted transparent group and
     /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
@@ -1757,7 +1769,7 @@ impl RenderScene {
         let FramePrelude {
             objects, cam, envmap_wired, atmosphere, view_proj, prev_view_proj,
             jitter_ndc, prev_jitter_ndc, light_count, velocity_wired,
-            ao_mask_wired, denoise_aux_ready, ..
+            ao_mask_wired, denoise_aux_ready, rt_enabled, ..
         } = pre;
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
@@ -1820,6 +1832,45 @@ impl RenderScene {
             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
             // `mesh_n` write generation, feeds the shadow cache key below.
             let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
+            let weights_slot = object.weights;
+            if weights_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
+                continue;
+            }
+            let weights = weights_slot.and_then(|s| ctx.inputs.array_slot(s));
+            if weights_slot.is_some() && weights.is_none() {
+                ctx.error(format!(
+                    "object_{n}: wired appearance weights input is unavailable; renderer fell back to magenta clear"
+                ));
+                if let Some(target) = ctx.outputs.texture_2d("color") {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+                }
+                return None;
+            }
+            let vertex_count = (vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32;
+            if let Some(weights) = weights
+                && ((weights.size / std::mem::size_of::<f32>() as u64) as u32) < vertex_count
+            {
+                ctx.error(format!(
+                    "object_{n}: appearance weights buffer is shorter than the mesh ({}, need {vertex_count}); renderer fell back to magenta clear",
+                    weights.size / std::mem::size_of::<f32>() as u64
+                ));
+                if let Some(target) = ctx.outputs.texture_2d("color") {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+                }
+                return None;
+            }
+            if *rt_enabled && (weights_slot.is_some() || object.gain != 1.0) {
+                ctx.error(format!(
+                    "object_{n}: per-vertex appearance weights and gain are unsupported when RT is enabled; renderer fell back to magenta clear"
+                ));
+                if let Some(target) = ctx.outputs.texture_2d("color") {
+                    let gpu = ctx.gpu_encoder();
+                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+                }
+                return None;
+            }
             let Some(material) = object.material else {
                 ctx.error(format!(
                     "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
@@ -1905,6 +1956,8 @@ impl RenderScene {
                 atmosphere,
                 *prev_view_proj,
                 prev_model_n,
+                object.gain,
+                weights.is_some(),
             );
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
@@ -2031,6 +2084,7 @@ impl RenderScene {
 
             draws.push(ObjectDraw {
                 vertices,
+                weights,
                 uniforms,
                 pipeline,
                 base_color_map,
@@ -2055,6 +2109,8 @@ impl RenderScene {
                 instance_count,
                 vertices_generation,
                 instances_generation,
+                weights_generation: weights_slot.and_then(|s| inputs.slot_generation_of(s)),
+                gain: object.gain,
                 alpha_mode,
                 sort_depth,
                 is_transmissive,
@@ -2426,6 +2482,8 @@ impl RenderScene {
                     hasher.write(bytemuck::bytes_of(&d.uniforms.model));
                     d.vertices_generation.hash(&mut hasher);
                     d.instances_generation.hash(&mut hasher);
+                    d.weights_generation.hash(&mut hasher);
+                    hasher.write_u32(d.gain.to_bits());
                     hasher.write_u32(mesh_vertex_count(d.vertices));
                     hasher.write_u32(d.instance_count);
                 }
@@ -2456,9 +2514,10 @@ impl RenderScene {
                     .map(|d| ShadowUniforms {
                         light_view_proj: vp,
                         model: d.uniforms.model,
+                        appearance: d.uniforms.appearance,
                     })
                     .collect();
-                let shadow_bindings: Vec<[GpuBinding; 3]> = caster_draws
+                let shadow_bindings: Vec<[GpuBinding; 4]> = caster_draws
                     .iter()
                     .zip(&shadow_uniforms)
                     .map(|(d, su)| {
@@ -2475,6 +2534,11 @@ impl RenderScene {
                             GpuBinding::Buffer {
                                 binding: 2,
                                 buffer: d.instances.unwrap_or(identity_stub),
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 3,
+                                buffer: d.weights.unwrap_or(d.vertices),
                                 offset: 0,
                             },
                         ]
@@ -2527,9 +2591,10 @@ impl RenderScene {
                 .map(|d| ShadowUniforms {
                     light_view_proj: view_proj,
                     model: d.uniforms.model,
+                    appearance: d.uniforms.appearance,
                 })
                 .collect();
-            let cam_bindings: Vec<[GpuBinding; 3]> = opaque_draws
+            let cam_bindings: Vec<[GpuBinding; 4]> = opaque_draws
                 .iter()
                 .zip(&cam_uniforms)
                 .map(|(d, su)| {
@@ -2546,6 +2611,11 @@ impl RenderScene {
                         GpuBinding::Buffer {
                             binding: 2,
                             buffer: d.instances.unwrap_or(identity_stub),
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: d.weights.unwrap_or(d.vertices),
                             offset: 0,
                         },
                     ]
@@ -4013,7 +4083,7 @@ impl RenderScene {
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 46]> = draws
+        let binding_sets: Vec<[GpuBinding; 47]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -4256,6 +4326,14 @@ impl RenderScene {
                     GpuBinding::Texture {
                         binding: 45,
                         texture: rt_svt_tex,
+                    },
+                    // Optional per-vertex appearance weights. Unwired draws
+                    // bind the existing vertex buffer as an unused ABI dummy;
+                    // the shader reads it only when the uniform flag is set.
+                    GpuBinding::Buffer {
+                        binding: 46,
+                        buffer: draw.weights.unwrap_or(draw.vertices),
+                        offset: 0,
                     },
                 ]
             })
@@ -7435,8 +7513,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw));",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw));",
         ),
     ];
 
@@ -7453,8 +7531,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), u.fog_params.z);",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), u.fog_params.z);",
         ),
     ];
 
@@ -7476,8 +7554,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z);",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z);",
         ),
     ];
 
@@ -7493,8 +7571,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -7514,8 +7592,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -7527,8 +7605,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -7549,8 +7627,8 @@ impl RenderScene {
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
-            "return vec4<f32>(rgb, albedo.a);",
-            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "let vn = normalize((u.view_proj * vec4<f32>(in.world_normal, 0.0)).xyz);\n    let f0_dn = mix(vec3<f32>(0.04), albedo.rgb, u.pbr_metallic_roughness.x) * u.pbr_metallic_roughness.w;\n    let dn_reactive = select(0.0, 1.0, dot(resolve_emissive(in.uv), vec3<f32>(0.2126, 0.7152, 0.0722)) > 1e-3 || any(u.prev_model[0] != u.model[0]) || any(u.prev_model[1] != u.model[1]) || any(u.prev_model[2] != u.model[2]) || any(u.prev_model[3] != u.model[3]));\n    return FsOut(apply_appearance(rgb, albedo.a, in.appearance_weight), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z, vec4<f32>(vn, 0.0), u.pbr_metallic_roughness.y, vec4<f32>(albedo.rgb, 1.0), vec4<f32>(f0_dn, 1.0), dn_reactive);",
         ),
     ];
 
@@ -8048,6 +8126,8 @@ fn build_uniforms(
     atmosphere: &Atmosphere,
     prev_view_proj: [[f32; 4]; 4],
     prev_model: [[f32; 4]; 4],
+    gain: f32,
+    weights_wired: bool,
 ) -> RenderSceneUniforms {
     RenderSceneUniforms {
         view_proj,
@@ -8121,6 +8201,7 @@ fn build_uniforms(
         scene_params: [light_count, material.ambient, cam.lens.exposure_ev, 0.0],
         fog_color: atmosphere.fog_color,
         fog_params: [atmosphere.fog_density, atmosphere.height_falloff, 0.0, 0.0],
+        appearance: [gain, if weights_wired { 1.0 } else { 0.0 }, 0.0, 0.0],
         ambient_tint: atmosphere.ambient_tint,
         shaft_params: [
             atmosphere.shaft_intensity,

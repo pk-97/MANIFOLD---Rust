@@ -24,6 +24,7 @@ pub mod viewport_render;
 pub mod viewport_session;
 mod binding_migration;
 mod boundary_nodes;
+mod mesh_boundary;
 mod bound_graph;
 mod bundled_presets;
 pub mod catalog_gen;

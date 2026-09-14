@@ -38,6 +38,7 @@ crate::primitive! {
     purpose: "Binds one scene object's mesh vertices, transform, material, seventeen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / volume thickness), and instances into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
     inputs: {
         vertices: Array(MeshVertex) optional,
+        weights: Array(f32) optional,
         transform: Transform optional,
         material: Material optional,
         base_color_map: Texture2D optional,
@@ -60,6 +61,7 @@ crate::primitive! {
         instances: Array(InstanceTransform) optional,
         visible: ScalarF32 optional,
         cast_shadows: ScalarF32 optional,
+        gain: ScalarF32 optional,
     },
     outputs: {
         object: Object,
@@ -95,6 +97,14 @@ crate::primitive! {
             range: Some((0.0, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("gain"),
+            label: "Appearance Gain",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
@@ -112,9 +122,11 @@ impl Primitive for SceneObjectNode {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
+        let gain = ctx.scalar_or_param("gain", 1.0);
         let transform = ctx.inputs.transform("transform").unwrap_or_default();
         let material = ctx.inputs.material("material");
         let mesh = ctx.inputs.slot_of("vertices");
+        let weights = ctx.inputs.slot_of("weights");
         let base_color_map = ctx.inputs.slot_of("base_color_map");
         let normal_map = ctx.inputs.slot_of("normal_map");
         let mr_map = ctx.inputs.slot_of("mr_map");
@@ -140,6 +152,7 @@ impl Primitive for SceneObjectNode {
             transform,
             material,
             mesh,
+            weights,
             base_color_map,
             normal_map,
             mr_map,
@@ -159,6 +172,7 @@ impl Primitive for SceneObjectNode {
             volume_thickness_map,
             instances,
             emission_strength,
+            gain,
         };
 
         ctx.outputs.set_object("object", object);

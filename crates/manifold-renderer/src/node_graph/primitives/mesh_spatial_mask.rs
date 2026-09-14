@@ -11,8 +11,9 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-const SHAPES: &[&str] = &["Band", "Sphere"];
-const SAMPLE_MODES: &[&str] = &["Vertex", "Triangle Centroid"];
+const SHAPES: &[&str] = &["Band", "Sphere", "Half Space"];
+const SAMPLE_MODES: &[&str] = &["Vertex", "Triangle Centroid", "Patch Cell"];
+const PATCH_CELL_COMMON: &str = include_str!("shaders/patch_cell_common.wgsl");
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -32,15 +33,21 @@ struct MeshSpatialMaskUniforms {
     source_offset_x: f32,
     source_offset_y: f32,
     source_offset_z: f32,
+    cell_size: f32,
+    low: f32,
+    high: f32,
+    weights_len: u32,
     dispatch_count: u32,
 }
 
 crate::primitive! {
     name: MeshSpatialMask,
     type_id: "node.mesh_spatial_mask",
-    purpose: "Generate scene-relative Array<f32> weights from an Array<MeshVertex>. A Band uses signed distance abs(dot(p, direction)) - width and a Sphere uses length(p) - width, with p = (sample_position + source_offset) / scene_radius - center. Vertex or reference triangle-centroid sampling is selectable; amount blends the mask against one and invert blends it toward its complement.",
+    purpose: "Generate scene-relative Array<f32> weights from an Array<MeshVertex>. A Band uses signed distance abs(dot(p, direction)) - width, a Sphere uses length(p) - width, and a Half Space uses dot(p, direction) - width, with p = (sample_position + source_offset) / scene_radius - center. Vertex, triangle-centroid, or fixed patch-cell sampling is selectable; amount maps the post-invert mask from low to high and blends that result against one.",
     inputs: {
         in: Array(MeshVertex) required,
+        weights: Array(f32) optional,
+        shape: ScalarF32 optional,
         center_x: ScalarF32 optional,
         center_y: ScalarF32 optional,
         center_z: ScalarF32 optional,
@@ -54,11 +61,14 @@ crate::primitive! {
         source_offset_x: ScalarF32 optional,
         source_offset_y: ScalarF32 optional,
         source_offset_z: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        low: ScalarF32 optional,
+        high: ScalarF32 optional,
     },
     outputs: { weights: Array(f32), },
     params: [
-        ParamDef { name: Cow::Borrowed("shape"), label: "Shape", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: SHAPES },
-        ParamDef { name: Cow::Borrowed("sample_mode"), label: "Sample Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: SAMPLE_MODES },
+        ParamDef { name: Cow::Borrowed("shape"), label: "Shape", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: SHAPES },
+        ParamDef { name: Cow::Borrowed("sample_mode"), label: "Sample Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: SAMPLE_MODES },
         ParamDef { name: Cow::Borrowed("center_x"), label: "Center X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-10.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("center_y"), label: "Center Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-10.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("center_z"), label: "Center Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-10.0, 10.0)), enum_values: &[] },
@@ -72,18 +82,24 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("source_offset_x"), label: "Source Offset X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("source_offset_y"), label: "Source Offset Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("source_offset_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.2), range: Some((0.000001, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("low"), label: "Low", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("high"), label: "High", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Pair `weights` with node.morph_mesh or another weighted mesh response. `sample_mode=Vertex` gives per-vertex wave masks; `Triangle Centroid` gives one coherent value to all three corners of each flat-list triangle. Width and feather are scene-radius units after the center/direction transform. Amount 0 is an exact all-one bypass. This atom has no clock and all float controls are scalar-shadowed.",
+    composition_notes: "Pair `weights` with node.morph_mesh or another weighted mesh response. `sample_mode=Vertex` gives per-vertex wave masks; `Triangle Centroid` gives one coherent value to all three corners of each flat-list triangle; `Patch Cell` quantizes each triangle centroid into a shared fixed spatial cell, so disconnected faces may intentionally share a weight. An incoming `weights` array is multiplied per vertex; an unwired array uses identity weight 1 and a short wired array is rejected. Width, feather, and cell_size are scene-radius units after the center/direction transform. The Half Space shape uses the signed plane distance dot(p, direction) - width. The post-invert mask maps from low to high before amount blends against one. Amount 0 preserves incoming weights exactly (one when unwired). This atom has no clock and all float controls are scalar-shadowed.",
     examples: [],
     picker: { label: "Mesh Spatial Mask", category: Atom },
     summary: "Makes soft band or sphere weights from mesh positions for driving a staged surface response.",
     category: Geometry3D,
     role: Source,
     aliases: ["mesh mask", "spatial mask", "band mask", "sphere mask", "mesh weights"],
+    pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/mesh_spatial_mask_body.wgsl"),
-    input_access: [BufferGather],
+    input_access: [BufferGather, BufferGather],
+    derived_uniforms: ["weights_len:u32"],
+    wgsl_includes: [PATCH_CELL_COMMON],
 }
 
 impl Primitive for MeshSpatialMask {
@@ -104,12 +120,21 @@ impl Primitive for MeshSpatialMask {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let shape = match ctx.params.get("shape") {
-            Some(ParamValue::Enum(v)) => (*v).min(1),
-            _ => 0,
+        if ["in", "weights"].iter().any(|name| ctx.inputs.slot(name).is_some_and(|slot| !ctx.inputs.slot_content_ready(slot))) {
+            ctx.mark_outputs_pending();
+            return;
+        }
+        let shape = match ctx.inputs.scalar("shape").as_ref() {
+            Some(ParamValue::Enum(v)) => (*v).min(2),
+            Some(ParamValue::Float(v)) => v.round().clamp(0.0, 2.0) as u32,
+            _ => match ctx.params.get("shape") {
+                Some(ParamValue::Enum(v)) => (*v).min(2),
+                Some(ParamValue::Float(v)) => v.round().clamp(0.0, 2.0) as u32,
+                _ => 0,
+            },
         };
         let sample_mode = match ctx.params.get("sample_mode") {
-            Some(ParamValue::Enum(v)) => (*v).min(1),
+            Some(ParamValue::Enum(v)) => (*v).min(2),
             _ => 0,
         };
         let center_x = ctx.scalar_or_param("center_x", 0.0);
@@ -125,6 +150,9 @@ impl Primitive for MeshSpatialMask {
         let source_offset_x = ctx.scalar_or_param("source_offset_x", 0.0);
         let source_offset_y = ctx.scalar_or_param("source_offset_y", 0.0);
         let source_offset_z = ctx.scalar_or_param("source_offset_z", 0.0);
+        let cell_size = ctx.scalar_or_param("cell_size", 0.2);
+        let low = ctx.scalar_or_param("low", 0.0);
+        let high = ctx.scalar_or_param("high", 1.0);
         let Some(src) = ctx.inputs.array("in") else {
             return;
         };
@@ -136,6 +164,17 @@ impl Primitive for MeshSpatialMask {
         if count == 0 {
             return;
         }
+        let weights_wired = ctx.inputs.array("weights");
+        if let Some(weights) = weights_wired {
+            let weights_len = (weights.size / 4) as u32;
+            if weights_len < count {
+                ctx.error(format!(
+                    "node.mesh_spatial_mask: incoming weights length {weights_len} is shorter than mesh length {count}"
+                ));
+                return;
+            }
+        }
+        let weights_buf = weights_wired.unwrap_or(src);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = MeshSpatialMaskUniforms {
@@ -154,6 +193,10 @@ impl Primitive for MeshSpatialMask {
             source_offset_x,
             source_offset_y,
             source_offset_z,
+            cell_size,
+            low,
+            high,
+            weights_len: weights_wired.map(|b| (b.size / 4) as u32).unwrap_or(0),
             dispatch_count: count,
         };
         gpu.native_enc.dispatch_compute(
@@ -170,6 +213,11 @@ impl Primitive for MeshSpatialMask {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: weights_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
                     buffer: dst,
                     offset: 0,
                 },
@@ -195,7 +243,14 @@ mod tests {
         assert_eq!(MeshSpatialMask::TYPE_ID, "node.mesh_spatial_mask");
         assert_eq!(MeshSpatialMask::INPUTS[0].ty, PortType::Array(mesh));
         assert!(MeshSpatialMask::INPUTS[0].required);
+        assert_eq!(MeshSpatialMask::INPUTS[1].name, "weights");
+        assert_eq!(
+            MeshSpatialMask::INPUTS[1].ty,
+            PortType::Array(ArrayType::of_known::<f32>())
+        );
+        assert!(!MeshSpatialMask::INPUTS[1].required);
         for name in [
+            "shape",
             "center_x",
             "center_y",
             "center_z",
@@ -209,6 +264,9 @@ mod tests {
             "source_offset_x",
             "source_offset_y",
             "source_offset_z",
+            "cell_size",
+            "low",
+            "high",
         ] {
             let port = MeshSpatialMask::INPUTS
                 .iter()
@@ -289,6 +347,11 @@ mod gpu_tests {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: &src,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
                     buffer: &dst,
                     offset: 0,
                 },
@@ -317,6 +380,10 @@ mod gpu_tests {
             source_offset_x: 0.0,
             source_offset_y: 0.0,
             source_offset_z: 0.0,
+            cell_size: 0.2,
+            low: 0.0,
+            high: 1.0,
+            weights_len: 0,
             dispatch_count: 6,
         }
     }
@@ -380,6 +447,59 @@ mod gpu_tests {
     }
 
     #[test]
+    fn overnight_modifier_mesh_spatial_mask_proves_patch_cells_half_space_and_highlight() {
+        let shared_cell_src = vec![
+            vertex([0.08, 0.08, 0.0]),
+            vertex([0.08, 0.08, 0.0]),
+            vertex([0.08, 0.08, 0.0]),
+            vertex([0.13, 0.11, 0.0]),
+            vertex([0.13, 0.11, 0.0]),
+            vertex([0.13, 0.11, 0.0]),
+        ];
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MeshSpatialMask>()
+            .expect("mask codegen");
+        let mut shared = uniforms(2, 2, 1.0);
+        shared.scale = 2.0;
+        shared.source_offset_x = 0.2;
+        shared.source_offset_y = 0.4;
+        shared.cell_size = 0.2;
+        shared.center_x = 0.2;
+        shared.center_y = 0.2;
+        shared.width = 0.0;
+        shared.feather = 0.0;
+        shared.low = 0.25;
+        shared.high = 2.0;
+        let shared_values = dispatch(&wgsl, &shared_cell_src, shared, "mask-patch-cell");
+        assert_eq!(shared_values[0], 2.0);
+        assert_eq!(shared_values[1], shared_values[0]);
+        assert_eq!(shared_values[2], shared_values[0]);
+        assert_eq!(shared_values[3], shared_values[0]);
+        assert_eq!(shared_values[4], shared_values[3]);
+        assert_eq!(shared_values[5], shared_values[3]);
+
+        let half_space_src = vec![
+            vertex([0.0, -0.5, 0.0]),
+            vertex([0.0, -0.5, 0.0]),
+            vertex([0.0, -0.5, 0.0]),
+            vertex([0.0, 0.5, 0.0]),
+            vertex([0.0, 0.5, 0.0]),
+            vertex([0.0, 0.5, 0.0]),
+        ];
+        let mut half_space = uniforms(2, 0, 1.0);
+        half_space.width = 0.0;
+        half_space.feather = 0.0;
+        half_space.low = 0.25;
+        half_space.high = 2.0;
+        let half_space_values = dispatch(&wgsl, &half_space_src, half_space, "mask-half-space");
+        assert_eq!(half_space_values[0], 2.0);
+        assert_eq!(half_space_values[3], 0.25);
+
+        half_space.amount = 0.0;
+        let identity_values = dispatch(&wgsl, &half_space_src, half_space, "mask-amount-zero");
+        assert!(identity_values.iter().all(|v| *v == 1.0));
+    }
+
+    #[test]
     fn overnight_modifier_mesh_spatial_mask_gather_is_explicit_boundary() {
         let id = NodeInstanceId;
         let region = FusionRegion {
@@ -389,7 +509,7 @@ mod gpu_tests {
                 body: MeshSpatialMask::WGSL_BODY.unwrap(),
                 params: MeshSpatialMask::PARAMS,
                 inputs: vec![InputSource::External(0)],
-                input_access: vec![InputAccess::BufferGather],
+                input_access: vec![InputAccess::BufferGather, InputAccess::BufferGather],
                 node_inputs: MeshSpatialMask::INPUTS,
                 node_outputs: MeshSpatialMask::OUTPUTS,
                 node_includes: MeshSpatialMask::WGSL_INCLUDES,

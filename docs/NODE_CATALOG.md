@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 279 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 282 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -157,7 +157,7 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (74)
+### 3D Geometry (75)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -219,6 +219,7 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | Ripple | `node.ripple_mesh` | Filter | Pushes every vertex along its normal by a sine wave indexed by position along an axis, making a mesh ripple like water or sheet metal. |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
+| Sample Mesh Triangles | `node.sample_mesh_triangles` | Source | Selects a bounded set of real mesh faces for inspection. |
 | Sample Triangle Grid | `node.sample_triangle_grid` | Source | Creates a small bounded lattice of triangle samples for spatial overlays. |
 | Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
 | Scene Array | `node.scene_array` | Source | Generates the corridor of instances around the camera — cells repeat by pattern, forever. |
@@ -404,11 +405,18 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 | Wave Field 3D | `node.wave_field_3d` | Map | Samples a moving sine wave at every 3D point, producing weights for copy displacement or other maps. |
 
+### Uncategorized (2)
+
+| Node | type_id | role | summary |
+|---|---|---|---|
+| — | `system.mesh_input` | — | — |
+| — | `system.mesh_output` | — | — |
+
 ### Effect & generator presets (78)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotWeather` | Apricot Weather | generator | Geometry | 174 |
+| `ApricotWeather` | Apricot Weather | generator | Geometry | 177 |
 | `AutoGain` | Auto Gain | effect | Color | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
@@ -431,7 +439,7 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | `FilmGrain` | Film Grain | effect | Filmic | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
-| `FogBlast` | Fog Blast | generator | Geometry | 88 |
+| `FogBlast` | Fog Blast | generator | Geometry | 89 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
@@ -455,8 +463,8 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 157 |
-| `LightOrbit` | Light Orbit | generator | Geometry | 77 |
+| `Lantern` | Lantern | generator | Geometry | 158 |
+| `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
@@ -467,9 +475,9 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 133 |
-| `SceneStrobe` | Scene Strobe | generator | Geometry | 77 |
-| `Skin` | Skin | generator | Geometry | 60 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 135 |
+| `SceneStrobe` | Scene Strobe | generator | Geometry | 78 |
+| `Skin` | Skin | generator | Geometry | 61 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
@@ -477,13 +485,13 @@ _Generated from the node registry. Do not hand-edit. 279 nodes registered, group
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
-| `TimeScrub` | Time Scrub | generator | Geometry | 77 |
+| `TimeScrub` | Time Scrub | generator | Geometry | 78 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
-| `WaveGrid` | Wave Grid | generator | Geometry | 72 |
-| `WaveRing` | Wave Ring | generator | Geometry | 72 |
-| `WaveSpiral` | Wave Spiral | generator | Geometry | 72 |
+| `WaveGrid` | Wave Grid | generator | Geometry | 73 |
+| `WaveRing` | Wave Ring | generator | Geometry | 73 |
+| `WaveSpiral` | Wave Spiral | generator | Geometry | 73 |
 | `Wireframe` | Wireframe | generator | Geometry | 12 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
 

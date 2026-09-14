@@ -5,6 +5,7 @@ struct U {
     tri_count: u32, vertex_count: u32, history_head: u32, history_len: u32,
     history_capacity: u32, history_stride: u32, _pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
+    brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32> };
 struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @location(1) @interpolate(flat) grid: u32 };
@@ -13,6 +14,45 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @loca
 @group(0) @binding(2) var<storage, read> reference: array<V>;
 @group(0) @binding(3) var<storage, read> incoming: array<V>;
 @group(0) @binding(4) var<storage, read> history: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> mesh_weights: array<f32>;
+@group(0) @binding(6) var<storage, read> scan_weights: array<f32>;
+
+fn targeted(target_element: u32, element: u32) -> bool { return target_element == 0u || target_element == element; }
+fn tone(color: vec4<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(color.rgb * max(gain, 1.0), color.a * clamp(gain, 0.0, 1.0));
+}
+fn grid_gain(world: vec3<f32>) -> f32 {
+    var gain = u.brightness.x;
+    if targeted(u.event_targets.x, 1u) { gain *= u.event_values.y; }
+    if targeted(u.event_targets.y, 1u) {
+        let direction = u32(round(u.scan_values.y));
+        let coordinate = select(select(world.z, world.y, direction / 2u == 1u), world.x, direction / 2u == 0u) / max(u.radius, 0.000001);
+        let axis_position = coordinate * select(-1.0, 1.0, direction % 2u == 0u);
+        let center = (2.0 * u.event_values.w - 1.0) * (1.0 + u.scan_values.x);
+        var distance = abs(axis_position-center) - u.scan_values.x;
+        if u.scan_values.z >= 0.5 { distance = axis_position-center; }
+        var mask = 1.0 - smoothstep(0.0, 0.03, distance);
+        if u.scan_values.z >= 0.5 {
+            if u.event_values.w <= 0.0 { mask = 0.0; }
+            if u.event_values.w >= 1.0 { mask = 1.0; }
+            gain *= 1.0-u.event_values.z + u.event_values.z*mask;
+        } else { gain *= 1.0+u.event_values.z*mask; }
+    }
+    return gain;
+}
+fn appearance(element: u32, triangle: u32) -> f32 {
+    if element == 1u { return grid_gain(vec3<f32>(0.0)); }
+    var gain = u.event_values.x;
+    if element < 5u { gain = u.brightness[element-1u]; }
+    if u.scan_values.w >= 0.5 && u.event_targets.z > 0u && u.tri_count > 0u {
+        let face = source_face_index(triangle,u.event_targets.z,u.tri_count);
+        // The same final composed buffer is bound to the scene object.
+        return gain * mesh_weights[face*3u];
+    }
+    if targeted(u.event_targets.x,element) { gain *= u.event_values.y; }
+    if targeted(u.event_targets.y,element) && triangle*3u < u.event_targets.w { gain *= scan_weights[triangle*3u]; }
+    return gain;
+}
 
 fn hidden() -> O {
     var o: O; o.p = vec4<f32>(-2.0, -2.0, 0.0, 1.0); o.color = vec4<f32>(0.0); o.grid = 0u; return o;
@@ -53,8 +93,7 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
     return incoming[idx].position;
 }
 
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
+fn vertex_body(vi: u32, instance: u32) -> O {
     // Draw the world grid first, behind the diagram marks. A fullscreen
     // triangle has no finite mesh boundary and never inherits object pose.
     if (instance == 0u) {
@@ -141,14 +180,32 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u3
     return line(a, b, vec4<f32>(hsv(u.path_hue), alpha), vi);
 }
 
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
+    var o=vertex_body(vi,instance);
+    if instance==0u || u.tri_count==0u { return o; }
+    let ii=instance-1u;
+    var element=2u;
+    var triangle=0u;
+    if ii < 2u*u.tri_count { triangle=ii%u.tri_count; }
+    else if ii < 3u*u.tri_count { element=3u; triangle=ii-2u*u.tri_count; }
+    else if ii < 4u*u.tri_count { element=4u; triangle=ii-3u*u.tri_count; }
+    else if ii < 4u*u.tri_count+3u { element=1u; }
+    else if ii >= 4u*u.tri_count+6u { element=5u; triangle=((ii-4u*u.tri_count-6u)%u.vertex_count)/3u; }
+    o.color=tone(o.color,appearance(element,triangle));
+    return o;
+}
+
 fn grid_lines(p: vec2<f32>, footprint: vec2<f32>, spacing: f32) -> f32 {
     let cell = p / spacing;
     let distance = abs(fract(cell + vec2<f32>(0.5)) - vec2<f32>(0.5)) * spacing;
     let pixels = distance / footprint;
     let coverage = vec2<f32>(1.0) - smoothstep(vec2<f32>(u.line_width * 0.35), vec2<f32>(u.line_width * 0.35 + 1.0), pixels);
-    // Fade each line family independently before subpixel cells alias.
-    let resolved = vec2<f32>(1.0) - smoothstep(vec2<f32>(0.1), vec2<f32>(0.5), footprint / spacing);
-    return max(coverage.x * resolved.x, coverage.y * resolved.y);
+    // Retire the whole graduation together. Independent axis fades leave
+    // a dense fan of longitudinal lines after the transverse cells vanish
+    // at a grazing camera angle, especially around the vanishing point.
+    let resolved = 1.0 - smoothstep(0.05, 0.2, max(footprint.x, footprint.y) / spacing);
+    return max(coverage.x, coverage.y) * resolved;
 }
 
 fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
@@ -172,9 +229,9 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     let distance = length(world - u.camera_pos_far.xyz);
     let fade_end = u.camera_pos_far.w * 0.9;
     let fade = 1.0 - smoothstep(fade_end * 0.35, fade_end, distance);
-    let horizon = smoothstep(0.0, 0.04, abs(ray.y) / max(length(ray), 0.000001));
+    let horizon = smoothstep(0.02, 0.08, abs(ray.y) / max(length(ray), 0.000001));
     let visible = select(0.0, 1.0, t > 0.0 && t < 1.0 && u.grid != 0u);
-    return vec4<f32>(0.18, 0.35, 0.40, alpha * fade * horizon * visible);
+    return tone(vec4<f32>(0.18, 0.35, 0.40, alpha * fade * horizon * visible),grid_gain(world));
 }
 
 @fragment

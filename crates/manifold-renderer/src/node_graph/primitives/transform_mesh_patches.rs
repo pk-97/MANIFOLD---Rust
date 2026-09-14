@@ -11,6 +11,8 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+const PATCH_CELL_COMMON: &str = include_str!("shaders/patch_cell_common.wgsl");
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TransformMeshPatchesUniforms {
@@ -82,6 +84,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/transform_mesh_patches_body.wgsl"),
     input_access: [Coincident, BufferGather],
+    wgsl_includes: [PATCH_CELL_COMMON],
 }
 
 impl Primitive for TransformMeshPatches {

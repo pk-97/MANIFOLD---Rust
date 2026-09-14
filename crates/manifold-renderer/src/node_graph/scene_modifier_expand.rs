@@ -13,6 +13,8 @@ pub use buffer_budget::{
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 mod compiler;
+pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
+pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
 mod math_view;
 pub use control_state::PreparedModifierControlState;

@@ -180,6 +180,10 @@ impl GpuTexture {
 // ─── GpuBuffer ────────────────────────────────────────────────────────
 
 /// GPU buffer backed by a native Metal buffer.
+/// Cloning retains the same storage and fence-retirement mark, just like
+/// `GpuTexture`. Hosts can share a producer's array with a render view without
+/// copying mesh data; writes still require the normal GPU/CPU synchronization.
+#[derive(Clone)]
 pub struct GpuBuffer {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub size: u64,

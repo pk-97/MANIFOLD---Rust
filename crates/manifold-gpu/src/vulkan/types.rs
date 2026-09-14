@@ -16,6 +16,7 @@ use super::SlotMap;
 /// host-visible allocations populate `mapped_ptr` after `vkMapMemory` at
 /// creation time and stay mapped for the buffer's lifetime (persistent
 /// mapping is the common pattern for per-frame upload buffers).
+#[derive(Clone)]
 pub struct GpuBuffer {
     pub size: u64,
     /// Host-mapped pointer for `HOST_VISIBLE | HOST_COHERENT` allocations.

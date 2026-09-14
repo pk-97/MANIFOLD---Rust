@@ -35,6 +35,25 @@
             .collect()
     }
 
+    fn readback_depth32f(
+        device: &manifold_gpu::GpuDevice,
+        tex: &manifold_gpu::GpuTexture,
+        w: u32,
+        h: u32,
+    ) -> Vec<f32> {
+        let bytes_per_row = w * 4;
+        let total = u64::from(h * bytes_per_row);
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("appearance-depth-readback");
+        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared depth readback buffer");
+        let values: &[f32] = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<f32>(), (w * h) as usize)
+        };
+        values.to_vec()
+    }
+
     fn upload_r32f(
         device: &manifold_gpu::GpuDevice,
         w: u32,
@@ -354,11 +373,16 @@
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let shadow_uniforms = ShadowUniforms { light_view_proj: vp, model: IDENTITY4 };
+        let shadow_uniforms = ShadowUniforms {
+            light_view_proj: vp,
+            model: IDENTITY4,
+            appearance: [1.0, 0.0, 0.0, 0.0],
+        };
         let shadow_bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&shadow_uniforms) },
             GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &vbuf, offset: 0 },
         ];
         let shadow_draw =
             manifold_gpu::GpuEncoder::depth_msaa_draw(&shadow_pipeline, &shadow_bindings, 6, 1);
@@ -507,6 +531,108 @@
                     );
                 }
             }
+        }
+    }
+
+    /// Appearance visibility proof: the same two-triangle geometry is drawn
+    /// twice into a native depth target. With all weights one, both triangles
+    /// write depth. With the left triangle's weights zero, only the right
+    /// triangle remains; the right-side depth is unchanged, proving that the
+    /// visibility input does not alter vertex positions or triangle topology.
+    #[test]
+    fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
+        let device = crate::test_device();
+        let (w, h) = (8u32, 4u32);
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let vertices = [
+            test_mesh_vertex([-1.0, -1.0, 0.5]),
+            test_mesh_vertex([0.0, -1.0, 0.5]),
+            test_mesh_vertex([-1.0, 1.0, 0.5]),
+            test_mesh_vertex([0.0, -1.0, 0.5]),
+            test_mesh_vertex([1.0, -1.0, 0.5]),
+            test_mesh_vertex([1.0, 1.0, 0.5]),
+        ];
+        let vbuf = device.create_buffer_shared(std::mem::size_of_val(&vertices) as u64);
+        unsafe { vbuf.write(0, bytemuck::cast_slice(&vertices)); }
+        let instance = InstanceTransform {
+            pos_scale: [0.0, 0.0, 0.0, 1.0],
+            rot_pad: [0.0, 0.0, 0.0, 0.0],
+        };
+        let ibuf = device.create_buffer_shared(std::mem::size_of_val(&instance) as u64);
+        unsafe { ibuf.write(0, bytemuck::bytes_of(&instance)); }
+        let all_visible = [1.0f32; 6];
+        let left_hidden = [0.0f32, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let all_visible_buf = device.create_buffer_shared(std::mem::size_of_val(&all_visible) as u64);
+        let left_hidden_buf = device.create_buffer_shared(std::mem::size_of_val(&left_hidden) as u64);
+        unsafe {
+            all_visible_buf.write(0, bytemuck::cast_slice(&all_visible));
+            left_hidden_buf.write(0, bytemuck::cast_slice(&left_hidden));
+        }
+        let pipeline = device.create_render_pipeline_depth_only(
+            include_str!("../shaders/shadow_depth.wgsl"),
+            "vs_main",
+            "fs_shadow",
+            GpuTextureFormat::Depth32Float,
+            "appearance-weight-shadow-proof",
+        );
+        let depth_state = device.create_depth_stencil_state(&GpuDepthStencilDesc {
+            compare: GpuCompareFunction::Less,
+            write_enabled: true,
+        });
+
+        let render = |weights: &manifold_gpu::GpuBuffer| {
+            let target = device.create_texture(&GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: GpuTextureFormat::Depth32Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
+                label: "appearance-weight-shadow-proof-depth",
+                mip_levels: 1,
+            });
+            let uniforms = ShadowUniforms {
+                light_view_proj: identity,
+                model: identity,
+                appearance: [1.0, 1.0, 0.0, 0.0],
+            };
+            let bindings = [
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: weights, offset: 0 },
+            ];
+            let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, &bindings, 6, 1);
+            let mut enc = device.create_encoder("appearance-weight-shadow-proof-pass");
+            enc.draw_instanced_depth_only_batch(&target, &depth_state, &[draw], "appearance-weight-shadow-proof");
+            enc.commit_and_wait_completed();
+            readback_depth32f(&device, &target, w, h)
+        };
+
+        let baseline = render(&all_visible_buf);
+        let masked = render(&left_hidden_buf);
+        let left = |pixels: &[f32]| pixels[(2 * w + 1) as usize];
+        let right = |pixels: &[f32]| pixels[(2 * w + 6) as usize];
+        assert!((left(&baseline) - 0.5).abs() < 1e-5, "baseline left triangle did not write depth");
+        assert!((right(&baseline) - 0.5).abs() < 1e-5, "baseline right triangle did not write depth");
+        assert!((left(&masked) - 1.0).abs() < 1e-5, "zero-weight triangle still wrote shadow depth");
+        assert!((right(&masked) - right(&baseline)).abs() < 1e-5, "visible triangle depth changed");
+    }
+
+    fn test_mesh_vertex(position: [f32; 3]) -> MeshVertex {
+        MeshVertex {
+            position,
+            _pad0: 0.0,
+            normal: [0.0, 0.0, 1.0],
+            _pad1: 0.0,
+            uv: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
         }
     }
 

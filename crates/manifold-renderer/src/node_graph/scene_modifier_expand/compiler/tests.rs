@@ -772,7 +772,7 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
             .def
             .nodes
             .iter()
-            .filter(|node| node.type_id == "node.sample_triangle_grid")
+            .filter(|node| node.type_id == "system.mesh_input")
             .count(),
         2
     );
@@ -918,7 +918,7 @@ fn scene_modifier_math_view_scope_changes_the_captured_incoming_route() {
     let isolated_incoming = incoming_source(&isolated);
     let chain_incoming = incoming_source(&chain);
     assert_eq!(
-        isolated_incoming.1, "node.sample_triangle_grid",
+        isolated_incoming.1, "system.mesh_input",
         "ThisModifier starts its incoming route at the sparse source"
     );
     assert_ne!(
