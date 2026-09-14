@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 282 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 283 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -366,10 +366,11 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | Vector Length | `node.vector_length` | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
 | Wrap | `node.wrap` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 
-### Routing (8)
+### Routing (9)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Block Sample | `node.block_sample` | Filter | Pixelates an image at full resolution by repeating each block's centre sample. |
 | Downsample | `node.downsample` | Filter | Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look. |
 | Switch (array) | `node.switch_array` | Filter | Picks one of several incoming lists and passes it through, chosen by a selector number. |
 | Switch (texture) | `node.switch_texture` | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
@@ -412,7 +413,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (83)
+### Effect & generator presets (85)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -429,6 +430,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | `ColorGrade` | Color Grade | effect | Color | 9 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
+| `DataMosh` | Data Mosh | effect | Stylize | 8 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 8 |
 | `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
 | `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
@@ -474,6 +476,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
+| `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |

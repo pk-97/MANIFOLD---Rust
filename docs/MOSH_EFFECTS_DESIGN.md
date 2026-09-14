@@ -56,7 +56,7 @@ Generic Block Sample: `in: Texture2D`, optional scalar `block_size`, `out: Textu
 | First frame / reset / resize | Fresh colour seed; no uninitialised or pre-reset image. Flow invalid until two valid analysis samples in current generation. |
 | Effect bypass / layer idle | Drop or clear retained state through existing chain lifecycle; re-entry fresh. Verify harvesting does not resurrect bypassed history. |
 | Seek / load / export warmup reset | Invalidate colour/mask history, previous analysis pairing and in-flight response generation. |
-| Contiguous clip change | History continues; enabled clip response is applied. Recover gives a clean boundary; Reblock/Reverse/Kick intentionally carry imagery. |
+| Contiguous clip change | A continuing layer/group/master effect instance retains history and applies its enabled clip response. Recover gives a clean boundary; Reblock/Reverse/Kick intentionally carry imagery. A different per-clip effect instance starts fresh through the existing topology rules. |
 | Clip gap | Existing idle clear causes fresh re-entry. |
 | Export | Fixed frame lag and sequential state evolution; reset warmup residue; same frame sequence yields same output independent of waits. |
 | Recover held at 1 | Clean source each frame and clean retained history; release starts from current imagery. |
