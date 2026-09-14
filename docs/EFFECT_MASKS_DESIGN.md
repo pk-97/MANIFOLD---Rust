@@ -1,6 +1,6 @@
 # Effect masks — spatial wet/dry for effect groups
 
-**Status:** IN PROGRESS · 2026-09-14 · Codex. Masks first; audio visualizers follow after this landing.
+**Status:** IN PROGRESS · 2026-09-14 · Codex. Mask engine landed; Modifier Group interaction implemented. Source-only routing, contour and audio visualizers remain follow-on work.
 
 Peter selected all three sources: shapes, the group's incoming image, and another
 layer/generator. "This gives us some very cool sidechain options too."
@@ -15,8 +15,8 @@ layer/generator. "This gives us some very cool sidechain options too."
   targets were mutable across frames; this slice adds owned pixel snapshots.
 - `PresetInstance` already provides graph overrides, manifests, modulation and
   stable EffectId editing. Inspector controls use `param_surface.rs`.
-- Cmd+G reaches `input_host.rs::handle_effect_group`; the current inspector lacks
-  rack-group headers, so membership must become visible as part of this work.
+- Cmd+G reaches `input_host.rs::handle_effect_group`; rack-group headers expose
+  membership and the group modifier picker.
 
 ## 2. Decisions
 
@@ -26,7 +26,15 @@ D1. A mask is an ordinary `PresetInstance` in the existing effect list. Add
    it does not replace the colour image. All other members remain serial effects.
    This reuses card addressing, graph editing and modulation without a second
    parameter or preset ownership system.
-D2. The mask card lives within its group. Cmd+G supports one selected effect.
+D2. Cmd+G wraps one or several selected effects in a **Modifier Group** using
+   the existing EffectGroup model. Without a modifier, effects run normally.
+   The header's **Add Modifier** picker offers Mask — Circle, Rectangle, Gradient,
+   Image and Layer; the ordinary mask card holds its controls inside the group.
+   One mask is supported per group, so the add button disappears until it is removed.
+   The picker captures the group ID; membership resolves on the content thread.
+   Existing generic Group/Masked Group labels display as Modifier Group; custom
+   names and serialized group data remain intact. Cmd+Shift+G ungroups as before.
+   The mask card lives within its group.
    Add-mask creates a group when required or attaches to the existing group.
    Removing the mask clears its reference; undo restores both. Ungroup removes
    the mask card and restores it on undo. Duplicating a layer remaps the reference.
@@ -71,8 +79,9 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
   per frame. Projects containing masks conservatively disable occlusion render-skip
   so potential sidechain sources advance. Narrow dependency tracking is a future
   optimization; presentation still skips occluded pixels.
-- `inspector-add-mask.json` covers the context menu, group header and undo after
-  card exit animation. `group_mask_circle_moves_over_infrared_without_rebuild`
+- `inspector-add-mask.json` covers the card context menu and undo after card exit
+  animation; `inspector-modifier-group.json` covers the group picker and undo/redo.
+  Input-host tests cover grouping one or several selected effects. `group_mask_circle_moves_over_infrared_without_rebuild`
   checks moving shape coverage against the standalone Infrared output and emits
   a two-position render. Source-only routing remains phase 2.
 

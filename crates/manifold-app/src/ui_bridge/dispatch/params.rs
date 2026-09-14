@@ -533,36 +533,47 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ctx.ui.inspector.clear_effect_selection(&mut ctx.ui.tree);
             DispatchResult::handled()
         }
-        ParamsAction::CardRightClicked(_) | ParamsAction::ModifierCardClicked(_) => {
+        ParamsAction::CardRightClicked(_) | ParamsAction::ModifierCardClicked(_)
+        | ParamsAction::EffectGroupAddModifierClicked(_) => {
             // Handled by UIRoot::try_open_dropdown (opens the card context menu)
             // — should not reach dispatch.
             DispatchResult::handled()
         }
-        ParamsAction::AddMask {
-            target: gpt,
-            selected_indices,
-            preset_id,
-            source_layer,
-        } => {
-            let Some(GraphTarget::Effect(_)) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                ctx.project,
-            ) else {
-                return DispatchResult::handled();
-            };
-            let target = match effective_tab {
-                InspectorTab::Master => EffectTarget::Master,
-                InspectorTab::Layer | InspectorTab::Group => {
-                    let Some(layer_id) = active_layer.clone() else {
+        ParamsAction::AddMask { preset_id, source_layer, .. }
+        | ParamsAction::AddEffectGroupMask { preset_id, source_layer, .. } => {
+            let target = match action {
+                ParamsAction::AddEffectGroupMask { group_id, .. } => {
+                    if ctx.project.settings.master_effect_groups.as_ref()
+                        .is_some_and(|groups| groups.iter().any(|group| group.id == *group_id))
+                    {
+                        EffectTarget::Master
+                    } else if let Some(layer) = ctx.project.timeline.layers.iter().find(|layer| {
+                        layer.effect_groups.as_ref()
+                            .is_some_and(|groups| groups.iter().any(|group| group.id == *group_id))
+                    }) {
+                        EffectTarget::Layer { layer_id: layer.layer_id.clone() }
+                    } else {
+                        return DispatchResult::handled();
+                    }
+                }
+                ParamsAction::AddMask { target: gpt, .. } => {
+                    let Some(GraphTarget::Effect(_)) = resolve_graph_target(
+                        gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+                    ) else {
                         return DispatchResult::handled();
                     };
-                    EffectTarget::Layer { layer_id }
+                    match effective_tab {
+                        InspectorTab::Master => EffectTarget::Master,
+                        InspectorTab::Layer | InspectorTab::Group => {
+                            let Some(layer_id) = active_layer.clone() else {
+                                return DispatchResult::handled();
+                            };
+                            EffectTarget::Layer { layer_id }
+                        }
+                        InspectorTab::Clip => return DispatchResult::handled(),
+                    }
                 }
-                InspectorTab::Clip => return DispatchResult::handled(),
+                _ => unreachable!(),
             };
             let effect_type = manifold_core::PresetTypeId::from_string(preset_id.clone());
             let mut mask = manifold_core::preset_definition_registry::create_default(&effect_type);
@@ -581,11 +592,14 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 );
                 mask.graph = Some(graph);
             }
-            let cmd = manifold_editing::commands::effect_groups::AddGroupMaskCommand::new(
-                target,
-                selected_indices.clone(),
-                mask,
-            );
+            use manifold_editing::commands::effect_groups::AddGroupMaskCommand;
+            let cmd = match action {
+                ParamsAction::AddEffectGroupMask { group_id, .. } =>
+                    AddGroupMaskCommand::for_group(target, group_id.clone(), mask),
+                ParamsAction::AddMask { selected_indices, .. } =>
+                    AddGroupMaskCommand::new(target, selected_indices.clone(), mask),
+                _ => unreachable!(),
+            };
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             DispatchResult::structural()
         }

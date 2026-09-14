@@ -5,19 +5,37 @@ fn rack_group_for_effect<'a>(groups: &'a [RackGroupConfig], effect_id: &EffectId
     groups.iter().find(|group| group.member_ids.iter().any(|id| id == effect_id))
 }
 
-fn rack_group_header_view(name: &str) -> View {
-    View::row(0.0)
+fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
+    crate::param_surface::stable_key(&format!("inspector.effect_group.add_modifier:{group_id}"))
+}
+
+fn rack_group_header_view(group: &RackGroupConfig) -> View {
+    let mut view = View::row(4.0)
         .fill_w()
         .h(Sizing::Fixed(InspectorCompositePanel::RACK_HEADER_H))
         .cross_align(crate::chrome::Align::Center)
         .child(
-            View::label(format!("▾ {name}"))
+            View::label(format!("▾ {}", group.name))
                 .fill_w()
                 .fill_h()
                 .font(color::FONT_LABEL)
                 .text_color(color::TEXT_DIMMED_C32)
                 .inert(),
-        )
+        );
+    if !group.has_mask {
+        view = view.child(
+            View::button("+ Add Modifier")
+                .w(Sizing::Fixed(104.0))
+                .fill_h()
+                .style(crate::chrome::components::button_secondary_style())
+                .on_click(PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(
+                    group.id.clone(),
+                )))
+                .name(super::GROUP_ADD_MODIFIER_NAME)
+                .key(rack_group_add_modifier_key(&group.id)),
+        );
+    }
+    view
 }
 
 impl InspectorCompositePanel {
@@ -493,6 +511,7 @@ impl InspectorCompositePanel {
         self.add_master_effect_btn = None;
         self.add_layer_effect_btn = None;
         self.add_modifier_btn = None;
+        self.group_add_modifier_btns.clear();
 
         // Range truthfulness (the single invariant the rest of this panel leans
         // on): a sub-panel's (first_node, node_count) must describe what it built
@@ -644,11 +663,18 @@ impl InspectorCompositePanel {
                             && previous_group != Some(group_id)
                             && let Some(group) = groups.iter().find(|candidate| &candidate.id == group_id)
                         {
-                            chrome::materialize(
+                            let header_ids = chrome::materialize(
                                 tree,
-                                &rack_group_header_view(&group.name),
+                                &rack_group_header_view(group),
                                 Rect::new(inner_x, cy, inner_w, Self::RACK_HEADER_H),
                             );
+                            if !group.has_mask
+                                && let Some((_, button_id)) = header_ids
+                                    .into_iter()
+                                    .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
+                            {
+                                self.group_add_modifier_btns.push((button_id, group.id.clone()));
+                            }
                             cy += Self::RACK_HEADER_H;
                         }
                         previous_group = group;
@@ -757,11 +783,18 @@ impl InspectorCompositePanel {
                             && previous_group != Some(group_id)
                             && let Some(group) = groups.iter().find(|candidate| &candidate.id == group_id)
                         {
-                            chrome::materialize(
+                            let header_ids = chrome::materialize(
                                 tree,
-                                &rack_group_header_view(&group.name),
+                                &rack_group_header_view(group),
                                 Rect::new(inner_x, cy, inner_w, Self::RACK_HEADER_H),
                             );
+                            if !group.has_mask
+                                && let Some((_, button_id)) = header_ids
+                                    .into_iter()
+                                    .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
+                            {
+                                self.group_add_modifier_btns.push((button_id, group.id.clone()));
+                            }
                             cy += Self::RACK_HEADER_H;
                         }
                         previous_group = group;
