@@ -628,6 +628,7 @@ impl PresetRuntime {
             effect_nodes: vec![segment],
             modifier_preview_routes: Vec::new(),
             math_views: Vec::new(),
+            shared_arrays: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
             modifier_events: None,
@@ -736,12 +737,13 @@ impl PresetRuntime {
         // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
+        for (resource,buffer) in &g.shared_arrays { backend.pre_bind_array(*resource,buffer.clone()); }
         crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
             .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
         for view in &mut g.math_views {
-            view.install_device(std::sync::Arc::clone(&device), width, height, format)?;
+            view.install_device(g.executor.backend(),std::sync::Arc::clone(&device), width, height, format)?;
         }
         Ok(())
     }

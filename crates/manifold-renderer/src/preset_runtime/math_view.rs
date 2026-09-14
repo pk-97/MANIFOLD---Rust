@@ -14,6 +14,8 @@ pub(super) struct MathViewRuntime {
     pub variants: [PresetRuntime; 2],
     presentation: Option<Presentation>,
     last_active_scope: Option<usize>,
+    pub(super) events: super::math_view_events::MathEvents,
+    shared_resources: [Vec<(ResourceId, ResourceId)>; 2],
 }
 
 struct Presentation {
@@ -23,7 +25,7 @@ struct Presentation {
     sampler: manifold_gpu::GpuSampler,
 }
 
-fn invalid(detail: impl Into<String>) -> JsonGeneratorLoadError {
+pub(super) fn invalid(detail: impl Into<String>) -> JsonGeneratorLoadError {
     JsonGeneratorLoadError::SceneModifier(SceneModifierExpandError::InvalidRecipe {
         path: "mathView".into(),
         detail: detail.into(),
@@ -79,13 +81,26 @@ pub(super) fn prepare_views(
             fused,
             Some((&modifier.id, MathViewScope::WithinChain)),
         )?;
+        let controls = manifold_core::scene_modifier_math_view::CONTROLS
+            .iter()
+            .map(|(name, _, default, _, _)| control(name).map(|node| (*name, node, *default)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let variants = [isolated, chained];
+        let events =
+            super::math_view_events::MathEvents::prepare(modifier, parent, &variants, controls)?;
+        let shared_resources = [
+            shared_resources(parent, &variants[0], modifier)?,
+            shared_resources(parent, &variants[1], modifier)?,
+        ];
         views.push(MathViewRuntime {
             modifier_id: modifier.id.clone(),
             mode_node,
             scope_node,
-            variants: [isolated, chained],
+            variants,
             presentation: None,
             last_active_scope: None,
+            events,
+            shared_resources,
         });
     }
     Ok(views)
@@ -106,12 +121,14 @@ impl MathViewRuntime {
 
     pub fn install_device(
         &mut self,
+        parent: &dyn crate::node_graph::Backend,
         device: std::sync::Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
     ) -> Result<(), JsonGeneratorLoadError> {
         crate::node_graph::primitives::RenderMeshDiagram::prewarm_pipelines(&device);
+        self.bind_shared_resources(parent)?;
         for variant in &mut self.variants {
             variant.install_generator_device(
                 std::sync::Arc::clone(&device),
@@ -126,11 +143,15 @@ impl MathViewRuntime {
 
     pub fn resize(
         &mut self,
+        parent: &dyn crate::node_graph::Backend,
         device: &GpuDevice,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
     ) {
+        self.bind_shared_resources(parent)
+            .expect("previously admitted shared mesh resources");
+        self.events.clear();
         for variant in &mut self.variants {
             variant.resize(device, width, height);
         }
@@ -139,6 +160,13 @@ impl MathViewRuntime {
                 .expect("previously admitted Math View output format"),
         );
         self.last_active_scope = None;
+    }
+
+    pub fn resources_ready(&self, parent: &crate::node_graph::execution::Executor) -> bool {
+        self.shared_resources
+            .iter()
+            .flatten()
+            .all(|(source, _)| parent.resource_content_ready(*source))
     }
 
     pub fn render(
@@ -193,6 +221,82 @@ impl MathViewRuntime {
             "math_view.composite",
         );
     }
+}
+
+impl MathViewRuntime {
+    fn bind_shared_resources(
+        &mut self,
+        parent: &dyn crate::node_graph::Backend,
+    ) -> Result<(), JsonGeneratorLoadError> {
+        for (variant, resources) in self.variants.iter_mut().zip(&self.shared_resources) {
+            variant.shared_arrays.clear();
+            for &(source, destination) in resources {
+                let buffer = parent
+                    .slot_for(source)
+                    .and_then(|slot| parent.array_buffer(slot))
+                    .ok_or_else(|| invalid("parent mesh export buffer is absent"))?;
+                variant.shared_arrays.push((destination, buffer.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn shared_resources(
+    parent: &PresetRuntime,
+    variant: &PresetRuntime,
+    modifier: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
+) -> Result<Vec<(ResourceId, ResourceId)>, JsonGeneratorLoadError> {
+    let mut resources = Vec::new();
+    for frame in &modifier.mesh_frames {
+        let export_id = crate::node_graph::scene_modifier_expand::math_resource_node_id(
+            &modifier.id,
+            &frame.target,
+            "export",
+        );
+        let export = parent
+            .graph
+            .instance_by_node_id(&export_id)
+            .ok_or_else(|| invalid("parent mesh export node is absent"))?;
+        // Seed nodes retain the first slice's stable generated identity.
+        let input = variant
+            .graph
+            .instance_by_node_id(&sample_node_id(&modifier.id, &frame.target))
+            .filter(|id| {
+                variant
+                    .graph
+                    .get_node(*id)
+                    .is_some_and(|node| node.node.type_id().as_str() == "system.mesh_input")
+            })
+            .ok_or_else(|| invalid("view mesh input node is absent"))?;
+        for port in ["vertices", "weights"] {
+            let source = parent
+                .plan
+                .steps()
+                .iter()
+                .find(|s| s.node == export)
+                .and_then(|s| s.inputs.iter().find(|(name, _)| *name == port))
+                .map(|(_, r)| *r)
+                .ok_or_else(|| invalid("parent export resource is absent"))?;
+            let destination = variant
+                .plan
+                .steps()
+                .iter()
+                .find(|s| s.node == input)
+                .and_then(|s| s.outputs.iter().find(|(name, _)| *name == port))
+                .map(|(_, r)| *r)
+                .ok_or_else(|| invalid("view input resource is absent"))?;
+            resources.push((source, destination));
+        }
+    }
+    Ok(resources)
+}
+
+fn sample_node_id(
+    modifier: &NodeId,
+    target: &manifold_core::scene_modifier_preset::SceneNodeRef,
+) -> NodeId {
+    crate::node_graph::scene_modifier_expand::math_sample_node_id(modifier, target)
 }
 
 #[repr(C)]

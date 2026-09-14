@@ -27,6 +27,7 @@ type PortAddress = (u32, String);
 type EndpointKey = (SceneNodeRef, String);
 type CloneKey = (u32, Option<SceneNodeRef>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
+pub(crate) mod math_events;
 
 #[cfg(test)]
 mod conformance;
@@ -295,6 +296,11 @@ fn prepare_scene_modifiers_impl(
             None
         };
         let leaves = builder.append_instance(owner, instance, &targets)?;
+        if math_view.is_none() && manifold_core::scene_modifier_math_view::has_math_view_controls(&instance.graph) {
+            for value in [SceneContextValue::TriggerCount, SceneContextValue::TriggerBaseline] {
+                builder.context(owner, instance, None, &targets, value)?;
+            }
+        }
         if let Some(before) = capture_before {
             builder.capture_math_view_result(instance, &targets, before)?;
         }
@@ -365,7 +371,15 @@ fn prepare_scene_modifiers_impl(
     }
     // This also rejects collisions between generated IDs and authored host IDs.
     FlatSceneIndex::build(&flat)?;
-    let prepared = bindings::seed_local_defaults(&flat)?;
+    let mut prepared = bindings::seed_local_defaults(&flat)?;
+    let routes = routes::build_routes(owner, &prepared, &leaf_maps, &target_maps)?;
+    math_events::prepare(owner, &mut prepared, &index, &routes, math_view)?;
+    if prepared.nodes.len() > 65_536 || prepared.wires.len() > 262_144 {
+        return Err(SceneModifierExpandError::CapacityExceeded {
+            path: "expandedGraph".into(),
+            detail: "expanded graph including Math View exceeds 65536 nodes or 262144 wires".into(),
+        });
+    }
     let graph = prepared
         .clone()
         .into_graph(registry)
@@ -373,7 +387,6 @@ fn prepare_scene_modifiers_impl(
     validate_binding_leaves(&prepared, &graph)?;
     crate::node_graph::validation::validate(&graph)
         .map_err(|error| invalid("expandedGraph", error.to_string()))?;
-    let routes = routes::build_routes(owner, &prepared, &leaf_maps, &target_maps)?;
     Ok(PreparedSceneModifierGraph {
         def: prepared,
         routes,
@@ -891,7 +904,7 @@ impl Builder<'_> {
         include_grid: bool,
     ) -> Result<(), SceneModifierExpandError> {
         for (suffix, _, _, _, _) in manifold_core::scene_modifier_math_view::CONTROLS {
-            if matches!(*suffix, "mode" | "scope") || (*suffix == "grid" && !include_grid) {
+            if !matches!(*suffix, "grid" | "fragments" | "ghosts" | "vectors" | "trails" | "density" | "line_width" | "geometry_hue" | "path_hue" | "grid_brightness" | "fragments_brightness" | "ghosts_brightness" | "vectors_brightness" | "trails_brightness" | "pulse_target" | "scan_target" | "connect_mesh") || (*suffix == "grid" && !include_grid) {
                 continue;
             }
             let source = controls.get(*suffix).ok_or_else(|| {

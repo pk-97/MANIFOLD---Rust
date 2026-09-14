@@ -123,6 +123,13 @@ pub fn plan_array_allocations(
                 ));
             }
 
+            // Explicit host inputs borrow already allocated scene resources.
+            // Never replace that shared storage with an independently owned
+            // allocation. Ordinary produced outputs retain their sizing rules.
+            if node_type == "system.mesh_input" && prebound.contains_key(resource) {
+                continue;
+            }
+
             let zero_init = atomic_outputs.contains(port_name);
             let alias_input_port = aliased_pairs
                 .iter()
@@ -399,6 +406,34 @@ mod tests {
             .expect("feedback allocation");
         assert_eq!(allocation.bytes, bytes);
         assert_eq!(prebound[&prebound_resource].bytes, bytes);
+    }
+
+    #[test]
+    fn math_view_borrowed_arrays_keep_owner_storage_and_capacity() {
+        let mut graph = Graph::new();
+        let registry = crate::node_graph::persistence::PrimitiveRegistry::with_builtin();
+        let source = graph.add_node(registry.construct("system.mesh_input").unwrap());
+        let mask = graph.add_node(Box::new(crate::node_graph::primitives::MeshSpatialMask::new()));
+        graph.connect((source, "vertices"), (mask, "in")).unwrap();
+        let output = graph.add_node(registry.construct("system.mesh_output").unwrap());
+        graph.connect((source, "vertices"), (output, "vertices")).unwrap();
+        graph.connect((mask, "weights"), (output, "weights")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let outputs = &plan.steps().iter().find(|step| step.node == source).unwrap().outputs;
+        let mut prebound = AHashMap::default();
+        for (port, resource) in outputs {
+            let bytes = if *port == "vertices" { 1536 * 64 } else { 4 * 9000 };
+            prebound.insert(*resource, ArrayStorage { root: *resource, bytes });
+        }
+        let planned = plan_array_allocations(&graph, &plan, (64, 64), &prebound).unwrap();
+        for (resource, storage) in &prebound {
+            assert_eq!(planned.storage[resource], *storage);
+            assert!(planned.actions.iter().all(|action| !matches!(action,
+                ArrayAllocationAction::Allocate(allocation) if allocation.resource == *resource)));
+        }
+        assert_eq!(planned.actions.len(), 1);
+        assert!(matches!(planned.actions[0], ArrayAllocationAction::Allocate(allocation)
+            if allocation.node == mask && allocation.bytes == 1536 * 4));
     }
 
     fn scatter_graph() -> (Graph, NodeInstanceId) {

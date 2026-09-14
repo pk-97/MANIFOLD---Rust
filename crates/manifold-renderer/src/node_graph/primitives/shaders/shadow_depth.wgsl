@@ -28,11 +28,14 @@ struct Vertex {
     tangent: vec4<f32>,
 };
 
-// 128 bytes: the light's view-projection and this object's model matrix.
+// 144 bytes: the light's view-projection, this object's model matrix, and
+// appearance visibility controls.
 // Bound per (caster, object) draw via GpuBinding::Bytes at @binding(0).
 struct ShadowUniforms {
     light_view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
+    // x: appearance gain, y: 1 when per-vertex weights are wired.
+    appearance: vec4<f32>,
 };
 
 struct Instance {
@@ -43,6 +46,7 @@ struct Instance {
 @group(0) @binding(0) var<uniform> su: ShadowUniforms;
 @group(0) @binding(1) var<storage, read> verts: array<Vertex>;
 @group(0) @binding(2) var<storage, read> instances: array<Instance>;
+@group(0) @binding(3) var<storage, read> weights: array<f32>;
 
 // Bit-for-bit the same as render_scene.wgsl's euler_xyz — forked, not
 // shared, per this file's header convention.
@@ -72,20 +76,36 @@ fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
     return rz * ry * rx;
 }
 
+struct ShadowVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) appearance_weight: f32,
+};
+
 @vertex
 fn vs_main(
     @builtin(vertex_index) vid: u32,
     @builtin(instance_index) iid: u32,
-) -> @builtin(position) vec4<f32> {
+) -> ShadowVsOut {
     let v = verts[vid];
     let inst = instances[iid];
     let rot = euler_xyz(inst.rot_pad.xyz);
     let inst_pos = rot * (v.position * inst.pos_scale.w) + inst.pos_scale.xyz;
     let world = su.model * vec4<f32>(inst_pos, 1.0);
-    return su.light_view_proj * world;
+    var out: ShadowVsOut;
+    out.clip_pos = su.light_view_proj * world;
+    if su.appearance.y > 0.5 {
+        out.appearance_weight = weights[vid];
+    } else {
+        out.appearance_weight = 1.0;
+    }
+    return out;
 }
 
 // Void fragment — writes no colour. Paired with a colourless render pass
 // (GpuEncoder::draw_instanced_depth_only) so the only output is depth.
 @fragment
-fn fs_shadow() {}
+fn fs_shadow(in: ShadowVsOut) {
+    if su.appearance.x * in.appearance_weight <= 0.0 {
+        discard;
+    }
+}

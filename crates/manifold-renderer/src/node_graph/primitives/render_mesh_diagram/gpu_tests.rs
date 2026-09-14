@@ -53,6 +53,8 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             grid: enabled,
             inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
+            brightness: [1.0;4],
+            event_values: [1.0,1.0,0.0,0.0],
             ..bytemuck::Zeroable::zeroed()
         };
         let mut encoder = device.create_encoder("world-grid-proof");
@@ -85,6 +87,8 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
                     buffer: &buffer,
                     offset: 0,
                 },
+                GpuBinding::Buffer { binding: 5, buffer: &buffer, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: &buffer, offset: 0 },
             ],
             18,
             1,

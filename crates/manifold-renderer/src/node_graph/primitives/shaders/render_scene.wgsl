@@ -46,7 +46,7 @@ struct Vertex {
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
 // aligned throughout — every member is already a vec4/mat4 multiple, so no
-// manual padding is needed. Total 736 bytes (four mat4x4s + twenty-four
+// manual padding is needed. Total 800 bytes (four mat4x4s + thirty-four
 // vec4s; stale as "272"/"320"/"448"/"464"/"480" in older comments — grew
 // with the P3 atmosphere fields, the P2 prev_view_proj/prev_model pair, the
 // VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field,
@@ -143,6 +143,8 @@ struct Uniforms {
     // x: fog_density (0 = no fog), y: height_falloff (0 = uniform),
     // z/w: reserved.
     fog_params: vec4<f32>,
+    // x: appearance gain, y: 1 when per-vertex weights are wired.
+    appearance: vec4<f32>,
     // rgb: ambient/sky tint multiplier on the ambient term (1,1,1 = neutral).
     ambient_tint: vec4<f32>,
     // VOLUMETRIC_LIGHT_DESIGN.md D1 (P1 plumbing only — no march kernel
@@ -402,6 +404,10 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // shadow_spp > 0 dispatch writes this texture, BUG-majv). Consumed in
 // exactly ONE textureLoad (I-TL3) in fs_pbr's light loop.
 @group(0) @binding(45) var rt_sun_tint: texture_2d<f32>;
+// Optional per-vertex appearance weights. Unwired draws bind their existing
+// vertex buffer here as an unused ABI dummy; the vertex shader never reads it
+// unless `u.appearance.y` is set.
+@group(0) @binding(46) var<storage, read> weights: array<f32>;
 
 // RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
@@ -752,6 +758,7 @@ struct VsOut {
     // w == 0 = no authored tangent → derived-frame fallback. @location(5)
     // because EMIT_VELOCITY takes 3 and 4.
     @location(5) world_tangent: vec4<f32>,
+    @location(6) appearance_weight: f32,
 };
 
 // Instance TRS applies FIRST, the object group's `model` (transform_n)
@@ -812,7 +819,24 @@ fn vs_main(
     // direction is selected, not branched (uniform control flow).
     let t_world = normalize((u.model * vec4<f32>(rot * (v.tangent.xyz * msign), 0.0)).xyz);
     out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w);
+    if u.appearance.y > 0.5 {
+        out.appearance_weight = weights[vid];
+    } else {
+        out.appearance_weight = 1.0;
+    }
     return out;
+}
+
+// Appearance weights are a coverage/brightness control. Values below one
+// reduce alpha (and therefore coverage where alpha-to-coverage is active),
+// while values above one brighten HDR output without exceeding opacity 1.
+fn apply_appearance(rgb: vec3<f32>, alpha: f32, weight: f32) -> vec4<f32> {
+    let level = u.appearance.x * weight;
+    return vec4<f32>(rgb * max(level, 1.0), alpha * clamp(level, 0.0, 1.0));
+}
+
+fn appearance_discard(weight: f32) -> bool {
+    return u.appearance.x * weight <= 0.0;
 }
 
 // IMPORT_FIDELITY_DESIGN.md D4/F-P2: tangent-space (glTF-convention) normal
@@ -1249,6 +1273,9 @@ fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
+    if appearance_discard(in.appearance_weight) {
+        discard;
+    }
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
@@ -1257,7 +1284,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     // untouched (alpha contract). exposure_ev = 0 (PINHOLE default) → ×1,
     // byte-identical to pre-lens builds (I2/I5).
     let rgb = apply_fog(albedo.rgb + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
-    return vec4<f32>(rgb, albedo.a);
+    return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }
 
 // Phong — Lambert diffuse + Blinn-Phong specular, summed over every
@@ -1266,6 +1293,9 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
+    if appearance_discard(in.appearance_weight) {
+        discard;
+    }
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
@@ -1292,7 +1322,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
-    return vec4<f32>(rgb, albedo.a);
+    return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }
 
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: `KHR_materials_sheen`'s Charlie
@@ -1427,6 +1457,9 @@ const RT_TRANSMISSION_WRAP: f32 = 0.5;
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
+    if appearance_discard(in.appearance_weight) {
+        discard;
+    }
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
@@ -1882,7 +1915,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit, in.world_pos) * exp2(u.scene_params.z);
-    return vec4<f32>(rgb, albedo.a);
+    return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }
 
 // Cel — Lambert N·L quantized into cel_bands discrete steps, summed over
@@ -1890,6 +1923,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
+    if appearance_discard(in.appearance_weight) {
+        discard;
+    }
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
@@ -1917,5 +1953,5 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
-    return vec4<f32>(rgb, albedo.a);
+    return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }

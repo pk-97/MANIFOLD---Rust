@@ -7,10 +7,15 @@
 
 use std::path::{Path, PathBuf};
 
-use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+use manifold_core::effect_graph_def::{
+    BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
+};
 use manifold_core::effects::{ParamId, ParameterDriver};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
+use manifold_core::scene_modifier_preset::{
+    SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{
     Beats, Bpm, LayerId, NodeId, PresetTypeId,
@@ -32,6 +37,10 @@ const STATIC_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/gltf/cc0__japanese_thistle_cirsium_japonicum.glb"
 );
+const NESTED_MULTIMATERIAL_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+));
 
 fn imported_layer(name: &str, layer_id: &str, index: i32, path: &Path) -> Layer {
     let (graph, report) = assemble_import_graph(path)
@@ -63,6 +72,107 @@ fn journey_project() -> Project {
         0,
         Path::new(MUSHROOM_FIXTURE),
     ));
+    project
+}
+
+fn math_view_project() -> Project {
+    let mut graph: EffectGraphDef =
+        serde_json::from_str(NESTED_MULTIMATERIAL_V2).expect("nested math fixture parses");
+    fn bake_left_material(nodes: &mut [EffectGraphNode]) {
+        for node in nodes {
+            if node.node_id == "left_pbr" {
+                node.params.insert(
+                    "baked_look".into(),
+                    SerializedParamValue::Bool { value: true },
+                );
+            }
+            if let Some(group) = node.group.as_mut() {
+                bake_left_material(&mut group.nodes);
+            }
+        }
+    }
+    bake_left_material(&mut graph.nodes);
+    graph.version = 3;
+    let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
+    )))
+    .expect("Vortex Fragments recipe parses");
+    let mut frames = Vec::new();
+    for container in &graph.nodes {
+        let Some(group) = &container.group else {
+            continue;
+        };
+        let source = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.cube_mesh")
+            .expect("cube mesh source");
+        let object = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.scene_object")
+            .expect("scene object target");
+        let transform = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.transform_3d")
+            .expect("transform source");
+        let scope = vec![container.node_id.clone()];
+        frames.push(SceneMeshReferenceFrame {
+            target: SceneNodeRef {
+                scope: scope.clone(),
+                node: object.node_id.clone(),
+            },
+            source: SceneNodeRef {
+                scope,
+                node: source.node_id.clone(),
+            },
+            source_definition_hash:
+                manifold_core::scene_source_identity::scene_source_definition_hash(&graph, source)
+                    .expect("cube source hash"),
+            source_offset: ["pos_x", "pos_y", "pos_z"].map(|param| {
+                match transform.params.get(param) {
+                    Some(SerializedParamValue::Float { value }) => f64::from(*value),
+                    _ => 0.0,
+                }
+            }),
+            scene_radius: 3.0,
+        });
+    }
+    let modifier_id = NodeId::new("vortex_math_view");
+    graph.scene_modifiers.push(SceneModifierInstanceDef {
+        id: modifier_id.clone(),
+        scene: SceneNodeRef {
+            scope: Vec::new(),
+            node: NodeId::new("scan_render"),
+        },
+        targets: SceneTargetSelection::AllObjects,
+        mesh_frames: frames,
+        graph: Box::new(recipe),
+    });
+    graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &graph,
+        &modifier_id,
+    )
+    .expect("reconcile Vortex Fragments controls")
+    .graph;
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(120.0);
+    project.settings.output_width = 320;
+    project.settings.output_height = 180;
+    let mut layer = Layer::new_generator(
+        "Math Grid".into(),
+        PresetTypeId::new("PhotoscanBaseline"),
+        0,
+    );
+    layer.layer_id = LayerId::new("math-grid");
+    layer.gen_params_or_init().graph = Some(graph);
+    layer.gen_params_or_init().refresh_manifest_from_graph();
+    let mut clip = manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0));
+    clip.layer_id = layer.layer_id.clone();
+    layer.clips.push(clip);
+    project.timeline.layers.push(layer);
     project
 }
 
@@ -157,7 +267,11 @@ pub(super) fn warm_project(
     ct.run_warmup(&command_rx, &command_tx, state_tx);
 }
 
-fn capture_output(ct: &crate::content_thread::ContentThread, path: &Path) -> (Vec<u8>, usize) {
+fn capture_output_impl(
+    ct: &crate::content_thread::ContentThread,
+    path: &Path,
+    require_geometry: bool,
+) -> (Vec<u8>, usize) {
     let device = ct
         .content_pipeline
         .native_gpu_for_tests()
@@ -191,13 +305,59 @@ fn capture_output(ct: &crate::content_thread::ContentThread, path: &Path) -> (Ve
         .count();
     std::fs::write(path, encode_rgba8_png(&rgba, texture.width, texture.height))
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-    assert!(
-        rgba.chunks_exact(4).any(|pixel| pixel != &rgba[..4]),
-        "uniform output {:?} is not geometry; capture {}",
-        &rgba[..4],
-        path.display()
-    );
+    if require_geometry {
+        assert!(
+            rgba.chunks_exact(4).any(|pixel| pixel != &rgba[..4]),
+            "uniform output {:?} is not geometry; capture {}",
+            &rgba[..4],
+            path.display()
+        );
+    }
     (rgba, nonzero)
+}
+
+fn capture_output(ct: &crate::content_thread::ContentThread, path: &Path) -> (Vec<u8>, usize) {
+    capture_output_impl(ct, path, true)
+}
+
+fn capture_output_allow_uniform(
+    ct: &crate::content_thread::ContentThread,
+    path: &Path,
+) -> (Vec<u8>, usize) {
+    capture_output_impl(ct, path, false)
+}
+
+fn set_generator_param(
+    ct: &mut crate::content_thread::ContentThread,
+    layer_id: &LayerId,
+    param_id: &str,
+    value: f32,
+) {
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let old = ct
+        .engine
+        .project_mut()
+        .expect("math journey project")
+        .with_preset_graph_mut(&target, |instance| {
+            instance
+                .params
+                .contains(param_id)
+                .then(|| instance.get_base_param(param_id))
+        })
+        .flatten()
+        .unwrap_or_else(|| panic!("missing generator parameter {param_id}"));
+    assert!(!ct.handle_command(ContentCommand::Execute(Box::new(
+        manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+            target,
+            param_id.to_string(),
+            old,
+            value,
+        ),
+    ))));
+    assert!(
+        ct.graph_edit_diagnostic.is_none(),
+        "parameter edit rejected"
+    );
 }
 
 #[test]
@@ -413,4 +573,135 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
         before_mapping, after_mapping,
         "changed mapping changes the observed output"
     );
+}
+
+#[test]
+fn math_view_grid_app_control_journey() {
+    let output_dir = PathBuf::from("target/journey-proofs/math-grid");
+    std::fs::create_dir_all(&output_dir).expect("math grid artifact directory");
+    let layer_id = LayerId::new("math-grid");
+    let mut ct = headless_content_thread(Project::default(), 320, 180);
+    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    ct.handle_command(ContentCommand::LoadProject(Box::new(math_view_project())));
+    assert!(
+        ct.graph_edit_diagnostic.is_none(),
+        "saved Math View project rejected: {:?}",
+        ct.graph_edit_diagnostic
+    );
+    let ids = modifier_ids(
+        ct.engine.project().expect("math journey project"),
+        &layer_id,
+    );
+    assert_eq!(ids.len(), 1, "one Vortex Fragments modifier is playing");
+    let modifier_id = ids[0].clone();
+    let modifier = generator_graph(
+        ct.engine.project().expect("math journey project"),
+        &layer_id,
+    )
+    .scene_modifiers
+    .iter()
+    .find(|modifier| modifier.id == modifier_id)
+    .expect("Vortex Fragments modifier");
+    assert_eq!(
+        modifier.mesh_frames.len(),
+        2,
+        "fixture captures both mesh objects"
+    );
+    let control_ids: Vec<(String, String)> =
+        ["fragments", "ghosts", "vectors", "trails", "mode", "grid"]
+            .iter()
+            .map(|local| {
+                (
+                    (*local).into(),
+                    host_binding(
+                        ct.engine.project().expect("math journey project"),
+                        &layer_id,
+                        &modifier_id,
+                        &format!("math_view_{local}"),
+                    ),
+                )
+            })
+            .collect();
+    let control_id = |local: &str| {
+        control_ids
+            .iter()
+            .find(|(name, _)| name == local)
+            .map(|(_, id)| id.as_str())
+            .expect("resolved Math View host binding")
+    };
+    ct.timer.set_frame_clocked(true);
+    warm_project(&mut ct, &state_tx);
+    ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
+    ct.tick_frame(&state_tx);
+    assert!(
+        ct.graph_edit_diagnostic.is_none(),
+        "Math View runtime graph invalid: {:?}",
+        ct.graph_edit_diagnostic
+    );
+
+    for control in ["fragments", "ghosts", "vectors", "trails"] {
+        set_generator_param(&mut ct, &layer_id, control_id(control), 0.0);
+    }
+    set_generator_param(&mut ct, &layer_id, control_id("mode"), 1.0);
+    set_generator_param(&mut ct, &layer_id, control_id("grid"), 0.0);
+    ct.tick_frame(&state_tx);
+    let (_, math_off_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-off.png"));
+    assert_eq!(
+        math_off_nonzero, 0,
+        "Math mode with all diagrams off is black"
+    );
+
+    set_generator_param(&mut ct, &layer_id, control_id("grid"), 1.0);
+    ct.tick_frame(&state_tx);
+    let (_, grid_on_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-on.png"));
+    assert!(
+        grid_on_nonzero > 0,
+        "Grid on produces visible diagram output"
+    );
+
+    set_generator_param(&mut ct, &layer_id, control_id("grid"), 0.0);
+    ct.tick_frame(&state_tx);
+    let (_, grid_off_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-off-after-edit.png"));
+    assert_eq!(grid_off_nonzero, 0, "Grid off returns Math mode to black");
+
+    ct.handle_command(ContentCommand::Undo);
+    ct.tick_frame(&state_tx);
+    let (_, undo_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-undo.png"));
+    assert!(undo_nonzero > 0, "undo restores Grid output");
+    ct.handle_command(ContentCommand::Redo);
+    ct.tick_frame(&state_tx);
+    let (_, redo_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-redo.png"));
+    assert_eq!(redo_nonzero, 0, "redo restores Grid off");
+
+    let saved_path = output_dir.join("math-grid.manifold");
+    manifold_io::saver::save_project_v1(
+        ct.engine.project().expect("math journey project"),
+        &saved_path,
+    )
+    .expect("save math grid journey");
+    let reopened =
+        manifold_io::loader::load_project(&saved_path).expect("reopen math grid journey");
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let reopened_grid = reopened
+        .graph_target_owner(&target)
+        .expect("reopened math generator")
+        .params
+        .get(control_id("grid"))
+        .expect("reopened grid parameter")
+        .base;
+    assert_eq!(reopened_grid, 0.0, "save/load preserves Grid off");
+
+    ct.handle_command(ContentCommand::LoadProject(Box::new(reopened)));
+    warm_project(&mut ct, &state_tx);
+    ct.timer.set_frame_clocked(true);
+    ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
+    ct.tick_frame(&state_tx);
+    let (_, loaded_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-off-after-load.png"));
+    assert_eq!(loaded_nonzero, 0, "loaded Grid off output remains black");
 }

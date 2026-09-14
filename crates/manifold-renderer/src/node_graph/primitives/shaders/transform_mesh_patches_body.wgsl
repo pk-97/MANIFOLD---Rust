@@ -36,8 +36,7 @@ fn body(idx: u32, count: u32, e_in: Element, separation: f32, rotation: f32, orb
     let safe_scale = max(abs(scale), 1e-6);
     let reference_centroid = (buf_reference[base].position + buf_reference[base + 1u].position + buf_reference[base + 2u].position) / 3.0 + source_offset;
     let centroid_normalized = reference_centroid / safe_scale;
-    let safe_cell = max(abs(cell_size), 1e-6);
-    let cell_center_normalized = floor(centroid_normalized / safe_cell + vec3<f32>(0.5)) * safe_cell;
+    let cell_center_normalized = patch_cell_center(centroid_normalized, cell_size);
     let cell_center_world = cell_center_normalized * safe_scale;
     let axis = safe_unit(rotate_basis(vec3<f32>(0.0, 1.0, 0.0), yaw, pitch), vec3<f32>(0.0, 1.0, 0.0));
     let radial_normal = safe_unit(cell_center_world, vec3<f32>(1.0, 0.0, 0.0));

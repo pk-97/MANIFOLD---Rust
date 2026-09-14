@@ -51,6 +51,10 @@ struct DiagramUniforms {
     _pad: u32,
     inv_view_proj: [[f32; 4]; 4],
     camera_pos_far: [f32; 4],
+    brightness: [f32;4],
+    event_values: [f32;4],
+    scan_values: [f32;4],
+    event_targets: [u32;4],
 }
 
 #[repr(C)]
@@ -82,9 +86,39 @@ crate::primitive! {
         geometry_hue: ScalarF32 optional,
         path_hue: ScalarF32 optional,
         radius: ScalarF32 optional,
+        mesh_weights: Array(f32) optional,
+        scan_weights: Array(f32) optional,
+        grid_brightness: ScalarF32 optional,
+        fragments_brightness: ScalarF32 optional,
+        ghosts_brightness: ScalarF32 optional,
+        vectors_brightness: ScalarF32 optional,
+        trails_brightness: ScalarF32 optional,
+        pulse_gain: ScalarF32 optional,
+        pulse_target: ScalarF32 optional,
+        scan_target: ScalarF32 optional,
+        connect_mesh: ScalarF32 optional,
+        scan_amount: ScalarF32 optional,
+        scan_progress: ScalarF32 optional,
+        scan_width: ScalarF32 optional,
+        scan_direction: ScalarF32 optional,
+        scan_mode: ScalarF32 optional,
     },
     outputs: { color: Texture2D },
     params: [
+        ParamDef { name: Cow::Borrowed("grid_brightness"), label: "grid brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fragments_brightness"), label: "fragments brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("ghosts_brightness"), label: "ghosts brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("vectors_brightness"), label: "vectors brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("trails_brightness"), label: "trails brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("pulse_gain"), label: "pulse gain", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("pulse_target"), label: "pulse target", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("scan_target"), label: "scan target", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("connect_mesh"), label: "connect mesh", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("scan_amount"), label: "scan amount", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("scan_progress"), label: "scan progress", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("scan_width"), label: "scan width", ty: ParamType::Float, default: ParamValue::Float(0.2), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("scan_direction"), label: "scan direction", ty: ParamType::Float, default: ParamValue::Float(2.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("scan_mode"), label: "scan mode", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("grid"), label: "Grid", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragments"), label: "Fragments", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("ghosts"), label: "Ghosts", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -117,7 +151,7 @@ crate::primitive! {
     },
 }
 
-const SHADER: &str = include_str!("shaders/render_mesh_diagram.wgsl");
+const SHADER: &str = concat!(include_str!("shaders/sample_face_common.wgsl"), "\n", include_str!("shaders/render_mesh_diagram.wgsl"));
 const CAPTURE_SHADER: &str = include_str!("shaders/history_capture.wgsl");
 
 impl RenderMeshDiagram {
@@ -195,7 +229,10 @@ impl Primitive for RenderMeshDiagram {
         let capacity = ((current.size.min(reference.size).min(incoming.size)
             / std::mem::size_of::<MeshVertex>() as u64) as u32)
             .min(MAX_VERTICES);
-        let tri_count = (density * density * density).min(capacity / 3);
+        let mesh_weights=ctx.inputs.array("mesh_weights");
+        let scan_weights=ctx.inputs.array("scan_weights");
+        let mesh_triangles=mesh_weights.map_or(0,|b|(b.size/12) as u32);
+        let tri_count = (density * density * density).min(capacity / 3).min(if mesh_triangles>0 {mesh_triangles}else{u32::MAX});
         let vertex_count = tri_count * 3;
         if vertex_count != self.last_vertex_count {
             self.history_head = 0;
@@ -210,7 +247,7 @@ impl Primitive for RenderMeshDiagram {
                 value
                     .as_scalar()
                     .map(|scalar| scalar > 0.5)
-                    .or_else(|| match value {
+                    .or(match value {
                         ParamValue::Bool(enabled) => Some(*enabled),
                         _ => None,
                     })
@@ -254,6 +291,10 @@ impl Primitive for RenderMeshDiagram {
             _pad: 0,
             inv_view_proj,
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
+            brightness: ["grid_brightness","fragments_brightness","ghosts_brightness","vectors_brightness"].map(|n|ctx.scalar_or_param(n,1.0).max(0.0)),
+            event_values: [ctx.scalar_or_param("trails_brightness",1.0).max(0.0),ctx.scalar_or_param("pulse_gain",1.0).max(0.0),ctx.scalar_or_param("scan_amount",0.0),ctx.scalar_or_param("scan_progress",0.0)],
+            scan_values: [ctx.scalar_or_param("scan_width",0.2),ctx.scalar_or_param("scan_direction",2.0),ctx.scalar_or_param("scan_mode",0.0),ctx.scalar_or_param("connect_mesh",0.0)],
+            event_targets: [ctx.scalar_or_param("pulse_target",0.0).round().clamp(0.0,5.0) as u32,ctx.scalar_or_param("scan_target",0.0).round().clamp(0.0,5.0) as u32,mesh_triangles,scan_weights.map_or(0,|b|(b.size/4) as u32)],
         };
         let gpu = ctx.gpu_encoder();
         self.ensure_history(gpu.device);
@@ -325,6 +366,8 @@ impl Primitive for RenderMeshDiagram {
                     buffer: history,
                     offset: 0,
                 },
+                GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
             ],
             18,
             instance_count.max(1),

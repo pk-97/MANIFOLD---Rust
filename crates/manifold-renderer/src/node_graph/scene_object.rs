@@ -52,6 +52,8 @@ pub struct SceneObject {
     /// unwired — consumers skip the draw the same way an unresolved
     /// `mesh_k` slot is skipped today (`render_scene.rs:2437`).
     pub mesh: Option<Slot>,
+    /// Optional per-vertex appearance weights consumed by `render_scene`.
+    pub weights: Option<Slot>,
     /// `Texture2D` slot — base colour map.
     pub base_color_map: Option<Slot>,
     /// `Texture2D` slot — normal map.
@@ -94,6 +96,8 @@ pub struct SceneObject {
     /// the material, so a skin driving `emissive_map` can be dimmed without
     /// touching the underlying material emission factor. Default 1.0.
     pub emission_strength: f32,
+    /// Per-object appearance gain. Default 1.0.
+    pub gain: f32,
 }
 
 // Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 4): `SceneObject` stays
@@ -126,6 +130,7 @@ mod tests {
             transform: Transform::default(),
             material: None,
             mesh: None,
+            weights: None,
             base_color_map: None,
             normal_map: None,
             mr_map: None,
@@ -145,6 +150,7 @@ mod tests {
             volume_thickness_map: None,
             instances: None,
             emission_strength: 1.0,
+            gain: 1.0,
         };
         assert!(!obj.visible);
         assert!(obj.mesh.is_none());
@@ -159,6 +165,7 @@ mod tests {
             transform: Transform::default(),
             material: None,
             mesh: Some(Slot(0)),
+            weights: None,
             base_color_map: Some(Slot(1)),
             normal_map: None,
             mr_map: None,
@@ -178,6 +185,7 @@ mod tests {
             volume_thickness_map: None,
             instances: Some(Slot(2)),
             emission_strength: 1.0,
+            gain: 1.0,
         };
         let copy = obj;
         // Both usable — proves Copy, not just Clone (a move would make

@@ -1,6 +1,6 @@
 # Scene modifier Math View — perform the structure behind the scene
 
-**Status:** IN PROGRESS · 2026-09-13 · Codex. Native Vortex Fragments slice implemented; broader mathematical presentation tracked in BUG-fgfk.
+**Status:** IN PROGRESS · 2026-09-14 · Codex. Native grid repair and connected graphics events implemented (BUG-ywdj, BUG-657u); broader mathematical presentation tracked in BUG-fgfk.
 **Prerequisites:** unified scene modifier recipes, parameter surface, native Metal.
 **Execution contract:** DESIGN_DOC_STANDARD.md sections 5–6; current AGENTS.md controls validation and delivery.
 
@@ -21,25 +21,29 @@ Paths in the renderer rows are relative to `crates/manifold-renderer/src`.
 
 ## 2. Decisions
 
-**D1. Evaluate the authored graph on sparse triangles.** Add a bounded triangle-grid source and a diagram rasterizer. Neither contains modifier mathematics. The sparse build uses the existing compiler, fusion, value routes and native backend. Rejected: a CPU or shader copy of Vortex's formula; it would drift from edits and composed mask/blend stages.
+**D1. Evaluate the authored graph on sampled real faces.** The parent selects at most 512 complete original triangles per object, evenly distributed by face index. Both scopes borrow those samples and evaluate the authored graph through the existing compiler, fusion, value routes and native backend. The sampler and diagram share the same integer face-index mapping. Synthetic triangles cannot establish mesh correspondence and are no longer the Math View source. Rejected: copying Vortex's deformation formula into a separate CPU or shader implementation.
 
-**D2. Keep the live scene graph intact.** A persistent derived runtime substitutes sparse initial vertex endpoints and renders the chosen modifier's output. Original source nodes remain available to binding validation but are dead in the sparse execution plan. Rejected: pinning additional full-mesh intermediates in the live graph; that could defeat fusion and increase the memory pressure that prompted this work.
+**D2. Share appearance weights with the live scene.** A persistent derived runtime substitutes sampled initial vertex endpoints and renders the chosen modifier's output. A connected event writes one float per original vertex, consumed by the scene object and borrowed by both diagram scopes. It never changes positions. Multiple connected cards multiply their masks; every connected diagram reads the final composed weights for its object. Original source nodes are dead in the derived execution plan. No additional full `MeshVertex` intermediate or deformation split is introduced.
 
 **D3. Native controls use existing data.** `scene_modifier_math_view` in core enriches eligible Vortex recipes with shared root `node.value` nodes (`__math_view_<suffix>`), local macro IDs (`math_view_<suffix>`) and `section: "Math View"`. Existing host reconciliation supplies stable addresses, undo and modulation. No new serialized fields or UI addressing protocol. Enrichment is additive and idempotent; reserved-ID collisions fail before mutation.
 
 **D4. Paths in this slice are motion trails.** They record actual evaluated sample positions over frame time, with bounded history and reset on discontinuity. They are labelled Motion trails. A parameter sweep is a different visualization and is deferred explicitly; a trail must never claim to be an Orbit sweep.
 
-**D5. Scope is explicit.** This modifier starts the selected vertex stage from its original sparse reference; Within chain includes preceding vertex modifiers. Both use the scene camera and object transforms. Sample source positions subtract the saved source offset so the modifier uses the same calibrated coordinate frame. All selected objects are represented.
+**D5. Scope is explicit.** This modifier starts the selected vertex stage from sampled original faces; Within chain includes preceding vertex modifiers. Both use the scene camera and object transforms. Sample positions retain the original attributes and coordinates; the authored patch transform applies the saved calibration. All selected objects are represented.
 
-**Cost:** sparse evaluations add shader dispatches, bounded geometry/history storage and output textures. They do not remove the main scene's prepared allocations. Scene mode dispatches no diagram work. This is not a fix for the project's existing memory usage. Measure the native slice; no frame-rate claim follows from compilation alone.
+**D6. Events affect appearance only.** Each element has independent brightness/opacity, neutral at 1. A manual Pulse plus a triggered beat envelope scales brightness above 1 and opacity below 1; negative Pulse Strength can hide marks. Stroke width, mark dimensions, and positions never receive pulse values. Scan defaults to Highlight, with progressive Reveal available. Amount, Progress, Width, six axis directions, Target, and duration in beats are ordinary automatable controls. Pulse Trigger and Scan Trigger opt into the existing modifier-scoped event stream; events restart on clip edges. Both reuse `BeatEnvelopeState`, the implementation behind `node.envelope_beats`, including baseline suppression, live duration, seek cancellation and completed-event latching.
+
+**D7. Connect to Mesh means reference patch groups.** The mask and Vortex use the same reference-centroid cell quantization, cell size, scene radius and source offset. A cell can group disconnected faces; it is not a topology-derived fracture. One reference patch transform per object is required for this qualified Vortex path. When connected, a mesh-targeted event affects the real patch group and all associated diagram marks together; Grid-only targets remain independent. The parent event clock runs in Scene, Math and Overlay, so changing mode or scope cannot restart it. Transport reset clears it. Graphics-only operation keeps the scene neutral. Raster color uses brightness/alpha coverage; zero weight also discards depth and shadow coverage. Partial shadow coverage remains binary. RT remains unsupported for the existing vertex-modifier path.
+
+**Cost:** each eligible modifier adds one 4-byte weight per original vertex, plus at most 1536 sampled vertices per object. The parent owns these buffers; both views retain the same native handles without copies. Local graphics-only scan masks, deformation intermediates and history stay bounded by the sample capacity. Shared producer readiness gates derived rendering during loading. Pure masks/samplers skip unchanged work. Scene mode dispatches no diagram work, but retains event evaluation and shared resource preparation. Existing scene allocations remain; no frame-rate claim is made.
 
 ## 3. Seams
 
-Core exports `enrich_math_view_controls(&mut EffectGraphDef) -> Result<bool, String>` and `has_math_view_controls(&EffectGraphDef) -> bool`, plus the shared control vocabulary. New controls: Mode (Scene/Math/Overlay), Grid, Fragments, Ghosts, Vectors, Motion trails, Density (2–8), Line Width, Geometry Hue, Path Hue, Scope (This modifier/Within chain).
+Core exports `enrich_math_view_controls(&mut EffectGraphDef) -> Result<bool, String>` and `has_math_view_controls(&EffectGraphDef) -> bool`, plus the shared control vocabulary. Controls include Mode (Scene/Math/Overlay), five element toggles and brightness levels, Pulse and Scan controls described in D6, Connect to Mesh, Density (2–8), Line Width, Geometry Hue, Path Hue, and Scope (This modifier/Within chain). The bundled recipe carries the same metadata; saved recipes receive additive enrichment on load.
 
 The compiler exports `MathViewScope { ThisModifier, WithinChain }` and `prepare_scene_modifier_math_view(owner: &EffectGraphDef, registry: &PrimitiveRegistry, modifier_id: &NodeId, scope: MathViewScope) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError>`. It shares normal preparation and preserves its route/binding-source contracts. Canonical data is never modified by rendering.
 
-`node.sample_triangle_grid` outputs at most 1536 `MeshVertex` items. Radius and source offsets preserve the captured scene frame; density changes active geometry without reallocating.
+`node.sample_mesh_triangles` outputs at most 1536 `MeshVertex` items; inactive triangles are zero. Density changes active face selection without reallocating. `system.mesh_output` keeps parent exports live; `system.mesh_input` receives those retained buffers before allocation and executes without a copy. The older standalone `node.sample_triangle_grid` remains available outside this path.
 
 `node.render_mesh_diagram` consumes original reference, incoming and current vertices, Camera and optional Transform. It draws fragments, incoming ghosts, one displacement arrow per triangle centroid, grid/axes and bounded temporal trails. Default density is 3 (27 triangles per object), adjustable from 2 to 8. Fragment axes follow the actual evaluated triangle. Projection uses the scene's final Camera wire, including any lens processor, and the existing scene model-matrix function. The grid is one shared world XZ plane at Y=0, reconstructed from that camera's inverse view-projection. It has no finite square boundary and does not inherit object rotation, scale, translation or sample radius. World-unit lines at 1, 10 and 100 units fade before aliasing. Each graduation fades as a whole using the largest projected footprint, preventing a surviving longitudinal fan after transverse lines become unresolved; distance and grazing-angle fades soften the horizon. The grid remains an orientation reference, not a depth-occluding scene floor. Only the first deterministic object diagram receives the shared Grid control. Every other diagram has an unwired typed Bool(false); toggle resolution honors the scalar wire first, then Bool/Float parameters, preventing duplicate grids and making Grid Off effective across all objects. Pipelines prewarm through the existing startup cache and runtime installation. GPU-written buffers are never read immediately by the CPU.
 
@@ -47,11 +51,11 @@ The parent `PresetRuntime` owns derived runtimes and output targets, forwards va
 
 ## 4. Invariants and enforcement
 
-- Scene preparation/output is unchanged with all modes Scene: structural comparison and GPU pixel parity.
+- Neutral connected controls preserve scene output; prepared appearance masks add resources even in Scene mode. Non-neutral connected events intentionally affect Scene output.
 - Sparse graph uses authored stage nodes and bindings: compiler graph tests; live-plan check excludes GLTF mesh/texture loads and `render_scene`.
-- Geometry cost is bounded independently of imported vertex counts: array-allocation plan test and sample-source capacity test.
+- Derived geometry cost is bounded independently of imported vertex counts; the shared appearance mask costs 4 bytes per original vertex per modifier. Allocation tests must prove borrowed buffers keep parent storage and capacity.
 - New controls preserve authored data and values: collision/idempotence tests, host reconciliation and save/reload tests.
-- Parameter edits affect the real output: focused native runtime proof with nonempty/Orbit-change assertions, Scene pixel parity, and a two-object all-marks-off → Grid-on → Grid-off sequence in fused and standalone plans. Blank assertions examine RGB because Math output alpha is opaque. The native world-grid proof covers perspective, orthographic and a shallow-camera horizon; preview artifacts were observed by the lead. Camera routing is structurally preserved. The new application ContentCommand/undo/save-reload journey remains unverified under BUG-ywdj after fixture setup failures; runtime proofs do not establish that additional path.
+- Parameter edits affect the real output: native runtime proof with nonempty/Orbit-change assertions, Scene pixel parity, shared buffer identity, connected pulse/reveal, partial face selection, clip retriggers, and mode/scope cuts. The two-object Grid Off sequence covers fused and standalone plans. Blank assertions examine RGB because Math output alpha is opaque. The world-grid proof covers perspective, orthographic and a shallow-camera horizon. The application `math_view_grid_app_control_journey` passes ContentCommand edits, undo/redo and save/reload; its Grid-on and reloaded Grid-off captures were observed by the lead, along with the native two-object Math preview. These are headless native application proofs, not a manual card-click session.
 - History clears across discontinuities: renderer history-reset proof and parent lifecycle propagation.
 - No new locks or per-frame geometry allocation: fixed sample capacity, reusable history and MSAA resources after first use, focused code review and clippy. No frame-rate claim is made.
 
@@ -65,7 +69,7 @@ Acceptance gesture: change Orbit while Math is selected, observe sample fragment
 
 ## 6. Decided — do not reopen
 
-1. Same authored mathematics, independent sparse geometry.
+1. Same authored mathematics, real sampled faces and shared reference-group weights.
 2. Normal parameter surface and commands.
 3. Native GPU output, including exports.
 4. Trails are temporal history, not parameter sweeps.
@@ -75,4 +79,4 @@ Acceptance gesture: change Orbit while Math is selected, observe sample fragment
 
 Exact parameter sweeps, equation typography/highlighting, annotated spatial-mask graphs and additional modifier families follow the first native slice and its measured behavior. They are part of the broader mathematical presentation direction, not capabilities of this slice. Ordered Recon is the next recipe to qualify after Vortex demonstrates the shared path.
 
-The qualified Vortex graph is stateless. Derived views start their own temporal state on activation; reproducing the inactive history of user-added simulation or trigger-latch nodes requires separate qualification.
+The qualified Vortex deformation graph is stateless. Derived views start their own geometry history on activation; the parent graphics-event clock continues independently. Reproducing the inactive history of user-added simulation or trigger-latch nodes requires separate qualification.

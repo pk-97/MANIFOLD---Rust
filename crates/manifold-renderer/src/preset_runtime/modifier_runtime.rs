@@ -282,6 +282,7 @@ impl PresetRuntime {
     pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
         for view in &mut self.math_views {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
+                view.events.carry_from(&previous.events);
                 for (variant, previous) in view.variants.iter_mut().zip(&mut previous.variants) {
                     variant.carry_modifier_control_state_from(previous);
                 }

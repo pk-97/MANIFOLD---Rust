@@ -68,6 +68,20 @@ impl PreparedModifierBufferBudget {
                 nodes.insert(runtime);
             }
         }
+        // Generated appearance masks and real-face samples belong to the
+        // modifier even though they have no authored parameter route.
+        for modifier in &owner.scene_modifiers {
+            let nodes = scenes.get_mut(&modifier.scene).expect("scene inserted above");
+            for frame in &modifier.mesh_frames {
+                for role in ["weights", "samples"] {
+                    let id = super::compiler::math_events::resource_node_id(&modifier.id, &frame.target, role);
+                    let target = fused_members.get(&id).unwrap_or(&id);
+                    if let Some(runtime) = graph.instance_by_node_id(target) {
+                        nodes.insert(runtime);
+                    }
+                }
+            }
+        }
         Ok(Self { scenes })
     }
 
