@@ -12,6 +12,7 @@ use crate::app::SelectionState;
 use crate::dialog_path_memory::{self, DialogContext};
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
+use crate::input_host::automation;
 
 pub(super) fn dispatch_editing(
     action: &EditingAction,
@@ -352,6 +353,65 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
+        EditingAction::ContextAutomationCopy(target, param_id, _beat) => {
+            automation::set_lane_context(selection, target, param_id);
+            automation::copy_selected(project, selection);
+            DispatchResult::handled()
+        }
+        EditingAction::ContextAutomationCut(target, param_id, _beat) => {
+            automation::set_lane_context(selection, target, param_id);
+            let mut needs_rebuild = false;
+            automation::cut_selected(project, selection, content_tx, &mut needs_rebuild);
+            DispatchResult::structural()
+        }
+        EditingAction::ContextAutomationPaste(target, param_id, beat) => {
+            automation::set_lane_context(selection, target, param_id);
+            let mut needs_rebuild = false;
+            automation::paste(project, selection, content_tx, *beat, &mut needs_rebuild);
+            DispatchResult::structural()
+        }
+        EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
+            automation::set_lane_context(selection, target, param_id);
+            let mut needs_rebuild = false;
+            automation::duplicate_selected(
+                project,
+                selection,
+                content_tx,
+                ui.viewport.grid_step(),
+                &mut needs_rebuild,
+            );
+            DispatchResult::structural()
+        }
+        EditingAction::ContextSelectAllAutomation(target, param_id) => {
+            automation::select_all_in_lane(project, selection, target, param_id);
+            DispatchResult::structural()
+        }
+        EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
+            automation::set_lane_context(selection, target, param_id);
+            let mut needs_rebuild = false;
+            automation::delete_selected(project, selection, content_tx, &mut needs_rebuild);
+            DispatchResult::structural()
+        }
+        EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
+            let mut needs_rebuild = false;
+            automation::insert_shape(
+                project,
+                selection,
+                content_tx,
+                target,
+                param_id,
+                *beat,
+                *shape,
+                &mut needs_rebuild,
+            );
+            DispatchResult::structural()
+        }
+        EditingAction::AutomationPointEditValue(_, _, _)
+        | EditingAction::AutomationPointEditTime(_, _, _) => {
+            // The app text-input owner intercepts these exact typed actions.
+            DispatchResult::handled()
+        }
+
         EditingAction::LayerHeaderRightClicked(_) => {
             // Handled by UIRoot::try_open_dropdown — should not reach dispatch
             DispatchResult::handled()
@@ -510,7 +570,8 @@ pub(super) fn dispatch_editing(
         // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)
         EditingAction::ClipRightClicked(_)
         | EditingAction::TrackRightClicked(_, _)
-        | EditingAction::AutomationLaneRightClicked(..) => DispatchResult::handled(),
+        | EditingAction::AutomationLaneRightClicked(..)
+        | EditingAction::ContextOpenAutomationShapePicker(..) => DispatchResult::handled(),
 
         // Generic dropdown fallback (should not normally fire)
         EditingAction::DropdownSelected(index) => {

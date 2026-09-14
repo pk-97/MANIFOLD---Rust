@@ -911,7 +911,7 @@ pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 // Engaging automation mode grows a content track by one strip per enabled
 // lane — `CoordinateMapper::layer_height` is the single place this height
 // actually applies (never re-derived elsewhere).
-pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 112.0;
+pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 160.0;
 /// Strip background — a subtle recess so the lane reads as its own row
 /// within the taller track, distinct from the routing-form area above it.
 pub const AUTOMATION_STRIP_BG: Color32 = Color32::new(20, 20, 22, 255);

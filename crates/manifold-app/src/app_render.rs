@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_ui::{ClipAction, LayerAction, MarkerAction, ParamsAction, ProjectAction, RootAction, TransportAction};
+use manifold_ui::{ClipAction, EditingAction, LayerAction, MarkerAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
@@ -1372,6 +1372,22 @@ impl Application {
                         crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                         11.0,
                     );
+                    continue;
+                }
+                PanelAction::Editing(EditingAction::AutomationPointEditValue(
+                    target,
+                    param_id,
+                    beat,
+                )) => {
+                    crate::app::automation_point_input::begin_value(self, target, param_id, *beat);
+                    continue;
+                }
+                PanelAction::Editing(EditingAction::AutomationPointEditTime(
+                    target,
+                    param_id,
+                    beat,
+                )) => {
+                    crate::app::automation_point_input::begin_time(self, target, param_id, *beat);
                     continue;
                 }
                 PanelAction::Root(RootAction::BeginParamTextInput {

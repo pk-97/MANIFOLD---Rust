@@ -163,6 +163,7 @@ impl ParamCardPanel {
         self.row_host.driver_config_ids = Vec::new();
         self.row_host.driver_config_ids.resize_with(n, || None);
         self.row_host.audio_btn_ids = vec![None; n];
+        self.row_host.automation_btn_ids = vec![None; n];
         self.row_host.audio_configs = Vec::new();
         self.row_host.audio_configs.resize_with(n, || None);
         self.row_host.audio_trigger_mode_badge_ids = vec![None; n];
@@ -1179,6 +1180,7 @@ impl ParamCardPanel {
         self.row_host.ableton_trim_ids[i] = None;
         self.row_host.audio_trim_ids[i] = None;
         self.row_host.ableton_config_ids[i] = None;
+        self.row_host.automation_btn_ids[i] = None;
         self.row_host.mapping_chevron_ids[i] = None;
         self.row_host.toggle_ids[i] = None;
         self.row_host.mod_tab_ids[i] = Vec::new();
@@ -1309,6 +1311,7 @@ impl ParamCardPanel {
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
                 label_width,
+                self.automation_entry_supported,
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                 !self.compact,
                 Some(param_row_key_base(&info.id)),
@@ -1332,6 +1335,7 @@ impl ParamCardPanel {
             self.row_host.driver_config_ids[i] = row.driver_config;
             self.row_host.ableton_config_ids[i] = row.ableton_config;
             self.row_host.audio_btn_ids[i] = Some(row.audio_btn);
+            self.row_host.automation_btn_ids[i] = row.automation_btn;
             self.row_host.audio_configs[i] = row.audio_config;
             self.row_host.mod_tab_ids[i] = row.mod_tabs;
             self.sync_mod_tab_ink(tree, i);
@@ -1759,6 +1763,7 @@ impl ParamCardPanel {
                         FONT_SIZE,
                         true,
                         label_width,
+                        self.automation_entry_supported,
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                         !self.compact,
                         Some(param_row_key_base(&info.id)),
@@ -1781,6 +1786,7 @@ impl ParamCardPanel {
                     self.row_host.driver_config_ids[i] = row.driver_config;
                     self.row_host.ableton_config_ids[i] = row.ableton_config;
                     self.row_host.audio_btn_ids[i] = Some(row.audio_btn);
+                    self.row_host.automation_btn_ids[i] = row.automation_btn;
                     self.row_host.audio_configs[i] = row.audio_config;
                     self.row_host.mod_tab_ids[i] = row.mod_tabs;
                     self.sync_mod_tab_ink(tree, i);

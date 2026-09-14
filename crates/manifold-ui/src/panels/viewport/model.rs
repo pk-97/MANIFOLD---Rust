@@ -246,6 +246,15 @@ pub struct ViewportAutomationLane {
 pub struct AutomationLaneScreen {
     /// The strip's background band, full tracks width.
     pub strip_rect: Rect,
+    /// Scalar horizontal mapping copied from the viewport's shared mapper.
+    /// Keeping these values with the lane lets the renderer draw the timing
+    /// grid directly, without allocating a second list of grid vertices or
+    /// re-deriving snap positions.
+    pub pixels_per_beat: f32,
+    pub visible_beat_start: f32,
+    pub grid_step: f32,
+    pub beats_per_bar: f32,
+    pub bar_skip: u32,
     pub label: String,
     /// True when this lane's param is currently latched/overridden — draws
     /// grayed instead of red (Live's affordance).
@@ -277,8 +286,16 @@ pub struct AutomationLaneScreen {
 impl AutomationLaneScreen {
     /// Chrome and graph share one geometry contract with input and rendering.
     pub fn header_rect(&self) -> Rect {
-        Rect::new(self.strip_rect.x, self.strip_rect.y, self.strip_rect.width,
-            if self.strip_rect.height >= 64.0 { 22.0 } else { 0.0 })
+        Rect::new(
+            self.strip_rect.x,
+            self.strip_rect.y,
+            self.strip_rect.width,
+            if self.strip_rect.height >= 64.0 {
+                22.0
+            } else {
+                0.0
+            },
+        )
     }
 
     pub fn curve_rect(&self) -> Rect {
@@ -288,8 +305,12 @@ impl AutomationLaneScreen {
     pub fn curve_rect_for(strip: Rect) -> Rect {
         let header = if strip.height >= 64.0 { 22.0 } else { 0.0 };
         let padding = if header > 0.0 { 8.0 } else { 0.0 };
-        Rect::new(strip.x, strip.y + header + padding,
-            strip.width, (strip.height - header - padding - if header > 0.0 { 24.0 } else { 0.0 }).max(1.0))
+        Rect::new(
+            strip.x,
+            strip.y + header + padding,
+            strip.width,
+            (strip.height - header - padding - if header > 0.0 { 24.0 } else { 0.0 }).max(1.0),
+        )
     }
 
     pub fn y_at_norm(&self, norm: f32) -> f32 {
@@ -301,12 +322,33 @@ impl AutomationLaneScreen {
         let rect = self.curve_rect();
         let norm = (1.0 - (y - rect.y) / rect.height).clamp(0.0, 1.0);
         let value = self.param_min + norm * (self.param_max - self.param_min);
-        if self.whole_numbers { value.round().clamp(self.param_min, self.param_max) } else { value }
+        if self.whole_numbers {
+            value.round().clamp(self.param_min, self.param_max)
+        } else {
+            value
+        }
+    }
+
+    /// Convert a beat on the shared timeline mapping to lane screen space.
+    /// This is deliberately scalar: the renderer uses it while walking the
+    /// bounded grid loop and the curve/point mapper uses the same origin.
+    pub fn beat_to_pixel(&self, beat: f32) -> f32 {
+        self.strip_rect.x + (beat - self.visible_beat_start) * self.pixels_per_beat
+    }
+
+    /// Alias for callers that describe the left edge as the mapping origin.
+    pub fn visible_beat_origin(&self) -> f32 {
+        self.visible_beat_start
     }
 
     /// Bottom resize handle: only the first 120 px of the strip is reserved.
     pub fn resize_rect(&self) -> Rect {
-        Rect::new(self.strip_rect.x, self.strip_rect.y + self.strip_rect.height - 5.0, self.strip_rect.width.min(120.0), 5.0)
+        Rect::new(
+            self.strip_rect.x,
+            self.strip_rect.y + self.strip_rect.height - 5.0,
+            self.strip_rect.width.min(120.0),
+            5.0,
+        )
     }
 }
 
@@ -374,5 +416,52 @@ impl CollapsedGroupBitmap {
             last_track_h: 0.0,
             last_clip_count: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod automation_lane_geometry_tests {
+    use super::*;
+
+    fn lane() -> AutomationLaneScreen {
+        AutomationLaneScreen {
+            strip_rect: Rect::new(120.0, 40.0, 800.0, 112.0),
+            pixels_per_beat: 37.5,
+            visible_beat_start: 3.25,
+            grid_step: 0.5,
+            beats_per_bar: 3.0,
+            bar_skip: 1,
+            label: "Fx: amount".into(),
+            overridden: false,
+            polyline: Vec::new(),
+            dots: Vec::new(),
+            target: crate::view::UiGraphTarget::Effect(EffectId::new("fx")),
+            param_id: ParamId::from("amount"),
+            param_min: 0.0,
+            param_max: 1.0,
+            whole_numbers: false,
+        }
+    }
+
+    #[test]
+    fn lane_grid_mapping_preserves_nonzero_scroll_and_zoom() {
+        let lane = lane();
+        // Beat 3.5 is the first half-beat grid line after a 3.25 beat scroll.
+        assert!((lane.beat_to_pixel(3.5) - 129.375).abs() < 0.001);
+        // A bar boundary remains mapped by the same scalar origin.
+        assert!((lane.beat_to_pixel(6.0) - 223.125).abs() < 0.001);
+    }
+
+    #[test]
+    fn lane_grid_metadata_handles_time_signature_and_empty_geometry() {
+        let mut lane = lane();
+        lane.beats_per_bar = 5.0;
+        lane.grid_step = 1.0;
+        lane.bar_skip = 4;
+        lane.strip_rect.width = 0.0;
+        assert!(lane.beat_to_pixel(3.25).is_finite());
+        assert_eq!(lane.dots.len(), 0);
+        assert!(lane.beats_per_bar >= 1.0);
+        assert!(lane.bar_skip >= 1);
     }
 }

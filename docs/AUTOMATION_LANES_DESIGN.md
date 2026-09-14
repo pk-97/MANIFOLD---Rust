@@ -209,20 +209,31 @@ target + `param_id`), not indices — same discipline as
 
 ## 7. UI / UX (decided: copy Ableton's model — Peter, 2026-07-02)
 
-Interaction feedback contract (2026-09-13): lane chrome identifies layer-owned
-arrangement automation. Default lanes are 112 px; resizing retains a 64 px
+Interaction feedback contract (2026-09-14): lane chrome identifies layer-owned
+arrangement automation. Default lanes are 160 px; resizing retains a 64 px
 minimum. Header, plot, and footer geometry is shared by rendering and input;
 chrome consumes clicks without creating points. Automation uses a cyan accent,
 with selected/hovered points and segments highlighted and overridden lanes dimmed.
 Hover feedback identifies the operation before pressing; active feedback remains
 bound to the captured gesture until release or cancellation. Point values and
 insertion previews use the same beat snap, parameter range, and integer rounding
-as editing. Empty populated lanes retain double-click insertion and marquee drag;
-empty placeholder lanes support first-click insertion. Segment clicks insert,
+as editing. One click in empty plot space or on a segment inserts a point;
+Shift-click deselects and a bare drag selects a region. Segment clicks insert,
 segment drags move vertically, and Alt-drag bends continuous parameters. Integer
 segments remain stepped. Draw mode takes precedence over point/segment drags.
 The corresponding inspector parameter receives a selection outline. Modifier
 changes and lane geometry changes refresh feedback without requiring mouse motion.
+
+The AUTOMATION and DRAW buttons expose mode state. Beat/bar/subdivision grid lines
+align with the ruler. Readouts and exact time entry use one-based
+`bar.beat.fraction`, with a three-digit fraction in thousandths of a beat.
+The lane menu exposes Cut, Copy, Paste Here, Duplicate, Select All, Delete,
+exact point value/time entry, and Insert Shape. Shapes replace the selected
+point span, or one bar at the snapped click when no span is selected: ramp up,
+ramp down, triangle, sine, square, hold low, and hold high. Edits retain the
+existing command/undo and clipboard range-conversion paths. Per-lane Restore
+Automation clears only that parameter's override; RESTORE ALL clears all latches.
+Authoring the first curve clears an earlier slider touch so it begins active.
 
 **Placement — automation lives on the layer.** Expanding a layer (the
 existing layer-expand affordance) reveals the advanced layer controls,
@@ -240,10 +251,10 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - **Automation mode toggle** (Live's `A`): show/hide automation across the
   timeline; lanes draw as a cyan breakpoint line beneath the layer.
 - **Click on the line** adds a breakpoint (dot); **drag** moves it (snapped
-  to the timeline grid); **double-click a dot** deletes it; **Delete** removes
-  the selection.
-- On an existing lane, a single click away from the line deselects; double-click
-  inserts. Placeholder lanes and pencil mode retain first-click insertion.
+  to the timeline grid); **Delete** removes the selection. Repeated clicks
+  select the dot without deleting it; Shift-click toggles its selection.
+- Every lane uses single-click insertion, including empty placeholders.
+  Shift-click away from the line deselects without changing the curve.
   Selected dots draw larger and white. A moved point remains selected at its new
   beat; hiding automation or undo/redo clears beat-addressed selections.
   Point dragging preserves the grab offset and Shift scales value movement to
@@ -253,7 +264,9 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - **Show Automation** in an effect/generator parameter's context menu reveals
   its lane without touching the parameter, arming recording, or creating points.
   It expands the owning track and folded parents through the content command
-  path. A newly revealed lane opens at 96px; an existing session height is kept.
+  path. Layer-owned parameter rows also expose an AUTO button. Revealing a lane
+  scrolls it into view and opens enough timeline space to edit; an existing
+  session lane height is kept.
   Master and group automation editors remain deferred.
 - **Drag the grip at the bottom-left of a lane** to resize it from 64–240px.
   Heights are session-only UI state keyed by the existing target/parameter

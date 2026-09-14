@@ -46,7 +46,8 @@ const BPM_CLEAR_W: f32 = 32.0;
 // group, mirroring the removed file-ops group's old slot.
 const AUTO_ARM_BUTTON_W: f32 = 48.0;
 const AUTO_BACK_BUTTON_W: f32 = 92.0;
-const AUTO_LANES_BUTTON_W: f32 = 62.0;
+const AUTO_LANES_BUTTON_W: f32 = 100.0;
+const AUTO_DRAW_BUTTON_W: f32 = 52.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
@@ -126,6 +127,7 @@ pub struct TransportPanel {
     /// ToggleAutomationMode`) — lit exactly when visible, no runtime/project
     /// state behind it.
     automation_mode_visible: bool,
+    automation_draw_mode: bool,
 }
 
 impl TransportPanel {
@@ -159,6 +161,7 @@ impl TransportPanel {
             automation_armed: false,
             automation_overridden: false,
             automation_mode_visible: false,
+            automation_draw_mode: false,
         }
     }
 
@@ -252,6 +255,10 @@ impl TransportPanel {
     /// LANES button exactly when lane strips are currently shown.
     pub fn set_automation_mode_visible(&mut self, visible: bool) {
         self.automation_mode_visible = visible;
+    }
+
+    pub fn set_automation_draw_mode(&mut self, enabled: bool) {
+        self.automation_draw_mode = enabled;
     }
 
     // ── View description ────────────────────────────────────────────
@@ -403,14 +410,16 @@ impl TransportPanel {
     fn automation_group(&self) -> View {
         let arm_bg = if self.automation_armed { color::STATUS_WARNING } else { color::BUTTON_INACTIVE_C32 };
         let back_bg = if self.automation_overridden { color::RECORD_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let draw_bg = if self.automation_draw_mode { color::AUTOMATION_LINE_COLOR } else { color::BUTTON_INACTIVE_C32 };
         let lanes_bg = if self.automation_mode_visible { color::AUTOMATION_LINE_COLOR } else { color::BUTTON_INACTIVE_C32 };
 
         View::row(ITEM_SPACING)
             .fill()
             .main_align(Align::End)
             .cross_align(Align::Center)
-            .child(Self::btn("LANES", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::Transport(TransportAction::ToggleAutomationMode)))
-            .child(Self::btn("BACK", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::Transport(TransportAction::AutomationBackToArrangement)))
+            .child(Self::btn("AUTOMATION", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::Transport(TransportAction::ToggleAutomationMode)))
+            .child(Self::btn("DRAW", AUTO_DRAW_BUTTON_W, button_style(draw_bg), PanelAction::Transport(TransportAction::ToggleAutomationDrawMode)))
+            .child(Self::btn("RESTORE ALL", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::Transport(TransportAction::AutomationBackToArrangement)))
             .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::Transport(TransportAction::ToggleAutomationArm)))
     }
 
@@ -532,11 +541,13 @@ mod tests {
             // against the padded right edge in child order — LANES first (left),
             // ARM last (flush right), same math as `left_group`'s Start-aligned x
             // but mirrored.
-            let auto_w = AUTO_LANES_BUTTON_W + ITEM_SPACING + AUTO_BACK_BUTTON_W + ITEM_SPACING + AUTO_ARM_BUTTON_W;
+            let auto_w = AUTO_LANES_BUTTON_W + ITEM_SPACING + AUTO_DRAW_BUTTON_W + ITEM_SPACING + AUTO_BACK_BUTTON_W + ITEM_SPACING + AUTO_ARM_BUTTON_W;
             let mut ax = bounds.x_max() - INSET - auto_w;
-            put("LANES", ax, AUTO_LANES_BUTTON_W);
+            put("AUTOMATION", ax, AUTO_LANES_BUTTON_W);
             ax += AUTO_LANES_BUTTON_W + ITEM_SPACING;
-            put("BACK", ax, AUTO_BACK_BUTTON_W);
+            put("DRAW", ax, AUTO_DRAW_BUTTON_W);
+            ax += AUTO_DRAW_BUTTON_W + ITEM_SPACING;
+            put("RESTORE ALL", ax, AUTO_BACK_BUTTON_W);
             ax += AUTO_BACK_BUTTON_W + ITEM_SPACING;
             put("ARM", ax, AUTO_ARM_BUTTON_W);
         }
@@ -561,7 +572,7 @@ mod tests {
         g.compute(layout.transport_bar());
 
         let got = buttons(&tree);
-        assert_eq!(got.len(), 14, "14 transport buttons (sync left + transport centre + automation right)");
+        assert_eq!(got.len(), 15, "15 transport buttons (sync left + transport centre + automation right)");
         for (text, rect) in &got {
             let want = g.rects.get(text.as_str()).unwrap_or_else(|| panic!("unexpected button {text:?}"));
             assert!(
@@ -609,11 +620,11 @@ mod tests {
             Some(PanelAction::Transport(TransportAction::ToggleAutomationArm))
         ));
         assert!(matches!(
-            intents.resolve(&tree, id_of("BACK"), Gesture::Click),
+            intents.resolve(&tree, id_of("RESTORE ALL"), Gesture::Click),
             Some(PanelAction::Transport(TransportAction::AutomationBackToArrangement))
         ));
         assert!(matches!(
-            intents.resolve(&tree, id_of("LANES"), Gesture::Click),
+            intents.resolve(&tree, id_of("AUTOMATION"), Gesture::Click),
             Some(PanelAction::Transport(TransportAction::ToggleAutomationMode))
         ));
     }
@@ -635,25 +646,28 @@ mod tests {
 
         panel.set_automation_state(true, true);
         panel.set_automation_mode_visible(true);
+        panel.set_automation_draw_mode(true);
         panel.update(&mut tree);
         assert_eq!(tree.structure_version(), sv, "automation state toggle must not rebuild");
         assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::STATUS_WARNING).bg_color);
-        assert_eq!(node(&tree, "BACK").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
-        assert_eq!(node(&tree, "LANES").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
+        assert_eq!(node(&tree, "RESTORE ALL").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
+        assert_eq!(node(&tree, "AUTOMATION").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
 
         panel.set_automation_state(false, false);
+        assert_eq!(node(&tree, "DRAW").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
         panel.set_automation_mode_visible(false);
+        panel.set_automation_draw_mode(false);
         panel.update(&mut tree);
         assert_eq!(
             node(&tree, "ARM").style.bg_color,
             button_style(color::BUTTON_INACTIVE_C32).bg_color
         );
         assert_eq!(
-            node(&tree, "BACK").style.bg_color,
+            node(&tree, "RESTORE ALL").style.bg_color,
             button_style(color::BUTTON_INACTIVE_C32).bg_color
         );
         assert_eq!(
-            node(&tree, "LANES").style.bg_color,
+            node(&tree, "AUTOMATION").style.bg_color,
             button_style(color::BUTTON_INACTIVE_C32).bg_color
         );
     }

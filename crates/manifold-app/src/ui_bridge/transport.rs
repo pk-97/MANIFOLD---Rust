@@ -144,6 +144,12 @@ pub(super) fn dispatch_transport(
             DispatchResult::structural()
         }
 
+        TransportAction::ToggleAutomationDrawMode => {
+            selection.automation_draw_mode = !selection.automation_draw_mode;
+            selection.automation_mode_visible = true;
+            DispatchResult::structural()
+        }
+
         TransportAction::CycleQuantize => {
             {
                 let old = project.settings.quantize_mode;

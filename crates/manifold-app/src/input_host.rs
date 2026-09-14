@@ -4,21 +4,22 @@
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
-use manifold_core::effects::{AutomationPoint, SegmentShape};
+use manifold_core::effects::SegmentShape;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::MuteClipCommand;
-use manifold_editing::commands::automation::AddAutomationPointCommand;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::RemoveEffectCommand;
 use manifold_editing::service::EditingService;
 use manifold_ui::InspectorTab;
 use manifold_ui::cursor_nav;
 use manifold_ui::timeline_input_host::TimelineInputHost;
-use manifold_ui::ui_state::{AutomationClipboard, AutomationClipboardPoint, UIState};
-use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
+use manifold_ui::ui_state::UIState;
+use manifold_ui::view::UiSegmentShape;
 
 use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
+
+pub(crate) mod automation;
 
 /// Wrapper implementing TimelineInputHost by borrowing Application fields.
 ///
@@ -512,6 +513,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn seek_to(&mut self, time: Seconds) {
+        let mut sought_beat = None;
         if time.0 == f64::MAX {
             // Sentinel for "seek to end" — Unity InputHandler line 380-390
             let mut max_beat = Beats::ZERO;
@@ -527,11 +529,34 @@ impl TimelineInputHost for AppInputHost<'_> {
                 self.content_tx,
                 crate::content_command::ContentCommand::SeekToBeat(max_beat),
             );
+            sought_beat = Some(max_beat);
         } else {
             ContentCommand::send(
                 self.content_tx,
                 crate::content_command::ContentCommand::SeekTo(time),
             );
+            if time == Seconds::ZERO {
+                sought_beat = Some(Beats::ZERO);
+            }
+        }
+
+        // Home/End must leave the sought position visible. Reuse the viewport's
+        // anchored-zoom entry point with its current zoom; this preserves the
+        // vertical scroll owned by the viewport while moving only horizontally.
+        if let Some(beat) = sought_beat {
+            let viewport = &mut self.ui_root.viewport;
+            let before = viewport.scroll_x_beats();
+            let tracks = viewport.tracks_rect();
+            let visible_beats = tracks.width / viewport.pixels_per_beat().max(f32::EPSILON);
+            let start = before.as_f32();
+            let end = start + visible_beats.max(0.0);
+            let target = beat.as_f32();
+            if target < start || target > end {
+                viewport.zoom_to(viewport.pixels_per_beat(), target, tracks.x);
+                if viewport.scroll_x_beats() != before {
+                    self.scroll_dirty.scroll_x = true;
+                }
+            }
         }
     }
 
@@ -1567,81 +1592,16 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn copy_selected_automation(&mut self) {
-        let refs = selected_automation_refs(self.selection);
-        let mut found = Vec::new();
-        let mut min_beat = f64::INFINITY;
-        let mut max_beat = f64::NEG_INFINITY;
-
-        for point_ref in refs {
-            let target = crate::editing_host::to_graph_target(&point_ref.target);
-            let Some(instance) = self.project.preset_instance(&target) else {
-                log::warn!("automation copy skipped missing target {:?}", point_ref.target);
-                continue;
-            };
-            let Some(lane) = instance.automation_lanes.as_ref().and_then(|lanes| {
-                lanes.iter().find(|lane| lane.param_id == point_ref.param_id)
-            }) else {
-                log::warn!("automation copy skipped missing lane {:?}/{:?}", point_ref.target, point_ref.param_id);
-                continue;
-            };
-            let Some(point) = lane.points.iter().find(|point| point.beat == point_ref.beat) else {
-                log::warn!("automation copy skipped missing point {:?}/{:?}@{}", point_ref.target, point_ref.param_id, point_ref.beat.0);
-                continue;
-            };
-            let Some(param) = instance.params.get(point_ref.param_id.as_ref()) else {
-                log::warn!("automation copy skipped missing param {:?}/{:?}", point_ref.target, point_ref.param_id);
-                continue;
-            };
-            let min = param.spec.min;
-            let max = param.spec.max;
-            let range = max - min;
-            let value_norm = if range.abs() > f32::EPSILON {
-                (point.value - min) / range
-            } else {
-                0.0
-            };
-            min_beat = min_beat.min(point.beat.0);
-            max_beat = max_beat.max(point.beat.0);
-            found.push(AutomationClipboardPoint {
-                target: point_ref.target,
-                param_id: point_ref.param_id,
-                beat_offset: point.beat,
-                value_norm: value_norm.clamp(0.0, 1.0),
-                value: point.value,
-                source_min: min,
-                source_max: max,
-                shape: from_core_segment_shape(point.shape),
-            });
-        }
-
-        if found.is_empty() {
-            self.selection.automation_clipboard = None;
-            self.selection.automation_paste_context = None;
-            return;
-        }
-        let origin = Beats(min_beat);
-        for point in &mut found {
-            point.beat_offset -= origin;
-        }
-        self.selection.automation_clipboard = Some(AutomationClipboard {
-            points: found,
-            span: Beats((max_beat - min_beat).max(0.0)),
-        });
-        if let Some(point) = self.selection.automation_clipboard.as_ref().and_then(|c| c.points.first()) {
-            self.selection.automation_paste_context = Some((point.target.clone(), point.param_id.clone()));
-        }
+        automation::copy_selected(self.project, self.selection);
     }
 
     fn cut_selected_automation(&mut self) {
-        let refs = selected_automation_refs(self.selection);
-        if refs.is_empty() { return; }
-        self.copy_selected_automation();
-        self.selection.selected_automation_point = None;
-        self.selection.selected_automation_points = refs;
-        self.delete_selected_automation_points();
-        if let Some(point) = self.selection.automation_clipboard.as_ref().and_then(|c| c.points.first()) {
-            self.selection.automation_paste_context = Some((point.target.clone(), point.param_id.clone()));
-        }
+        automation::cut_selected(
+            self.project,
+            self.selection,
+            self.content_tx,
+            self.needs_rebuild,
+        );
     }
 
     fn has_automation_paste_target(&self) -> bool {
@@ -1652,175 +1612,38 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn paste_automation(&mut self, target_beat: f32) {
-        let Some(clipboard) = self.selection.automation_clipboard.clone() else { return; };
-        let destination = selected_automation_destination(self.selection);
-        let single_lane = clipboard_lane_count(&clipboard) == 1;
-        let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let mut inserted = Vec::new();
-        for point in clipboard.points {
-            let (ui_target, param_id) = if single_lane {
-                destination.clone().unwrap_or((point.target.clone(), point.param_id.clone()))
-            } else {
-                (point.target.clone(), point.param_id.clone())
-            };
-            let target = crate::editing_host::to_graph_target(&ui_target);
-            let Some(instance) = self.project.preset_instance(&target) else {
-                log::warn!("automation paste skipped missing target {:?}", ui_target);
-                continue;
-            };
-            let Some(param) = instance.params.get(param_id.as_ref()) else {
-                log::warn!("automation paste skipped missing param {:?}/{:?}", ui_target, param_id);
-                continue;
-            };
-            let spec = &param.spec;
-            let same_range = (point.source_min - spec.min).abs() <= f32::EPSILON
-                && (point.source_max - spec.max).abs() <= f32::EPSILON;
-            let value = if same_range {
-                point.value
-            } else {
-                (spec.min + point.value_norm * (spec.max - spec.min)).clamp(spec.min, spec.max)
-            };
-            let value = if param.whole_numbers() { value.round() } else { value };
-            let beat = Beats::from_f32(target_beat) + point.beat_offset;
-            let core_point = AutomationPoint {
-                beat,
-                value,
-                shape: if param.whole_numbers() {
-                    manifold_core::effects::SegmentShape::Hold
-                } else {
-                    to_core_segment_shape(point.shape)
-                },
-            };
-            let mut command = AddAutomationPointCommand::new(
-                target,
-                param_id.as_ref(),
-                core_point,
-            );
-            command.execute(self.project);
-            commands.push(Box::new(command));
-            inserted.push(UiAutomationPointRef { target: ui_target, param_id, beat });
-        }
-        if commands.is_empty() { return; }
-        ContentCommand::send(
+        automation::paste(
+            self.project,
+            self.selection,
             self.content_tx,
-            ContentCommand::ExecuteBatch(commands, "Paste Automation".to_string()),
+            Beats::from_f32(target_beat),
+            self.needs_rebuild,
         );
-        self.selection.selected_automation_point = inserted.first().cloned();
-        self.selection.selected_automation_points = inserted;
-        *self.needs_rebuild = true;
     }
 
     fn duplicate_selected_automation(&mut self) {
-        let refs = selected_automation_refs(self.selection);
-        if refs.is_empty() { return; }
-        let mut min_beat = f64::INFINITY;
-        let mut max_beat = f64::NEG_INFINITY;
-        for point_ref in &refs {
-            min_beat = min_beat.min(point_ref.beat.0);
-            max_beat = max_beat.max(point_ref.beat.0);
-        }
-        let step = self.ui_root.viewport.grid_step().max(f32::EPSILON) as f64;
-        let destination = Beats(max_beat + step);
-        let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let mut inserted = Vec::new();
-        for point_ref in refs {
-            let target = crate::editing_host::to_graph_target(&point_ref.target);
-            let Some(instance) = self.project.preset_instance(&target) else { continue; };
-            let Some(lane) = instance.automation_lanes.as_ref().and_then(|lanes| {
-                lanes.iter().find(|lane| lane.param_id == point_ref.param_id)
-            }) else { continue; };
-            let Some(point) = lane.points.iter().find(|point| point.beat == point_ref.beat) else {
-                continue;
-            };
-            let new_beat = destination + (point.beat - Beats(min_beat));
-            let new_point = AutomationPoint { beat: new_beat, value: point.value, shape: point.shape };
-            let mut command = AddAutomationPointCommand::new(
-                target,
-                point_ref.param_id.as_ref(),
-                new_point,
-            );
-            command.execute(self.project);
-            commands.push(Box::new(command));
-            inserted.push(UiAutomationPointRef {
-                target: point_ref.target,
-                param_id: point_ref.param_id,
-                beat: new_beat,
-            });
-        }
-        if commands.is_empty() { return; }
-        ContentCommand::send(
+        automation::duplicate_selected(
+            self.project,
+            self.selection,
             self.content_tx,
-            ContentCommand::ExecuteBatch(commands, "Duplicate Automation".to_string()),
+            self.ui_root.viewport.grid_step(),
+            self.needs_rebuild,
         );
-        self.selection.selected_automation_point = inserted.first().cloned();
-        self.selection.selected_automation_points = inserted;
-        *self.needs_rebuild = true;
     }
 
     fn delete_selected_automation_points(&mut self) {
-        use manifold_editing::commands::automation::RemoveAutomationPointCommand;
-        use std::collections::HashMap;
-
-        let refs = std::mem::take(&mut self.selection.selected_automation_points);
-        self.selection.selected_automation_point = None;
-        if refs.is_empty() {
-            return;
-        }
-
-        // Group by lane — index-based removal only makes sense within one
-        // lane; a marquee rect can span multiple lanes/params at once.
-        let mut by_lane: HashMap<(manifold_core::GraphTarget, String), Vec<f64>> = HashMap::new();
-        for r in &refs {
-            let target = crate::editing_host::to_graph_target(&r.target);
-            by_lane.entry((target, r.param_id.as_ref().to_string())).or_default().push(r.beat.0);
-        }
-
-        let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        for ((target, param_id), beats) in by_lane {
-            let Some(inst) = self.project.preset_instance(&target) else {
-                continue;
-            };
-            let Some(lanes) = inst.automation_lanes.as_ref() else {
-                continue;
-            };
-            let Some(lane) = lanes.iter().find(|l| l.param_id.as_ref() == param_id) else {
-                continue;
-            };
-            // Highest index first WITHIN this lane — an earlier removal must
-            // never shift a later target index (see
-            // `commands::automation::tests::composite_group_delete_highest_index_first_survives_execute_and_undo`).
-            let mut indices: Vec<usize> = beats
-                .iter()
-                .filter_map(|b| lane.points.iter().position(|p| p.beat.0 == *b))
-                .collect();
-            indices.sort_unstable_by(|a, b| b.cmp(a));
-            indices.dedup();
-            for idx in indices {
-                commands.push(Box::new(RemoveAutomationPointCommand::new(target.clone(), param_id.clone(), idx)));
-            }
-        }
-        if commands.is_empty() {
-            *self.needs_rebuild = true;
-            return;
-        }
-        // Apply locally first (immediate visual feedback), same
-        // already-executed-then-sent shape as the single-point delete above.
-        // Each command re-derives its target index fresh from whichever
-        // Project it's given, so re-running the SAME commands via
-        // `ExecuteBatch` against the content thread's separate Project copy
-        // is correct, not a double-apply.
-        for cmd in &mut commands {
-            cmd.execute(self.project);
-        }
-        ContentCommand::send(
+        automation::delete_selected(
+            self.project,
+            self.selection,
             self.content_tx,
-            ContentCommand::ExecuteBatch(commands, "Delete Automation Points".to_string()),
+            self.needs_rebuild,
         );
-        *self.needs_rebuild = true;
     }
 
     fn toggle_automation_draw_mode(&mut self) {
         self.selection.automation_draw_mode = !self.selection.automation_draw_mode;
+        self.selection.automation_mode_visible = true;
+        *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
 
@@ -1953,38 +1776,7 @@ impl AppInputHost<'_> {
     }
 }
 
-fn selected_automation_refs(selection: &UIState) -> Vec<UiAutomationPointRef> {
-    let mut refs = selection.selected_automation_points.clone();
-    if let Some(point) = selection.selected_automation_point.clone()
-        && !refs.contains(&point)
-    {
-        refs.push(point);
-    }
-    refs
-}
-
-fn selected_automation_destination(selection: &UIState) -> Option<(UiGraphTarget, manifold_core::effects::ParamId)> {
-    if let Some(point) = &selection.selected_automation_point {
-        return Some((point.target.clone(), point.param_id.clone()));
-    }
-    if selection.selected_automation_points.len() == 1 {
-        let point = &selection.selected_automation_points[0];
-        return Some((point.target.clone(), point.param_id.clone()));
-    }
-    selection.automation_paste_context.clone()
-}
-
-fn clipboard_lane_count(clipboard: &AutomationClipboard) -> usize {
-    let mut lanes: Vec<(&UiGraphTarget, &manifold_core::effects::ParamId)> = Vec::new();
-    for point in &clipboard.points {
-        if !lanes.iter().any(|(target, param)| **target == point.target && **param == point.param_id) {
-            lanes.push((&point.target, &point.param_id));
-        }
-    }
-    lanes.len()
-}
-
-#[allow(unreachable_patterns)]
+#[allow(dead_code, unreachable_patterns)]
 fn from_core_segment_shape(shape: SegmentShape) -> UiSegmentShape {
     match shape {
         SegmentShape::Linear => UiSegmentShape::Linear,
@@ -1997,7 +1789,7 @@ fn from_core_segment_shape(shape: SegmentShape) -> UiSegmentShape {
     }
 }
 
-#[allow(unreachable_patterns)]
+#[allow(dead_code, unreachable_patterns)]
 fn to_core_segment_shape(shape: UiSegmentShape) -> SegmentShape {
     match shape {
         UiSegmentShape::Linear => SegmentShape::Linear,
@@ -2125,12 +1917,12 @@ mod automation_clipboard_host_tests {
     use super::*;
     use crossbeam_channel::Receiver;
     use manifold_core::effect_graph_def::ParamSpecDef;
-    use manifold_core::effects::{AutomationLane, PresetInstance};
+    use manifold_core::effects::{AutomationLane, AutomationPoint, PresetInstance, SegmentShape};
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::{EffectId, GraphTarget, LayerId, PresetTypeId};
     use manifold_core::layer::Layer;
     use manifold_editing::service::EditingService;
-    use manifold_ui::view::UiAutomationPointRef;
+    use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget};
 
     struct Harness {
         project: manifold_core::project::Project,
@@ -2393,6 +2185,25 @@ mod automation_clipboard_host_tests {
         h.selection.selected_automation_points.clear();
         { let mut host = h.host(); host.paste_automation(12.0); }
         assert!(h.rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn shape_creates_first_lane_and_undo_restores_absence() {
+        let mut h = Harness::new();
+        h.project.settings.master_effects[0].automation_lanes = None;
+        h.project.settings.time_signature_numerator = 3;
+        let target = UiGraphTarget::Effect(h.effect_id());
+        let mut authoritative = h.project.clone();
+        automation::insert_shape(&mut h.project, &mut h.selection, &h.tx, &target,
+            &"amount".into(), Beats(5.0), manifold_ui::panels::actions::AutomationShape::Triangle,
+            &mut h.needs_rebuild);
+        assert_eq!(points(&h.project, "amount"), vec![(5.0, 0.0), (6.5, 1.0), (8.0, 0.0)]);
+        let ContentCommand::Execute(command) = h.rx.try_recv().unwrap() else { panic!("one undoable shape"); };
+        let mut service = EditingService::new();
+        service.execute(command, &mut authoritative);
+        assert_eq!(points(&authoritative, "amount"), points(&h.project, "amount"));
+        assert!(service.undo(&mut authoritative));
+        assert!(authoritative.settings.master_effects[0].automation_lanes.is_none());
     }
 
     #[test]

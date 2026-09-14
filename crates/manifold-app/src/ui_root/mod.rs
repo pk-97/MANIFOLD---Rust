@@ -299,6 +299,8 @@ pub struct UIRoot {
     /// overlay-generated actions (TrackRightClicked, ClipRightClicked) can anchor
     /// their dropdown menus after the main event loop returns.
     last_right_click_pos: Vec2,
+    /// One-shot view request, consumed after lane geometry is projected.
+    pub(crate) pending_automation_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
 
     /// Cached macro slot labels for context menu display.
     pub macro_labels: [String; manifold_core::MACRO_COUNT],
@@ -481,6 +483,7 @@ impl UIRoot {
             pending_keyboard_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
+            pending_automation_reveal: None,
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
@@ -1040,6 +1043,14 @@ impl UIRoot {
     /// the region mechanism costs the same one wrapper node per rebuild
     /// either way.
     fn build_scroll_panels(&mut self) {
+        self.viewport.prepare_layout(&self.layout);
+        if let Some((target, param)) = self.pending_automation_reveal.as_ref()
+            && self.viewport.has_visible_automation_lane(target, param)
+        {
+            self.viewport.reveal_automation_lane(target, param);
+            self.pending_automation_reveal = None;
+        }
+
         let region =
             self.tree
                 .begin_region(self.layout.layer_controls(), ZTier::Base, "layer_headers", UIFlags::empty());

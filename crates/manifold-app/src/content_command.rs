@@ -108,6 +108,8 @@ pub enum ContentCommand {
     /// BACK button (`PanelAction::AutomationBackToArrangement` →
     /// `ui_bridge::transport::dispatch_transport`).
     AutomationBackToArrangement,
+    /// Resume one parameter without disturbing other live overrides.
+    AutomationResumeParameter(manifold_core::GraphTarget, manifold_core::effects::ParamId),
     /// Toggle the global Automation Arm (section 5): while on, touching an
     /// automated param (while playing) records into its lane instead of
     /// latching an override. Runtime-only state, same shape as

@@ -19,6 +19,17 @@ use crate::types::{
 use crate::view::UiGraphTarget;
 use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, NodeId, ParamId};
 
+#[derive(Debug, Clone, Copy)]
+pub enum AutomationShape {
+    RampUp,
+    RampDown,
+    Triangle,
+    Sine,
+    Square,
+    HoldLow,
+    HoldHigh,
+}
+
 #[derive(Debug, Clone)]
 pub enum TransportAction {
     PlayPause,
@@ -44,6 +55,8 @@ pub enum TransportAction {
     /// view-state toggle, not a project mutation or runtime playback state.
     /// Lit when lanes are currently visible.
     ToggleAutomationMode,
+    /// Toggle automation draw/pencil mode (Live's `B`).
+    ToggleAutomationDrawMode,
     ZoomIn,
     ZoomOut,
     CycleQuantize,
@@ -72,6 +85,23 @@ pub enum EditingAction {
     /// Right-click anywhere on an automation lane strip/segment/dot
     /// (BUG-184) — opens the lane's context menu.
     AutomationLaneRightClicked(UiGraphTarget, ParamId),
+    ContextAutomationCut(UiGraphTarget, ParamId, Beats),
+    ContextAutomationCopy(UiGraphTarget, ParamId, Beats),
+    ContextAutomationPaste(UiGraphTarget, ParamId, Beats),
+    ContextAutomationDuplicate(UiGraphTarget, ParamId, Beats),
+    ContextSelectAllAutomation(UiGraphTarget, ParamId),
+    ContextDeleteSelectedAutomation(UiGraphTarget, ParamId),
+    ContextOpenAutomationShapePicker(UiGraphTarget, ParamId, Beats),
+    ContextInsertAutomationShape(
+        UiGraphTarget,
+        ParamId,
+        Beats,
+        AutomationShape,
+    ),
+    /// Opens the existing point value editor for the addressed point.
+    AutomationPointEditValue(UiGraphTarget, ParamId, Beats),
+    /// Opens the existing point time editor for the addressed point.
+    AutomationPointEditTime(UiGraphTarget, ParamId, Beats),
     LayerHeaderRightClicked(LayerId),
     ContextSplitAtPlayhead(String),  // clip_id
     ContextDeleteClip(String),       // clip_id
@@ -271,6 +301,9 @@ pub enum ProjectAction {
     /// "Remove Lane" context-menu item: deletes the whole lane —
     /// `RemoveLaneCommand`.
     ContextRemoveAutomationLane(UiGraphTarget, ParamId),
+    /// Resume arrangement playback for one lane after a live automation
+    /// override was latched.
+    ContextRestoreAutomationLane(UiGraphTarget, ParamId),
     SetMidiNote(LayerId, i32),              // layer, note (0-127)
     SetMidiChannel(LayerId, i32),           // layer, channel (0-15 internal, displayed 1-16)
     SetMidiDevice(LayerId, Option<String>), // layer, device name (None = any)
