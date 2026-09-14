@@ -20,6 +20,10 @@ pub struct ReadbackRequest {
     native_readback_buf: Option<manifold_gpu::GpuBuffer>,
     /// Persistent CPU pointer into the native shared-memory buffer.
     native_shared_ptr: Option<*const u8>,
+    /// Allocated byte capacity of `native_readback_buf`. The buffer is kept
+    /// after a consume and reused by later submissions at the same or a
+    /// smaller size.
+    buffer_capacity: u64,
 }
 
 // Safety: native_shared_ptr points to GPU shared memory
@@ -32,6 +36,50 @@ impl Default for ReadbackRequest {
     }
 }
 
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod tests {
+    use super::*;
+    use crate::{gpu_encoder::GpuEncoder, render_target::RenderTarget};
+    use manifold_gpu::GpuTextureFormat;
+
+    #[test]
+    fn gpu_readback_reuses_gpu_and_cpu_storage_after_consume_and_cancel() {
+        let device = crate::test_device();
+        let target = RenderTarget::new(
+            &device,
+            5,
+            3,
+            GpuTextureFormat::Rgba16Float,
+            "readback-reuse",
+        );
+        let mut request = ReadbackRequest::new();
+        let mut pixels = Vec::with_capacity(5 * 3 * 4);
+        let cpu_ptr = pixels.as_ptr();
+        let mut gpu_ptr = None;
+        for frame in 0..3 {
+            let mut enc = device.create_encoder("readback-reuse");
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            gpu.clear_texture(&target.texture, 0.25, 0.5, 0.75, 1.0);
+            request.submit(&mut gpu, &target.texture, 5, 3);
+            enc.commit_and_wait_completed();
+            if frame == 0 {
+                gpu_ptr = request.native_shared_ptr;
+            }
+            assert_eq!(request.native_shared_ptr, gpu_ptr);
+            assert_eq!(request.buffer_capacity, 256 * 3);
+            if frame == 1 {
+                request.cancel();
+                assert!(!request.is_pending());
+            } else {
+                assert!(request.try_read_into(&mut pixels));
+                assert_eq!(pixels.as_ptr(), cpu_ptr);
+                assert_eq!(pixels.len(), 5 * 3 * 4);
+                assert_eq!(&pixels[..4], &[64, 128, 191, 255]);
+            }
+        }
+    }
+}
+
 impl ReadbackRequest {
     pub fn new() -> Self {
         Self {
@@ -41,6 +89,7 @@ impl ReadbackRequest {
             pending: false,
             native_readback_buf: None,
             native_shared_ptr: None,
+            buffer_capacity: 0,
         }
     }
 
@@ -51,8 +100,9 @@ impl ReadbackRequest {
 
     /// Submit a readback of `texture`. Accepts any format — try_read()
     /// always returns tightly-packed RGBA8 data regardless of source format.
-    /// Creates a shared-memory buffer, encodes a blit copy on the native encoder.
-    /// Call try_read() on the next frame to consume the result.
+    /// Allocates or grows a shared-memory buffer, encodes a blit copy on the
+    /// native encoder, and keeps that buffer for later submissions. Call
+    /// try_read() on the next frame to consume the result.
     pub fn submit(
         &mut self,
         gpu: &mut crate::gpu_encoder::GpuEncoder,
@@ -60,20 +110,36 @@ impl ReadbackRequest {
         width: u32,
         height: u32,
     ) {
+        // A second submission would overwrite a shared buffer that the GPU
+        // may still be reading. Callers must wait for/consume the pending
+        // request before submitting again.
+        if self.pending {
+            debug_assert!(false, "readback submitted while another request is pending");
+            return;
+        }
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = align_to_256(width * bpp);
         let buffer_size = (bytes_per_row * height) as u64;
 
-        let shared_buf = gpu.device.create_buffer_shared(buffer_size);
-        let mapped_ptr = shared_buf
-            .mapped_ptr()
-            .expect("shared buffer must have mapped pointer") as *const u8;
+        if self.buffer_capacity < buffer_size {
+            let shared_buf = gpu.device.create_buffer_shared(buffer_size);
+            let mapped_ptr = shared_buf
+                .mapped_ptr()
+                .expect("shared buffer must have mapped pointer")
+                as *const u8;
+            self.native_readback_buf = Some(shared_buf);
+            self.native_shared_ptr = Some(mapped_ptr);
+            self.buffer_capacity = buffer_size;
+        }
+
+        let shared_buf = self
+            .native_readback_buf
+            .as_ref()
+            .expect("readback buffer must exist after capacity check");
 
         gpu.native_enc
-            .copy_texture_to_buffer(texture, &shared_buf, width, height, bytes_per_row);
+            .copy_texture_to_buffer(texture, shared_buf, width, height, bytes_per_row);
 
-        self.native_readback_buf = Some(shared_buf);
-        self.native_shared_ptr = Some(mapped_ptr);
         self.width = width;
         self.height = height;
         self.bpp = bpp;
@@ -90,11 +156,25 @@ impl ReadbackRequest {
         if !self.pending {
             return None;
         }
-        let ptr = self.native_shared_ptr?;
+        let row_bytes = (self.width * 4) as usize;
+        let mut out = vec![0u8; row_bytes * self.height as usize];
+        self.try_read_into(&mut out).then_some(out)
+    }
+
+    /// Try to read into a caller-owned RGBA8 buffer, reusing its allocation.
+    /// Returns `true` when a pending request was consumed. The shared Metal
+    /// buffer remains owned by this request and is reusable by `submit()`.
+    pub fn try_read_into(&mut self, out: &mut Vec<u8>) -> bool {
+        if !self.pending {
+            return false;
+        }
+        let Some(ptr) = self.native_shared_ptr else {
+            return false;
+        };
 
         let bytes_per_row = align_to_256(self.width * self.bpp) as usize;
         let row_bytes = (self.width * 4) as usize;
-        let mut out = vec![0u8; row_bytes * self.height as usize];
+        out.resize(row_bytes * self.height as usize, 0);
 
         if self.bpp == 8 {
             // Rgba16Float: read 4× f16 channels, convert to u8.
@@ -130,11 +210,8 @@ impl ReadbackRequest {
             }
         }
 
-        self.native_readback_buf = None;
-        self.native_shared_ptr = None;
         self.pending = false;
-
-        Some(out)
+        true
     }
 
     /// Read the raw, tightly-packed *source-format* bytes from the shared buffer
@@ -149,11 +226,23 @@ impl ReadbackRequest {
         if !self.pending {
             return None;
         }
-        let ptr = self.native_shared_ptr?;
+        let row_bytes = (self.width * self.bpp) as usize;
+        let mut out = vec![0u8; row_bytes * self.height as usize];
+        self.try_read_packed_into(&mut out).then_some(out)
+    }
+
+    /// Packed-source equivalent of [`Self::try_read_into`].
+    pub fn try_read_packed_into(&mut self, out: &mut Vec<u8>) -> bool {
+        if !self.pending {
+            return false;
+        }
+        let Some(ptr) = self.native_shared_ptr else {
+            return false;
+        };
 
         let bytes_per_row = align_to_256(self.width * self.bpp) as usize;
         let row_bytes = (self.width * self.bpp) as usize;
-        let mut out = vec![0u8; row_bytes * self.height as usize];
+        out.resize(row_bytes * self.height as usize, 0);
         for row in 0..self.height as usize {
             let src_start = row * bytes_per_row;
             let dst_start = row * row_bytes;
@@ -166,11 +255,22 @@ impl ReadbackRequest {
             }
         }
 
+        self.pending = false;
+        true
+    }
+
+    /// Cancel a pending request after the caller has reached a frame boundary
+    /// where the previous GPU command buffer is complete. The shared buffer is
+    /// released so a later submit cannot overwrite in-flight GPU work. An
+    /// already-idle request keeps its allocation for reuse.
+    pub fn cancel(&mut self) {
+        if !self.pending {
+            return;
+        }
+        self.pending = false;
         self.native_readback_buf = None;
         self.native_shared_ptr = None;
-        self.pending = false;
-
-        Some(out)
+        self.buffer_capacity = 0;
     }
 }
 

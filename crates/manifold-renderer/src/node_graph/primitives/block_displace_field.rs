@@ -50,6 +50,7 @@ crate::primitive! {
         amount: ScalarF32 optional,
         speed: ScalarF32 optional,
         time: ScalarF32 optional,
+        block_size: ScalarF32 optional,
     },
     outputs: {
         offset: Texture2D,
@@ -203,7 +204,7 @@ mod tests {
     #[test]
     fn amount_speed_time_are_optional_scalar_inputs() {
         let names: Vec<&str> = BlockDisplaceField::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["amount", "speed", "time"]);
+        assert_eq!(names, vec!["amount", "speed", "time", "block_size"]);
         assert!(BlockDisplaceField::INPUTS.iter().all(|p| !p.required));
         assert!(
             BlockDisplaceField::INPUTS

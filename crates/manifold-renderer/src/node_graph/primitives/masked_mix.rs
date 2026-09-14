@@ -36,6 +36,7 @@ crate::primitive! {
         a: Texture2D required,
         b: Texture2D required,
         mask: Texture2D required,
+        amount: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -73,7 +74,7 @@ struct MaskedMixUniforms {
 
 impl Primitive for MaskedMix {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let amount = ctx.param_f32("amount", 1.0);
+        let amount = ctx.scalar_or_param("amount", 1.0);
 
         let Some(a) = ctx.inputs.texture_2d("a") else {
             return;

@@ -8,11 +8,13 @@
 //! pattern every future stateful primitive (frame difference, motion
 //! blur, accumulators) follows.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureFormat};
 
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
 
@@ -33,7 +35,7 @@ pub const FEEDBACK_TYPE_ID: &str = "node.feedback";
 crate::primitive! {
     name: Feedback,
     type_id: "node.feedback",
-    purpose: "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims. Optional `reset_trigger` zeroes the persistent state texture on integer-edge changes (scene cut + state clear pattern).",
+    purpose: "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims. Optional `reset_trigger` clears the persistent state texture on integer-edge changes, or re-seeds it from `seed` when `seed_on_reset` is enabled.",
     inputs: {
         in: Texture2D required,
         seed: Texture2D optional,
@@ -42,9 +44,26 @@ crate::primitive! {
     outputs: {
         out: Texture2D,
     },
-    params: [],
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("copy_capture"),
+            label: "Copy Capture",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("seed_on_reset"),
+            label: "Seed On Reset",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
+    ],
     depth_rule: Warp,
-    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels); after a `clear_state` reset (idle layer, seek, project load) `out` is zeroed instead, because the back-edge slot still holds the pre-reset frame. When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise seed, reaction-diffusion's spike pattern, etc.). The seed producer runs every frame in v1 but only matters on the first allocation; gating it to first-frame-only is a planner-pass follow-up. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands. `reset_trigger`: wire any integer-counted trigger (clip_trigger, threshold-gated cut_score, beat-1 pulse) — when its rounded integer value advances, the next emission is zero-cleared (rgba 0,0,0,0). First observation arms without firing. To re-seed (rather than zero) on the same trigger event, route the seed-producing atom to also respond to the trigger — the seed atom's own re-emission is the re-seed mechanism, not this primitive's job. BUG-217: if the wire feeding `in` is a non-Lerp `node.mix` (Add/Max, the standard accumulation shape), the blend passes its `a` input's alpha straight through unchanged — trails painted outside `a`'s alpha footprint carry alpha 0 and get culled at display, even though the RGB accumulated correctly. Wire `node.set_alpha` onto the source feeding that `node.mix` BEFORE the blend (force it opaque) so the accumulated trail's alpha is visible; there is no alpha-mode opt-in on `node.mix` yet.",
+    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels); after a `clear_state` reset (idle layer, seek, project load) `out` is zeroed instead, because the back-edge slot still holds the pre-reset frame. When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise, reaction-diffusion's spike pattern, etc.). Set `copy_capture` true when the capture producer is also a publicly presented output: copying preserves its current texture after late capture, while the default swap rotates producer storage. Set `seed_on_reset` true to use the current `seed` on `clear_state` re-entry and on each `reset_trigger` edge; with its default false, reset behavior remains zero-clear. The seed producer runs every frame in v1 but only matters when allocation or an opted-in reset consumes it. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands. `reset_trigger`: wire any integer-counted trigger (clip_trigger, threshold-gated cut_score, beat-1 pulse) — when its rounded integer value advances, the next emission is zero-cleared (rgba 0,0,0,0), or re-seeded when `seed_on_reset` is true and `seed` is wired. First observation arms without firing. BUG-217: if the wire feeding `in` is a non-Lerp `node.mix` (Add/Max, the standard accumulation shape), the blend passes its `a` input's alpha straight through unchanged — trails painted outside `a`'s alpha footprint carry alpha 0 and get culled at display, even though the RGB accumulated correctly. Wire `node.set_alpha` onto the source feeding that `node.mix` BEFORE the blend (force it opaque) so the accumulated trail's alpha is visible; there is no alpha-mode opt-in on `node.mix` yet.",
     examples: ["preset.effect.stylized_feedback"],
     picker: { label: "Feedback", category: Atom },
     summary: "Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through a blend.",
@@ -131,6 +150,11 @@ struct FeedbackState {
     /// re-entry needs the mirror+swap parity fix; seed allocs must keep
     /// the old skip to preserve the seed.
     cleared_on_alloc: bool,
+    /// Set when a post-clear allocation was initialised from the current
+    /// seed. Like the initial bootstrap seed, late capture must skip the
+    /// first swap so the seeded output is not overwritten by the stale
+    /// back-edge slot.
+    seeded_on_alloc: bool,
 }
 
 impl NodeState for FeedbackState {}
@@ -192,6 +216,10 @@ impl Primitive for Feedback {
         // a non-black initial state — used for sims that need
         // structured noise to start (oily fluid).
         let seed_tex = ctx.inputs.texture_2d("seed");
+        let seed_on_reset = matches!(
+            ctx.params.get("seed_on_reset"),
+            Some(ParamValue::Bool(true))
+        );
         let (width, height) = (out_tex.width, out_tex.height);
         if width == 0 || height == 0 {
             return;
@@ -208,7 +236,9 @@ impl Primitive for Feedback {
         // would either quantize on the copy (fp32 → fp16) or violate
         // the texture-copy size invariant. Reading the override here
         // keeps the two allocations bit-aligned.
-        let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
+        let state_format = self
+            .output_format_override
+            .unwrap_or(FEEDBACK_DEFAULT_FORMAT);
 
         ctx.mark_gpu_accessed();
         let gpu = ctx
@@ -226,7 +256,11 @@ impl Primitive for Feedback {
         // fp16 producers — Phase 3c) or a dims mismatch lands via the
         // compute bridge directly into `out` (one dispatch). Both are
         // down from the old two-copies-a-frame `prev` round-trip.
-        let swap = pingpong_enabled()
+        // A producer also presented outside the graph must retain its current
+        // texture after late capture. Opt into a copy for such public outputs;
+        // internal loops keep the existing zero-copy swap default.
+        let swap = !matches!(ctx.params.get("copy_capture"), Some(ParamValue::Bool(true)))
+            && pingpong_enabled()
             && in_tex.format == out_tex.format
             && in_tex.width == out_tex.width
             && in_tex.height == out_tex.height;
@@ -243,13 +277,20 @@ impl Primitive for Feedback {
         };
         if needs_alloc {
             let cleared = self.needs_clear;
-            if cleared {
+            let seeded = cleared && seed_on_reset && seed_tex.is_some();
+            if cleared && !seeded {
                 // Post-reset re-entry: the back-edge `in` slot still holds
                 // the pre-reset frame, so the seed path would copy a ghost
                 // of the old content into `out`. Zero instead.
                 gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
             } else {
-                let init_source = seed_tex.unwrap_or(in_tex);
+                let init_source = if seeded {
+                    // Opt-in reset re-seed: use this frame's seed rather
+                    // than the stale back-edge or a black clear.
+                    seed_tex.expect("seeded feedback reset requires seed")
+                } else {
+                    seed_tex.unwrap_or(in_tex)
+                };
                 Self::copy_with_format_bridge(
                     gpu,
                     init_source,
@@ -263,10 +304,33 @@ impl Primitive for Feedback {
             store.insert(
                 node_id,
                 owner_key,
-                FeedbackState { swap, width, height, just_allocated: true, cleared_on_alloc: cleared },
+                FeedbackState {
+                    swap,
+                    width,
+                    height,
+                    just_allocated: true,
+                    cleared_on_alloc: cleared,
+                    seeded_on_alloc: seeded,
+                },
             );
         } else if self.needs_clear {
-            gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+            if seed_on_reset {
+                if let Some(seed) = seed_tex {
+                    Self::copy_with_format_bridge(
+                        gpu,
+                        seed,
+                        out_tex,
+                        width,
+                        height,
+                        state_format,
+                        &mut self.cross_format_copy_fp32,
+                    );
+                } else {
+                    gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+                }
+            } else {
+                gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+            }
         }
         self.needs_clear = false;
 
@@ -285,8 +349,25 @@ impl Primitive for Feedback {
             };
             self.last_reset_trigger = Some(current);
             if edge && store.get::<FeedbackState>(node_id, owner_key).is_some() {
-                // `out` IS the state about to be read this frame — clear it.
-                gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+                // `out` IS the state about to be read this frame — clear it,
+                // or use the current seed when explicitly opted in.
+                if seed_on_reset {
+                    if let Some(seed) = seed_tex {
+                        Self::copy_with_format_bridge(
+                            gpu,
+                            seed,
+                            out_tex,
+                            width,
+                            height,
+                            state_format,
+                            &mut self.cross_format_copy_fp32,
+                        );
+                    } else {
+                        gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+                    }
+                } else {
+                    gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
+                }
             }
         }
 
@@ -299,9 +380,12 @@ impl Primitive for Feedback {
     fn clear_state(&mut self) {
         // The StateStore bucket is dropped by the caller, but the
         // persistent `out` / back-edge slots survive with the pre-reset
-        // frame still in them. Flag so the next `run` zeroes `out`
-        // rather than re-seeding from that stale slot.
+        // frame still in them. Flag so the next `run` clears `out`, or
+        // re-seeds it when the opt-in parameter is enabled.
         self.needs_clear = true;
+        // Re-arm the trigger edge detector after a lifecycle reset. The
+        // first post-clear observation is a baseline, not a synthetic edge.
+        self.last_reset_trigger = None;
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -322,7 +406,9 @@ impl Primitive for Feedback {
         };
         let node_id = ctx.node_id;
         let owner_key = ctx.owner_key;
-        let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
+        let state_format = self
+            .output_format_override
+            .unwrap_or(FEEDBACK_DEFAULT_FORMAT);
 
         // If `run` short-circuited before allocating state (zero-dim
         // out_tex), there's nothing to capture into yet. Pull the mode +
@@ -334,8 +420,13 @@ impl Primitive for Feedback {
         let Some(state) = store.get::<FeedbackState>(node_id, owner_key) else {
             return;
         };
-        let (swap, width, height, cleared_on_alloc) =
-            (state.swap, state.width, state.height, state.cleared_on_alloc);
+        let (swap, width, height, cleared_on_alloc, seeded_on_alloc) = (
+            state.swap,
+            state.width,
+            state.height,
+            state.cleared_on_alloc,
+            state.seeded_on_alloc,
+        );
         // Parity invariant: every frame must end with exactly one swap so
         // the presented slot's texture is never more than one frame old.
         // On the re-entry frame after a gap clear (`just_allocated` +
@@ -351,6 +442,9 @@ impl Primitive for Feedback {
         // Bridge mode always keeps the skip (no swap, no twin to rotate).
         if state.just_allocated {
             state.just_allocated = false;
+            if seeded_on_alloc {
+                return;
+            }
             if swap && cleared_on_alloc {
                 // Gap re-entry: mirror the fresh producer write (in_tex)
                 // into the persistent out slot so the swap can't rotate a
@@ -490,7 +584,10 @@ impl Feedback {
             "node.feedback cross-format copy requires matching dims — \
              src {}×{} != dst {}×{}. A cross-format AND cross-size \
              feedback would need a sample-resize bridge shader variant.",
-            src.width, src.height, dst.width, dst.height,
+            src.width,
+            src.height,
+            dst.width,
+            dst.height,
         );
         // Currently only fp32 dst is supported. Add sibling shader
         // variants + pipeline fields if a future preset needs fp16
@@ -531,6 +628,31 @@ impl Feedback {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::primitive::PrimitiveSpec;
+
+    #[test]
+    fn seed_on_reset_is_opt_in_and_defaults_false() {
+        assert_eq!(Feedback::PARAMS.len(), 2);
+        assert_eq!(Feedback::PARAMS[0].name, "copy_capture");
+        assert_eq!(Feedback::PARAMS[1].name, "seed_on_reset");
+        assert_eq!(Feedback::PARAMS[1].default, ParamValue::Bool(false));
+        assert_eq!(Feedback::PARAMS[0].ty, ParamType::Bool);
+        assert_eq!(Feedback::PARAMS[0].default, ParamValue::Bool(false));
+    }
+
+    #[test]
+    fn clear_state_rearms_reset_trigger_baseline() {
+        let mut feedback = Feedback::new();
+        feedback.last_reset_trigger = Some(7);
+        feedback.clear_state();
+        assert_eq!(feedback.last_reset_trigger, None);
+        assert!(feedback.needs_clear);
+    }
+}
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU regression test guarding the StateStore contract:
@@ -545,17 +667,19 @@ mod gpu_tests {
     //! through it across two frames (the first allocates + seeds prev;
     //! the second actually reads it).
 
+    use half::f16;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::{
         ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-        ResourceId, Source, StateStore, compile,
+        ParamValue, ResourceId, Source, StateStore, compile,
     };
     use crate::render_target::RenderTarget;
 
     use super::Feedback;
+    use crate::node_graph::primitives::Value;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -577,6 +701,33 @@ mod gpu_tests {
             }
         }
         panic!("no output `{port}` on node {node:?}");
+    }
+
+    fn read_first_pixel(
+        device: &manifold_gpu::GpuDevice,
+        texture: &manifold_gpu::GpuTexture,
+    ) -> [f32; 4] {
+        let bytes_per_row = texture.width * 8;
+        let buffer = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
+        let mut enc = device.create_encoder("feedback-seed-readback");
+        enc.copy_texture_to_buffer(
+            texture,
+            &buffer,
+            texture.width,
+            texture.height,
+            bytes_per_row,
+        );
+        enc.commit_and_wait_completed();
+        let ptr = buffer
+            .mapped_ptr()
+            .expect("feedback readback buffer should be mapped");
+        let pixel: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), 4) };
+        [
+            f16::from_bits(pixel[0]).to_f32(),
+            f16::from_bits(pixel[1]).to_f32(),
+            f16::from_bits(pixel[2]).to_f32(),
+            f16::from_bits(pixel[3]).to_f32(),
+        ]
     }
 
     #[test]
@@ -663,7 +814,10 @@ mod gpu_tests {
         // wrote to the per-instance override, not just a local copy.
         let inst = g.get_node(fb).unwrap();
         let node: &dyn EffectNode = inst.node.as_ref();
-        assert_eq!(node.output_format("out"), Some(GpuTextureFormat::Rgba32Float));
+        assert_eq!(
+            node.output_format("out"),
+            Some(GpuTextureFormat::Rgba32Float)
+        );
         // Sibling ports unaffected.
         assert_eq!(node.output_format("nonexistent"), None);
 
@@ -719,8 +873,13 @@ mod gpu_tests {
 
         // Seed the source slot.
         let source_res = output_resource(&plan, src, "out");
-        let source_target =
-            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "fp32-feedback-src");
+        let source_target = RenderTarget::new(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "fp32-feedback-src",
+        );
         let mut native_enc = device.create_encoder("fp32-feedback");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
@@ -731,8 +890,7 @@ mod gpu_tests {
         // backend slot pool keys on (PortType, GpuTextureFormat), so
         // the feedback persistent slot opens in a separate fp32 bucket
         // without colliding with regular 16f slots.
-        let mut backend =
-            MetalBackend::new(device.arc(), w, h, GpuTextureFormat::Rgba16Float);
+        let mut backend = MetalBackend::new(device.arc(), w, h, GpuTextureFormat::Rgba16Float);
         backend.pre_bind_texture_2d(source_res, source_target);
 
         let mut exec = Executor::new(Box::new(backend));
@@ -759,14 +917,7 @@ mod gpu_tests {
         let mut native_enc = device.create_encoder("fp32-feedback-2");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
-            exec.execute_frame_with_state(
-                &mut g,
-                &plan,
-                frame_time(),
-                &mut gpu,
-                &mut store,
-                11,
-            );
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 11);
         }
         native_enc.commit_and_wait_completed();
     }
@@ -841,14 +992,7 @@ mod gpu_tests {
         // Frame 1: allocates state.prev from seed, emits seed → out.
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
-            exec.execute_frame_with_state(
-                &mut g,
-                &plan,
-                frame_time(),
-                &mut gpu,
-                &mut store,
-                17,
-            );
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 17);
         }
         native_enc.commit_and_wait_completed();
 
@@ -881,5 +1025,131 @@ mod gpu_tests {
              that on the same frame, so downstream chains start from \
              structured noise instead of black. got {pixel:?}"
         );
+    }
+
+    #[test]
+    fn feedback_seed_on_reset_reseeds_on_edge_and_after_clear_state() {
+        let device = crate::test_device();
+        let (w, h) = (4u32, 4u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut g = Graph::new();
+        let in_src = g.add_node(Box::new(Source::new()));
+        let seed_src = g.add_node(Box::new(Source::new()));
+        let trigger = g.add_node(Box::new(Value::new()));
+        let fb = g.add_node(Box::new(Feedback::new()));
+        let observe = g.add_node(Box::new(crate::node_graph::primitives::Gain::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.set_param(fb, "seed_on_reset", ParamValue::Bool(true))
+            .unwrap();
+        g.set_param(trigger, "value", ParamValue::Float(0.0))
+            .unwrap();
+        g.connect((in_src, "out"), (fb, "in")).unwrap();
+        g.connect((seed_src, "out"), (fb, "seed")).unwrap();
+        g.connect((trigger, "out"), (fb, "reset_trigger")).unwrap();
+        g.connect((fb, "out"), (observe, "in")).unwrap();
+        g.connect((observe, "out"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let in_res = output_resource(&plan, in_src, "out");
+        let seed_res = output_resource(&plan, seed_src, "out");
+        // Observe the emitted frame before late_capture swaps feedback to the next frame.
+        let fb_res = output_resource(&plan, observe, "out");
+
+        let in_target = RenderTarget::new(&device, w, h, format, "seed-reset-in");
+        let seed_target = RenderTarget::new(&device, w, h, format, "seed-reset-seed");
+        let seed_texture = seed_target.texture.clone();
+        let mut native_enc = device.create_encoder("seed-reset-fill");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(&in_target.texture, 0.0, 0.0, 0.0, 1.0);
+            gpu.clear_texture(&seed_target.texture, 0.7, 0.3, 0.1, 1.0);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        backend.pre_bind_texture_2d(in_res, in_target);
+        backend.pre_bind_texture_2d(seed_res, seed_target);
+        backend.pre_bind_texture_2d(
+            fb_res,
+            RenderTarget::new(&device, w, h, format, "seed-reset-observation"),
+        );
+        let mut exec = Executor::new(Box::new(backend));
+        let mut store = StateStore::new();
+
+        // First observation arms the reset edge tracker and allocates from seed.
+        {
+            let mut enc = device.create_encoder("seed-reset-frame-0");
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
+            enc.commit_and_wait_completed();
+        }
+
+        // Advance reset_trigger: the current seed must be visible on this edge.
+        g.set_param(trigger, "value", ParamValue::Float(1.0))
+            .unwrap();
+        {
+            let mut enc = device.create_encoder("seed-reset-frame-1");
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
+            enc.commit_and_wait_completed();
+        }
+        let fb_slot = exec
+            .backend()
+            .slot_for(fb_res)
+            .expect("feedback output slot");
+        let edge_pixel = read_first_pixel(&device, exec.backend().texture_2d(fb_slot).unwrap());
+        assert!((edge_pixel[0] - 0.7).abs() < 0.02);
+        assert!((edge_pixel[1] - 0.3).abs() < 0.02);
+        assert!((edge_pixel[2] - 0.1).abs() < 0.02);
+
+        // Change the live seed and advance again; reset edges consume current seed data.
+        let mut seed_update = device.create_encoder("seed-reset-update-seed");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut seed_update, &device);
+            gpu.clear_texture(&seed_texture, 0.1, 0.6, 0.9, 1.0);
+        }
+        seed_update.commit_and_wait_completed();
+        g.set_param(trigger, "value", ParamValue::Float(2.0))
+            .unwrap();
+        {
+            let mut enc = device.create_encoder("seed-reset-frame-2");
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
+            enc.commit_and_wait_completed();
+        }
+        let fb_slot = exec
+            .backend()
+            .slot_for(fb_res)
+            .expect("feedback output slot");
+        let edge_pixel = read_first_pixel(&device, exec.backend().texture_2d(fb_slot).unwrap());
+        assert!((edge_pixel[0] - 0.1).abs() < 0.02);
+        assert!((edge_pixel[1] - 0.6).abs() < 0.02);
+        assert!((edge_pixel[2] - 0.9).abs() < 0.02);
+
+        // Drop the state bucket and clear the node, then keep the trigger at
+        // the same count. clear_state must re-arm the baseline and use seed,
+        // rather than treating the unchanged count as an artificial edge.
+        g.get_node_mut(fb).unwrap().node.clear_state();
+        store.cleanup_all();
+        let mut seed_update = device.create_encoder("seed-reset-clear-seed");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut seed_update, &device);
+            gpu.clear_texture(&seed_texture, 0.9, 0.2, 0.4, 1.0);
+        }
+        seed_update.commit_and_wait_completed();
+        {
+            let mut enc = device.create_encoder("seed-reset-frame-after-clear");
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
+            enc.commit_and_wait_completed();
+        }
+        let fb_slot = exec
+            .backend()
+            .slot_for(fb_res)
+            .expect("feedback output slot");
+        let clear_pixel = read_first_pixel(&device, exec.backend().texture_2d(fb_slot).unwrap());
+        assert!((clear_pixel[0] - 0.9).abs() < 0.02);
+        assert!((clear_pixel[1] - 0.2).abs() < 0.02);
+        assert!((clear_pixel[2] - 0.4).abs() < 0.02);
     }
 }

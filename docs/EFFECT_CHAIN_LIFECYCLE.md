@@ -1,119 +1,99 @@
 # Effect Chain State Lifecycle
 
-How per-layer / per-group effect chains are created, preserved, and dropped — and how that interacts with stateful effects (Watercolor, Stylized Feedback, Bloom, etc.).
+How per-layer and per-group effect chains are created, preserved, cleared, and
+dropped, and how that affects stateful effects such as feedback, bloom, and
+halation.
 
-**Read this first when chasing**: feedback bleed-through across project loads, feedback continuity issues after mutes / clip gaps, ghost trails from a previous scene, "the look resets when it shouldn't" or "the look persists when it shouldn't."
+Read this when investigating feedback bleed-through across project loads,
+unexpected continuity after a topology edit, ghost trails from an earlier
+scene, or a look that persists after a layer is muted.
 
----
+## Where effect state lives
 
-## Where effect state actually lives
+The compositor owns pools of optional [`PresetRuntime`](../crates/manifold-renderer/src/preset_runtime/core.rs)
+instances, keyed by `LayerId` for layer and group chains. A runtime owns its
+graph and its per-instance [`StateStore`](../crates/manifold-renderer/src/node_graph/state_store.rs).
+State may also live in a primitive instance: `EffectNode::clear_state` is the
+reset hook for both forms.
 
-Three layers of storage to understand:
+Disabled effects and disabled groups are omitted from a newly built graph. The
+runtime is therefore the authoritative owner of state for the enabled graph;
+there is no separate legacy effect state cache to synchronize.
 
-| Layer | Owned by | Keyed by | Holds |
-|---|---|---|---|
-| `LayerCompositor::effect_chains` (and the group / LED group variants) | The compositor | `LayerId` | `AHashMap<LayerId, Option<ChainGraph>>` — one chain per layer |
-| Primitive instances inside a `ChainGraph` | A specific `ChainGraph` | `node_id` within the graph | The runtime `Primitive` impls (e.g. `primitives::Watercolor`) |
-| `StateStore` entries | The compositor | `(owner_key, node_id)` | StateStore-backed per-frame state (`Feedback.prev`, `Smoothing.previous`, `Watercolor` pigment buffers, …) |
+## Chain pool policy
 
-There is no longer a dual-state-cache class to keep in sync — `StateStore` is the single store, and `clear_all_effect_state` walks one path.
+`LayerCompositor::trim_excess_buffers` applies two eviction rules:
 
-Watercolor's feedback texture lives inside its primitive instance, which the `StateStore` references via `(owner_key, "watercolor")`. When the `ChainGraph` is rebuilt (topology change), the primitive instance is recreated and the StateStore entry is dropped. Stale feedback is lost.
+1. It drops a pool entry as soon as its `LayerId` is absent from the current
+   frame's layer list.
+2. It drops an entry after `CHAIN_GRACE_FRAMES` unused render calls (currently
+   18,000, approximately five minutes at 60 fps).
 
----
+The idle reset is separate from eviction. Every layer, group, or LED group
+chain that did not dispatch in the current frame is passed through
+`clear_idle_chain_state`, which calls `PresetRuntime::clear_state` while
+leaving the chain instance resident. A later activation therefore rebuilds no
+chain resources, but its retained effect state starts clean.
 
-## Chain pool eviction policy (hybrid)
+## When state is cleared or retained
 
-In [`LayerCompositor::trim_excess_buffers`](../crates/manifold-renderer/src/layer_compositor.rs):
-
-1. **Event-based (immediate)**: drop a chain the moment its `LayerId` is no longer present in `frame.layers`. The user removed the layer from the project → chain (and its memory) goes immediately.
-2. **Timer-based (safety net)**: drop a chain unused for more than `CHAIN_GRACE_FRAMES = 18000` (~5 min @ 60 fps). The layer technically still exists but the operator has clearly moved on from this section of the show.
-
-Together: brief intra-song mutes / clip gaps preserve feedback state (visual continuity); long idle / explicit deletion reclaims memory.
-
-**Tuning `CHAIN_GRACE_FRAMES`** is a trade-off:
-- Lower → faster memory reclaim, more "state reset" surprises if a layer comes back unexpectedly.
-- Higher → more visual continuity, more held memory.
-- Counter advances per `render()` call, so the wall-time grace scales with project FPS (30-fps project gets 10 min, 120-fps project gets 2.5 min).
-
----
-
-## Important: feedback **does not decay during mute**
-
-Common misconception worth flagging: Watercolor's `decay` factor (default 0.99/frame) only multiplies when the effect actually runs. When a layer is muted or has no active clip, the effect doesn't run, so the feedback texture sits **frozen in GPU memory** at whatever the last-active frame looked like.
-
-This means:
-- After a 30-second mute, the feedback texture is unchanged from 30 seconds ago.
-- When the layer resumes, watercolor sees that pre-mute frame as its feedback input — no natural fade has happened.
-- The chain pool eviction policy is what *actually* resets feedback after a long idle.
-
-If you want a layer's look to fade naturally during silence rather than freeze, the effect itself would need a "decay-while-idle" pass. None of the current MANIFOLD effects do this.
-
----
-
-## When to expect a feedback reset
-
-| Trigger | Resets feedback? | Why |
+| Trigger | State behavior | Reason |
 |---|---|---|
-| Layer has an active clip dispatching effects this frame | **No** | Effect runs, state evolves normally per `amount`/`decay` parameters. |
-| Layer has no active clip this frame (idle / muted / soloed-out) | **YES** | `clear_idle_chain_state` fires `clear_state` on the chain. Per-primitive state (Watercolor feedback, Bloom mips, Halation buffers) wiped. Chain instance stays in the pool — reactivation has no rebuild cost. |
-| Layer is deleted from the project | **Yes** | Chain instance dropped immediately on next `trim_excess_buffers`. |
-| Project is loaded (different `.manifold` file) | **Yes** | `clear_all_effect_state` walks every chain and clears the `StateStore` entries. |
-| Compositor resizes (resolution change, render scale change) | **Yes** | Resize sets `chain_graph = None` for the affected chains → next frame rebuilds with fresh primitives. |
-| Seek (jumping playback head to a different time) | **Yes** | `clear_all_effect_state` fires on seek paths. Single StateStore now (no parallel cache), so the clear is consistent. |
-| Topology change (effect added/removed, enabled toggled, group changed) | **Yes** | `is_compatible` returns false → chain_graph rebuilds. Stateful primitives lose their cached state. |
+| Active clip dispatches effects | Retained and advanced normally | The graph runs for this frame. |
+| No active clip, muted, or outside the solo set | Cleared immediately; runtime stays pooled | `clear_idle_chain_state` resets every stateful node and the runtime store. |
+| Layer or group removed from the project | Runtime and buffers dropped on the next pool trim | The `LayerId` is no longer alive. |
+| Project load or seek | All pooled effect runtimes are cleared | `clear_all_effect_state` walks layer, group, LED group, and master chains. |
+| Compositor resize | Cached chains are dropped and rebuilt at the new dimensions | Resolution-dependent state is not carried across resize. |
+| Topology rebuild at unchanged dimensions | Compatible card state may be harvested | `PresetRuntime::try_build` matches unchanged cards and node identity; membership changes, edited content, or changed upstream order reset the affected state. |
 
-The "no active clip this frame" trigger is the key live-performance behavior: feedback effects start fresh on every clip retrigger after the layer goes idle, but feedback stays continuous *within* a clip and across rapid clip-to-clip transitions where the layer is never truly idle. Matches the operator intuition "if I muted this layer and unmuted it later, I want it to start fresh."
+The topology rule is deliberately narrower than “every rebuild resets.” A
+rebuild caused by fusion or an authoring change can preserve a compatible
+card's persistent state, while adding, removing, disabling, or reordering the
+relevant upstream cards prevents that harvest.
 
----
+Feedback does not decay during an idle frame: the effect is not evaluated, and
+the idle clear removes or resets its retained state instead. A later clip
+starts from the primitive's fresh-state behavior. Continuous frames within an
+active clip retain and evolve feedback according to that effect's parameters.
 
-## Common symptoms → likely causes
+## Common symptoms and likely causes
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
-| Ghost trails / old content visible after loading a different project | `clear_graph_runner_state` not wired into `clear_all_effect_state` | [`layer_compositor.rs::clear_all_effect_state`](../crates/manifold-renderer/src/layer_compositor.rs) — must call `clear_graph_runner_state()` on every chain |
-| Layer's feedback "resets" after a long quiet stretch (>5 min) | Timer-based eviction triggered | `CHAIN_GRACE_FRAMES` — tune if needed, or rethink the policy |
-| Same layer index produces different visuals frame-to-frame | Chains positionally indexed | Won't reoccur — chains are `AHashMap<LayerId, _>` |
-| Master FX state contaminated by layer 0's effects | Shared `effect_chains[0]` | Won't reoccur — master is a dedicated field |
-| FPS tanks to ~30 fps at 4K with many effects | Chain rebuild thrash | Won't reoccur — chains pinned to `LayerId` |
-| Feedback look subtly different after refactor / migration | Eviction policy change shifted what gets retained between frames | See "When to expect a feedback reset" above |
-| Memory grows unboundedly during a long show | Eviction policy not running, or `current_layers` slice empty | Check that `trim_excess_buffers(frame.layers)` is called every frame |
+| Old content appears after loading another project | A chain was not included in the clear path | [`LayerCompositor::clear_all_effect_state`](../crates/manifold-renderer/src/layer_compositor.rs) |
+| A muted layer resumes with a stale trail | The chain was marked used or bypassed the idle clear | [`clear_idle_chain_state`](../crates/manifold-renderer/src/layer_compositor.rs) and the node's `clear_state` implementation |
+| A topology edit unexpectedly changes a trail | The card failed the state-harvest match | [`PresetRuntime::harvest_state_from`](../crates/manifold-renderer/src/preset_runtime/core.rs) |
+| A long-unused layer rebuilds on re-entry | Pool grace eviction reclaimed the runtime | `CHAIN_GRACE_FRAMES` and `trim_excess_buffers` |
+| Memory grows during a long show | Pool trimming is not seeing the live layer list | The `trim_excess_buffers(frame.layers)` call in the compositor render path |
 
----
+For rebuild diagnostics, `MANIFOLD_LOG_REBUILD_REASON=1` logs topology and pool
+events, while `MANIFOLD_LOG_HARVEST=1` logs compatible node state carried into a
+new runtime. These logs identify why state was rebuilt, harvested, or evicted;
+they do not replace a visual runtime reproduction.
 
-## Diagnosing rebuild thrash (if topology is suspected)
+## Contract for stateful primitives
 
-Set both env vars and run the scene where the symptom appears:
+When adding a stateful primitive, keep persistent textures, buffers, and
+accumulators in the primitive instance or the runtime's `StateStore`, and
+override `clear_state` for every resource it owns. That hook is used by:
 
-```bash
-MANIFOLD_LOG_REBUILD_REASON=1 MANIFOLD_LOG_CHAIN_STATS=1 cargo run --release 2> debug.log
-```
+- idle layer and group clearing;
+- project-load and seek clearing; and
+- runtime reset paths that clear the graph and its `StateStore` together.
 
-`MANIFOLD_LOG_REBUILD_REASON` dumps **both** the previous topology (`prev=...`) and the current frame's topology (`curr=...`) per rebuild, so you can diff in one line which field flapped. `MANIFOLD_LOG_CHAIN_STATS` prints per-second dispatch counters (dispatches / rebuilds / graph_runs / legacy_fallbacks).
+If a primitive needs a first-frame clear or seed after reset, keep that marker
+with the primitive and make the first subsequent evaluation perform the clear
+or seed. Do not add another compositor-level state cache.
 
-Healthy: `rebuilds=0-2/sec` in steady state. Rebuilds every frame = topology flapping or chain identity issue.
-
----
-
-## Don't add a third state cache
-
-If you find yourself needing per-frame state for a new effect, **put it inside the primitive instance** (so it lives with the chain_graph) rather than introducing a fourth keyed cache. Three caches is already enough surface area to keep in sync.
-
-When adding a new stateful primitive:
-- **Override `clear_state()` to drop every persistent texture / accumulator the node owns.** See [`primitives/watercolor.rs::clear_state`](../crates/manifold-renderer/src/node_graph/primitives/watercolor.rs) as the reference impl: drop the `Option<RenderTarget>` fields and the `state_dims` so `ensure_state` knows to re-allocate. This single override hooks the primitive into:
-  - `clear_idle_chain_state` (fires every frame the layer is idle — the live-performance reset).
-  - `ChainGraph::clear_state` (fires on `clear_all_effect_state` — seek, project load).
-  - `EffectChain::resize` (forces graph rebuild on resolution change).
-- Set a `feedback_needs_clear: bool` flag on (re)allocation so the first `evaluate()` after a reset writes opaque/transparent black to the feedback. Reference: same `watercolor.rs`.
-- Document the state in the primitive's docstring so this file's "Where state lives" stays accurate.
-
-If you skip the `clear_state` override, your new primitive accumulates state indefinitely across mute/unmute cycles — the symptom is "feedback never clears, runs away to saturation." It's the silent-failure version of "I forgot to write a destructor."
-
----
+Motion Mosh and Data Mosh extend this contract for retained image and mask
+history. Their retained-state decisions, recovery behavior, fixed flow lag,
+and reset expectations are defined in
+[`MOSH_EFFECTS_DESIGN.md`](MOSH_EFFECTS_DESIGN.md).
 
 ## Related docs
 
-- [`docs/CHAIN_POOL_REFACTOR_PLAN.md`](CHAIN_POOL_REFACTOR_PLAN.md) — the 2026-05 refactor that introduced LayerId-keyed pools (Stages 1–5).
-- [`docs/EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md) — design of `StateStore`, `ChainGraph`, and the legacy fallback contract.
-- [`docs/ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md) — primitive authoring guide.
-- [`docs/PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog + per-effect decomposition recipes.
+- [`MOSH_EFFECTS_DESIGN.md`](MOSH_EFFECTS_DESIGN.md) — retained-state contract for Motion Mosh and Data Mosh.
+- [`CHAIN_POOL_REFACTOR_PLAN.md`](archive/CHAIN_POOL_REFACTOR_PLAN.md) — LayerId-keyed pool design.
+- [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md) — `PresetRuntime`, graph, and `StateStore` design.
+- [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md) — primitive authoring and lifecycle hooks.
+- [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog and composition patterns.

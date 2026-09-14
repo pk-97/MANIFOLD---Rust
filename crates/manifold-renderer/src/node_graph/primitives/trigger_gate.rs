@@ -27,7 +27,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: TriggerGate,
     type_id: "node.trigger_gate",
-    purpose: "Gate a trigger_count scalar stream. When `enable` is true, advances pass through (output += input - previous_input). When false, advances are absorbed — output stays frozen and re-enabling does NOT fire a backlog. Equivalent to the legacy `if triggered { advance }` gate pattern, expressed as a graph wire instead of consumer-internal state.",
+    purpose: "Gate a trigger_count scalar stream. When `enable` is true, advances pass through (output += input - previous_input) and emit a one-frame `pulse`; when false, advances are absorbed — output stays frozen and re-enabling does NOT fire a backlog. Equivalent to the legacy `if triggered { advance }` gate pattern, expressed as a graph wire instead of consumer-internal state.",
     inputs: {
         trigger_count: ScalarF32 optional,
         enable: ScalarF32 optional,
@@ -35,6 +35,7 @@ crate::primitive! {
     },
     outputs: {
         out: ScalarF32,
+        pulse: ScalarF32,
     },
     params: [
         ParamDef {
@@ -47,7 +48,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Both `trigger_count` and `enable` are port-shadows-param. When the enable wire is present, values > 0.5 are treated as enabled (BoolThreshold semantics). When absent, the `enable` param drives. State (last_input, output_count) is fresh on rebuild per the graph-editor-is-authoring-not-perform rule.",
+    composition_notes: "Both `trigger_count` and `enable` are port-shadows-param. When the enable wire is present, values > 0.5 are treated as enabled (BoolThreshold semantics). When absent, the `enable` param drives. `pulse` is 1.0 only on an enabled advance and 0.0 on every other evaluation, so it can drive one-shot reset or seed paths. State (last_input, output_count) is fresh on rebuild per the graph-editor-is-authoring-not-perform rule.",
     examples: ["NestedCubes"],
     picker: { label: "Trigger Gate", category: Driver },
     summary: "Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off.",
@@ -58,6 +59,7 @@ crate::primitive! {
     extra_fields: {
         last_input: Option<u32> = None,
         output_count: u32 = 0,
+        pulse: f32 = 0.0,
     },
 }
 
@@ -97,15 +99,19 @@ impl Primitive for TriggerGate {
         if enabled {
             self.output_count = self.output_count.saturating_add(delta);
         }
+        self.pulse = if enabled && delta > 0 { 1.0 } else { 0.0 };
         self.last_input = Some(input);
 
         ctx.outputs
             .set_scalar("out", ParamValue::Float(self.output_count as f32));
+        ctx.outputs
+            .set_scalar("pulse", ParamValue::Float(self.pulse));
     }
 
     fn clear_state(&mut self) {
         self.last_input = None;
         self.output_count = 0;
+        self.pulse = 0.0;
     }
 
     /// BUG-104: `output_count` only ever accumulates while `enable` is
@@ -120,7 +126,14 @@ impl Primitive for TriggerGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::MockBackend;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
+    use crate::node_graph::effect_node::{FrameTime, ParamValues};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::ports::{PortType, ScalarType};
     use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_core::{Beats, Seconds};
 
     #[test]
     fn declares_three_optional_inputs_and_scalar_output() {
@@ -135,10 +148,15 @@ mod tests {
         assert_eq!(inputs[2].name, "initial_count");
         assert!(!inputs[2].required);
 
-        assert_eq!(TriggerGate::OUTPUTS.len(), 1);
+        assert_eq!(TriggerGate::OUTPUTS.len(), 2);
         assert_eq!(TriggerGate::OUTPUTS[0].name, "out");
         assert_eq!(
             TriggerGate::OUTPUTS[0].ty,
+            PortType::Scalar(ScalarType::F32)
+        );
+        assert_eq!(TriggerGate::OUTPUTS[1].name, "pulse");
+        assert_eq!(
+            TriggerGate::OUTPUTS[1].ty,
             PortType::Scalar(ScalarType::F32)
         );
     }
@@ -170,5 +188,96 @@ mod tests {
         let prim = TriggerGate::new();
         let node: &dyn EffectNode = &prim;
         assert!(node.is_trigger_latch());
+    }
+
+    fn evaluate_actual(node: &mut TriggerGate, trigger_count: f32, enable: bool) -> (f32, f32) {
+        let mut backend = MockBackend::new();
+        let trigger_slot = backend.acquire(
+            ResourceId(0),
+            PortType::Scalar(ScalarType::F32),
+            None,
+            (0, 0),
+        );
+        let enable_slot = backend.acquire(
+            ResourceId(1),
+            PortType::Scalar(ScalarType::F32),
+            None,
+            (0, 0),
+        );
+        let out_slot = backend.acquire(
+            ResourceId(2),
+            PortType::Scalar(ScalarType::F32),
+            None,
+            (0, 0),
+        );
+        let pulse_slot = backend.acquire(
+            ResourceId(3),
+            PortType::Scalar(ScalarType::F32),
+            None,
+            (0, 0),
+        );
+        backend.set_scalar(trigger_slot, ParamValue::Float(trigger_count));
+        backend.set_scalar(enable_slot, ParamValue::Bool(enable));
+
+        let params = ParamValues::default();
+        let inputs_bindings = [("trigger_count", trigger_slot), ("enable", enable_slot)];
+        let outputs_bindings = [("out", out_slot), ("pulse", pulse_slot)];
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        {
+            let inputs = NodeInputs::new(&inputs_bindings, &backend, &[]);
+            let outputs = NodeOutputs::new(
+                &outputs_bindings,
+                &backend,
+                &mut scalar_scratch,
+                &mut camera_scratch,
+                &mut light_scratch,
+                &mut material_scratch,
+                &mut transform_scratch,
+                &mut atmosphere_scratch,
+                &mut object_scratch,
+            );
+            let frame_time = FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(0.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: 0,
+            };
+            let mut ctx = EffectNodeContext::new(frame_time, &params, inputs, outputs, None);
+            node.run(&mut ctx);
+        }
+        for (slot, value) in scalar_scratch.drain(..) {
+            backend.set_scalar(slot, value);
+        }
+        let read = |slot| match backend.scalar(slot) {
+            Some(ParamValue::Float(value)) => value,
+            other => panic!("expected scalar output, got {other:?}"),
+        };
+        (read(out_slot), read(pulse_slot))
+    }
+
+    #[test]
+    fn pulse_is_one_frame_for_enabled_advance_and_absorbs_disabled_backlog() {
+        let mut node = TriggerGate::new();
+        assert_eq!(evaluate_actual(&mut node, 0.0, true), (0.0, 0.0));
+        assert_eq!(evaluate_actual(&mut node, 1.0, true), (1.0, 1.0));
+        assert_eq!(evaluate_actual(&mut node, 1.0, true), (1.0, 0.0));
+        assert_eq!(evaluate_actual(&mut node, 3.0, false), (1.0, 0.0));
+        assert_eq!(evaluate_actual(&mut node, 4.0, true), (2.0, 1.0));
+    }
+
+    #[test]
+    fn clear_state_clears_pulse_and_rearms_baseline() {
+        let mut node = TriggerGate::new();
+        assert_eq!(evaluate_actual(&mut node, 4.0, true), (0.0, 0.0));
+        assert_eq!(evaluate_actual(&mut node, 5.0, true), (1.0, 1.0));
+        node.clear_state();
+        assert_eq!(evaluate_actual(&mut node, 5.0, true), (0.0, 0.0));
+        assert_eq!(evaluate_actual(&mut node, 6.0, true), (1.0, 1.0));
     }
 }
