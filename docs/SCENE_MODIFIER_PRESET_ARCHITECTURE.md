@@ -194,6 +194,8 @@ Host manifests expose modifier params using stable `(instance ID, param ID)` ide
 
 The outer SceneModifier macro address uses `ParamConvert::Float`: it addresses a scalar manifest value. Its scale/offset compose with each local binding's scale/offset, and the local leaf retains the final Bool/Enum/Int/Trigger conversion. Reject a non-Float outer conversion rather than silently changing conversion order. Ordinary existing host bindings keep their conversion unchanged. Fresh calibration updates both the manifest default and matching binding defaults; otherwise normal binding initialization would undo the calibration at the next rebuild.
 
+Periodic modifier controls declare `wraps: true` on their parameter specs so saw LFOs wrap instead of clamping when driven beyond the range boundary. Current full-cycle phase controls use 0–1; orientation and mask angles use a complete turn. Angle display alone does not establish periodicity: weighted Vortex Orbit, Peel Curl and Recon Rotation, FOV, and mask translations are not full-cycle controls. Load-time `scene_modifier_periodicity::repair_scene_modifier_periodicity` repairs stale local and host flags only for verified primitive/parameter bindings whose mapped range spans complete periods. It preserves authored values, ranges, IDs and mappings, and refuses partial-cycle or unqualified bindings. Math View remains independent of this parameter contract.
+
 ## 5. Sources, identity and bypass
 
 ### Clip-edge response contract

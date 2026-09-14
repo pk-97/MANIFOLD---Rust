@@ -5,6 +5,8 @@
 //! gestures, save/reopen, and a pair of post-reopen output captures. The test
 //! uses the same headless `ContentThread` and native Metal output as the app.
 
+mod periodic;
+
 use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::{

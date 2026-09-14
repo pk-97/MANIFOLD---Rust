@@ -219,6 +219,7 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
                 Err(reason) => notices.push(format!("Math View metadata reconciliation failed for {id}: {reason}")),
             }
         }
+        manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         host.refresh_manifest_from_graph();
     }
     notices
