@@ -2037,10 +2037,7 @@ impl PresetRuntime {
         }
 
         // 3. Install the host's target as the FinalOutput's source slot.
-        for view in &mut self.math_views {
-            let (count,baseline)=self.modifier_events.as_ref().and_then(|events|events.counts(&view.modifier_id)).expect("prepared Math View event stream");
-            view.events.tick(&mut self.graph,&mut view.variants,count,baseline,Beats(ctx.beat));
-        }
+        self.tick_math_view_events(Beats(ctx.beat));
         self.install_target(target);
 
         // 4. Run the graph through the state-aware executor entry.
@@ -2066,11 +2063,7 @@ impl PresetRuntime {
             ctx.owner_key,
         );
 
-        for view in &mut self.math_views {
-            if view.resources_ready(&self.executor) {
-                view.render(&self.graph, gpu, target, ctx, params);
-            }
-        }
+        self.render_math_views(gpu, target, ctx, params);
 
         self.consume_trigger_markers();
         ctx.anim_progress

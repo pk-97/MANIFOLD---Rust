@@ -13,6 +13,15 @@ use super::standalone_pipeline::standalone_pipeline;
 
 pub const SAMPLE_MESH_TRIANGLES_CAPACITY: u32 = 512 * 3;
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SampleMeshTrianglesUniforms {
+    density: f32,
+    dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
 crate::primitive! {
     name: SampleMeshTriangles,
     type_id: "node.sample_mesh_triangles",
@@ -53,7 +62,12 @@ impl Primitive for SampleMeshTriangles {
         };
         let density = ctx.scalar_or_param("density", 3.0).round().clamp(2.0, 8.0);
         let count = (dst.size / std::mem::size_of::<MeshVertex>() as u64) as u32;
-        let uniform = [density.to_bits(), count, 0, 0];
+        let uniform = SampleMeshTrianglesUniforms {
+            density,
+            dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
+        };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         gpu.native_enc.dispatch_compute(
@@ -61,7 +75,7 @@ impl Primitive for SampleMeshTriangles {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::cast_slice(&uniform),
+                    data: bytemuck::bytes_of(&uniform),
                 },
                 GpuBinding::Buffer {
                     binding: 1,
@@ -210,14 +224,19 @@ mod gpu_tests {
         unsafe {
             src.write(0, bytemuck::cast_slice(source));
         }
-        let uniform = [2.0f32.to_bits(), output_len as u32, 0, 0];
+        let uniform = SampleMeshTrianglesUniforms {
+            density: 2.0,
+            dispatch_count: output_len as u32,
+            _pad0: 0,
+            _pad1: 0,
+        };
         let mut encoder = device.create_encoder(label);
         encoder.dispatch_compute(
             &pipeline,
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::cast_slice(&uniform),
+                    data: bytemuck::bytes_of(&uniform),
                 },
                 GpuBinding::Buffer {
                     binding: 1,

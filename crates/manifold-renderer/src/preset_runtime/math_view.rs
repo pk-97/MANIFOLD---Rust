@@ -25,6 +25,53 @@ struct Presentation {
     sampler: manifold_gpu::GpuSampler,
 }
 
+impl PresetRuntime {
+    pub(super) fn install_math_views(
+        &mut self,
+        device: std::sync::Arc<GpuDevice>,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<(), JsonGeneratorLoadError> {
+        for view in &mut self.math_views {
+            view.install_device(
+                self.executor.backend(),
+                std::sync::Arc::clone(&device),
+                width,
+                height,
+                format,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn tick_math_view_events(&mut self, beat: Beats) {
+        for view in &mut self.math_views {
+            let (count, baseline) = self
+                .modifier_events
+                .as_ref()
+                .and_then(|events| events.counts(&view.modifier_id))
+                .expect("prepared Math View event stream");
+            view.events
+                .tick(&mut self.graph, &mut view.variants, count, baseline, beat);
+        }
+    }
+
+    pub(super) fn render_math_views(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        target: &GpuTexture,
+        ctx: &PresetContext,
+        params: &ParamManifest,
+    ) {
+        for view in &mut self.math_views {
+            if view.resources_ready(&self.executor) {
+                view.render(&self.graph, gpu, target, ctx, params);
+            }
+        }
+    }
+}
+
 pub(super) fn invalid(detail: impl Into<String>) -> JsonGeneratorLoadError {
     JsonGeneratorLoadError::SceneModifier(SceneModifierExpandError::InvalidRecipe {
         path: "mathView".into(),

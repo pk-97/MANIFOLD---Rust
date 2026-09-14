@@ -742,9 +742,7 @@ impl PresetRuntime {
             .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
-        for view in &mut g.math_views {
-            view.install_device(g.executor.backend(),std::sync::Arc::clone(&device), width, height, format)?;
-        }
+        g.install_math_views(device, width, height, format)?;
         Ok(())
     }
 

@@ -462,6 +462,8 @@ const NON_STANDALONE: &[&str] = &[
     "node.spawn_from_mesh",
     "node.spawn_particles",
     "node.torus_wrap_field",
+    // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
+    "system.mesh_input",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {
