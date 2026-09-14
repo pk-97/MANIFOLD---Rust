@@ -8,6 +8,7 @@ mod app_render;
 mod frame;
 mod editor_bridge;
 mod audio_mod_runtime;
+mod audio_visualization;
 mod autosave;
 mod audio_waveform_cache;
 mod blender_import;

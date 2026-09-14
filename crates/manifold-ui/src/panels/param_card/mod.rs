@@ -194,7 +194,8 @@ mod routing;
 mod state;
 
 pub use state::{
-    CardContext, ParamCardKind, ParamCardState, ParamCardStringInfo, RelightCardConfig, RowMod,
+    CardContext, ParamCardKind, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
+    RelightCardConfig, RowMod,
 };
 pub(crate) use state::RELIGHT_FIELD_SPECS;
 

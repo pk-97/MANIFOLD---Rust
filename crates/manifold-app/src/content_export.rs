@@ -378,7 +378,8 @@ impl ContentThread {
         // every layer any consumed send reads (union over
         // `AudioSend::layers()`), so the mixdown renders exactly the taps the
         // driver will need and no more.
-        let consumed_sends = project.analysis_consumed_sends();
+        let mut consumed_sends = project.analysis_consumed_sends();
+        consumed_sends.extend(crate::audio_visualization::visualizer_consumed_sends(project));
         let mut tapped_layers_set: ahash::AHashSet<manifold_core::id::LayerId> =
             ahash::AHashSet::new();
         for send in &project.audio_setup.sends {
@@ -702,7 +703,7 @@ impl ContentThread {
         state_tx: &crossbeam_channel::Sender<ContentState>,
         progress_prefix: Option<&str>,
         generator_only: bool,
-        offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
+        mut offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<ExportFrameFailure> {
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         // Frame k samples the timeline at export_start + k * frame_dt via the
@@ -728,7 +729,7 @@ impl ContentThread {
         // `snap.sends` unconditionally on every live tick (including its
         // `active == false` branch, which still clears+resizes), so
         // export-written features cannot leak into subsequent live playback.
-        if let Some(driver) = offline_audio_mod {
+        if let Some(driver) = offline_audio_mod.as_deref_mut() {
             driver.feed_frame(frame_idx, &mut self.engine);
         }
         let tick_result = self.engine.tick(ctx);
@@ -749,6 +750,7 @@ impl ContentThread {
             frame_idx as u64,
             true,
             self.editing_service.data_version(),
+            offline_audio_mod.as_deref().map(|driver| driver.visuals()),
         );
 
         // Block until async effect workers complete (blob tracking, wireframe depth,

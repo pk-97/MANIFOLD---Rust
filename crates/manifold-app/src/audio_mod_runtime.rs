@@ -49,6 +49,14 @@ struct CaptureSignature {
     sends: Vec<Vec<u16>>,
 }
 
+/// Changes to actual visualizer inputs invalidate history; labels and gain
+/// edits do not. Compared only when the project changes.
+#[derive(PartialEq)]
+struct VisualRoutingSignature {
+    device: Option<AudioDeviceRef>,
+    sends: Vec<(AudioSendId, Vec<u16>, Vec<manifold_core::LayerId>)>,
+}
+
 impl CaptureSignature {
     fn from_setup(setup: &AudioSetup) -> Self {
         Self {
@@ -97,6 +105,10 @@ impl SendAnalyzer {
 /// Content-thread-owned runtime that reconciles capture against the project and
 /// feeds the engine its feature snapshot.
 pub struct AudioModRuntime {
+    /// Per-send waveform and spectrum histories fed from the same mixed mono
+    /// stream as the modulation analyzer.
+    visuals: manifold_core::audio_visual::AudioVisualRegistry,
+    visual_routing: Option<VisualRoutingSignature>,
     capture: Option<AudioModCapture>,
     /// Last project data-version reconciled against — reconcile only runs when
     /// the project changed, not every frame.
@@ -111,6 +123,9 @@ pub struct AudioModRuntime {
     /// quits; drained each tick. Acted on **only** when the current source is an
     /// app tap, so device / system-audio captures don't churn on unrelated apps.
     processes_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Explicit seek/transport boundaries clear history; ordinary clock nudges
+    /// and steady live capture while stopped preserve it.
+    last_transport_epoch: u64,
     /// Hot-plug subscription guard — unregisters the device listener on drop.
     _hotplug_sub: manifold_audio::directory::Subscription,
     /// Process-list subscription guard — unregisters the listener on drop.
@@ -139,6 +154,10 @@ pub struct AudioModRuntime {
     /// scope-tapped send: no mono push, no analyzer entry. Makes analysis cost
     /// proportional to what's actually bound, not to `sends.len()`.
     consumed: ahash::AHashSet<AudioSendId>,
+    /// Sends read by enabled waveform/spectrum graph sources. These are kept
+    /// separate so visual history storage does not grow for modulation-only
+    /// sends.
+    visual_consumed: ahash::AHashSet<AudioSendId>,
     /// Snapshot index (project send order) of the scope-tapped send, for the
     /// per-band meters. Resolved each tick.
     tapped_index: Option<usize>,
@@ -170,11 +189,14 @@ impl Default for AudioModRuntime {
         let process_sub =
             directory.subscribe_processes(Box::new(move || pflag.store(true, Ordering::Relaxed)));
         Self {
+            visuals: manifold_core::audio_visual::AudioVisualRegistry::new(),
+            visual_routing: None,
             capture: None,
-            last_version: 0,
+            last_version: u64::MAX,
             directory,
             devices_dirty,
             processes_dirty,
+            last_transport_epoch: u64::MAX,
             _hotplug_sub: sub,
             _process_sub: process_sub,
             mic_access_requested: false,
@@ -183,6 +205,7 @@ impl Default for AudioModRuntime {
             analyzers: AHashMap::new(),
             pitch_sends: ahash::AHashSet::new(),
             consumed: ahash::AHashSet::new(),
+            visual_consumed: ahash::AHashSet::new(),
             tapped_index: None,
             capture_mono: Vec::new(),
             layer_mix: Vec::new(),
@@ -204,6 +227,11 @@ impl AudioModRuntime {
         data_version: u64,
         mut layer_playback: Option<&mut AudioLayerPlayback>,
     ) {
+        let transport_epoch = engine.transport_epoch();
+        if transport_epoch != self.last_transport_epoch {
+            self.visuals.clear();
+            self.last_transport_epoch = transport_epoch;
+        }
         let hotplugged = self
             .devices_dirty
             .swap(false, std::sync::atomic::Ordering::Relaxed);
@@ -229,16 +257,47 @@ impl AudioModRuntime {
         let app_rebuild = processes_changed && matches!(source_kind, Some(AudioSourceKind::App));
         if data_version != self.last_version || device_rebuild || app_rebuild || self.spec_dirty {
             if device_rebuild || app_rebuild {
+                self.visuals.clear();
+            }
+            if device_rebuild || app_rebuild {
                 // The device or the tapped app appeared/vanished/changed — drop
                 // capture so reconcile rebuilds against the current state (the
                 // stored ref is unchanged, so the signature alone wouldn't fire).
                 self.capture = None;
             }
+            let next_visual_consumed = engine
+                .project()
+                .map(crate::audio_visualization::visualizer_consumed_sends)
+                .unwrap_or_default();
+            let visual_routing = engine.project().map(|project| VisualRoutingSignature {
+                device: project.audio_setup.device.clone(),
+                sends: project.audio_setup.sends.iter()
+                    .filter(|send| next_visual_consumed.contains(&send.id))
+                    .map(|send| (send.id.clone(), send.channels.clone(), send.layers().to_vec()))
+                    .collect(),
+            });
+            if visual_routing != self.visual_routing {
+                self.visuals.clear();
+                self.visual_routing = visual_routing;
+            }
+            self.visual_consumed = next_visual_consumed;
+            if let Some(project) = engine.project() {
+                self.visuals
+                    .set_first_send(project.audio_setup.sends.first().map(|send| &send.id));
+            } else {
+                self.visuals.set_first_send(None);
+            }
             self.reconcile(engine.project());
             // D4 activation set (AUDIO_SENDS_UX_DESIGN section 3.2): recomputed only here,
             // never per tick.
-            self.consumed =
-                engine.project().map(|p| p.analysis_consumed_sends()).unwrap_or_default();
+            self.consumed = engine
+                .project()
+                .map(|p| {
+                    let mut consumed = p.analysis_consumed_sends();
+                    consumed.extend(self.visual_consumed.iter().cloned());
+                    consumed
+                })
+                .unwrap_or_default();
             // Drop analyzers for sends that no longer exist, or that are no longer
             // consumed and aren't the scope-tapped send (runs only on a project
             // change, never per tick — keeps the map bounded without allocating on
@@ -250,9 +309,19 @@ impl AudioModRuntime {
                     project.audio_setup.sends.iter().any(|s| &s.id == id)
                         && (consumed.contains(id) || spec_send.as_ref() == Some(id))
                 });
+                let visual_ids: Vec<_> = project
+                    .audio_setup
+                    .sends
+                    .iter()
+                    .filter(|send| self.visual_consumed.contains(&send.id))
+                    .map(|send| send.id.clone())
+                    .collect();
+                self.visuals.remove_unlisted(&visual_ids);
             }
-            self.pitch_sends =
-                engine.project().map(|p| p.sends_with_pitch_mods()).unwrap_or_default();
+            self.pitch_sends = engine
+                .project()
+                .map(|p| p.sends_with_pitch_mods())
+                .unwrap_or_default();
             self.last_version = data_version;
             self.spec_dirty = false;
         }
@@ -263,9 +332,13 @@ impl AudioModRuntime {
         let (active, send_count) = engine.project().map_or((false, 0), |p| {
             let needs = p.has_active_audio_mods()
                 || self.spec_send.is_some()
-                || p.has_active_clip_triggers();
+                || p.has_active_clip_triggers()
+                || !self.visual_consumed.is_empty();
             (needs, p.audio_setup.sends.len())
         });
+        if !active {
+            self.visuals.clear();
+        }
 
         // The rate the capture worker delivers mono at (also the analyzer rate for
         // any capture-fed send).
@@ -339,9 +412,20 @@ impl AudioModRuntime {
                         e.insert(SendAnalyzer::new(canonical, low_hz, mid_hz))
                     }
                 };
+                let visualized = self.visual_consumed.contains(&send.id);
+                if visualized {
+                    self.visuals.ensure(
+                        &send.id,
+                        canonical,
+                        entry.analyzer.num_bins(),
+                        entry.analyzer.hop(),
+                    );
+                }
                 entry.analyzer.set_crossovers(low_hz, mid_hz);
                 entry.analyzer.set_scope(is_tapped);
-                entry.analyzer.set_pitch_tracking(self.pitch_sends.contains(&send.id));
+                entry
+                    .analyzer
+                    .set_pitch_tracking(self.pitch_sends.contains(&send.id));
                 // Pre-analysis squelch: applied live, identical for scope + features.
                 entry.analyzer.set_floor_db(send.floor_db);
 
@@ -350,12 +434,16 @@ impl AudioModRuntime {
                 if has_cap && let Some(cap_in) = capture_mono.get(i) {
                     mono_mix.extend_from_slice(cap_in);
                 }
-                if !layers.is_empty() && let Some(pb) = layer_playback.as_deref_mut() {
+                if !layers.is_empty()
+                    && let Some(pb) = layer_playback.as_deref_mut()
+                {
                     // Sum every feeding layer's post-fader tap.
                     layer_mix.clear();
                     for (li, layer_id) in layers.iter().enumerate() {
                         if li == 0 {
-                            pb.drain_layer_tap(layer_id, |chunk| layer_mix.extend_from_slice(chunk));
+                            pb.drain_layer_tap(layer_id, |chunk| {
+                                layer_mix.extend_from_slice(chunk)
+                            });
                         } else {
                             let mut idx = 0usize;
                             pb.drain_layer_tap(layer_id, |chunk| {
@@ -396,7 +484,19 @@ impl AudioModRuntime {
                     }
                 }
 
-                entry.analyzer.push(&mono_mix);
+                if visualized && mono_mix.is_empty() && !has_cap {
+                    if let Some(history) = self.visuals.get_mut(Some(&send.id)) {
+                        history.clear();
+                    }
+                } else if visualized {
+                    self.visuals.feed_waveform(&send.id, &mono_mix);
+                    let visuals = &mut self.visuals;
+                    entry.analyzer.push_with_callback(&mono_mix, |column| {
+                        visuals.feed_spectrum(&send.id, column);
+                    });
+                } else {
+                    entry.analyzer.push(&mono_mix);
+                }
                 features.push((i, entry.analyzer.latest()));
             }
 
@@ -429,6 +529,12 @@ impl AudioModRuntime {
                 *slot = f;
             }
         }
+    }
+
+    /// Visual histories fed by the live analyzer. Readers should use the
+    /// immutable registry on the content/UI snapshot path.
+    pub fn visuals(&self) -> &manifold_core::audio_visual::AudioVisualRegistry {
+        &self.visuals
     }
 
     /// Set which send the Audio Setup scope is showing (`None` = panel closed /
@@ -488,7 +594,6 @@ impl AudioModRuntime {
         self.tapped_analyzer().map(|a| a.freq_range())
     }
 
-
     /// Resolve the project's chosen input to a ready-to-open [`CaptureSource`]
     /// plus a human label for logging. `None` means the configured source is
     /// currently unavailable (device absent, app not running, tap unsupported) —
@@ -504,7 +609,10 @@ impl AudioModRuntime {
             // never opens a capture backend.)
             AudioSourceKind::None => None,
             AudioSourceKind::InputDevice => {
-                match self.directory.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
+                match self
+                    .directory
+                    .resolve(dev_ref.uid_opt(), Some(&dev_ref.name))
+                {
                     Some(info) => {
                         let label = info.name.clone();
                         Some((CaptureSource::Device { name: info.name }, label))
@@ -535,7 +643,12 @@ impl AudioModRuntime {
                 match self.directory.resolve_app(bundle_id) {
                     Some(app) => {
                         let label = format!("app:{}", app.name);
-                        Some((CaptureSource::Apps { handles: vec![app.handle] }, label))
+                        Some((
+                            CaptureSource::Apps {
+                                handles: vec![app.handle],
+                            },
+                            label,
+                        ))
                     }
                     None => {
                         log::warn!(
@@ -565,7 +678,8 @@ impl AudioModRuntime {
         let any_capture = project.audio_setup.sends.iter().any(|s| s.has_capture());
         let needs_analysis = project.has_active_audio_mods()
             || self.spec_send.is_some()
-            || project.has_active_clip_triggers();
+            || project.has_active_clip_triggers()
+            || !self.visual_consumed.is_empty();
         let gate = any_capture && needs_analysis && !project.audio_setup.sends.is_empty();
         if !gate {
             if self.capture.is_some() {
@@ -656,8 +770,13 @@ impl AudioModRuntime {
             return;
         }
 
-        let (worker, mono) =
-            AudioFeatureWorker::spawn(consumer, sample_rate, channels, send_channels, gains.clone());
+        let (worker, mono) = AudioFeatureWorker::spawn(
+            consumer,
+            sample_rate,
+            channels,
+            send_channels,
+            gains.clone(),
+        );
         log::info!(
             "[AudioMod] Capture started: source={source_label}, {send_count} sends, \
              {sample_rate}Hz {channels}ch"

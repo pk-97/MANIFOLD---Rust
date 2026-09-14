@@ -107,6 +107,8 @@ pub struct TickResult {
 pub struct PlaybackEngine {
     // Transport state
     current_state: PlaybackState,
+    /// Advances on explicit transport boundaries, never ordinary clock nudges.
+    transport_epoch: u64,
     current_time_double: f64,
     current_time: Seconds,
     current_beat: f64,
@@ -304,6 +306,7 @@ impl PlaybackEngine {
         Self {
             current_state: PlaybackState::Stopped,
             current_time_double: 0.0,
+            transport_epoch: 0,
             current_time: Seconds::ZERO,
             current_beat: 0.0,
             playback_speed: 1.0,
@@ -384,6 +387,9 @@ impl PlaybackEngine {
     }
     pub fn current_time_double(&self) -> f64 {
         self.current_time_double
+    }
+    pub fn transport_epoch(&self) -> u64 {
+        self.transport_epoch
     }
     pub fn current_time(&self) -> Seconds {
         self.current_time
@@ -523,6 +529,7 @@ impl PlaybackEngine {
     // ─── Lifecycle ───
 
     pub fn initialize(&mut self, mut project: Project) {
+        self.transport_epoch = self.transport_epoch.wrapping_add(1);
         // A project boundary invalidates every runtime-only preview. Restore
         // any preview-owned bases on the old project before it is replaced.
         self.clear_automation_previews();
@@ -597,6 +604,9 @@ impl PlaybackEngine {
     // ─── Transport ───
 
     pub fn set_state(&mut self, state: PlaybackState) {
+        if self.current_state != state {
+            self.transport_epoch = self.transport_epoch.wrapping_add(1);
+        }
         if self.current_state == PlaybackState::Playing && state != PlaybackState::Playing {
             self.queue_finished_automation();
         }
@@ -608,6 +618,7 @@ impl PlaybackEngine {
             return;
         }
         self.current_state = PlaybackState::Playing;
+        self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.pending_pauses.clear();
 
         // Sync clips at current position (start clips that should be active)
@@ -620,6 +631,7 @@ impl PlaybackEngine {
     }
 
     pub fn stop(&mut self) {
+        self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.queue_finished_automation();
         self.current_state = PlaybackState::Stopped;
         self.stop_all_clips();
@@ -653,6 +665,7 @@ impl PlaybackEngine {
         }
         self.queue_finished_automation();
         self.current_state = PlaybackState::Paused;
+        self.transport_epoch = self.transport_epoch.wrapping_add(1);
         // Pause only seekable clips (generators render procedurally each frame)
         self.pause_active_clips();
     }
@@ -753,6 +766,7 @@ impl PlaybackEngine {
     }
 
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
+        self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.queue_finished_automation();
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
@@ -3157,6 +3171,26 @@ mod tests {
     use manifold_core::preset_definition_registry::create_default;
     use manifold_core::project::Project;
     use manifold_core::{Beats, PresetTypeId};
+
+    #[test]
+    fn transport_epoch_tracks_small_seeks_but_not_clock_nudges() {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(Project::default());
+        engine.play();
+        let running = engine.transport_epoch();
+        engine.nudge_time(Seconds(0.1));
+        assert_eq!(engine.transport_epoch(), running);
+        engine.seek_to(Seconds(0.11));
+        assert_ne!(engine.transport_epoch(), running);
+        let sought = engine.transport_epoch();
+        engine.pause();
+        assert_ne!(engine.transport_epoch(), sought);
+        let paused = engine.transport_epoch();
+        engine.pause();
+        assert_eq!(engine.transport_epoch(), paused);
+        engine.stop();
+        assert_ne!(engine.transport_epoch(), paused);
+    }
 
     #[test]
     fn stopped_and_paused_seek_sample_automation_before_modulation() {

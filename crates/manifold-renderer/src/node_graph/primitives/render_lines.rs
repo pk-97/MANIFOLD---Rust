@@ -103,6 +103,7 @@ crate::primitive! {
         // trunk-to-tip taper. Unwired: every point is 1.0 and the
         // geometry is bit-identical to the pre-taper renderer.
         widths: Array(f32) optional,
+        edge_thickness: ScalarF32 optional,
     },
     outputs: {
         color: Texture2D,
@@ -506,7 +507,7 @@ impl Primitive for RenderLines {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // ── Param read (port-shadows-param not yet used; all
         // params are static knobs on this primitive). ──
-        let edge_thickness = ctx.param_f32("edge_thickness", 0.002);
+        let edge_thickness = ctx.scalar_or_param("edge_thickness", 0.002);
 
         let closed_loop = matches!(ctx.params.get("closed_loop"), Some(ParamValue::Bool(true)));
         let show_verts = matches!(ctx.params.get("show_verts"), Some(ParamValue::Bool(true)));
@@ -723,13 +724,13 @@ mod tests {
 
     #[test]
     fn declares_linepoint_input_optional_edges_and_texture_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let points_layout = ArrayType::of_known::<CurvePoint>();
         let edges_layout = ArrayType::of_known::<EdgePair>();
         let widths_layout = ArrayType::of_known::<f32>();
 
         assert_eq!(RenderLines::TYPE_ID, "node.draw_lines");
-        assert_eq!(RenderLines::INPUTS.len(), 3);
+        assert_eq!(RenderLines::INPUTS.len(), 4);
         assert_eq!(RenderLines::INPUTS[0].name, "points");
         assert!(RenderLines::INPUTS[0].required);
         assert_eq!(RenderLines::INPUTS[0].ty, PortType::Array(points_layout));
@@ -739,6 +740,9 @@ mod tests {
         assert_eq!(RenderLines::INPUTS[2].name, "widths");
         assert!(!RenderLines::INPUTS[2].required);
         assert_eq!(RenderLines::INPUTS[2].ty, PortType::Array(widths_layout));
+        assert_eq!(RenderLines::INPUTS[3].name, "edge_thickness");
+        assert!(!RenderLines::INPUTS[3].required);
+        assert_eq!(RenderLines::INPUTS[3].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(RenderLines::OUTPUTS.len(), 1);
         assert_eq!(RenderLines::OUTPUTS[0].name, "color");
         assert_eq!(RenderLines::OUTPUTS[0].ty, PortType::Texture2D);

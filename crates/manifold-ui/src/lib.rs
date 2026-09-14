@@ -77,7 +77,8 @@ pub use panels::layer_chrome::LayerChromePanel;
 pub use panels::layer_header::{LayerHeaderPanel, LayerInfo};
 pub use panels::master_chrome::MasterChromePanel;
 pub use panels::param_card::{
-    ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, RelightCardConfig, RowMod,
+    ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
+    RelightCardConfig, RowMod,
 };
 pub use panels::transport::TransportPanel;
 pub use panels::viewport::{

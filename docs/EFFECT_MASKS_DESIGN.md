@@ -1,6 +1,6 @@
 # Effect masks — spatial wet/dry for effect groups
 
-**Status:** IN PROGRESS · 2026-09-14 · Codex. Mask engine landed; Modifier Group interaction implemented. Source-only routing, contour and audio visualizers remain follow-on work.
+**Status:** IN PROGRESS · 2026-09-14 · Codex. Masks and Modifier Groups landed. Standalone Oscilloscope and Spectrogram implemented; source-only routing, contour and audio-to-mask routing deferred.
 
 Peter selected all three sources: shapes, the group's incoming image, and another
 layer/generator. "This gives us some very cool sidechain options too."
@@ -100,10 +100,41 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
    existing atoms. Gesture: use a separate playing layer to reveal the masked group
    without displaying the source itself. Resolve visibility against compositor
    code before authoring this slice; do not guess at hidden-layer scheduling.
-3. Audio sources and separate visualizer presets: audit send ownership and bounded
-   histories before committing the data seam. Existing analysis is authoritative;
-   oscilloscope/spectrogram outputs feed the same group masks. No audio work starts
-   before the mask landing. Its exact seam and checks are added at that point.
+3. Separate Oscilloscope and Spectrogram effects (implemented). Each card exposes
+   an Audio Send dropdown through the existing string-parameter rows. An explicit
+   selection stores the send's stable ID in its graph node; reordering sends does
+   not retarget it. `First send` is an explicit default mode. Deleted sources show
+   as missing and emit zero data. Source edits use `SetGraphNodeParamCommand` and
+   normal undo/redo. Audio-to-mask routing is outside this slice.
+
+   The content thread already mixes capture and audio-layer taps into one
+   `StreamingSendAnalyzer` per send. A per-hop callback copies its existing raw,
+   floored, untilted spectrum into bounded reusable histories; Audio Setup keeps
+   its existing scope drain. Raw mono feeds a bounded waveform ring. Only sends
+   read by enabled graph sources are added to the existing analysis consumers.
+   No second analyzer, audio worker, shared lock or per-frame history allocation.
+
+   Data-only histories live in core. The live runtime and offline export driver
+   own separate registries. Rendering borrows the registry through `GpuEncoder`
+   for one frame; no cached raw pointer or new synchronization. Export tap
+   discovery includes visualizer consumers before audio mixdown.
+   PlaybackEngine exposes a runtime transport epoch for explicit seek, play,
+   pause, stop and project replacement. Visual histories reset on that epoch
+   or a source-routing change, without guessing from elapsed time. Continuous
+   external-clock nudges and effect knob edits preserve history.
+
+   `node.audio_waveform` supplies an array to Range, Array Math, Combine XY and
+   Draw Lines. `node.audio_spectrum` supplies raw magnitude history as a texture;
+   decibel conversion, contrast, color mapping and image blending stay separate
+   graph operations. Source nodes are non-pure I/O boundaries. Any new numeric
+   GPU atom uses the shared standalone/fusion code generator.
+
+   Gesture: route a playing audio layer to a send, add either effect, change its
+   source and waveform window or spectral history while it plays, then export.
+   Focused tests cover ring bounds, waveform sampling, spectrum chronology,
+   missing sources, analyzer/scope coexistence and offline feeding. GPU proofs
+   check both graphs against synthetic audio and inspect their rendered output;
+   UI routing checks cover source identity and undo. Required landing checks apply.
 
 Workers receive prepared bounded briefs, return edits/checks, and never land.
 The lead reviews and uses `land_branch.py`, then releases the slot. At most two
@@ -116,5 +147,6 @@ card/modulation ownership; delayed cross-layer routing; result masking by defaul
 
 ## 7. Deferred
 
-Automatic injection-mask UI and nested mask groups are deferred until requested.
-The audio phase is authorized follow-on work, not complete with the mask landing.
+Automatic injection-mask UI, nested mask groups and using audio visualizers to
+drive group masks are deferred until requested.
+Standalone audio visualization is phase 3; it does not enable audio-to-mask routing.

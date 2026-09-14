@@ -41,11 +41,13 @@
 //! per-frame allocation, D1: no cumulative cursor — see
 //! [`frame_sample_bounds`]).
 
+use manifold_audio::analysis::StreamingSendAnalyzer;
+use manifold_core::AudioSendId;
+use manifold_core::SendFeatures;
 use manifold_core::audio_setup::AudioSend;
+use manifold_core::audio_visual::AudioVisualRegistry;
 use manifold_core::id::LayerId;
 use manifold_core::project::Project;
-use manifold_core::SendFeatures;
-use manifold_audio::analysis::StreamingSendAnalyzer;
 use manifold_playback::audio_mixdown::ExportAudio;
 use manifold_playback::engine::PlaybackEngine;
 
@@ -68,6 +70,7 @@ struct AnalyzedSend {
     /// `AudioFeatureSnapshot::sends`, since the snapshot is positional
     /// (mirrors the live write at audio_mod_runtime.rs:427-430).
     snapshot_index: usize,
+    send_id: AudioSendId,
     source: SendSource,
     analyzer: StreamingSendAnalyzer,
 }
@@ -98,7 +101,9 @@ fn sum_layer_taps(
 ) -> Option<Vec<f32>> {
     let mut sum: Option<Vec<f32>> = None;
     for lid in layer_ids {
-        let Some(buf) = per_layer_mono.get(lid) else { continue };
+        let Some(buf) = per_layer_mono.get(lid) else {
+            continue;
+        };
         if buf.is_empty() {
             continue;
         }
@@ -137,6 +142,7 @@ pub struct OfflineAudioModDriver<'a> {
     /// is [`SendSource::Master`] (see that variant's docs).
     master_mono: &'a [f32],
     sends: Vec<AnalyzedSend>,
+    visuals: AudioVisualRegistry,
     /// Total sends in the project (analyzed or not) — the snapshot's length,
     /// matching the live write's `send_count` (audio_mod_runtime.rs:267).
     send_count: usize,
@@ -153,7 +159,9 @@ impl<'a> OfflineAudioModDriver<'a> {
     /// empty — nothing in the project reads audio, so there's nothing for the
     /// export loop to drive.
     pub fn new(project: &Project, audio: &'a ExportAudio, fps: f64) -> Option<Self> {
-        let consumed = project.analysis_consumed_sends();
+        let mut consumed = project.analysis_consumed_sends();
+        let visual_consumed = crate::audio_visualization::visualizer_consumed_sends(project);
+        consumed.extend(visual_consumed.iter().cloned());
         if consumed.is_empty() {
             log::info!(
                 "[OfflineAudioMod] no send has an enabled audio mod or clip trigger — \
@@ -166,6 +174,8 @@ impl<'a> OfflineAudioModDriver<'a> {
         let (low_hz, mid_hz) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
 
         let mut analyzed = Vec::with_capacity(consumed.len());
+        let mut visuals = AudioVisualRegistry::new();
+        visuals.set_first_send(project.audio_setup.sends.first().map(|send| &send.id));
         for (i, send) in project.audio_setup.sends.iter().enumerate() {
             if !consumed.contains(&send.id) {
                 continue;
@@ -181,7 +191,10 @@ impl<'a> OfflineAudioModDriver<'a> {
                          layers {:?}",
                         send.label,
                         send.id,
-                        send.layers().iter().map(LayerId::to_string).collect::<Vec<_>>(),
+                        send.layers()
+                            .iter()
+                            .map(LayerId::to_string)
+                            .collect::<Vec<_>>(),
                     );
                     let mut combined = audio.master_mono.clone();
                     add_in_place(&mut combined, &sum);
@@ -200,7 +213,10 @@ impl<'a> OfflineAudioModDriver<'a> {
                         "[OfflineAudioMod] send '{}' ({}): layers {:?}",
                         send.label,
                         send.id,
-                        send.layers().iter().map(LayerId::to_string).collect::<Vec<_>>(),
+                        send.layers()
+                            .iter()
+                            .map(LayerId::to_string)
+                            .collect::<Vec<_>>(),
                     );
                     SendSource::Own(sum)
                 }
@@ -215,12 +231,23 @@ impl<'a> OfflineAudioModDriver<'a> {
                 }
             };
 
-            analyzed.push(build_analyzed_send(i, source, send, audio, low_hz, mid_hz, &pitch_sends));
+            let analyzed_send =
+                build_analyzed_send(i, source, send, audio, low_hz, mid_hz, &pitch_sends);
+            if visual_consumed.contains(&send.id) {
+                visuals.ensure(
+                    &send.id,
+                    audio.sample_rate,
+                    analyzed_send.analyzer.num_bins(),
+                    analyzed_send.analyzer.hop(),
+                );
+            }
+            analyzed.push(analyzed_send);
         }
 
         Some(Self {
             master_mono: &audio.master_mono,
             sends: analyzed,
+            visuals,
             send_count: project.audio_setup.sends.len(),
             sample_rate: audio.sample_rate,
             pre_roll_samples: audio.pre_roll_samples,
@@ -252,11 +279,25 @@ impl<'a> OfflineAudioModDriver<'a> {
             };
             let lo = (pre + start).min(buf.len());
             let hi = (pre + end).min(buf.len());
-            entry.analyzer.push(&buf[lo..hi]);
+            let frame = &buf[lo..hi];
+            let send_id = &entry.send_id;
+            if self.visuals.get(Some(send_id)).is_some() {
+                self.visuals.feed_waveform(send_id, frame);
+                let visuals = &mut self.visuals;
+                entry.analyzer.push_with_callback(frame, |column| {
+                    visuals.feed_spectrum(send_id, column);
+                });
+            } else {
+                entry.analyzer.push(frame);
+            }
             if let Some(slot) = snap.sends.get_mut(entry.snapshot_index) {
                 *slot = entry.analyzer.latest();
             }
         }
+    }
+
+    pub fn visuals(&self) -> &AudioVisualRegistry {
+        &self.visuals
     }
 }
 
@@ -290,18 +331,25 @@ fn build_analyzed_send(
     let preroll_end = audio.pre_roll_samples.min(buf.len());
     analyzer.push(&buf[..preroll_end]);
 
-    AnalyzedSend { snapshot_index, source, analyzer }
+    AnalyzedSend {
+        snapshot_index,
+        send_id: send.id.clone(),
+        source,
+        analyzer,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ahash::AHashMap;
+    use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::AudioSend;
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
     use manifold_core::audio_trigger::LayerClipTrigger;
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
-    use manifold_core::AudioSend;
 
     /// Push a send named `label` onto `project`, plus a layer carrying one
     /// enabled `LayerClipTrigger` sourcing it — the simplest way to make a
@@ -332,7 +380,11 @@ mod tests {
         project.audio_setup.sends.last_mut().unwrap()
     }
 
-    fn empty_export_audio(sample_rate: u32, master_mono: Vec<f32>, pre_roll_samples: usize) -> ExportAudio {
+    fn empty_export_audio(
+        sample_rate: u32,
+        master_mono: Vec<f32>,
+        pre_roll_samples: usize,
+    ) -> ExportAudio {
         ExportAudio {
             sample_rate,
             left: Vec::new(),
@@ -352,8 +404,15 @@ mod tests {
         let mut prev_end = 0usize;
         for f in 0..10_000u32 {
             let (s, e) = frame_sample_bounds(f, 48_000, 60.0);
-            assert_eq!(s, prev_end, "frame {f} start must equal the previous frame's end");
-            assert_eq!(e - s, 800, "frame {f} length must be exactly 800 at 48kHz/60fps");
+            assert_eq!(
+                s, prev_end,
+                "frame {f} start must equal the previous frame's end"
+            );
+            assert_eq!(
+                e - s,
+                800,
+                "frame {f} length must be exactly 800 at 48kHz/60fps"
+            );
             prev_end = e;
         }
         assert_eq!(prev_end, 10_000 * 800);
@@ -366,13 +425,22 @@ mod tests {
         let mut prev_end = 0usize;
         for f in 0..10_000u32 {
             let (s, e) = frame_sample_bounds(f, rate, fps);
-            assert_eq!(s, prev_end, "frame {f} start must equal the previous frame's end (no gap/overlap => no drift)");
+            assert_eq!(
+                s, prev_end,
+                "frame {f} start must equal the previous frame's end (no gap/overlap => no drift)"
+            );
             let len = e - s;
-            assert!(len == 1837 || len == 1838, "frame {f} length {len} not in {{1837,1838}}");
+            assert!(
+                len == 1837 || len == 1838,
+                "frame {f} length {len} not in {{1837,1838}}"
+            );
             prev_end = e;
         }
         let expected_final = ((10_000u64 * rate as u64) as f64 / fps).floor() as usize;
-        assert_eq!(prev_end, expected_final, "final boundary must equal floor(N*rate/fps) exactly");
+        assert_eq!(
+            prev_end, expected_final,
+            "final boundary must equal floor(N*rate/fps) exactly"
+        );
     }
 
     // ─── inactive project ───
@@ -384,9 +452,77 @@ mod tests {
         assert!(OfflineAudioModDriver::new(&project, &audio, 60.0).is_none());
     }
 
+    #[test]
+    fn visualizer_only_send_drives_offline_histories_without_modulation() {
+        let rate = 48_000u32;
+        let layer_id = LayerId::new("visual-layer");
+        let send = AudioSend::new("Visual");
+        let send_id = send.id.clone();
+        let mut project = Project::default();
+        project.audio_setup.sends.push(send);
+        project.audio_setup.sends[0].channels.clear();
+        project.audio_setup.sends[0].source.layers.push(layer_id.clone());
+
+        let mut params = std::collections::BTreeMap::new();
+        params.insert(
+            "send".into(),
+            SerializedParamValue::String { value: send_id.to_string() },
+        );
+        let source = EffectGraphNode {
+            id: 1,
+            node_id: Default::default(),
+            type_id: "node.audio_waveform".into(),
+            handle: None,
+            params,
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        };
+        let mut visualizer = PresetInstance::new(manifold_core::PresetTypeId::new("TestVisualizer"));
+        visualizer.graph = Some(EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![source],
+            wires: Vec::new(),
+        });
+        project.settings.master_effects.push(visualizer);
+
+        let master = vec![0.0; rate as usize * 2];
+        let layer = sine_master_mono(rate, 0, 0.0, 2.0);
+        let mut audio = empty_export_audio(rate, master, 0);
+        audio.per_layer_mono.insert(layer_id, layer);
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0)
+            .expect("visualizer source must activate offline analysis");
+        let mut engine = PlaybackEngine::new(Vec::new());
+        for frame in 0..120 {
+            driver.feed_frame(frame, &mut engine);
+        }
+
+        let history = driver.visuals().get(None).expect("first configured visual send");
+        let mut waveform = [0.0; 64];
+        history.waveform_into(&mut waveform, 100.0, false);
+        assert!(waveform.iter().any(|sample| sample.abs() > 0.1));
+        let bins = history.spectrum_bins();
+        let mut spectrum = vec![0.0; 16 * bins];
+        history.spectrum_into(&mut spectrum, 16, bins, 0.1);
+        assert!(spectrum.iter().any(|magnitude| *magnitude > 0.0));
+    }
+
     // ─── sine fixture: silence before onset, clear signal after ───
 
-    fn sine_master_mono(rate: u32, pre_roll_samples: usize, silent_seconds_in_range: f32, total_seconds: f32) -> Vec<f32> {
+    fn sine_master_mono(
+        rate: u32,
+        pre_roll_samples: usize,
+        silent_seconds_in_range: f32,
+        total_seconds: f32,
+    ) -> Vec<f32> {
         let total_len = (rate as f32 * total_seconds) as usize;
         let onset_at = pre_roll_samples + (rate as f32 * silent_seconds_in_range) as usize;
         let mut buf = vec![0.0f32; total_len];
@@ -431,8 +567,14 @@ mod tests {
             loud = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
         }
 
-        assert!(silent < 0.05, "expected near-zero amplitude before onset, got {silent}");
-        assert!(loud > silent + 0.2, "expected clearly higher amplitude after onset ({loud} vs {silent})");
+        assert!(
+            silent < 0.05,
+            "expected near-zero amplitude before onset, got {silent}"
+        );
+        assert!(
+            loud > silent + 0.2,
+            "expected clearly higher amplitude after onset ({loud} vs {silent})"
+        );
     }
 
     // ─── determinism (D4) ───
@@ -484,7 +626,10 @@ mod tests {
             driver.feed_frame(f, &mut engine);
         }
         let amp = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
-        assert!(amp > 0.1, "capture-fed send should read the master mix's signal, got {amp}");
+        assert!(
+            amp > 0.1,
+            "capture-fed send should read the master mix's signal, got {amp}"
+        );
     }
 
     #[test]
@@ -511,7 +656,10 @@ mod tests {
             driver.feed_frame(f, &mut engine);
         }
         let amp = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
-        assert!(amp > 0.1, "master's signal must still contribute when a silent layer is also routed, got {amp}");
+        assert!(
+            amp > 0.1,
+            "master's signal must still contribute when a silent layer is also routed, got {amp}"
+        );
 
         // And the reverse: silent master, signal-carrying layer.
         let rate2 = 48_000u32;
@@ -534,7 +682,10 @@ mod tests {
             driver2.feed_frame(f, &mut engine2);
         }
         let amp2 = engine2.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
-        assert!(amp2 > 0.1, "layer's signal must still contribute when the master is silent, got {amp2}");
+        assert!(
+            amp2 > 0.1,
+            "layer's signal must still contribute when the master is silent, got {amp2}"
+        );
     }
 
     #[test]

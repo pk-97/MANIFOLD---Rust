@@ -1,0 +1,168 @@
+[
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Oscilloscope"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Spectrogram"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Audio Send: First send"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Audio Send: First send"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "1 · Music"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "2 · Music"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "2 · Music"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Audio Send: 2 · Music"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Audio Send: First send"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Audio Send: 2 · Music"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Audio Send: 2 · Music"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "First send"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Audio Send: First send"
+        }
+      },
+      "check": "Exists"
+    }
+  }
+]

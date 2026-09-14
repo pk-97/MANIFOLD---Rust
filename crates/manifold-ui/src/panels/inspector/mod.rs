@@ -4,7 +4,7 @@ use super::layer_chrome::LayerChromePanel;
 use super::audio_trigger_section::AudioTriggerSection;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
-use super::param_card::{CardContext, ParamCardPanel};
+use super::param_card::{CardContext, ParamCardPanel, ParamCardStringInfo};
 use crate::param_surface::ParamSurface;
 use super::{AudioDrawerClick, GraphParamTarget, InspectorTab, Panel, PanelAction};
 use crate::chrome::{self, Pad, View};
@@ -781,6 +781,42 @@ impl InspectorCompositePanel {
     /// `begin_value_snapback`) rather than just mutate the model.
     pub fn effect_card_mut(&mut self, tab: InspectorTab, idx: usize) -> Option<&mut ParamCardPanel> {
         self.cards_for_tab_mut(tab).get_mut(idx)
+    }
+
+    /// Find an effect string parameter by its stable card identity. The index
+    /// remains an anchor hint from the click, while the effect and binding ids
+    /// keep the dropdown tied to the intended instance across reorder.
+    pub fn effect_string_param(
+        &self,
+        effect_id: &EffectId,
+        binding_id: &str,
+        index: usize,
+    ) -> Option<&ParamCardStringInfo> {
+        self.effects
+            .iter()
+            .flatten()
+            .find(|card| card.effect_id() == effect_id)
+            .and_then(|card| card.string_param(index))
+            .filter(|sp| sp.binding_id.as_deref() == Some(binding_id))
+    }
+
+    pub fn effect_string_param_rect(
+        &self,
+        tree: &UITree,
+        effect_id: &EffectId,
+        binding_id: &str,
+        index: usize,
+    ) -> Option<Rect> {
+        self.effects
+            .iter()
+            .flatten()
+            .find(|card| card.effect_id() == effect_id)
+            .filter(|card| {
+                card.string_param(index)
+                    .and_then(|sp| sp.binding_id.as_deref())
+                    == Some(binding_id)
+            })
+            .and_then(|card| card.string_param_rect(tree, index))
     }
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_rect
@@ -1658,6 +1694,10 @@ mod tests {
             key: "text".into(),
             value: "HELLO".into(),
             use_dropdown: false,
+            effect_id: None,
+            binding_id: None,
+            dropdown_choices: Vec::new(),
+            display_value: None,
         }];
         panel.configure_gen_params(Some(&text_gen), None);
         panel.configure_tabs(
@@ -1720,6 +1760,10 @@ mod tests {
             key: "text".into(),
             value: "HELLO".into(),
             use_dropdown: false,
+            effect_id: None,
+            binding_id: None,
+            dropdown_choices: Vec::new(),
+            display_value: None,
         }];
         panel.configure_gen_params(Some(&text_gen), None);
         // Layer tab active → layer_visible, clip_visible == false (the regression
@@ -1976,6 +2020,10 @@ mod tests {
             key: "text".into(),
             value: "HELLO".into(),
             use_dropdown: false,
+            effect_id: None,
+            binding_id: None,
+            dropdown_choices: Vec::new(),
+            display_value: None,
         }];
         panel.configure_gen_params(Some(&text_gen), None);
         panel.configure_tabs(

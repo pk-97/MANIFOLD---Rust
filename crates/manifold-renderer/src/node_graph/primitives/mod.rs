@@ -7,6 +7,7 @@
 //! not a structural divide.
 
 mod abs_texture;
+mod audio_waveform;
 mod affine_transform;
 mod atmosphere;
 mod anti_clump_particles;
@@ -156,6 +157,7 @@ mod light;
 mod lightning_bolt;
 mod linear_gradient;
 mod luminance;
+mod magnitude_db;
 mod lut1d;
 mod masked_mix;
 mod matcap_two_tone;
@@ -293,6 +295,7 @@ pub mod watercolor;
 mod wet_dry_mix;
 
 pub use abs_texture::AbsTexture;
+pub use audio_waveform::{AudioSpectrum, AudioWaveform};
 pub use affine_transform::AffineTransform;
 pub use atmosphere::AtmosphereNode;
 pub use anti_clump_particles::AntiClumpParticles;
@@ -433,6 +436,7 @@ pub use light::LightNode;
 pub use linear_gradient::LinearGradient;
 pub use loop_camera::{LOOP_CAMERA_AXIS_LABELS, LoopCamera};
 pub use luminance::Luminance;
+pub use magnitude_db::MagnitudeDb;
 pub use lut1d::ColorLut;
 pub use math::{MATH_OPS, Math};
 pub use masked_mix::MaskedMix;

@@ -119,6 +119,7 @@
     "inspector-card-drag-reorder": "inspector",
     "inspector-add-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
+    "audio-visualizer-source": "audiovisualizers",
     "inspector-drawer-filmstrip": "inspector",
     "inspector-scroll": "inspector",
     "ruler-scrub": "timeline",

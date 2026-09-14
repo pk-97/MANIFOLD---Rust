@@ -44,7 +44,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use ringbuf::HeapRb;
-use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split};
+use ringbuf::traits::{
+    Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split,
+};
 
 pub use manifold_core::audio_features::SendFeatures;
 use manifold_spectral::{CqtTransform, ScopeColumn, ScopeOnsets, SpectrogramConfig};
@@ -78,7 +80,10 @@ impl GainBank {
     /// Build a bank from initial linear gains (one per send, in send order).
     pub fn new(linear_gains: &[f32]) -> Self {
         Self {
-            linear: linear_gains.iter().map(|g| AtomicU32::new(g.to_bits())).collect(),
+            linear: linear_gains
+                .iter()
+                .map(|g| AtomicU32::new(g.to_bits()))
+                .collect(),
         }
     }
 
@@ -224,7 +229,13 @@ impl AudioFeatureWorker {
             })
             .expect("spawn audio downmix thread");
 
-        (Self { running, handle: Some(handle) }, reader)
+        (
+            Self {
+                running,
+                handle: Some(handle),
+            },
+            reader,
+        )
     }
 
     /// Stop the worker thread and join it. Idempotent.
@@ -421,7 +432,6 @@ impl MonoWorkerLoop {
     }
 }
 
-
 /// Downmix the channels of one interleaved frame to a single mono sample
 /// (mean of the selected channels). Out-of-range channels are skipped.
 fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
@@ -457,7 +467,11 @@ pub struct LinearResampler {
 
 impl LinearResampler {
     pub fn new(in_rate: u32, out_rate: u32) -> Self {
-        Self { step: in_rate as f64 / out_rate.max(1) as f64, pos: 0.0, last: 0.0 }
+        Self {
+            step: in_rate as f64 / out_rate.max(1) as f64,
+            pos: 0.0,
+            last: 0.0,
+        }
     }
 
     /// Whether input and output rates match (the runtime copies directly instead).
@@ -810,8 +824,13 @@ impl KickRidges {
         self.tracks.retain(|tk| tk.gap <= KICK_MAX_GAP);
         for j in 0..self.peaks.len() {
             if !self.consumed[j] {
-                let mut tk =
-                    KickTrack { bins: [0.0; KICK_WIN], len: 0, gap: 0, fired: false, birth: hop };
+                let mut tk = KickTrack {
+                    bins: [0.0; KICK_WIN],
+                    len: 0,
+                    gap: 0,
+                    fired: false,
+                    birth: hop,
+                };
                 tk.extend(self.peaks[j] as f32);
                 self.tracks.push(tk);
             }
@@ -956,8 +975,16 @@ const PEAK_MASK_RADIUS: usize = 4;
 /// the presence feature read tracked-bin salience against its neighbourhood
 /// (D6); normalizing here would erase that signal before it exists.
 pub fn salience_into(col: &[f32], bpo: usize, peaks: &mut [f32], out: &mut [f32]) {
-    debug_assert_eq!(col.len(), out.len(), "salience_into: out must match col in length");
-    debug_assert_eq!(col.len(), peaks.len(), "salience_into: peaks scratch must match col in length");
+    debug_assert_eq!(
+        col.len(),
+        out.len(),
+        "salience_into: out must match col in length"
+    );
+    debug_assert_eq!(
+        col.len(),
+        peaks.len(),
+        "salience_into: peaks scratch must match col in length"
+    );
     let n = col.len();
     peaks.fill(0.0);
     for k in 0..n {
@@ -1004,7 +1031,11 @@ fn refine_peak(salience: &[f32], k: usize) -> (f32, f32) {
     let delta = if km1 != k && kp1 != k {
         let (y0, y1, y2) = (salience[km1], salience[k], salience[kp1]);
         let denom = y0 - 2.0 * y1 + y2;
-        if denom.abs() > 1e-12 { (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0) } else { 0.0 }
+        if denom.abs() > 1e-12 {
+            (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -1224,7 +1255,16 @@ impl RidgeTracker {
     /// tracker's own prior output); `bpo` bins-per-octave (D6's presence
     /// neighbourhood radius — see `presence_target`); `dt` the hop period in
     /// seconds (presence one-pole time base).
-    fn update(&mut self, salience: &[f32], col: &[f32], lo: usize, hi: usize, transient_fired: bool, bpo: usize, dt: f32) {
+    fn update(
+        &mut self,
+        salience: &[f32],
+        col: &[f32],
+        lo: usize,
+        hi: usize,
+        transient_fired: bool,
+        bpo: usize,
+        dt: f32,
+    ) {
         let peaks = local_peaks(salience, lo, hi);
 
         // Apex position-consistency (BUG-043 riser follow-up, 2026-07-06):
@@ -1264,7 +1304,10 @@ impl RidgeTracker {
                 self.stability = 0.0;
             }
             let target = if self.active {
-                self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo)
+                self.stability
+                    * dominance(salience, self.pos, lo, hi)
+                    * consistency
+                    * presence_target(salience, col, self.pos, bpo)
             } else {
                 0.0
             };
@@ -1310,7 +1353,8 @@ impl RidgeTracker {
                 // fire) a briefly-parked harmonic is refused — measured:
                 // without this clause one hop-18 fire teleported the dive
                 // tracker 19 st onto a fade-in harmonic.
-                let held_bin = (self.pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
+                let held_bin =
+                    (self.pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
                 let held_val = salience[held_bin];
                 if self.settle_streak >= SETTLE_STREAK && apex_val > held_val * CHALLENGE_RATIO {
                     let delta = bin - self.pos;
@@ -1322,7 +1366,10 @@ impl RidgeTracker {
                     // held position is the SAME object and keeps trust; a
                     // genuine jump (the octave note) re-earns it.
                     self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
-                    let target = self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo);
+                    let target = self.stability
+                        * dominance(salience, self.pos, lo, hi)
+                        * consistency
+                        * presence_target(salience, col, self.pos, bpo);
                     self.step_presence(target, dt);
                     return;
                 }
@@ -1333,7 +1380,11 @@ impl RidgeTracker {
 
         // Step 2: continuation — the strongest peak within `SLEW_RADIUS`.
         let continuation = strongest_peak(
-            &peaks.iter().copied().filter(|&(bin, _)| (bin - self.pos).abs() <= SLEW_RADIUS).collect::<Vec<_>>(),
+            &peaks
+                .iter()
+                .copied()
+                .filter(|&(bin, _)| (bin - self.pos).abs() <= SLEW_RADIUS)
+                .collect::<Vec<_>>(),
         );
 
         let this_cont_bin = continuation.map(|(b, _)| b).unwrap_or(f32::NEG_INFINITY);
@@ -1343,7 +1394,11 @@ impl RidgeTracker {
             // trivial pass against nothing — see the note below) for
             // `CHALLENGE_HOPS` consecutive hops.
             let challenger = strongest_peak(
-                &peaks.iter().copied().filter(|&(bin, _)| (bin - self.pos).abs() > SLEW_RADIUS).collect::<Vec<_>>(),
+                &peaks
+                    .iter()
+                    .copied()
+                    .filter(|&(bin, _)| (bin - self.pos).abs() > SLEW_RADIUS)
+                    .collect::<Vec<_>>(),
             );
             let mut took_over = false;
             if let Some((xbin, xval)) = challenger {
@@ -1431,7 +1486,10 @@ impl RidgeTracker {
         self.last_cont_bin = this_cont_bin;
 
         let target = if self.active {
-            self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo)
+            self.stability
+                * dominance(salience, self.pos, lo, hi)
+                * consistency
+                * presence_target(salience, col, self.pos, bpo)
         } else {
             0.0
         };
@@ -1441,8 +1499,16 @@ impl RidgeTracker {
     /// One-pole toward `target`: attack tau while rising, release tau while
     /// falling (D5/D6) — trust is earned fast, lost slowly.
     fn step_presence(&mut self, target: f32, dt: f32) {
-        let tau = if target > self.presence { PRESENCE_ATTACK_S } else { PRESENCE_RELEASE_S };
-        let alpha = if tau > 0.0 { 1.0 - (-dt / tau).exp() } else { 1.0 };
+        let tau = if target > self.presence {
+            PRESENCE_ATTACK_S
+        } else {
+            PRESENCE_RELEASE_S
+        };
+        let alpha = if tau > 0.0 {
+            1.0 - (-dt / tau).exp()
+        } else {
+            1.0
+        };
         self.presence += (target - self.presence) * alpha;
     }
 }
@@ -1555,8 +1621,15 @@ fn dominance(salience: &[f32], pos: f32, lo: usize, hi: usize) -> f32 {
         return 0.0;
     }
     let hi = hi.min(salience.len());
-    let win_max = salience[lo.min(hi)..hi].iter().copied().fold(0.0f32, f32::max);
-    if win_max <= 0.0 { 0.0 } else { (s_pos / win_max).clamp(0.0, 1.0) }
+    let win_max = salience[lo.min(hi)..hi]
+        .iter()
+        .copied()
+        .fold(0.0f32, f32::max);
+    if win_max <= 0.0 {
+        0.0
+    } else {
+        (s_pos / win_max).clamp(0.0, 1.0)
+    }
 }
 
 fn presence_target(salience: &[f32], col: &[f32], pos: f32, bpo: usize) -> f32 {
@@ -1587,7 +1660,12 @@ fn presence_target(salience: &[f32], col: &[f32], pos: f32, bpo: usize) -> f32 {
 /// bin ranges `reduce_send`'s band split uses (D4: "the band cell scopes the
 /// tracker's search window").
 fn tracker_windows(num_bins: usize, low_bin: usize, mid_bin: usize) -> [(usize, usize); 4] {
-    [(0, num_bins), (0, low_bin), (low_bin, mid_bin), (mid_bin, num_bins)]
+    [
+        (0, num_bins),
+        (0, low_bin),
+        (low_bin, mid_bin),
+        (mid_bin, num_bins),
+    ]
 }
 
 /// Run all four windows' D5 update for one hop and fill `pitch`/`presence` on
@@ -1626,8 +1704,11 @@ fn update_trackers(
             let delta_bins = send.trackers[wi].pos - prev_pos;
             let hops_per_sec = if dt > 0.0 { 1.0 / dt } else { 0.0 };
             let bins_per_semitone = bpof / 12.0;
-            send.features.pitch_delta_st =
-                if bins_per_semitone > 0.0 { delta_bins * hops_per_sec / bins_per_semitone } else { 0.0 };
+            send.features.pitch_delta_st = if bins_per_semitone > 0.0 {
+                delta_bins * hops_per_sec / bins_per_semitone
+            } else {
+                0.0
+            };
             send.features.pitch_confidence = send.trackers[wi].presence;
         }
     }
@@ -1751,7 +1832,14 @@ fn band_reduce(
         0.0
     };
 
-    BandReduce { amplitude, brightness, noisiness, flux, superflux, energy }
+    BandReduce {
+        amplitude,
+        brightness,
+        noisiness,
+        flux,
+        superflux,
+        energy,
+    }
 }
 
 /// Reduce one send's current tilted column into its five per-band features, using
@@ -1922,7 +2010,11 @@ fn reduce_send(
 /// can't exceed its current value when prev ≥ 0), gated to 0 on near-silence so
 /// the ratio doesn't blow up.
 fn relative_flux(flux: f32, energy: f32) -> f32 {
-    if energy > FLUX_ENERGY_GATE { (flux / energy).clamp(0.0, 1.0) } else { 0.0 }
+    if energy > FLUX_ENERGY_GATE {
+        (flux / energy).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 // ── Streaming feature analysis (audio-layer modulation) ──────────────────────
@@ -2058,7 +2150,6 @@ impl StreamingSendAnalyzer {
         self.pitch_tracking = on;
     }
 
-
     /// The sample rate this analyzer was built for — the caller rebuilds it if
     /// the mixer's output rate ever changes under it.
     pub fn sample_rate(&self) -> u32 {
@@ -2072,7 +2163,10 @@ impl StreamingSendAnalyzer {
 
     /// Analysed frequency range `(fmin, fmax)` Hz, for the scope's frequency axis.
     pub fn freq_range(&self) -> (f32, f32) {
-        (self.spec_config.fmin, self.spec_config.effective_fmax(self.sample_rate))
+        (
+            self.spec_config.fmin,
+            self.spec_config.effective_fmax(self.sample_rate),
+        )
     }
 
     /// Hop size in SAMPLES at this analyzer's rate — the BUG-052 rate-scaled
@@ -2117,8 +2211,13 @@ impl StreamingSendAnalyzer {
     /// Retune the analysis band edges to new Low/Mid crossovers (cheap; no
     /// transform rebuild). Mirrors the live worker's live-crossover retune.
     pub fn set_crossovers(&mut self, low_hz: f32, mid_hz: f32) {
-        let (low_bin, mid_bin) =
-            band_edges(&self.spec_config, self.sample_rate, self.num_bins, low_hz, mid_hz);
+        let (low_bin, mid_bin) = band_edges(
+            &self.spec_config,
+            self.sample_rate,
+            self.num_bins,
+            low_hz,
+            mid_hz,
+        );
         self.low_bin = low_bin;
         self.mid_bin = mid_bin;
     }
@@ -2127,6 +2226,13 @@ impl StreamingSendAnalyzer {
     /// now owes, refreshing [`latest`](Self::latest). Same accumulate-and-emit
     /// cadence as the live worker's per-send loop.
     pub fn push(&mut self, mono: &[f32]) {
+        self.push_with_callback(mono, |_| {});
+    }
+
+    /// Push mono samples and invoke `on_hop` once for each newly produced raw,
+    /// floored, untilted VQT column. The callback runs synchronously on the
+    /// caller's thread and must not retain the borrowed column.
+    pub fn push_with_callback(&mut self, mono: &[f32], mut on_hop: impl FnMut(&[f32])) {
         if mono.is_empty() {
             return;
         }
@@ -2220,6 +2326,7 @@ impl StreamingSendAnalyzer {
                     *c = 0.0;
                 }
             }
+            on_hop(vqt_raw);
             reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
             // Same guard `reduce_send` used internally for flux/transients
             // (captured before the has_prev update just below) — the D5
@@ -2240,8 +2347,22 @@ impl StreamingSendAnalyzer {
             // features are unaffected either way (this never touches
             // `state.col`/`prev_col`/the existing band fields).
             if pitch_tracking && have_prev {
-                salience_into(vqt_raw, spec_config.bpo, &mut state.salience_peaks, &mut state.salience);
-                update_trackers(state, vqt_raw, nb, *low_bin, *mid_bin, spec_config.bpo, spec_config.fmin, dt);
+                salience_into(
+                    vqt_raw,
+                    spec_config.bpo,
+                    &mut state.salience_peaks,
+                    &mut state.salience,
+                );
+                update_trackers(
+                    state,
+                    vqt_raw,
+                    nb,
+                    *low_bin,
+                    *mid_bin,
+                    spec_config.bpo,
+                    spec_config.fmin,
+                    dt,
+                );
             }
 
             // Scope capture: buffer the raw (untilted) column + overlay scalars,
@@ -2461,10 +2582,18 @@ mod tests {
         let nb = nbins();
         let prev = vec![0.0f32; nb];
         let n = nfft();
-        let dark = band_reduce(&vqt_col(&sine(100.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
-        let bright = band_reduce(&vqt_col(&sine(5000.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
-        assert!(bright > dark, "5 kHz brighter than 100 Hz: {dark} vs {bright}");
-        assert!((0.0..=1.0).contains(&dark) && (0.0..=1.0).contains(&bright), "0..1");
+        let dark =
+            band_reduce(&vqt_col(&sine(100.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
+        let bright =
+            band_reduce(&vqt_col(&sine(5000.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
+        assert!(
+            bright > dark,
+            "5 kHz brighter than 100 Hz: {dark} vs {bright}"
+        );
+        assert!(
+            (0.0..=1.0).contains(&dark) && (0.0..=1.0).contains(&bright),
+            "0..1"
+        );
     }
 
     #[test]
@@ -2473,7 +2602,8 @@ mod tests {
         let nb = nbins();
         let prev = vec![0.0f32; nb];
         let n = nfft();
-        let tone = band_reduce(&vqt_col(&sine(1000.0, n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
+        let tone =
+            band_reduce(&vqt_col(&sine(1000.0, n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
         let noisy = band_reduce(&vqt_col(&noise(n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
         assert!(noisy > tone, "noise flatter than a tone: {tone} vs {noisy}");
     }
@@ -2488,9 +2618,28 @@ mod tests {
         // ~10x the quiet one and false-fire. Same +3.5 dB step (×1.5) at two levels:
         let c = cfg();
         let nb = nbins();
-        let loud = band_reduce(&vec![0.45f32; nb], &vec![0.30f32; nb], 0, nb, c.db_min, c.db_max).superflux;
-        let quiet = band_reduce(&vec![0.045f32; nb], &vec![0.030f32; nb], 0, nb, c.db_min, c.db_max).superflux;
-        assert!(loud > 0.0 && quiet > 0.0, "a +3.5 dB step is a positive ODF: loud {loud}, quiet {quiet}");
+        let loud = band_reduce(
+            &vec![0.45f32; nb],
+            &vec![0.30f32; nb],
+            0,
+            nb,
+            c.db_min,
+            c.db_max,
+        )
+        .superflux;
+        let quiet = band_reduce(
+            &vec![0.045f32; nb],
+            &vec![0.030f32; nb],
+            0,
+            nb,
+            c.db_min,
+            c.db_max,
+        )
+        .superflux;
+        assert!(
+            loud > 0.0 && quiet > 0.0,
+            "a +3.5 dB step is a positive ODF: loud {loud}, quiet {quiet}"
+        );
         assert!(
             (loud - quiet).abs() / loud < 0.02,
             "same fractional step → same dB ODF regardless of loudness: loud {loud}, quiet {quiet}"
@@ -2547,7 +2696,10 @@ mod tests {
                 fired_gated = true;
             }
         }
-        assert!(!fired_gated, "floored onset must not fire — the floor is the only gate");
+        assert!(
+            !fired_gated,
+            "floored onset must not fire — the floor is the only gate"
+        );
     }
 
     #[test]
@@ -2559,7 +2711,10 @@ mod tests {
         let zeros = vec![0.0f32; nb];
         let r = band_reduce(&col, &zeros, 0, nb, c.db_min, c.db_max);
         let onset = relative_flux(r.flux, r.energy);
-        assert!(onset > 0.5, "energy from silence → high relative flux: {onset}");
+        assert!(
+            onset > 0.5,
+            "energy from silence → high relative flux: {onset}"
+        );
         // The same spectrum twice → ~0 change.
         let r2 = band_reduce(&col, &col, 0, nb, c.db_min, c.db_max);
         let steady = relative_flux(r2.flux, r2.energy);
@@ -2581,7 +2736,11 @@ mod tests {
 
         let silence = vec![0.0f32; nb];
         let slide = band_reduce(&col, &prev_shifted, 0, nb, c.db_min, c.db_max);
-        assert!(slide.flux > 0.5, "plain flux trips on the bin shift: {}", slide.flux);
+        assert!(
+            slide.flux > 0.5,
+            "plain flux trips on the bin shift: {}",
+            slide.flux
+        );
         assert!(
             slide.superflux < 1e-6,
             "SuperFlux's max-filter covers the neighbour, so a 1-bin slide reads ~0: {}",
@@ -2654,7 +2813,10 @@ mod tests {
             }
             s.prev_col.copy_from_slice(&s.col);
         }
-        assert!(reonset, "the note returning after a gap must fire a fresh onset");
+        assert!(
+            reonset,
+            "the note returning after a gap must fire a fresh onset"
+        );
     }
 
     #[test]
@@ -2709,7 +2871,10 @@ mod tests {
                 hits += 1;
             }
         }
-        assert_eq!(hits, 4, "every kick over sustained bass should fire an onset");
+        assert_eq!(
+            hits, 4,
+            "every kick over sustained bass should fire an onset"
+        );
     }
 
     #[test]
@@ -2764,7 +2929,10 @@ mod tests {
                 fires += 1;
             }
         }
-        assert!(fires >= cycles - 1, "rapid kicks must keep firing, not pin out: {fires}/{cycles}");
+        assert!(
+            fires >= cycles - 1,
+            "rapid kicks must keep firing, not pin out: {fires}/{cycles}"
+        );
     }
 
     #[test]
@@ -2833,7 +3001,10 @@ mod tests {
                 fires += 1;
             }
         }
-        assert_eq!(fires, 1, "a coherent descending ridge fires exactly once: {fires}");
+        assert_eq!(
+            fires, 1,
+            "a coherent descending ridge fires exactly once: {fires}"
+        );
     }
 
     #[test]
@@ -2869,7 +3040,10 @@ mod tests {
             let bin = (90 - 2 * h).max(1) as usize;
             any |= kr.update(&ridge_col(nb, bin), 0, nb);
         }
-        assert!(!any, "a late-bending (long-lived) ridge must not fire — age cap");
+        assert!(
+            !any,
+            "a late-bending (long-lived) ridge must not fire — age cap"
+        );
     }
 
     #[test]
@@ -2905,10 +3079,16 @@ mod tests {
         let (_lo1, mid1) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
         // Raise the mid/high split: the High band must start at a higher bin.
         let (_lo2, mid2) = band_edges(&c, SR as f32, nb, 250.0, 6000.0);
-        assert!(mid2 > mid1, "raising mid_hz pushes the High band start up: {mid1} -> {mid2}");
+        assert!(
+            mid2 > mid1,
+            "raising mid_hz pushes the High band start up: {mid1} -> {mid2}"
+        );
         // Degenerate input (low ≥ mid) still yields ordered, non-empty bands.
         let (lo3, mid3) = band_edges(&c, SR as f32, nb, 5000.0, 1000.0);
-        assert!(mid3 > lo3 && mid3 < nb, "degenerate edges stay ordered: {lo3}..{mid3}/{nb}");
+        assert!(
+            mid3 > lo3 && mid3 < nb,
+            "degenerate edges stay ordered: {lo3}..{mid3}/{nb}"
+        );
     }
 
     #[test]
@@ -2971,10 +3151,22 @@ mod tests {
             "send 0 mono count {} (want ~{frames})",
             per_send[0].len()
         );
-        assert_eq!(per_send[0].len(), per_send[1].len(), "sends stay in lockstep");
+        assert_eq!(
+            per_send[0].len(),
+            per_send[1].len(),
+            "sends stay in lockstep"
+        );
         // Send 0 = channel 0 (0.5) at unity; send 1 = channel 1 (-0.25) × 2 gain.
-        assert!((per_send[0][100] - 0.5).abs() < 1e-6, "send0={}", per_send[0][100]);
-        assert!((per_send[1][100] + 0.5).abs() < 1e-6, "send1={}", per_send[1][100]);
+        assert!(
+            (per_send[0][100] - 0.5).abs() < 1e-6,
+            "send0={}",
+            per_send[0][100]
+        );
+        assert!(
+            (per_send[1][100] + 0.5).abs() < 1e-6,
+            "send1={}",
+            per_send[1][100]
+        );
     }
 
     // ── Streaming analyzer (audio-layer realtime tap) ──
@@ -3053,7 +3245,10 @@ mod tests {
             a.push(chunk);
         }
         let quiet = a.latest().bands[mid].amplitude;
-        assert!(quiet < loud, "silence should decay mid energy: {loud} -> {quiet}");
+        assert!(
+            quiet < loud,
+            "silence should decay mid energy: {loud} -> {quiet}"
+        );
     }
 
     #[test]
@@ -3097,6 +3292,24 @@ mod tests {
         assert_eq!(after, 0, "disabling scope clears buffered columns");
     }
 
+    #[test]
+    fn push_callback_matches_enabled_scope_columns() {
+        let input = sine(440.0, nfft() * 5 + 37);
+        let mut callback_analyzer = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let mut scope_analyzer = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        scope_analyzer.set_scope(true);
+        let mut callback_columns = Vec::new();
+        for chunk in input.chunks(193) {
+            callback_analyzer.push_with_callback(chunk, |column| {
+                callback_columns.push(column.to_vec());
+            });
+            scope_analyzer.push(chunk);
+        }
+        let mut scope_columns = Vec::new();
+        scope_analyzer.drain_scope_columns(|column| scope_columns.push(column.to_vec()));
+        assert_eq!(callback_columns, scope_columns);
+    }
+
     // `streaming_analyzer_scope_reports_kick_fires` removed
     // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 1, P8,
     // 2026-07-11): its whole premise — the scope's kick lane firing end to
@@ -3132,7 +3345,10 @@ mod tests {
         // The fundamental sums every harmonic; no other bin can do that, so
         // its raw (un-refined) value must strictly beat every other bin.
         let (argmax_k, _) =
-            sal.iter().enumerate().fold((0usize, f32::MIN), |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) });
+            sal.iter().enumerate().fold(
+                (0usize, f32::MIN),
+                |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) },
+            );
         assert_eq!(argmax_k, b, "argmax bin");
         assert!(peak_val > 0.0);
     }
@@ -3154,8 +3370,14 @@ mod tests {
         let mut pk = vec![0.0f32; sal.len()];
         salience_into(&col, SAL_BPO, &mut pk, &mut sal);
         let (argmax_k, _) =
-            sal.iter().enumerate().fold((0usize, f32::MIN), |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) });
-        assert_eq!(argmax_k, b, "missing-fundamental argmax should still land on B");
+            sal.iter().enumerate().fold(
+                (0usize, f32::MIN),
+                |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) },
+            );
+        assert_eq!(
+            argmax_k, b,
+            "missing-fundamental argmax should still land on B"
+        );
     }
 
     #[test]
@@ -3180,7 +3402,11 @@ mod tests {
     #[test]
     fn salience_peak_none_on_all_zero_column() {
         let sal = vec![0.0f32; 32];
-        assert_eq!(salience_peak(&sal), None, "fully floored column has no peak");
+        assert_eq!(
+            salience_peak(&sal),
+            None,
+            "fully floored column has no peak"
+        );
     }
 
     // ── Tracker (D5) — synthetic salience columns, no FFT ────────────────
@@ -3225,7 +3451,10 @@ mod tests {
             let sal = impulse(n, 40, 10.0);
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
             assert!(t.active, "acquires on the first hop with a peak");
-            assert_eq!(t.pos, 40.0, "an isolated peak has no fractional refine, hop {hop}");
+            assert_eq!(
+                t.pos, 40.0,
+                "an isolated peak has no fractional refine, hop {hop}"
+            );
             assert!(
                 t.presence >= last_presence - 1e-6,
                 "presence must not fall while tracking a stable peak: hop {hop} {last_presence} -> {}",
@@ -3251,11 +3480,17 @@ mod tests {
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
             if let Some(p) = prev_pos {
                 let step = t.pos - p;
-                assert!(step.abs() <= MAX_SLEW, "hop {hop}: step {step} exceeds MAX_SLEW");
+                assert!(
+                    step.abs() <= MAX_SLEW,
+                    "hop {hop}: step {step} exceeds MAX_SLEW"
+                );
             }
             prev_pos = Some(t.pos);
         }
-        assert_eq!(t.pos, 39.0, "tracker should have followed the glide to its final bin");
+        assert_eq!(
+            t.pos, 39.0,
+            "tracker should have followed the glide to its final bin"
+        );
     }
 
     #[test]
@@ -3272,7 +3507,10 @@ mod tests {
         for hop in 0..20 {
             t.update(&silent, &silent, 0, n, false, SAL_BPO, TRACKER_DT);
             assert_eq!(t.pos, 40.0, "pos must hold through the dropout, hop {hop}");
-            assert!(t.active, "20 hops is well within HOLD_HOPS ({HOLD_HOPS}), hop {hop}");
+            assert!(
+                t.active,
+                "20 hops is well within HOLD_HOPS ({HOLD_HOPS}), hop {hop}"
+            );
         }
         assert!(
             t.presence < presence_before_dropout,
@@ -3298,10 +3536,16 @@ mod tests {
         let sal = two_impulses(n, 40, 10.0, 70, 20.0);
         for hop in 1..CHALLENGE_HOPS {
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
-            assert_eq!(t.pos, 40.0, "must not jump before CHALLENGE_HOPS consecutive hops (hop {hop})");
+            assert_eq!(
+                t.pos, 40.0,
+                "must not jump before CHALLENGE_HOPS consecutive hops (hop {hop})"
+            );
         }
         t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
-        assert_eq!(t.pos, 70.0, "must jump exactly at CHALLENGE_HOPS consecutive hops");
+        assert_eq!(
+            t.pos, 70.0,
+            "must jump exactly at CHALLENGE_HOPS consecutive hops"
+        );
     }
 
     /// BUG-043 mechanism regression (2026-07-06): a 45 Hz deep sub through
@@ -3341,12 +3585,25 @@ mod tests {
         let hz_of = |bin: f32| fmin * 2f32.powf(bin / bpo as f32);
         let breakdown = |k: usize| {
             let bpof = bpo as f32;
-            print!("  bin {k:3} ({:6.2} Hz): S={:9.4}  own col[k]={:9.4}  terms:", hz_of(k as f32), sal[k], col[k]);
+            print!(
+                "  bin {k:3} ({:6.2} Hz): S={:9.4}  own col[k]={:9.4}  terms:",
+                hz_of(k as f32),
+                sal[k],
+                col[k]
+            );
             for (i, &w) in SALIENCE_WEIGHTS.iter().enumerate() {
                 let h = (i + 1) as f32;
                 let off = (bpof * h.log2()).round() as usize;
                 let v = col.get(k + off).copied().unwrap_or(0.0);
-                print!("  h{}[bin {}, {:5.1} Hz]: {:.4}*{:.4}={:.4}", i + 1, k + off, hz_of((k + off) as f32), w, v, w * v);
+                print!(
+                    "  h{}[bin {}, {:5.1} Hz]: {:.4}*{:.4}={:.4}",
+                    i + 1,
+                    k + off,
+                    hz_of((k + off) as f32),
+                    w,
+                    v,
+                    w * v
+                );
             }
             println!();
         };
@@ -3426,10 +3683,16 @@ mod tests {
         // after SETTLE_STREAK - 1 further parked hops.
         for hop in 0..(SETTLE_STREAK - 2) {
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
-            assert_eq!(t.pos, 40.0, "must hold until the streak completes (hop {hop})");
+            assert_eq!(
+                t.pos, 40.0,
+                "must hold until the streak completes (hop {hop})"
+            );
         }
         t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
-        assert_eq!(t.pos, 95.0, "must jump to the settled apex after SETTLE_STREAK parked hops, not after the takeover clock");
+        assert_eq!(
+            t.pos, 95.0,
+            "must jump to the settled apex after SETTLE_STREAK parked hops, not after the takeover clock"
+        );
     }
 
     /// BUG-042 guard: an onset whose window never sees a position-consistent
@@ -3452,7 +3715,10 @@ mod tests {
             let sal = two_impulses(n, 40, 10.0, apex_bin, 50.0);
             t.update(&sal, &sal, 0, n, fired, SAL_BPO, TRACKER_DT);
             fired = false;
-            assert_eq!(t.pos, 40.0, "a wandering apex must never win the re-acquire window (hop {hop})");
+            assert_eq!(
+                t.pos, 40.0,
+                "a wandering apex must never win the re-acquire window (hop {hop})"
+            );
         }
         assert_eq!(t.reacquire_hops, 0, "window must have expired");
     }
@@ -3488,13 +3754,19 @@ mod tests {
         t.update(&sal, &sal, 0, n, true, SAL_BPO, TRACKER_DT);
         for hop in 0..10 {
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
-            assert_eq!(t.pos, 40.0, "same-pitch re-attack must never move pos (hop {hop})");
+            assert_eq!(
+                t.pos, 40.0,
+                "same-pitch re-attack must never move pos (hop {hop})"
+            );
             assert!(
                 t.presence >= presence_before_near - 1e-6,
                 "presence must not dip below its pre-re-attack value while re-earning nothing (same object), hop {hop}"
             );
         }
-        assert_eq!(t.stability, 1.0, "re-attack at Δpos=0 must read full stability (same object)");
+        assert_eq!(
+            t.stability, 1.0,
+            "re-attack at Δpos=0 must read full stability (same object)"
+        );
         assert!(
             t.presence > presence_before_near,
             "presence must have kept rising through the same-pitch re-attack: {presence_before_near} -> {}",
@@ -3519,8 +3791,14 @@ mod tests {
             }
             t.update(&sal_far, &sal_far, 0, n, false, SAL_BPO, TRACKER_DT);
         }
-        assert!(jumped_at.is_some(), "the settled far apex must have won the window");
-        assert_eq!(t.stability, 0.0, "a far jump must read 0 stability (new object)");
+        assert!(
+            jumped_at.is_some(),
+            "the settled far apex must have won the window"
+        );
+        assert_eq!(
+            t.stability, 0.0,
+            "a far jump must read 0 stability (new object)"
+        );
         assert!(
             t.presence < presence_before_far,
             "presence must fall on a far re-acquire before it can re-earn trust: {presence_before_far} -> {}",
@@ -3550,8 +3828,14 @@ mod tests {
         let mut sal = vec![0.0f32; n];
         let mut pk = vec![0.0f32; sal.len()];
         salience_into(&col, SAL_BPO, &mut pk, &mut sal);
-        assert!(sal[44] > 0.0, "the ghost bin must show nonzero borrowed salience (test setup check)");
-        assert_eq!(col[44], 0.0, "the ghost bin itself carries no real energy (test setup check)");
+        assert!(
+            sal[44] > 0.0,
+            "the ghost bin must show nonzero borrowed salience (test setup check)"
+        );
+        assert_eq!(
+            col[44], 0.0,
+            "the ghost bin itself carries no real energy (test setup check)"
+        );
 
         // Window = [0, 50): the ghost bin (44) is inside it, its real
         // support (bin 100) is not. (Narrower than "everything below 100"
@@ -3564,9 +3848,18 @@ mod tests {
             t.update(&sal, &col, 0, 50, false, SAL_BPO, TRACKER_DT);
             last = t.presence;
         }
-        assert!(t.active, "the ghost bin is still a real local maximum within the window, so it acquires");
-        assert_eq!(t.pos, 44.0, "test setup: the tracker must have acquired the ghost bin, not bin 100 (outside the window)");
-        assert!(last < 0.1, "a peak with no in-window comb support must not read as present: got {last}");
+        assert!(
+            t.active,
+            "the ghost bin is still a real local maximum within the window, so it acquires"
+        );
+        assert_eq!(
+            t.pos, 44.0,
+            "test setup: the tracker must have acquired the ghost bin, not bin 100 (outside the window)"
+        );
+        assert!(
+            last < 0.1,
+            "a peak with no in-window comb support must not read as present: got {last}"
+        );
     }
 
     /// D6 recalibration — the mirror case: a single, real, fully-supported
@@ -3594,8 +3887,14 @@ mod tests {
             last = t.presence;
         }
         assert!(t.active);
-        assert_eq!(t.pos, b as f32, "test setup: must have acquired the fundamental");
-        assert!(last >= 0.5, "a single dominant, fully-supported object must clear the D6 display bar: got {last}");
+        assert_eq!(
+            t.pos, b as f32,
+            "test setup: must have acquired the fundamental"
+        );
+        assert!(
+            last >= 0.5,
+            "a single dominant, fully-supported object must clear the D6 display bar: got {last}"
+        );
     }
 
     #[test]
@@ -3613,13 +3912,34 @@ mod tests {
         }
         let (fo, fon) = (off.latest(), on.latest());
         for b in 0..4 {
-            assert_eq!(fo.bands[b].amplitude, fon.bands[b].amplitude, "band {b} amplitude diverged");
-            assert_eq!(fo.bands[b].brightness, fon.bands[b].brightness, "band {b} brightness diverged");
-            assert_eq!(fo.bands[b].noisiness, fon.bands[b].noisiness, "band {b} noisiness diverged");
-            assert_eq!(fo.bands[b].liveliness, fon.bands[b].liveliness, "band {b} liveliness diverged");
-            assert_eq!(fo.bands[b].transients, fon.bands[b].transients, "band {b} transients diverged");
-            assert_eq!(fo.bands[b].pitch, 0.0, "disabled tracker must read pitch 0, band {b}");
-            assert_eq!(fo.bands[b].presence, 0.0, "disabled tracker must read presence 0, band {b}");
+            assert_eq!(
+                fo.bands[b].amplitude, fon.bands[b].amplitude,
+                "band {b} amplitude diverged"
+            );
+            assert_eq!(
+                fo.bands[b].brightness, fon.bands[b].brightness,
+                "band {b} brightness diverged"
+            );
+            assert_eq!(
+                fo.bands[b].noisiness, fon.bands[b].noisiness,
+                "band {b} noisiness diverged"
+            );
+            assert_eq!(
+                fo.bands[b].liveliness, fon.bands[b].liveliness,
+                "band {b} liveliness diverged"
+            );
+            assert_eq!(
+                fo.bands[b].transients, fon.bands[b].transients,
+                "band {b} transients diverged"
+            );
+            assert_eq!(
+                fo.bands[b].pitch, 0.0,
+                "disabled tracker must read pitch 0, band {b}"
+            );
+            assert_eq!(
+                fo.bands[b].presence, 0.0,
+                "disabled tracker must read presence 0, band {b}"
+            );
         }
         assert_eq!(fo.pitch_hz, 0.0);
         assert_eq!(fo.pitch_confidence, 0.0);

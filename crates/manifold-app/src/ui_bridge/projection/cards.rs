@@ -5,7 +5,9 @@
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_ui::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
+use manifold_ui::panels::param_card::{
+    ParamCardKind, ParamCardStringChoice, ParamCardStringInfo, RowMod,
+};
 use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
 use manifold_ui::param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec, RowValue};
 use crate::ui_root::UIRoot;
@@ -118,15 +120,110 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
 /// config, from the project's `AudioSetup`. One pass after the configs are
 /// built, so the per-instance builders stay project-agnostic.
 pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_core::audio_setup::AudioSetup) {
-    if setup.sends.is_empty() {
-        return;
-    }
     let labels: Vec<String> = setup.sends.iter().map(|s| s.label.clone()).collect();
     let ids: Vec<manifold_core::AudioSendId> = setup.sends.iter().map(|s| s.id.clone()).collect();
     for c in configs.iter_mut() {
         c.audio.send_labels = labels.clone();
         c.audio.send_ids = ids.clone();
+        for sp in &mut c.string_params {
+            if c.kind != ParamCardKind::Effect || sp.key != "audioSend" || !sp.use_dropdown {
+                continue;
+            }
+            let (choices, display) = audio_send_string_state(&sp.value, setup);
+            sp.dropdown_choices = choices;
+            sp.display_value = Some(display);
+        }
     }
+}
+
+fn audio_send_string_state(
+    value: &str,
+    setup: &manifold_core::audio_setup::AudioSetup,
+) -> (Vec<ParamCardStringChoice>, String) {
+    if setup.sends.is_empty() {
+        return (
+            vec![ParamCardStringChoice {
+                label: "No audio sends".to_string(),
+                value: String::new(),
+                disabled: true,
+            }],
+            if value.is_empty() {
+                "No audio sends".to_string()
+            } else {
+                "Missing send".to_string()
+            },
+        );
+    }
+
+    let choices = std::iter::once(ParamCardStringChoice {
+        label: "First send".to_string(),
+        value: String::new(),
+        disabled: false,
+    })
+    .chain(setup.sends.iter().enumerate().map(|(index, send)| {
+        ParamCardStringChoice {
+            label: format!("{} · {}", index + 1, send.label),
+            value: send.id.to_string(),
+            disabled: false,
+        }
+    }))
+    .collect();
+    let display = if value.is_empty() {
+        "First send".to_string()
+    } else {
+        setup
+            .sends
+            .iter()
+            .enumerate()
+            .find(|(_, send)| send.id.as_str() == value)
+            .map(|(index, send)| format!("{} · {}", index + 1, send.label))
+            .unwrap_or_else(|| "Missing send".to_string())
+    };
+    (choices, display)
+}
+
+fn find_string_node<'a>(
+    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    node_id: &manifold_core::NodeId,
+) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
+    nodes.iter().find_map(|node| {
+        (node.node_id == *node_id)
+            .then_some(node)
+            .or_else(|| node.group.as_ref().and_then(|group| find_string_node(&group.nodes, node_id)))
+    })
+}
+
+fn effect_string_param_value(
+    inst: &PresetInstance,
+    sp_def: &manifold_core::preset_definition_registry::StringParamDef,
+) -> (String, Option<String>) {
+    let Some(catalog_def) = manifold_renderer::node_graph::bundled_preset_def(inst.effect_type()) else {
+        return (sp_def.default_value.to_string(), None);
+    };
+    let graph = inst.graph.as_ref().unwrap_or(catalog_def);
+    let metadata = graph
+        .preset_metadata
+        .as_ref()
+        .or(catalog_def.preset_metadata.as_ref());
+    let binding = metadata.and_then(|m| {
+        m.string_bindings
+            .iter()
+            .find(|b| b.id == sp_def.key)
+    });
+    let Some(binding) = binding else {
+        return (sp_def.default_value.to_string(), None);
+    };
+    let value = match &binding.target {
+        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => find_string_node(&graph.nodes, node_id)
+            .and_then(|node| node.params.get(param))
+            .and_then(|value| match value {
+                manifold_core::effect_graph_def::SerializedParamValue::String { value } => Some(value.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| binding.default_value.clone()),
+        _ => binding.default_value.clone(),
+    };
+    (value, Some(binding.id.clone()))
 }
 
 /// Thin adapter: build a card config for each effect in `effects`, skipping
@@ -365,8 +462,8 @@ fn param_surface(
     }
     let audio = build_audio_card_state(inst, n, |id| row_index_of.get(id).copied());
 
-    // String params are a generator-only surface (text inputs, font dropdowns),
-    // sourced from the registry def.
+    // String params are sourced from the registry def. Effects currently use
+    // the same surface for graph-backed audio-send selectors.
     let string_params: Vec<ParamCardStringInfo> = match kind {
         PresetKind::Generator => reg_def
             .as_deref()
@@ -383,12 +480,36 @@ fn param_surface(
                             key: sp_def.key.to_string(),
                             value,
                             use_dropdown: sp_def.use_dropdown,
+                            effect_id: None,
+                            binding_id: None,
+                            dropdown_choices: Vec::new(),
+                            display_value: None,
                         }
                     })
                     .collect()
             })
             .unwrap_or_default(),
-        PresetKind::Effect => Vec::new(),
+        PresetKind::Effect => reg_def
+            .as_deref()
+            .map(|def| {
+                def.string_param_defs
+                    .iter()
+                    .map(|sp_def| {
+                        let (value, binding_id) = effect_string_param_value(inst, sp_def);
+                        ParamCardStringInfo {
+                            name: sp_def.name.to_string(),
+                            key: sp_def.key.to_string(),
+                            value,
+                            use_dropdown: sp_def.use_dropdown,
+                            effect_id: Some(inst.id.clone()),
+                            binding_id,
+                            dropdown_choices: Vec::new(),
+                            display_value: None,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         PresetKind::SceneModifier => return None,
     };
 
@@ -720,6 +841,38 @@ mod param_label_tests {
             "label must show the live param name, got {label:?}"
         );
         assert!(!label.contains('?'), "label must not fall back to ?, got {label:?}");
+    }
+}
+
+#[cfg(test)]
+mod audio_send_projection_tests {
+    use super::*;
+    use manifold_core::audio_setup::{AudioSend, AudioSetup};
+
+    #[test]
+    fn audio_send_choices_keep_empty_first_send_and_follow_stable_ids() {
+        let first = AudioSend::new("Music");
+        let second = AudioSend::new("Music");
+        let selected = second.id.to_string();
+        let mut setup = AudioSetup::default();
+        setup.sends = vec![first.clone(), second.clone()];
+
+        let (choices, display) = audio_send_string_state("", &setup);
+        assert_eq!(choices[0].value, "", "First send uses the automatic empty payload");
+        assert_eq!(display, "First send");
+        assert_eq!(choices[1].label, "1 · Music");
+        assert_eq!(choices[2].label, "2 · Music");
+
+        let (_, selected_display) = audio_send_string_state(&selected, &setup);
+        assert_eq!(selected_display, "2 · Music");
+
+        setup.sends = vec![second];
+        let (_, reordered_display) = audio_send_string_state(&selected, &setup);
+        assert_eq!(reordered_display, "1 · Music");
+
+        setup.sends.clear();
+        let (_, missing_display) = audio_send_string_state(&selected, &setup);
+        assert_eq!(missing_display, "Missing send");
     }
 }
 
