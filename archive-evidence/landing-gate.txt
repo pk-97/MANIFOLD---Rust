@@ -1,0 +1,48 @@
+dependents added: manifold-audio, manifold-io, manifold-media, manifold-playback
+[PASS] scripts/test_codex_checks.py (0s)
+[PASS] scripts/test_codex_regressions.py (0s)
+[PASS] design-status (0s)
+[PASS] docs-index (0s)
+[PASS] flow-gate (53s)
+[PASS] deny (1s)
+[PASS] ignored-tests (0s)
+[PASS] clippy (9s)
+[FAIL] tests (117s)
+        running 1 test
+        test no_register_listed_file_regrows ... FAILED
+    
+        failures:
+    
+        failures:
+            no_register_listed_file_regrows
+    
+        test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+    
+      stderr ───
+    
+        thread 'no_register_listed_file_regrows' (197117667) panicked at crates/manifold-app/tests/godfile_regrowth.rs:126:5:
+        god-file regrowth detected (see the owning decomposition design doc — do not bump ceilings without a design update naming the reason):
+        crates/manifold-renderer/src/preset_runtime/core.rs: 2229 lines > ceiling 2200
+        crates/manifold-renderer/src/preset_runtime/build.rs: 762 lines > ceiling 750
+        note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    
+    warning: 4694/4708 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+    error: test run failed
+[gpu-proofs] full suite (no narrow scope covers the touched paths)
+[gpu-proofs] complete transcript: /Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-2/target/landing-logs/gpu-proofs-20260914T065058.138385Z-1789368658138844000.log
+[FAIL] gpu-proofs (238s)
+    Failed tests (1):
+      - rt_bugmajv_kernel_toggle::rt_kernel_toggle_sequence_preserves_raster_base
+    Drifted goldens: none
+    GPU-PROOFS GATE: FAIL (1 failed tests, 0 drifted goldens)
+PASS scripts/test_codex_checks.py (0s)
+PASS scripts/test_codex_regressions.py (0s)
+PASS design-status (0s)
+PASS docs-index (0s)
+PASS flow-gate (53s)
+PASS deny (1s)
+PASS ignored-tests (0s)
+PASS clippy (9s)
+FAIL tests (117s)
+FAIL gpu-proofs (238s)
+landing gate: 8 passed, 2 failed, 0 skipped
