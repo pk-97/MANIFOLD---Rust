@@ -38,6 +38,7 @@ pub mod scene_exposure;
 pub mod scene_modifier_preset;
 pub mod scene_modifier_edit;
 pub mod scene_modifier_math_view;
+pub mod scene_modifier_periodicity;
 pub mod scene_source_identity;
 pub mod scene_object_migration;
 pub mod selection;
@@ -62,6 +63,7 @@ pub use scene_modifier_preset::{
     SceneStageSource, SceneTargetSelection, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
     SCENE_MODIFIER_RECIPE_VERSION,
 };
+pub use scene_modifier_periodicity::repair_scene_modifier_periodicity;
 pub use preset_type_id::PresetTypeId;
 pub use audio_features::{AudioFeatureSnapshot, BandFeatures, SendFeatures};
 pub use audio_mod::{
