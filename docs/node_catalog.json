@@ -12983,6 +12983,11 @@
           "type": "f32"
         },
         {
+          "name": "amount",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "yaw",
           "required": false,
           "type": "f32"
@@ -13082,6 +13087,16 @@
           "type": "float"
         },
         {
+          "default": "1",
+          "label": "Amount",
+          "name": "amount",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
           "default": "0",
           "label": "Yaw",
           "name": "yaw",
@@ -13122,7 +13137,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Generate an attack/hold/release weight envelope ordered by scene-relative mesh position. Order is clamp(0.5 + 0.5 * dot((sample_position + source_offset) / scene_radius, direction), 0, 1), where direction is the rotated Y axis; stagger_beats delays later positions. Vertex or triangle-centroid sampling is selectable, and an optional incoming weights array multiplies the result.",
+      "purpose": "Generate an attack/hold/release weight envelope ordered by scene-relative mesh position. Order is clamp(0.5 + 0.5 * dot((sample_position + source_offset) / scene_radius, direction), 0, 1), where direction is the rotated Y axis; stagger_beats delays later positions. Vertex or triangle-centroid sampling is selectable, amount blends from identity to the envelope, and an optional incoming weights array multiplies the result.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order.",
