@@ -259,8 +259,10 @@ design** (F2, F4) · cleanup **trivial** (F14-F17).
 - **D8 — Crud removal**: NodeGraphTest and TrivialPassthrough move to test fixtures
   (references checked first — app_render.rs/app.rs, param_storage_v14.rs) ·
   Diagnostic is no longer user-facing: EdgeDetect and WireframeDepth recategorize to
-  Stylize, BlobTracking gates `available=false` (parked per decision log; revive
-  when the tracking work resumes) · LED-* generators are visible only on Dmx layers
+  Stylize, as does BlobTracking. **Correction (Peter, 2026-09-14):** Blob Track
+  remains available in the effect picker; parking tracking development does not
+  hide the existing preset. This supersedes the original `available=false` gate.
+  LED-* generators are visible only on Dmx layers
   (data: a `layer_types: [...]` or equivalent on preset metadata; the picker filters
   by the invoking layer's type) · scene-asset companions (TimeScrub, Skin, MriVolume,
   SceneStarter) gate `available=false` with the Scene Setup panel as their host —
