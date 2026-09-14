@@ -178,8 +178,8 @@ mod custom {
         }
         assert_eq!(
             scalar_count,
-            71,
-            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid, covered by uniform_layout_proof)"
+            72,
+            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles, covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(
