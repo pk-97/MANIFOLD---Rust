@@ -569,7 +569,8 @@ mod gpu_tests {
             ),
         ];
         let mut u = OrderedReconUniforms {
-            progress: 0.3,
+            // The single band settles at 0.28; sample inside its transition.
+            progress: 0.1,
             bands: 1,
             separation: 0.17,
             rotation: 0.0,
