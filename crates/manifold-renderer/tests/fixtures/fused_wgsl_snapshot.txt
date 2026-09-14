@@ -2612,6 +2612,117 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
+=== effect:Oscilloscope node:12 ===
+// @input_access: src_0 gather
+// @input_access: src_1 coincident
+struct Params {
+    n0_translate_x: f32,
+    n0_translate_y: f32,
+    n0_scale: f32,
+    n0_rotation: f32,
+    n1_amount: f32,
+    n1_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn overlay_channel(a: f32, b: f32) -> f32 {
+    if a < 0.5 {
+        return 2.0 * a * b;
+    }
+    return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
+}
+
+fn safe_div(a: f32, b: f32) -> f32 {
+    if abs(b) < 1.0e-6 {
+        return 0.0;
+    }
+    return a / b;
+}
+
+fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
+    switch mode {
+        case 0u: { return b; }
+        case 1u: { return 1.0 - (1.0 - a) * (1.0 - b); }
+        case 2u: { return a + b; }
+        case 3u: { return max(a, b); }
+        case 4u: { return a * b; }
+        case 5u: { return abs(a - b); }
+        case 6u: {
+            return vec3<f32>(
+                overlay_channel(a.x, b.x),
+                overlay_channel(a.y, b.y),
+                overlay_channel(a.z, b.z),
+            );
+        }
+        case 7u: {
+            return vec3<f32>(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
+        }
+        default: { return b; }
+    }
+}
+
+fn n0_body(tex_in: texture_2d<f32>, s_in: sampler, uv: vec2<f32>, dims: vec2<f32>, translate_x: f32, translate_y: f32, scale: f32, rotation: f32) -> vec4<f32> {
+    let aspect_ratio = dims.x / dims.y;
+    let rot = -(rotation * 3.14159265358979323846 / 180.0);
+
+    var p = uv - vec2<f32>(0.5, 0.5);
+
+    p.x = p.x * aspect_ratio;
+
+    let cos_r = cos(rot);
+    let sin_r = sin(rot);
+    p = vec2<f32>(
+        p.x * cos_r - p.y * sin_r,
+        p.x * sin_r + p.y * cos_r,
+    );
+
+    p.x = p.x / aspect_ratio;
+
+    p = p / max(scale, 0.01);
+    p = p - vec2<f32>(translate_x, translate_y);
+    p = p + vec2<f32>(0.5, 0.5);
+
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    return textureSampleLevel(tex_in, s_in, p, 0.0);
+}
+
+fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_1 = textureLoad(src_1, coord, 0);
+    let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_translate_x, params.n0_translate_y, params.n0_scale, params.n0_rotation);
+    let r1 = n1_body(ext_1, r0, uv, vec2<f32>(dims), params.n1_amount, params.n1_mode);
+    textureStore(dst, coord, r1);
+}
+
 === effect:QuadMirror node:7 ===
 // @input_access: src_0 gather
 struct Params {
@@ -2737,6 +2848,79 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
     let r3 = n3_body(src_0, samp, r2, uv, vec2<f32>(dims), params.n3_wrap, params.n3_mode);
     let r4 = n4_body(ext_0, r3, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode);
+    textureStore(dst, coord, r4);
+}
+
+=== effect:Spectrogram node:11 ===
+// @input_access: src_0 coincident
+// @input_access: src_1 gather
+struct Params {
+    n0_floor_db: f32,
+    n0_reference: f32,
+    n1_scale: f32,
+    n1_offset: f32,
+    n2_min: f32,
+    n2_max: f32,
+    n3_amount: f32,
+    n3_contrast: f32,
+    n4_gain: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, floor_db: f32, reference: f32) -> vec4<f32> {
+    let safe_reference = max(reference, 1.0e-6);
+    let db = max(20.0 * log2(max(c.rgb, vec3<f32>(1.0e-6)) / safe_reference) * 0.30102999566, vec3<f32>(floor_db));
+    return vec4<f32>(db, c.a);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32) -> vec4<f32> {
+    return vec4<f32>(clamp(c.rgb, vec3<f32>(min_v), vec3<f32>(max_v)), c.a);
+}
+
+fn n3_body(src: vec4<f32>, lut_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, amount: f32, contrast: f32) -> vec4<f32> {
+    let lum_raw = dot(src.rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let lum = max(0.0, (lum_raw - 0.5) * contrast + 0.5);
+    let lut_coord = clamp(lum * 0.5, 0.0, 1.0);
+    let thermal = textureSampleLevel(lut_tex, samp, vec2<f32>(lut_coord, 0.5), 0.0).rgb;
+    let result = mix(src.rgb, thermal, amount);
+    return vec4<f32>(result, src.a);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_floor_db, params.n0_reference);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_scale, params.n1_offset);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_min, params.n2_max);
+    let r3 = n3_body(r2, src_1, samp, uv, vec2<f32>(dims), params.n3_amount, params.n3_contrast);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_gain);
     textureStore(dst, coord, r4);
 }
 

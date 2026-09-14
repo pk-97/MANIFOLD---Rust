@@ -18,8 +18,8 @@ use crate::node_graph::primitive::Primitive;
 struct MagnitudeDbUniforms {
     floor_db: f32,
     reference: f32,
-    _pad0: f32,
-    _pad1: f32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 crate::primitive! {
@@ -86,8 +86,8 @@ impl Primitive for MagnitudeDb {
         let uniforms = MagnitudeDbUniforms {
             floor_db,
             reference,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            _pad0: 0,
+            _pad1: 0,
         };
         dispatch_standalone_2d(
             gpu,

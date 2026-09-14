@@ -8,6 +8,13 @@ pub struct TextureAbiCase {
 }
 pub const CASES: &[TextureAbiCase] = &[
     TextureAbiCase {
+        source: "magnitude_db.rs",
+        rust_struct: "MagnitudeDbUniforms",
+        type_id: "node.magnitude_db",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    TextureAbiCase {
         source: "basic_shape.rs",
         rust_struct: "BasicShapeUniforms",
         type_id: "node.basic_shape",

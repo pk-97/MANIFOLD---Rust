@@ -160,12 +160,14 @@ fn warmup_time(frame: u32) -> (f64, f64) {
 fn pump_warmup_frames(
     device: &GpuDevice,
     frames: u32,
+    audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     mut render_frame: impl for<'e> FnMut(u32, &mut RendererGpuEncoder<'e>),
 ) {
     for frame in 0..frames {
         let mut enc = device.create_encoder("preset-thumb-warmup");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            gpu.audio_visuals = audio_visuals;
             render_frame(frame, &mut gpu);
         }
         enc.commit_and_wait_completed();
@@ -242,7 +244,7 @@ fn render_generator(
         }
     };
 
-    pump_warmup_frames(device, WARMUP_FRAMES, |frame, gpu| {
+    pump_warmup_frames(device, WARMUP_FRAMES, None, |frame, gpu| {
         // Thumbnails render every binding at its declared default — no card
         // overrides — so an empty manifest is exactly right.
         runtime.render(gpu, &target.texture, &make_ctx(frame), &ParamManifest::default());
@@ -466,6 +468,34 @@ fn render_effect(
         backend.pre_bind_texture_2d(final_in, out_target)
     };
 
+    crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+        .map_err(|error| format!("effect resource allocation failed: {error:?}"))?;
+
+    // Factory audio previews use deterministic sample data. Runtime sources
+    // still read only the user's selected send; this registry lives here only.
+    let audio_preview = graph.nodes().any(|node| matches!(node.node.type_id().as_str(),
+        "node.audio_waveform" | "node.audio_spectrum")).then(|| {
+        let mut audio = manifold_core::audio_visual::AudioVisualRegistry::new();
+        let send = manifold_core::AudioSendId::new("thumbnail-audio");
+        audio.set_first_send(Some(&send));
+        audio.ensure(&send, 48_000, 128, 256);
+        let wave: Vec<f32> = (0..12_000).map(|i| {
+            let phase = std::f32::consts::TAU * 110.0 * i as f32 / 48_000.0;
+            0.65 * phase.sin() + 0.15 * (phase * 2.0).sin()
+        }).collect();
+        audio.feed_waveform(&send, &wave);
+        for t in 0..470 {
+            let mut column = [0.0; 128];
+            for (bin, magnitude) in column.iter_mut().enumerate() {
+                let center = 30.0 + 12.0 * (t as f32 * 0.03).sin();
+                *magnitude = 0.7 * (-((bin as f32 - center) / 3.0).powi(2)).exp()
+                    + 0.2 * (-((bin as f32 - center - 24.0) / 5.0).powi(2)).exp();
+            }
+            audio.feed_spectrum(&send, &column);
+        }
+        audio
+    });
+
     // The D4 warm-up, same recipe as generators: a stateful effect
     // (temporal::Feedback prev-frame buffers, trails) develops across the 60
     // frames exactly like a sim, and time-dependent effects (Glitch, Strobe)
@@ -473,7 +503,7 @@ fn render_effect(
     // persists across the pumped frames — that persistence IS the warm-up.
     let mut state_store = StateStore::new();
     let mut exec = Executor::new(Box::new(backend));
-    pump_warmup_frames(device, WARMUP_FRAMES, |frame, gpu| {
+    pump_warmup_frames(device, WARMUP_FRAMES, audio_preview.as_ref(), |frame, gpu| {
         let (time, beats) = warmup_time(frame);
         let frame_time = FrameTime {
             beats: manifold_core::Beats(beats),

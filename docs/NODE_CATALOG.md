@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 282 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 285 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -100,10 +100,12 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 
-### Generate (13)
+### Generate (15)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Audio Spectrum | `node.audio_spectrum` | Source | Provides a live scrolling spectrum texture for spectrogram graphs. |
+| Audio Waveform | `node.audio_waveform` | Source | Provides a live audio waveform as 512 curve samples for oscilloscope and line-based graphs. |
 | Basic Shape | `node.basic_shape` | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
 | Checkerboard | `node.checkerboard` | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
@@ -342,7 +344,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | Person Mask | `node.person_mask` | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 
-### Math & Convert (19)
+### Math & Convert (20)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -351,6 +353,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | Array Math | `node.array_math` | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
 | Combine XYZW | `node.combine_xyzw` | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
 | Connect Nearest | `node.connect_nearest` | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
+| Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | Power | `node.power` | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
@@ -412,7 +415,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (83)
+### Effect & generator presets (85)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -477,6 +480,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
+| `Oscilloscope` | Oscilloscope | effect | Audio | 12 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
@@ -484,6 +488,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | `SceneStrobe` | Scene Strobe | generator | Geometry | 78 |
 | `Skin` | Skin | generator | Geometry | 61 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
+| `Spectrogram` | Spectrogram | effect | Audio | 7 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
