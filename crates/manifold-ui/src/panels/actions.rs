@@ -453,6 +453,18 @@ pub enum ParamsAction {
     /// per registry kind; applied/inapplicable kinds disabled) — the layer
     /// the picker applies to rides on the action.
     AddModifierClicked(LayerId), // layer_id
+    /// Click on an unmasked effect-group header's add-modifier affordance.
+    /// The stable group id is captured by the header intent and remains valid
+    /// while the picker/menu flow is open.
+    EffectGroupAddModifierClicked(manifold_foundation::EffectGroupId),
+    /// Apply the selected mask preset to an effect group. The picker/menu
+    /// owns the preset and optional source-layer selection before emitting
+    /// this typed action.
+    AddEffectGroupMask {
+        group_id: manifold_foundation::EffectGroupId,
+        preset_id: String,
+        source_layer: Option<LayerId>,
+    },
     GenStringParamClicked(usize), // string_param_index — open text input
     GenStringParamDropdownClicked(usize), // string_param_index — open dropdown selector
     GenStringParamSelected(usize, String), // string_param_index, selected value

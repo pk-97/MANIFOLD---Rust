@@ -258,6 +258,7 @@ impl Command for UngroupEffectsCommand {
 pub struct AddGroupMaskCommand {
     target: EffectTarget,
     effect_indices: Vec<usize>,
+    group_id: Option<EffectGroupId>,
     mask: PresetInstance,
     created_group: Option<EffectGroup>,
     old_effects: Option<Vec<PresetInstance>>,
@@ -271,6 +272,7 @@ impl AddGroupMaskCommand {
         Self {
             target,
             effect_indices,
+            group_id: None,
             mask,
             created_group: None,
             old_effects: None,
@@ -279,15 +281,33 @@ impl AddGroupMaskCommand {
             rejection: None,
         }
     }
+
+    /// Capture a group address at menu-open time; resolve its members on the
+    /// content thread so intervening selection/reorder changes cannot retarget it.
+    pub fn for_group(target: EffectTarget, group_id: EffectGroupId, mask: PresetInstance) -> Self {
+        let mut command = Self::new(target, Vec::new(), mask);
+        command.group_id = Some(group_id);
+        command
+    }
 }
 
 impl Command for AddGroupMaskCommand {
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
-        let indices = self.effect_indices.clone();
+        let mut indices = self.effect_indices.clone();
         let mask = self.mask.clone();
         with_effects_mut(project, &self.target, |effects, groups| {
+            if let Some(group_id) = &self.group_id {
+                if !groups.iter().any(|group| &group.id == group_id) {
+                    self.rejection = Some("modifier group no longer exists");
+                    return;
+                }
+                indices = effects.iter().enumerate()
+                    .filter(|(_, effect)| effect.group_id.as_ref() == Some(group_id))
+                    .map(|(index, _)| index)
+                    .collect();
+            }
             if indices.is_empty() {
                 self.rejection = Some("at least one effect must be selected");
                 return;
@@ -344,7 +364,7 @@ impl Command for AddGroupMaskCommand {
                 groups.push(group.clone());
                 group_id
             } else {
-                let group = EffectGroup::new("Masked Group".to_string());
+                let group = EffectGroup::new("Modifier Group".to_string());
                 let group_id = group.id.clone();
                 self.created_group = Some(group.clone());
                 groups.push(group);
@@ -717,6 +737,46 @@ mod tests {
         let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
         assert_eq!(redo_group.id, group_id);
         assert_eq!(redo_group.mask_effect_id, Some(mask_id));
+    }
+
+    #[test]
+    fn group_mask_by_id_follows_reordered_members_and_undo_redo() {
+        let mut project = Project::default();
+        project.settings.master_effects = vec![effect("First"), effect("Second"), effect("Outside")];
+        let mut group = GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
+        group.execute(&mut project);
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let mask = effect("Mask");
+        let mask_id = mask.id.clone();
+        let mut command = AddGroupMaskCommand::for_group(master_target(), group_id.clone(), mask);
+        // A queued menu command must resolve the group, not its old indices.
+        project.settings.master_effects.rotate_right(1);
+        let before = project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>();
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        assert_eq!(project.settings.master_effects[0].id, before[0]);
+        assert_eq!(project.settings.master_effects[1].id, mask_id);
+        assert!(project.settings.master_effects[1..].iter().all(|effect| effect.group_id.as_ref() == Some(&group_id)));
+        command.undo(&mut project);
+        assert_eq!(project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>(), before);
+        command.execute(&mut project);
+        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(mask_id));
+    }
+
+    #[test]
+    fn group_mask_by_id_rejects_deleted_group_without_wrapping_other_effects() {
+        let mut project = Project::default();
+        project.settings.master_effects = vec![effect("First")];
+        let mut group = GroupEffectsCommand::new(master_target(), vec![0], "Modifier Group".into());
+        group.execute(&mut project);
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let mut command = AddGroupMaskCommand::for_group(master_target(), group_id, effect("Mask"));
+        group.undo(&mut project);
+        command.execute(&mut project);
+        assert!(!command.was_applied());
+        assert_eq!(project.settings.master_effects.len(), 1);
+        assert!(project.settings.master_effects[0].group_id.is_none());
+        assert!(project.settings.master_effect_groups.as_ref().unwrap().is_empty());
     }
 
     #[test]

@@ -50,8 +50,12 @@ fn rack_groups(
                 .collect::<Vec<_>>();
             (!member_ids.is_empty()).then(|| RackGroupConfig {
                 id: group.id.clone(),
-                name: group.name.clone(),
+                name: match group.name.as_str() {
+                    "Group" | "Masked Group" => "Modifier Group".to_string(),
+                    _ => group.name.clone(),
+                },
                 member_ids,
+                has_mask: group.mask_effect_id.is_some(),
             })
         })
         .collect()

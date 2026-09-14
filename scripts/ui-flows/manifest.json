@@ -117,6 +117,7 @@
     "gltf-import-card-sections": "gltfscene",
     "inspector-card-drag-reorder": "inspector",
     "inspector-add-mask": "inspector",
+    "inspector-modifier-group": "modifiergroup",
     "inspector-drawer-filmstrip": "inspector",
     "inspector-scroll": "inspector",
     "ruler-scrub": "timeline",

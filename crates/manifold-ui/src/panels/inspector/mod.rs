@@ -53,6 +53,9 @@ pub struct RackGroupConfig {
     pub id: EffectGroupId,
     pub name: String,
     pub member_ids: Vec<EffectId>,
+    /// Whether this group already contains a composable mask modifier.
+    /// Masked groups omit the group-header add-modifier affordance.
+    pub has_mask: bool,
 }
 
 // ── Tab strip ───────────────────────────────────────────────────
@@ -73,6 +76,11 @@ const KEY_ADD_EFFECT_BTN: u64 = 95_001;
 /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's key —
 /// one per layer scope, below the modifier cards.
 const KEY_ADD_MODIFIER_BTN: u64 = 95_002;
+
+/// Automation name for the group-header add-modifier affordance. There can
+/// be one instance per visible group; callers can use the structural query's
+/// `nth` selector when more than one group is present.
+const GROUP_ADD_MODIFIER_NAME: &str = "inspector.effect_group.add_modifier";
 
 /// The "+ Add Modifier" button as a typed Chrome view — the same neutral kit
 /// button as "+ Add Effect" (`add_effect_button_view`), keyed separately so
@@ -269,6 +277,10 @@ pub struct InspectorCompositePanel {
     // Add Effect button node IDs
     add_master_effect_btn: Option<NodeId>,
     add_layer_effect_btn: Option<NodeId>,
+    /// Live group-header add-modifier nodes, paired with their stable group
+    /// ids. Rebuilt each frame with the header nodes so intent registration
+    /// cannot retain bindings to dead nodes after a structural rebuild.
+    group_add_modifier_btns: Vec<(NodeId, EffectGroupId)>,
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's
     /// node id (layer scope only), and whether the current layer scope is a
     /// scene layer at all (the picker needs a live scene to offer kinds).
@@ -444,6 +456,7 @@ impl InspectorCompositePanel {
             mods_compact: false,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
+            group_add_modifier_btns: Vec::new(),
             add_modifier_btn: None,
             show_add_modifier: false,
             // Set by `configure_gen_params`, which the app calls with the
@@ -1284,6 +1297,13 @@ impl Panel for InspectorCompositePanel {
         // `node_count() > 0` here — one signal, the same the rest of the panel uses.
         self.macros_panel.register_intents(intents);
         self.audio_trigger_section.register_intents(intents);
+        for (node_id, group_id) in &self.group_add_modifier_btns {
+            intents.on(
+                *node_id,
+                crate::intent::Gesture::Click,
+                PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id.clone())),
+            );
+        }
         if self.master_chrome.node_count() > 0 {
             self.master_chrome.register_intents(intents);
         }
