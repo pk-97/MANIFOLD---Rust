@@ -106,7 +106,7 @@ One struct for all three tasks; `joint` namespaces differ (body ~17–19, hand 2
 
 - The **worker owns ID association**, independent of backend (greedy IoU/ByteTrack-style matching, ~100 lines, MIT-licensed prior art). Vision doesn't provide stable IDs; ours are consistent across both backends.
 - IDs are **monotonic u32, never reused within a session** (same doctrine as typed IDs). Person walks off camera → their keypoints stop appearing; walk back within a short re-association window → same ID; otherwise a new one.
-- This **supersedes the parked blob tracker** at a higher semantic level (Peter unparked person-tracking-in-evolved-form). Blob detection itself stays parked.
+- Person tracking extends tracking at a higher semantic level. Further blob-detection development stays parked; the existing Blob Track effect remains available in the picker (Peter, 2026-09-14).
 
 ### 6.3 Smoothing and convenience
 
@@ -172,7 +172,7 @@ Full workspace sweep gates P1 (runtime infrastructure). P2–P5 are per-node sco
 6. Keypoints = `Keypoint2D` Channels-typed array (section 6.1), UV space, monotonic never-reused person IDs, worker-owned tracking.
 7. License gate: Apache/MIT/BSD ship; GPL/AGPL/CC-BY-NC banned. Audit at every model pick.
 8. Curated nodes only — generic ONNX-loader node rejected permanently.
-9. Person tracking via pose IDs supersedes the parked blob tracker; blob detection itself stays parked.
+9. Person tracking via pose IDs extends tracking; further blob-detection development stays parked. The existing Blob Track effect remains available in the picker (Peter, 2026-09-14).
 10. Camera is a source node; ML nodes accept any Texture2D.
 11. Model downloads/compiles in setup contexts only, never mid-show.
 12. Optical flow stays Farneback until an ML replacement earns its place.

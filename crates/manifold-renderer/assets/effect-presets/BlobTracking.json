@@ -7,7 +7,7 @@
     "category": "Stylize",
     "oscPrefix": "blobTracking",
     "legacyDiscriminant": 22,
-    "available": false,
+    "available": true,
     "isLineBased": false,
     "params": [
       {
