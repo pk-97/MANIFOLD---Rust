@@ -6,6 +6,7 @@
 //! uses the same headless `ContentThread` and native Metal output as the app.
 
 mod periodic;
+mod angular;
 mod consolidation;
 
 use std::path::{Path, PathBuf};

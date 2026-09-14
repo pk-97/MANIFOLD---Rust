@@ -1,13 +1,15 @@
-//! `node.ordered_recon_mesh` — a deterministic, band-ordered rigid return to
-//! a reference triangle stream.
+//! `node.ordered_recon_mesh` — a deterministic, band-ordered pose-blended
+//! return to a reference triangle stream.
 //!
 //! Each reference triangle is assigned to a directional band from its
 //! reference centroid.  Bands ease in with a staggered `progress`; while a
 //! band is waiting, its corners share one pivot and receive a restrained
-//! translation/rotation.  The current mesh remains the source of the
-//! attributes during the response so the atom composes after other mesh
-//! modifiers.  The reference is used only for stable band membership and
-//! pivots; at `progress >= 1` the incoming record is returned exactly.
+//! translation plus a full-angle rotation pose blended by the band's `away`
+//! weight.  The current mesh remains the source of the attributes during the
+//! response so the atom composes after other mesh modifiers.  The reference
+//! is used only for stable band membership and pivots; at `progress >= 1` the
+//! incoming record is returned exactly.  Partial pose blends can compress
+//! faces, while 0 and 2π rotation remain the same periodic pose.
 
 use std::borrow::Cow;
 
@@ -45,7 +47,7 @@ struct OrderedReconUniforms {
 crate::primitive! {
     name: OrderedReconMesh,
     type_id: "node.ordered_recon_mesh",
-    purpose: "Animate an incoming Array<MeshVertex> through ordered rigid bands using a reference mesh only for stable centroid ordering. Each reference triangle is assigned by its centroid projection onto a normalized direction; staggered smoothstep progress makes bands settle in sequence. Waiting bands rotate around a shared directional pivot and translate by restrained separation/spread. UVs and smooth frame attributes remain attached, and progress >= 1 returns the incoming record exactly.",
+    purpose: "Animate an incoming Array<MeshVertex> through ordered pose-blended bands using a reference mesh only for stable centroid ordering. Each reference triangle is assigned by its centroid projection onto a normalized direction; staggered smoothstep progress makes bands settle in sequence. Waiting bands evaluate a full rotation around a shared directional pivot, blend the rotated pose by `away`, and translate by restrained separation/spread. UVs and orthonormalized frame attributes remain attached, and progress >= 1 returns the incoming record exactly.",
     inputs: {
         in: Array(MeshVertex) required,
         reference: Array(MeshVertex) required,
@@ -80,10 +82,10 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use the actual upstream mesh as `in` and its immutable source as `reference`. Reference triangle centroids are projected into ordered directional bands, so this is a staged assembly response rather than random shatter or fixed-cell peel. `progress >= 1` and disabled both return the incoming record byte-exactly; reference attributes are never substituted. Keep separation, rotation and spread restrained for readable scan assembly. Direction and all scalar controls are port-shadowed for live modulation. The centroid reads are BufferGather, so this remains a standalone reference-driven boundary like node.transform_mesh_patches rather than pretending the reference lookup is coincident and fusable.",
+    composition_notes: "Use the actual upstream mesh as `in` and its immutable source as `reference`. Reference triangle centroids are projected into ordered directional bands, so this is a staged assembly response rather than random shatter or fixed-cell peel. Waiting bands evaluate the full rotation angle and pose-blend the result by `away`, making 0 and 2π equivalent even during partial progress; this intentionally allows partial pose blending to compress faces. Separation and spread remain weighted translations. `progress >= 1`, a settled local band, and disabled all return the incoming record byte-exactly; reference attributes are never substituted. Keep separation, rotation and spread restrained for readable scan assembly. Direction and all scalar controls are port-shadowed for live modulation. The centroid reads are BufferGather, so this remains a standalone reference-driven boundary like node.transform_mesh_patches rather than pretending the reference lookup is coincident and fusable.",
     examples: ["OrderedRecon"],
     picker: { label: "Ordered Recon", category: Atom },
-    summary: "Reassembles an incoming mesh in directional bands, with each band settling as a rigid group.",
+    summary: "Reassembles an incoming mesh in directional bands, with each band settling from a periodic pose blend.",
     category: Geometry3D,
     role: Filter,
     aliases: ["ordered recon", "ordered reconstruction", "banded assembly", "mesh assembly", "reconstruct mesh"],
@@ -522,6 +524,144 @@ mod gpu_tests {
                 .all(|x| x.is_finite())),
             "ordered reconstruction stays finite"
         );
+    }
+
+    #[test]
+    fn structured_modifier_ordered_recon_rotation_is_periodic_during_partial_pose_blend() {
+        let current = vec![
+            vertex(
+                [0.52, 0.18, -0.11],
+                [0.3, 0.8, 0.5],
+                [0.0, 0.0],
+                [0.9, -0.2, 0.35, -1.0],
+            ),
+            vertex(
+                [0.91, 0.22, -0.11],
+                [0.3, 0.8, 0.5],
+                [1.0, 0.0],
+                [0.9, -0.2, 0.35, -1.0],
+            ),
+            vertex(
+                [0.52, 0.59, -0.11],
+                [0.3, 0.8, 0.5],
+                [0.0, 1.0],
+                [0.9, -0.2, 0.35, -1.0],
+            ),
+        ];
+        let reference = vec![
+            vertex(
+                [0.12, 0.17, 0.08],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            vertex(
+                [0.16, 0.17, 0.08],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            vertex(
+                [0.12, 0.21, 0.08],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+        ];
+        let mut u = OrderedReconUniforms {
+            // The single band settles at 0.28; sample inside its transition.
+            progress: 0.1,
+            bands: 1,
+            separation: 0.17,
+            rotation: 0.0,
+            spread: -0.09,
+            direction_x: 0.31,
+            direction_y: 0.78,
+            direction_z: -0.41,
+            scale: 1.0,
+            source_offset_x: 0.12,
+            source_offset_y: -0.08,
+            source_offset_z: 0.07,
+            enabled: 1.0,
+            dispatch_count: 3,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<OrderedReconMesh>()
+            .expect("ordered recon standalone codegen");
+        let zero = dispatch(
+            &wgsl,
+            &current,
+            &reference,
+            u,
+            "ordered-recon-rotation-zero",
+        );
+        u.rotation = std::f32::consts::TAU;
+        let turn = dispatch(
+            &wgsl,
+            &current,
+            &reference,
+            u,
+            "ordered-recon-rotation-turn",
+        );
+        u.rotation = std::f32::consts::TAU - 1e-4;
+        let before_seam = dispatch(
+            &wgsl,
+            &current,
+            &reference,
+            u,
+            "ordered-recon-rotation-before-seam",
+        );
+        u.rotation = std::f32::consts::TAU + 1e-4;
+        let after_seam = dispatch(
+            &wgsl,
+            &current,
+            &reference,
+            u,
+            "ordered-recon-rotation-after-seam",
+        );
+        u.rotation = std::f32::consts::PI;
+        let midpoint = dispatch(&wgsl, &current, &reference, u, "ordered-recon-rotation-mid");
+        for (a, b) in zero.iter().zip(&turn) {
+            for axis in 0..3 {
+                assert!((a.position[axis] - b.position[axis]).abs() < 3e-5);
+                assert!((a.normal[axis] - b.normal[axis]).abs() < 3e-5);
+                assert!((a.tangent[axis] - b.tangent[axis]).abs() < 3e-5);
+            }
+            assert_eq!(a.uv, b.uv);
+            assert_eq!(a.tangent[3], b.tangent[3]);
+        }
+        for (a, b) in before_seam.iter().zip(&after_seam) {
+            for axis in 0..3 {
+                assert!((a.position[axis] - b.position[axis]).abs() < 3e-4);
+                assert!((a.normal[axis] - b.normal[axis]).abs() < 3e-4);
+                assert!((a.tangent[axis] - b.tangent[axis]).abs() < 3e-4);
+            }
+        }
+        assert!(midpoint.iter().zip(&zero).any(|(a, b)| {
+            a.position
+                .iter()
+                .zip(b.position.iter())
+                .any(|(x, y)| (x - y).abs() > 1e-4)
+        }));
+        for frame in midpoint {
+            let normal_length = frame.normal.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let tangent = [frame.tangent[0], frame.tangent[1], frame.tangent[2]];
+            let tangent_length = tangent.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let frame_dot = frame.normal[0] * tangent[0]
+                + frame.normal[1] * tangent[1]
+                + frame.normal[2] * tangent[2];
+            assert!(
+                frame
+                    .normal
+                    .iter()
+                    .chain(tangent.iter())
+                    .all(|component| component.is_finite())
+            );
+            assert!((normal_length - 1.0).abs() < 3e-5);
+            assert!((tangent_length - 1.0).abs() < 3e-5);
+            assert!(frame_dot.abs() < 3e-5);
+        }
     }
 
     #[test]

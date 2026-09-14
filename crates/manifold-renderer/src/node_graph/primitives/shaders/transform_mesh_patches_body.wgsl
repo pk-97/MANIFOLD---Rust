@@ -1,4 +1,4 @@
-// node.transform_mesh_patches — fixed-cell rigid reference patch response.
+// node.transform_mesh_patches — fixed-cell reference patch pose blend.
 const TAU: f32 = 6.283185307179586;
 const EPS: f32 = 1e-8;
 
@@ -28,6 +28,16 @@ fn fallback_rotation_axis(axis: vec3<f32>) -> vec3<f32> {
     return safe_unit(cross(axis, basis), vec3<f32>(0.0, 0.0, 1.0));
 }
 
+fn blend_frame(original: vec3<f32>, rotated: vec3<f32>, weight: f32, fallback: vec3<f32>) -> vec3<f32> {
+    return safe_unit(mix(original, rotated, clamp(weight, 0.0, 1.0)), safe_unit(original, fallback));
+}
+
+fn blend_tangent(original: vec3<f32>, rotated: vec3<f32>, normal: vec3<f32>, weight: f32) -> vec3<f32> {
+    let mixed = safe_unit(mix(original, rotated, clamp(weight, 0.0, 1.0)), vec3<f32>(0.0, 0.0, 0.0));
+    let orthogonal = mixed - normal * dot(mixed, normal);
+    return safe_unit(orthogonal, vec3<f32>(0.0, 0.0, 0.0));
+}
+
 fn body(idx: u32, count: u32, e_in: Element, separation: f32, rotation: f32, orbit: f32, spread: f32, phase: f32, frequency: f32, yaw: f32, pitch: f32, cell_size: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32, enabled: f32) -> Element {
     if enabled <= 0.0 || (separation == 0.0 && rotation == 0.0 && orbit == 0.0 && spread == 0.0) { return e_in; }
     let base = (idx / 3u) * 3u;
@@ -43,12 +53,17 @@ fn body(idx: u32, count: u32, e_in: Element, separation: f32, rotation: f32, orb
     let local_axis = safe_unit(cross(radial_normal, axis), fallback_rotation_axis(axis));
     let mask = 0.5 + 0.5 * sin(TAU * (dot(cell_center_normalized, axis) * frequency - phase));
     let w = enabled * mask;
-    let local = e_in.position + source_offset - cell_center_world;
-    let local_response = rotate_about(local, local_axis, rotation * w) + cell_center_world;
-    let rotated_world = rotate_about(local_response, axis, orbit * w);
-    let translated_world = rotated_world + safe_scale * w * (separation * radial_normal + spread * axis);
+    if w <= 0.0 { return e_in; }
+    let original_world = e_in.position + source_offset;
+    let local = original_world - cell_center_world;
+    let local_response = rotate_about(local, local_axis, rotation) + cell_center_world;
+    let rotated_world = rotate_about(local_response, axis, orbit);
+    let blended_world = mix(original_world, rotated_world, w);
+    let translated_world = blended_world + safe_scale * w * (separation * radial_normal + spread * axis);
     let p = translated_world - source_offset;
-    let n = rotate_about(rotate_about(e_in.normal, local_axis, rotation * w), axis, orbit * w);
-    let t = rotate_about(rotate_about(e_in.tangent.xyz, local_axis, rotation * w), axis, orbit * w);
+    let rotated_normal = rotate_about(rotate_about(e_in.normal, local_axis, rotation), axis, orbit);
+    let n = blend_frame(e_in.normal, rotated_normal, w, vec3<f32>(0.0, 1.0, 0.0));
+    let rotated_tangent = rotate_about(rotate_about(e_in.tangent.xyz, local_axis, rotation), axis, orbit);
+    let t = blend_tangent(e_in.tangent.xyz, rotated_tangent, n, w);
     return Element(p, n, e_in.uv, vec4<f32>(t, e_in.tangent.w));
 }

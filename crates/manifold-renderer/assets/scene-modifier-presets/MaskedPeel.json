@@ -18,8 +18,9 @@
       {
         "id": "curl",
         "name": "Curl",
-        "min": -3.1415927,
-        "max": 3.1415927,
+        "min": 0.0,
+        "max": 6.2831855,
+        "wraps": true,
         "defaultValue": 1.0,
         "isAngle": true
       },
