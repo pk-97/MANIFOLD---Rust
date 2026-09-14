@@ -136,6 +136,8 @@ fn group_mask_circle_moves_over_infrared_without_rebuild() {
     mask.set_base_param("size_y", 0.35);
     mask.set_base_param("feather", 0.2);
     let mut wet = manifold_core::preset_definition_registry::create_default(&PresetTypeId::INFRARED);
+    wet.set_base_param("amount", 1.0);
+    wet.set_base_param("palette", 3.0);
     let plain_effects = vec![wet.clone()];
     mask.group_id = Some(group.id.clone());
     wet.group_id = Some(group.id.clone());
@@ -175,6 +177,7 @@ fn group_mask_circle_moves_over_infrared_without_rebuild() {
         };
         let inside = if frame == 0 { 16 } else { 48 };
         let outside = if frame == 0 { 48 } else { 16 };
+        assert!((0..3).any(|c| (channel(&wet, inside, c) - 0.2).abs() > 0.05), "Infrared reference must visibly differ from dry input");
         for c in 0..4 {
             assert!((channel(&output, inside, c) - channel(&wet, inside, c)).abs() < 0.002);
             assert!((channel(&output, outside, c) - if c == 3 { 0.3 } else { 0.2 }).abs() < 0.002);
