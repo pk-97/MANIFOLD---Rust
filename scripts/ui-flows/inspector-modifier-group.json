@@ -19,6 +19,40 @@
       "check": "Exists"
     }
   },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.container"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.container"
+        }
+      },
+      "check": {
+        "Above": {
+          "name": "param_card.drag_handle.Strobe"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "2 effects"
+        }
+      },
+      "check": "Exists"
+    }
+  },
   "Snapshot",
   {
     "Pointer": {
@@ -104,6 +138,30 @@
         }
       },
       "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask → 2 effects"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.container"
+        }
+      },
+      "check": {
+        "Above": {
+          "name": "param_card.drag_handle.Strobe"
+        }
+      }
     }
   },
   {
