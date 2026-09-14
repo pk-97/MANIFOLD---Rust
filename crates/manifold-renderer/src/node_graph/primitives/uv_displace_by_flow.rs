@@ -34,6 +34,8 @@ crate::primitive! {
     inputs: {
         in: Texture2D required,
         flow: Texture2D required,
+        weight: ScalarF32 optional,
+        bias: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -71,9 +73,9 @@ crate::primitive! {
 
 impl Primitive for UvDisplaceByFlow {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let weight = ctx.param_f32("weight", 0.001);
+        let weight = ctx.scalar_or_param("weight", 0.001);
 
-        let bias = ctx.param_f32("bias", 0.5);
+        let bias = ctx.scalar_or_param("bias", 0.5);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
@@ -125,7 +127,7 @@ mod tests {
     fn uv_displace_by_flow_declares_two_texture_inputs_and_one_output() {
         use crate::node_graph::ports::PortType;
         assert_eq!(UvDisplaceByFlow::TYPE_ID, "node.uv_displace_by_flow");
-        assert_eq!(UvDisplaceByFlow::INPUTS.len(), 2);
+        assert_eq!(UvDisplaceByFlow::INPUTS.len(), 4);
         assert_eq!(UvDisplaceByFlow::INPUTS[0].name, "in");
         assert_eq!(UvDisplaceByFlow::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(UvDisplaceByFlow::INPUTS[1].name, "flow");

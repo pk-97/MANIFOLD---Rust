@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 
 /// Resolve the path to a native plugin bundle.
 ///
-/// Search order (matches Unity's plugin resolution):
-/// 1. `assets/plugins/{name}.bundle/Contents/MacOS/{name}` relative to executable
-/// 2. `assets/plugins/{name}.bundle/Contents/MacOS/{name}` relative to manifest dir
-/// 3. Absolute path from environment variable `MANIFOLD_{NAME}_PLUGIN`
+/// Search order: explicit `MANIFOLD_{NAME}_PLUGIN`, executable-relative
+/// assets, development executable root, current-directory assets, then the
+/// build workspace's assets in debug builds (Cargo tests run from crate dirs).
 pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
     let env_key = format!("MANIFOLD_{}_PLUGIN", name.to_uppercase());
     if let Ok(path) = std::env::var(&env_key) {
@@ -47,6 +46,16 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
         .join(name);
     if cwd_candidate.exists() {
         return Some(cwd_candidate);
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        let development_candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/plugins")
+            .join(format!("{name}.bundle/Contents/MacOS/{name}"));
+        if development_candidate.exists() {
+            return Some(development_candidate);
+        }
     }
 
     None
