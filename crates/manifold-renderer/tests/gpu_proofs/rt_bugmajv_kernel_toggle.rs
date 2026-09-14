@@ -177,6 +177,10 @@ fn render_until_lit(
             px = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, target);
             frac = non_black_fraction(&px);
             if frac >= LIT_FRACTION_THRESHOLD {
+                eprintln!(
+                    "[bug-majv] {phase}: frame={f}, lit={frac:.4}, luma={:.4}, io_pending={}, warmup_pending={}",
+                    mean_luma(&px), runtime.io_pending(), runtime.warmup_pending(),
+                );
                 return (px, f);
             }
         }

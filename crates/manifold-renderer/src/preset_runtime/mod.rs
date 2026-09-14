@@ -84,7 +84,10 @@ pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
 mod build;
-use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, OpenGroup};
+use build::{assign_texture2d_slots, compute_topology_hash};
+
+mod groups;
+use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
 
 mod convert_heal;
 mod math_view;
@@ -109,7 +112,7 @@ mod core;
 pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
-use core::{EffectSlot, PresetIo, chain_active_effects};
+use core::{EffectSlot, PresetIo};
 #[cfg(test)]
 use core::assert_manifest_gate;
 #[cfg(all(test, feature = "gpu-proofs"))]

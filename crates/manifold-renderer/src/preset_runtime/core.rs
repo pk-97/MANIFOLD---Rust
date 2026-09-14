@@ -328,31 +328,6 @@ impl EffectSlot {
     }
 }
 
-/// The active (enabled, group-enabled) effects of a chain, with their original
-/// indices into `effects`. Shared between the chain build and the project-load
-/// segment prewarm so both walk the identical card list.
-pub(super) fn chain_active_effects<'a>(
-    effects: &'a [PresetInstance],
-    groups: &[EffectGroup],
-) -> Vec<(usize, &'a PresetInstance)> {
-    effects
-        .iter()
-        .enumerate()
-        .filter(|(_, fx)| {
-            if !fx.enabled {
-                return false;
-            }
-            if let Some(gid) = fx.group_id.as_deref()
-                && let Some(group) = groups.iter().find(|g| g.id.as_str() == gid)
-                && !group.enabled
-            {
-                return false;
-            }
-            true
-        })
-        .collect()
-}
-
 /// BUG-080 seam: a provisional manifest (built against an incomplete
 /// registry, not yet reconciled) reaching chain build means a load/ingest
 /// path skipped `reconcile_param_manifests()`. Loud in dev (panics), throttled
@@ -474,21 +449,7 @@ impl PresetRuntime {
             height,
             preview_effect,
         } = inputs;
-        for group in groups {
-            if let Some(mask_id) = &group.mask_effect_id {
-                let member = effects.iter().find(|fx| &fx.id == mask_id);
-                if !member.is_some_and(|fx| fx.group_id.as_ref() == Some(&group.id)) {
-                    eprintln!("[chain-build-fail] group {} has missing mask member {}", group.id, mask_id);
-                    return None;
-                }
-                let first = effects.iter().position(|fx| fx.group_id.as_ref() == Some(&group.id))?;
-                let last = effects.iter().rposition(|fx| fx.group_id.as_ref() == Some(&group.id))?;
-                if effects[first..=last].iter().any(|fx| fx.group_id.as_ref() != Some(&group.id)) {
-                    eprintln!("[chain-build-fail] masked group {} is not contiguous", group.id);
-                    return None;
-                }
-            }
-        }
+        validate_mask_groups(effects, groups)?;
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
         // (replaces the previous AHashMap<EffectId, &PresetInstance>

@@ -78,7 +78,7 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
 
 ## 5. Phases
 
-1. Group mask vertical slice (implemented; landing checks pending): model, commands, mask presets, branch assembly,
+1. Group mask vertical slice (implemented): model, commands, mask presets, branch assembly,
    visible membership and Add Mask. Gesture: move a soft circle across Infrared.
    Focused core/editing/renderer/UI tests and clippy; required GPU proofs and
    landing gate. Verify save/reload, then continue the gesture.
