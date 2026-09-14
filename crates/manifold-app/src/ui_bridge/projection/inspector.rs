@@ -106,8 +106,9 @@ pub fn sync_inspector_data(
             .timeline
             .layers
             .iter()
-            .filter(|layer| matches!(layer.layer_type, LayerType::Video | LayerType::Generator))
-            .map(|layer| (layer.layer_id.clone(), layer.name.clone()))
+            .enumerate()
+            .filter(|(_, layer)| matches!(layer.layer_type, LayerType::Video | LayerType::Generator))
+            .map(|(index, layer)| (layer.layer_id.clone(), format!("{} · {}", index + 1, layer.name)))
             .collect(),
     );
     let selected_automation = |layer_id: &manifold_core::LayerId| {
@@ -1380,8 +1381,9 @@ pub fn sync_inspector_data(
                     .timeline
                     .layers
                     .iter()
-                    .filter(|l| l.layer_type != LayerType::Group)
-                    .map(|l| (l.layer_id.clone(), l.name.clone()))
+                    .enumerate()
+                    .filter(|(_, l)| l.layer_type != LayerType::Group)
+                    .map(|(index, l)| (l.layer_id.clone(), format!("{} · {}", index + 1, l.name)))
                     .collect();
 
                 let instruments = cfg

@@ -35,6 +35,8 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "inspector" => Some(inspector_scene()),
         "modifiergroup" => {
             let mut scene = inspector_scene();
+            // Duplicate source names must remain distinguishable in the mask picker.
+            scene.project.timeline.layers[2].name = "GLOW".into();
             let target = manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id: lid("glow") };
             let mut command = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
                 target, vec![0, 1], "Modifier Group".into(),

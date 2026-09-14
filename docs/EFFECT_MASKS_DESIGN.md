@@ -30,6 +30,11 @@ D2. Cmd+G wraps one or several selected effects in a **Modifier Group** using
    the existing EffectGroup model. Without a modifier, effects run normally.
    The header's **Add Modifier** picker offers Mask — Circle, Rectangle, Gradient,
    Image and Layer; the ordinary mask card holds its controls inside the group.
+   The picker anchors below its button. Layer sources include their timeline row
+   number so duplicate names remain distinguishable.
+   A bordered container surrounds each group, with a distinct header and inset
+   member cards. The header shows the effect count, or `Mask → N effects` when
+   masked, to make the modifier scope explicit. Ungrouped effects sit outside it.
    One mask is supported per group, so the add button disappears until it is removed.
    The picker captures the group ID; membership resolves on the content thread.
    Existing generic Group/Masked Group labels display as Modifier Group; custom

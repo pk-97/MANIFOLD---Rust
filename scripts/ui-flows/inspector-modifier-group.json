@@ -19,6 +19,40 @@
       "check": "Exists"
     }
   },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.container"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.container"
+        }
+      },
+      "check": {
+        "Above": {
+          "name": "param_card.drag_handle.Strobe"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "2 effects"
+        }
+      },
+      "check": "Exists"
+    }
+  },
   "Snapshot",
   {
     "Pointer": {
@@ -45,6 +79,44 @@
     }
   },
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask — Circle"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 1291.0,
+          "y": 194.0,
+          "width": 233.0,
+          "height": 28.0
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask — Layer: 2 · GLOW"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask — Layer: 3 · GLOW"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
     "Pointer": {
       "target": {
         "Query": {
@@ -66,6 +138,30 @@
         }
       },
       "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask → 2 effects"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.container"
+        }
+      },
+      "check": {
+        "Above": {
+          "name": "param_card.drag_handle.Strobe"
+        }
+      }
     }
   },
   {

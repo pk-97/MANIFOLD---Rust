@@ -1126,6 +1126,7 @@ impl UIRoot {
         }
         self.screen_width = width;
         self.screen_height = height;
+        self.dropdown.set_screen_size(width, height);
         self.build();
     }
 
@@ -1831,5 +1832,4 @@ mod tick_parity_tests {
         );
     }
 }
-
 

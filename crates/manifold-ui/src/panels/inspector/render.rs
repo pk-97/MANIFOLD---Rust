@@ -9,14 +9,46 @@ fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
     crate::param_surface::stable_key(&format!("inspector.effect_group.add_modifier:{group_id}"))
 }
 
+const GROUP_CONTAINER_NAME: &str = "inspector.effect_group.container";
+
+fn rack_group_scope_text(group: &RackGroupConfig) -> String {
+    let effect_count = group
+        .member_ids
+        .len()
+        .saturating_sub(group.has_mask as usize);
+    let noun = if effect_count == 1 {
+        "effect"
+    } else {
+        "effects"
+    };
+    if group.has_mask {
+        format!("Mask → {effect_count} {noun}")
+    } else {
+        format!("{effect_count} {noun}")
+    }
+}
+
 fn rack_group_header_view(group: &RackGroupConfig) -> View {
     let mut view = View::row(4.0)
         .fill_w()
         .h(Sizing::Fixed(InspectorCompositePanel::RACK_HEADER_H))
         .cross_align(crate::chrome::Align::Center)
+        .style(UIStyle {
+            bg_color: color::mix(color::BG_2, color::DEFAULT_GROUP_ACCENT, 0.16),
+            border_color: color::DEFAULT_GROUP_ACCENT,
+            border_width: 1.0,
+            ..UIStyle::default()
+        })
         .child(
             View::label(format!("▾ {}", group.name))
                 .fill_w()
+                .fill_h()
+                .font(color::FONT_SUBHEADING)
+                .text_color(color::TEXT_PRIMARY_C32)
+                .inert(),
+        )
+        .child(
+            View::label(rack_group_scope_text(group))
                 .fill_h()
                 .font(color::FONT_LABEL)
                 .text_color(color::TEXT_DIMMED_C32)
@@ -38,9 +70,86 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
     view
 }
 
+fn rack_group_container_view() -> View {
+    View::panel()
+        .fill()
+        .style(UIStyle {
+            bg_color: color::mix(color::BG_2, color::DEFAULT_GROUP_ACCENT, 0.06),
+            border_color: color::DEFAULT_GROUP_ACCENT,
+            border_width: 2.0,
+            corner_radius: color::SMALL_RADIUS,
+            ..UIStyle::default()
+        })
+        .name(GROUP_CONTAINER_NAME)
+        .inert()
+}
+
+/// Return the group run beginning at `start`, with the frame height needed to
+/// enclose its header and cards. Group membership is projected as an ordered
+/// run, so a later reappearance of the same group starts a new enclosure.
+fn rack_group_span(
+    groups: &[RackGroupConfig],
+    cards: &[ParamCardPanel],
+    start: usize,
+) -> Option<(usize, usize, f32)> {
+    let group_idx = groups.iter().position(|group| {
+        group
+            .member_ids
+            .iter()
+            .any(|id| id == cards[start].effect_id())
+    })?;
+    let group_id = &groups[group_idx].id;
+    let mut end = start;
+    let mut height = InspectorCompositePanel::RACK_HEADER_H + InspectorCompositePanel::RACK_GROUP_BOTTOM_PAD;
+    while end < cards.len() {
+        let member_group = rack_group_for_effect(groups, cards[end].effect_id());
+        if member_group.is_none_or(|group| group.id != *group_id) {
+            break;
+        }
+        height += cards[end].compute_height();
+        end += 1;
+        if end < cards.len()
+            && rack_group_for_effect(groups, cards[end].effect_id())
+                .is_some_and(|group| group.id == *group_id)
+        {
+            height += SECTION_GAP;
+        }
+    }
+    Some((group_idx, end, height))
+}
+
+fn build_rack_group_frame(
+    tree: &mut UITree,
+    group: &RackGroupConfig,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    group_add_modifier_btns: &mut Vec<(NodeId, EffectGroupId)>,
+) {
+    chrome::materialize(
+        tree,
+        &rack_group_container_view(),
+        Rect::new(x, y, width, height),
+    );
+    let header_ids = chrome::materialize(
+        tree,
+        &rack_group_header_view(group),
+        Rect::new(x, y, width, InspectorCompositePanel::RACK_HEADER_H),
+    );
+    if !group.has_mask
+        && let Some((_, button_id)) = header_ids
+            .into_iter()
+            .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
+    {
+        group_add_modifier_btns.push((button_id, group.id.clone()));
+    }
+}
+
 impl InspectorCompositePanel {
-    const RACK_HEADER_H: f32 = 20.0;
-    const RACK_INDENT: f32 = 10.0;
+    const RACK_HEADER_H: f32 = 28.0;
+    const RACK_INDENT: f32 = color::SPACE_XL;
+    const RACK_GROUP_BOTTOM_PAD: f32 = color::SPACE_M;
 
     /// Set which tab rungs are available (display order, local→global) and which
     /// is active. Drives section visibility so only the active scope renders.
@@ -444,14 +553,17 @@ impl InspectorCompositePanel {
         let mut h = SECTION_CARD_PAD + self.master_chrome.compute_height();
         if !self.master_chrome.is_collapsed() {
             let groups = &self.rack_groups[Self::SCOPE_MASTER];
-            let mut previous_group = None;
-            for card in &self.effects[Self::SCOPE_MASTER] {
-                let group = rack_group_for_effect(groups, card.effect_id()).map(|g| &g.id);
-                if group.is_some() && group != previous_group {
-                    h += Self::RACK_HEADER_H;
+            let cards = &self.effects[Self::SCOPE_MASTER];
+            let mut card_idx = 0;
+            while card_idx < cards.len() {
+                if let Some((_, group_end, group_height)) = rack_group_span(groups, cards, card_idx)
+                {
+                    h += group_height + SECTION_GAP;
+                    card_idx = group_end;
+                } else {
+                    h += cards[card_idx].compute_height() + SECTION_GAP;
+                    card_idx += 1;
                 }
-                previous_group = group;
-                h += card.compute_height() + SECTION_GAP;
             }
             h += ADD_EFFECT_BTN_H + SECTION_GAP;
         }
@@ -483,14 +595,18 @@ impl InspectorCompositePanel {
                     h += ADD_EFFECT_BTN_H + SECTION_GAP;
                 }
                 let groups = &self.rack_groups[Self::SCOPE_LAYER];
-                let mut previous_group = None;
-                for card in &self.effects[Self::SCOPE_LAYER] {
-                    let group = rack_group_for_effect(groups, card.effect_id()).map(|g| &g.id);
-                    if group.is_some() && group != previous_group {
-                        h += Self::RACK_HEADER_H;
+                let cards = &self.effects[Self::SCOPE_LAYER];
+                let mut card_idx = 0;
+                while card_idx < cards.len() {
+                    if let Some((_, group_end, group_height)) =
+                        rack_group_span(groups, cards, card_idx)
+                    {
+                        h += group_height + SECTION_GAP;
+                        card_idx = group_end;
+                    } else {
+                        h += cards[card_idx].compute_height() + SECTION_GAP;
+                        card_idx += 1;
                     }
-                    previous_group = group;
-                    h += card.compute_height() + SECTION_GAP;
                 }
                 h += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
@@ -666,32 +782,44 @@ impl InspectorCompositePanel {
 
                 if !self.master_chrome.is_collapsed() {
                     let groups = &self.rack_groups[Self::SCOPE_MASTER];
-                    let mut previous_group = None;
-                    for card in &mut self.effects[Self::SCOPE_MASTER] {
-                        let group = rack_group_for_effect(groups, card.effect_id()).map(|g| &g.id);
-                        if let Some(group_id) = group
-                            && previous_group != Some(group_id)
-                            && let Some(group) = groups.iter().find(|candidate| &candidate.id == group_id)
+                    let mut card_idx = 0;
+                    while card_idx < self.effects[Self::SCOPE_MASTER].len() {
+                        if let Some((group_idx, group_end, group_height)) =
+                            rack_group_span(groups, &self.effects[Self::SCOPE_MASTER], card_idx)
                         {
-                            let header_ids = chrome::materialize(
+                            build_rack_group_frame(
                                 tree,
-                                &rack_group_header_view(group),
-                                Rect::new(inner_x, cy, inner_w, Self::RACK_HEADER_H),
+                                &groups[group_idx],
+                                inner_x,
+                                cy,
+                                inner_w,
+                                group_height,
+                                &mut self.group_add_modifier_btns,
                             );
-                            if !group.has_mask
-                                && let Some((_, button_id)) = header_ids
-                                    .into_iter()
-                                    .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
-                            {
-                                self.group_add_modifier_btns.push((button_id, group.id.clone()));
-                            }
                             cy += Self::RACK_HEADER_H;
+                            while card_idx < group_end {
+                                let card = &mut self.effects[Self::SCOPE_MASTER][card_idx];
+                                let card_h = card.compute_height();
+                                card.build(
+                                    tree,
+                                    Rect::new(
+                                        inner_x + Self::RACK_INDENT,
+                                        cy,
+                                        inner_w - Self::RACK_INDENT * 2.0,
+                                        card_h,
+                                    ),
+                                );
+                                cy += card_h + SECTION_GAP;
+                                card_idx += 1;
+                            }
+                            cy += Self::RACK_GROUP_BOTTOM_PAD;
+                        } else {
+                            let card = &mut self.effects[Self::SCOPE_MASTER][card_idx];
+                            let card_h = card.compute_height();
+                            card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
+                            cy += card_h + SECTION_GAP;
+                            card_idx += 1;
                         }
-                        previous_group = group;
-                        let card_h = card.compute_height();
-                        let indent = if previous_group.is_some() { Self::RACK_INDENT } else { 0.0 };
-                        card.build(tree, Rect::new(inner_x + indent, cy, inner_w - indent, card_h));
-                        cy += card_h + SECTION_GAP;
                     }
                     self.add_master_effect_btn = chrome::materialize(
                         tree,
@@ -786,32 +914,44 @@ impl InspectorCompositePanel {
                     }
 
                     let groups = &self.rack_groups[Self::SCOPE_LAYER];
-                    let mut previous_group = None;
-                    for card in &mut self.effects[Self::SCOPE_LAYER] {
-                        let group = rack_group_for_effect(groups, card.effect_id()).map(|g| &g.id);
-                        if let Some(group_id) = group
-                            && previous_group != Some(group_id)
-                            && let Some(group) = groups.iter().find(|candidate| &candidate.id == group_id)
+                    let mut card_idx = 0;
+                    while card_idx < self.effects[Self::SCOPE_LAYER].len() {
+                        if let Some((group_idx, group_end, group_height)) =
+                            rack_group_span(groups, &self.effects[Self::SCOPE_LAYER], card_idx)
                         {
-                            let header_ids = chrome::materialize(
+                            build_rack_group_frame(
                                 tree,
-                                &rack_group_header_view(group),
-                                Rect::new(inner_x, cy, inner_w, Self::RACK_HEADER_H),
+                                &groups[group_idx],
+                                inner_x,
+                                cy,
+                                inner_w,
+                                group_height,
+                                &mut self.group_add_modifier_btns,
                             );
-                            if !group.has_mask
-                                && let Some((_, button_id)) = header_ids
-                                    .into_iter()
-                                    .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
-                            {
-                                self.group_add_modifier_btns.push((button_id, group.id.clone()));
-                            }
                             cy += Self::RACK_HEADER_H;
+                            while card_idx < group_end {
+                                let card = &mut self.effects[Self::SCOPE_LAYER][card_idx];
+                                let card_h = card.compute_height();
+                                card.build(
+                                    tree,
+                                    Rect::new(
+                                        inner_x + Self::RACK_INDENT,
+                                        cy,
+                                        inner_w - Self::RACK_INDENT * 2.0,
+                                        card_h,
+                                    ),
+                                );
+                                cy += card_h + SECTION_GAP;
+                                card_idx += 1;
+                            }
+                            cy += Self::RACK_GROUP_BOTTOM_PAD;
+                        } else {
+                            let card = &mut self.effects[Self::SCOPE_LAYER][card_idx];
+                            let card_h = card.compute_height();
+                            card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
+                            cy += card_h + SECTION_GAP;
+                            card_idx += 1;
                         }
-                        previous_group = group;
-                        let card_h = card.compute_height();
-                        let indent = if previous_group.is_some() { Self::RACK_INDENT } else { 0.0 };
-                        card.build(tree, Rect::new(inner_x + indent, cy, inner_w - indent, card_h));
-                        cy += card_h + SECTION_GAP;
                     }
                     self.add_layer_effect_btn = chrome::materialize(
                         tree,
