@@ -35,7 +35,7 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
         .cross_align(crate::chrome::Align::Center)
         .style(UIStyle {
             bg_color: color::mix(color::BG_2, color::DEFAULT_GROUP_ACCENT, 0.16),
-            border_color: color::GROUP_BOTTOM_BORDER,
+            border_color: color::DEFAULT_GROUP_ACCENT,
             border_width: 1.0,
             ..UIStyle::default()
         })
@@ -75,8 +75,8 @@ fn rack_group_container_view() -> View {
         .fill()
         .style(UIStyle {
             bg_color: color::mix(color::BG_2, color::DEFAULT_GROUP_ACCENT, 0.06),
-            border_color: color::RACK_BORDER,
-            border_width: 1.0,
+            border_color: color::DEFAULT_GROUP_ACCENT,
+            border_width: 2.0,
             corner_radius: color::SMALL_RADIUS,
             ..UIStyle::default()
         })
