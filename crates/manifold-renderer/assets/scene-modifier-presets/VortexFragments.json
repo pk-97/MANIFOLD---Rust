@@ -11,8 +11,9 @@
       {
         "id": "orbit",
         "name": "Orbit",
-        "min": -6.2831855,
+        "min": 0.0,
         "max": 6.2831855,
+        "wraps": true,
         "defaultValue": 2.2,
         "isAngle": true
       },

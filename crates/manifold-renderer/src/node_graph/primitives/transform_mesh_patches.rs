@@ -1,5 +1,6 @@
-//! `node.transform_mesh_patches` — fixed-cell rigid transforms for a reference
-//! triangle stream. Spatial cells are not topology or adjacency information.
+//! `node.transform_mesh_patches` — fixed-cell pose blends for a reference
+//! triangle stream. Spatial cells are not topology or adjacency information;
+//! partial pose blending may compress faces.
 
 use std::borrow::Cow;
 
@@ -37,7 +38,7 @@ struct TransformMeshPatchesUniforms {
 crate::primitive! {
     name: TransformMeshPatches,
     type_id: "node.transform_mesh_patches",
-    purpose: "Apply one shared rigid transform to each reference triangle's fixed spatial cell. Reference centroids plus source offset are normalized by scale and quantized into cell_size cubes; all three corners of a triangle use the same cell center, so faces stay rigid. Current vertices are coincident; reference vertices are BufferGather. UVs, padding, smooth normals, tangent xyz, and tangent.w are preserved.",
+    purpose: "Apply one shared fixed-cell pose blend to each reference triangle. Reference centroids plus source offset are normalized by scale and quantized into cell_size cubes; all three corners of a triangle use the same cell center. Rotation and orbit evaluate as full poses, then blend position and orthonormalized frames by the spatial weight, so driven angles are periodic; weighted separation/spread translation remains additive. Current vertices are coincident; reference vertices are BufferGather. UVs, padding, smooth normals, tangent xyz, and tangent.w are preserved.",
     inputs: {
         in: Array(MeshVertex) required,
         reference: Array(MeshVertex) required,
@@ -74,10 +75,10 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use the animated/current mesh as `in` and an immutable source mesh as `reference`. Spatial cells may group disconnected faces; this atom has no adjacency or watertight-fracture guarantee. All controls are instantaneous scalar shadows with no hidden clock or random source. enabled <= 0 or zero motion controls return the current record byte-exactly.",
+    composition_notes: "Use the animated/current mesh as `in` and an immutable source mesh as `reference`. Spatial cells may group disconnected faces; this atom has no adjacency or watertight-fracture guarantee. Rotation and orbit are evaluated at their full angles and pose-blended by the spatial mask, so 0 and 2π produce the same response even at partial influence; this intentionally allows partial pose blending to compress faces. Separation and spread remain weighted translations. All controls are instantaneous scalar shadows with no hidden clock or random source. enabled <= 0 or zero motion controls return the current record byte-exactly.",
     examples: [],
     picker: { label: "Transform Mesh Patches", category: Atom },
-    summary: "Moves textured mesh patches as rigid cells using a reference triangle stream.",
+    summary: "Moves textured mesh patches with periodic full-angle poses and weighted translations using a reference triangle stream.",
     category: Geometry3D,
     role: Filter,
     aliases: ["transform mesh patches", "mesh patches", "rigid patches", "fragment transform", "surface peel"],
@@ -194,8 +195,8 @@ impl Primitive for TransformMeshPatches {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use crate::node_graph::EffectNode;
+    use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
     fn photoscan_modifier_patch_ports_access_and_capacity() {
@@ -273,7 +274,7 @@ mod gpu_tests {
     use crate::node_graph::effect_node::NodeInstanceId;
     use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
     use crate::node_graph::freeze::codegen::{
-        generate_fused, FusionRegion, InputSource, RegionNode, ENTRY,
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
     };
     use crate::node_graph::primitive::PrimitiveSpec;
 
@@ -334,6 +335,48 @@ mod gpu_tests {
         unit(cross(axis, basis), [0.0, 0.0, 1.0])
     }
 
+    fn blend_frame(
+        original: [f32; 3],
+        rotated: [f32; 3],
+        weight: f32,
+        fallback: [f32; 3],
+    ) -> [f32; 3] {
+        let w = weight.clamp(0.0, 1.0);
+        unit(
+            [
+                original[0] + (rotated[0] - original[0]) * w,
+                original[1] + (rotated[1] - original[1]) * w,
+                original[2] + (rotated[2] - original[2]) * w,
+            ],
+            unit(original, fallback),
+        )
+    }
+
+    fn blend_tangent(
+        original: [f32; 3],
+        rotated: [f32; 3],
+        normal: [f32; 3],
+        weight: f32,
+    ) -> [f32; 3] {
+        let w = weight.clamp(0.0, 1.0);
+        let mixed = unit(
+            [
+                original[0] + (rotated[0] - original[0]) * w,
+                original[1] + (rotated[1] - original[1]) * w,
+                original[2] + (rotated[2] - original[2]) * w,
+            ],
+            [0.0, 0.0, 0.0],
+        );
+        unit(
+            [
+                mixed[0] - normal[0] * dot(mixed, normal),
+                mixed[1] - normal[1] * dot(mixed, normal),
+                mixed[2] - normal[2] * dot(mixed, normal),
+            ],
+            [0.0, 0.0, 0.0],
+        )
+    }
+
     fn cpu_patch(
         v: &MeshVertex,
         reference: &[MeshVertex],
@@ -386,20 +429,33 @@ mod gpu_tests {
         let mask = 0.5
             + 0.5 * (std::f32::consts::TAU * (dot(cell_norm, axis) * u.frequency - u.phase)).sin();
         let w = u.enabled * mask;
+        if w <= 0.0 {
+            return *v;
+        }
+        let original_world = [
+            v.position[0] + off[0],
+            v.position[1] + off[1],
+            v.position[2] + off[2],
+        ];
         let local = [
-            v.position[0] + off[0] - center[0],
-            v.position[1] + off[1] - center[1],
-            v.position[2] + off[2] - center[2],
+            original_world[0] - center[0],
+            original_world[1] - center[1],
+            original_world[2] - center[2],
         ];
         let local_response = {
-            let r = rotate(local, local_axis, u.rotation * w);
+            let r = rotate(local, local_axis, u.rotation);
             [r[0] + center[0], r[1] + center[1], r[2] + center[2]]
         };
-        let rotated = rotate(local_response, axis, u.orbit * w);
+        let rotated = rotate(local_response, axis, u.orbit);
+        let blended = [
+            original_world[0] + (rotated[0] - original_world[0]) * w,
+            original_world[1] + (rotated[1] - original_world[1]) * w,
+            original_world[2] + (rotated[2] - original_world[2]) * w,
+        ];
         let translated = [
-            rotated[0] + safe_scale * w * (u.separation * radial[0] + u.spread * axis[0]),
-            rotated[1] + safe_scale * w * (u.separation * radial[1] + u.spread * axis[1]),
-            rotated[2] + safe_scale * w * (u.separation * radial[2] + u.spread * axis[2]),
+            blended[0] + safe_scale * w * (u.separation * radial[0] + u.spread * axis[0]),
+            blended[1] + safe_scale * w * (u.separation * radial[1] + u.spread * axis[1]),
+            blended[2] + safe_scale * w * (u.separation * radial[2] + u.spread * axis[2]),
         ];
         let mut out = *v;
         out.position = [
@@ -407,19 +463,22 @@ mod gpu_tests {
             translated[1] - off[1],
             translated[2] - off[2],
         ];
-        out.normal = rotate(
-            rotate(v.normal, local_axis, u.rotation * w),
-            axis,
-            u.orbit * w,
-        );
-        let tangent = rotate(
+        let rotated_normal = rotate(rotate(v.normal, local_axis, u.rotation), axis, u.orbit);
+        out.normal = blend_frame(v.normal, rotated_normal, w, [0.0, 1.0, 0.0]);
+        let rotated_tangent = rotate(
             rotate(
                 [v.tangent[0], v.tangent[1], v.tangent[2]],
                 local_axis,
-                u.rotation * w,
+                u.rotation,
             ),
             axis,
-            u.orbit * w,
+            u.orbit,
+        );
+        let tangent = blend_tangent(
+            [v.tangent[0], v.tangent[1], v.tangent[2]],
+            rotated_tangent,
+            out.normal,
+            w,
         );
         out.tangent = [tangent[0], tangent[1], tangent[2], v.tangent[3]];
         out
@@ -479,7 +538,7 @@ mod gpu_tests {
     }
 
     #[test]
-    fn photoscan_modifier_patch_cpu_oracle_rigid_reference_and_degenerate() {
+    fn photoscan_modifier_patch_cpu_oracle_reference_pose_blend_and_degenerate() {
         let current = vec![
             vertex([0.4, 0.1, 0.2], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0, -1.0]),
             vertex([1.1, 0.1, 0.2], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0, -1.0]),
@@ -536,20 +595,6 @@ mod gpu_tests {
             assert_eq!(got[i].uv, current[i].uv);
             assert_eq!(got[i].tangent[3], current[i].tangent[3]);
         }
-        let edge = |a: usize, b: usize, verts: &[MeshVertex]| {
-            length([
-                verts[a].position[0] - verts[b].position[0],
-                verts[a].position[1] - verts[b].position[1],
-                verts[a].position[2] - verts[b].position[2],
-            ])
-        };
-        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
-            assert!(
-                (edge(a, b, &got) - edge(a, b, &current)).abs() < 4e-5,
-                "rigid edge {a}-{b}"
-            );
-        }
-
         let mut shifted_ref = reference.clone();
         for v in &mut shifted_ref {
             v.position[0] += 1.0;
@@ -626,6 +671,160 @@ mod gpu_tests {
             for axis in 0..3 {
                 assert!((a[i].position[axis] - b[i].position[axis]).abs() < 3e-5);
             }
+        }
+    }
+
+    #[test]
+    fn photoscan_modifier_patch_rotation_and_orbit_are_periodic_pose_blends() {
+        let src = vec![
+            vertex([0.4, 0.1, 0.2], [0.3, 0.8, 0.5], [0.9, -0.2, 0.35, -1.0]),
+            vertex([0.9, 0.1, 0.2], [0.3, 0.8, 0.5], [0.9, -0.2, 0.35, -1.0]),
+            vertex([0.4, 0.6, 0.2], [0.3, 0.8, 0.5], [0.9, -0.2, 0.35, -1.0]),
+        ];
+        let reference = vec![
+            vertex([0.14, 0.19, 0.08], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
+            vertex([0.18, 0.19, 0.08], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
+            vertex([0.14, 0.23, 0.08], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
+        ];
+        let base = TransformMeshPatchesUniforms {
+            separation: 0.19,
+            rotation: 0.0,
+            orbit: 0.0,
+            spread: -0.11,
+            phase: 0.0,
+            frequency: 0.0,
+            yaw: 0.31,
+            pitch: -0.22,
+            cell_size: 0.2,
+            scale: 1.0,
+            source_offset_x: 0.11,
+            source_offset_y: -0.07,
+            source_offset_z: 0.09,
+            enabled: 0.8,
+            dispatch_count: 3,
+            _pad0: 0,
+        };
+        let wgsl = standalone_wgsl();
+        let mut rotation_zero = base;
+        let rotation_zero_out = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            rotation_zero,
+            "photoscan-rotation-zero",
+        );
+        rotation_zero.rotation = std::f32::consts::TAU;
+        let rotation_turn_out = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            rotation_zero,
+            "photoscan-rotation-turn",
+        );
+        rotation_zero.rotation = std::f32::consts::TAU - 1e-4;
+        let rotation_before_seam = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            rotation_zero,
+            "photoscan-rotation-before-seam",
+        );
+        rotation_zero.rotation = std::f32::consts::TAU + 1e-4;
+        let rotation_after_seam = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            rotation_zero,
+            "photoscan-rotation-after-seam",
+        );
+        rotation_zero.rotation = std::f32::consts::PI;
+        let rotation_mid_out = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            rotation_zero,
+            "photoscan-rotation-mid",
+        );
+        let mut orbit_zero = base;
+        let orbit_zero_out = dispatch(&wgsl, &src, &reference, orbit_zero, "photoscan-orbit-zero");
+        orbit_zero.orbit = std::f32::consts::TAU;
+        let orbit_turn_out = dispatch(&wgsl, &src, &reference, orbit_zero, "photoscan-orbit-turn");
+        orbit_zero.orbit = std::f32::consts::TAU - 1e-4;
+        let orbit_before_seam = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            orbit_zero,
+            "photoscan-orbit-before-seam",
+        );
+        orbit_zero.orbit = std::f32::consts::TAU + 1e-4;
+        let orbit_after_seam = dispatch(
+            &wgsl,
+            &src,
+            &reference,
+            orbit_zero,
+            "photoscan-orbit-after-seam",
+        );
+        orbit_zero.orbit = std::f32::consts::PI;
+        let orbit_mid_out = dispatch(&wgsl, &src, &reference, orbit_zero, "photoscan-orbit-mid");
+
+        for (zero, turn) in [
+            (&rotation_zero_out, &rotation_turn_out),
+            (&orbit_zero_out, &orbit_turn_out),
+        ] {
+            for (a, b) in zero.iter().zip(turn.iter()) {
+                for axis in 0..3 {
+                    assert!((a.position[axis] - b.position[axis]).abs() < 3e-5);
+                    assert!((a.normal[axis] - b.normal[axis]).abs() < 3e-5);
+                    assert!((a.tangent[axis] - b.tangent[axis]).abs() < 3e-5);
+                }
+                assert_eq!(a.uv, b.uv);
+                assert_eq!(a.tangent[3], b.tangent[3]);
+            }
+        }
+        for (before, after) in [
+            (&rotation_before_seam, &rotation_after_seam),
+            (&orbit_before_seam, &orbit_after_seam),
+        ] {
+            for (a, b) in before.iter().zip(after.iter()) {
+                for axis in 0..3 {
+                    assert!((a.position[axis] - b.position[axis]).abs() < 3e-4);
+                    assert!((a.normal[axis] - b.normal[axis]).abs() < 3e-4);
+                    assert!((a.tangent[axis] - b.tangent[axis]).abs() < 3e-4);
+                }
+            }
+        }
+        assert!(
+            rotation_mid_out
+                .iter()
+                .zip(&rotation_zero_out)
+                .any(|(a, b)| {
+                    a.position
+                        .iter()
+                        .zip(b.position.iter())
+                        .any(|(x, y)| (x - y).abs() > 1e-4)
+                })
+        );
+        assert!(orbit_mid_out.iter().zip(&orbit_zero_out).any(|(a, b)| {
+            a.position
+                .iter()
+                .zip(b.position.iter())
+                .any(|(x, y)| (x - y).abs() > 1e-4)
+        }));
+        for frame in rotation_mid_out.iter().chain(orbit_mid_out.iter()) {
+            let n_len = length(frame.normal);
+            let t = [frame.tangent[0], frame.tangent[1], frame.tangent[2]];
+            let t_len = length(t);
+            assert!(
+                frame
+                    .normal
+                    .iter()
+                    .chain(t.iter())
+                    .all(|component| component.is_finite())
+            );
+            assert!((n_len - 1.0).abs() < 3e-5);
+            assert!((t_len - 1.0).abs() < 3e-5);
+            assert!(dot(frame.normal, t).abs() < 3e-5);
         }
     }
 

@@ -1,6 +1,6 @@
-// node.ordered_recon_mesh — fusable BUFFER body (reference is BufferGather).
+// node.ordered_recon_mesh — fusable BUFFER pose-blend body (reference is BufferGather).
 // A reference centroid assigns one directional band to each triangle. The
-// same band center is used as the rigid pivot for all three corners.
+// same band center is used as the shared pivot for all three corners.
 const EPS: f32 = 1e-8;
 
 fn safe_unit(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
@@ -18,6 +18,16 @@ fn rotate_about(v: vec3<f32>, axis: vec3<f32>, angle: f32) -> vec3<f32> {
 fn fallback_axis(direction: vec3<f32>) -> vec3<f32> {
     let basis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(direction.y) < 0.9);
     return safe_unit(cross(direction, basis), vec3<f32>(1.0, 0.0, 0.0));
+}
+
+fn blend_frame(original: vec3<f32>, rotated: vec3<f32>, weight: f32, fallback: vec3<f32>) -> vec3<f32> {
+    return safe_unit(mix(original, rotated, clamp(weight, 0.0, 1.0)), safe_unit(original, fallback));
+}
+
+fn blend_tangent(original: vec3<f32>, rotated: vec3<f32>, normal: vec3<f32>, weight: f32) -> vec3<f32> {
+    let mixed = safe_unit(mix(original, rotated, clamp(weight, 0.0, 1.0)), vec3<f32>(0.0, 0.0, 0.0));
+    let orthogonal = mixed - normal * dot(mixed, normal);
+    return safe_unit(orthogonal, vec3<f32>(0.0, 0.0, 0.0));
 }
 
 fn body(
@@ -66,10 +76,13 @@ fn body(
     let away = 1.0 - local;
     let lateral = safe_unit(cross(direction, rotation_axis), vec3<f32>(1.0, 0.0, 0.0));
     let local_position = e_in.position + source_offset - pivot_world;
-    let rotated = rotate_about(local_position, rotation_axis, rotation * away) + pivot_world;
-    let translated = rotated + safe_scale * away * (direction * separation + lateral * (spread * (band_center * 2.0 - 1.0)));
+    let rotated = rotate_about(local_position, rotation_axis, rotation) + pivot_world;
+    let blended = mix(e_in.position + source_offset, rotated, away);
+    let translated = blended + safe_scale * away * (direction * separation + lateral * (spread * (band_center * 2.0 - 1.0)));
     let position = translated - source_offset;
-    let normal = rotate_about(e_in.normal, rotation_axis, rotation * away);
-    let tangent = rotate_about(e_in.tangent.xyz, rotation_axis, rotation * away);
+    let rotated_normal = rotate_about(e_in.normal, rotation_axis, rotation);
+    let normal = blend_frame(e_in.normal, rotated_normal, away, vec3<f32>(0.0, 1.0, 0.0));
+    let rotated_tangent = rotate_about(e_in.tangent.xyz, rotation_axis, rotation);
+    let tangent = blend_tangent(e_in.tangent.xyz, rotated_tangent, normal, away);
     return Element(position, normal, e_in.uv, vec4<f32>(tangent, e_in.tangent.w));
 }

@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::effect_graph_def::{
-    AliasEntry, BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef,
-    SerializedParamValue,
+    AliasEntry, BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    ParamSpecDef, SerializedParamValue,
 };
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
@@ -22,11 +22,11 @@ struct QualifiedBinding {
 /// Repair stale `wraps` metadata on scene-modifier graphs and their host
 /// scene-modifier bindings.
 ///
-/// Returns `true` when one or more `wraps` flags were changed.  Existing
-/// `wraps: true` values are preserved, and no other serialized field is
-/// modified.
+/// Returns `true` when a range or `wraps` flag changed. Existing
+/// `wraps: true` values are preserved. The former stock Recon half-turn range
+/// is expanded to a full turn; values, defaults and binding identities stay intact.
 pub fn repair_scene_modifier_periodicity(def: &mut EffectGraphDef) -> bool {
-    let mut changed = false;
+    let mut changed = upgrade_recon_rotation_range(def);
     let mut local_qualifications: BTreeMap<(String, String), Vec<QualifiedBinding>> =
         BTreeMap::new();
     let mut local_aliases: BTreeMap<String, Vec<AliasEntry>> = BTreeMap::new();
@@ -174,7 +174,12 @@ fn qualify_local_metadata(
                 qualified.clear();
                 break;
             };
-            let Some(period) = periodicity(node.type_id.as_str(), target_param) else {
+            let period = periodicity(node.type_id.as_str(), target_param).or_else(|| {
+                (node.type_id == "node.value" && target_param == "value")
+                    .then(|| additive_angle_period(metadata_graph, node_id))
+                    .flatten()
+            });
+            let Some(period) = period else {
                 qualified.clear();
                 break;
             };
@@ -275,7 +280,10 @@ fn periodicity(type_id: &str, param: &str) -> Option<f32> {
     }
     let orientation = matches!(
         (type_id, param),
-        ("node.transform_mesh_patches", "yaw" | "pitch")
+        (
+            "node.transform_mesh_patches",
+            "yaw" | "pitch" | "orbit" | "rotation"
+        ) | ("node.ordered_recon_mesh", "rotation")
             | ("node.normal_wave_mesh", "yaw" | "pitch")
             | ("node.wave_shear_mesh", "yaw" | "pitch")
             | ("node.mesh_spatial_mask", "yaw" | "pitch")
@@ -283,6 +291,150 @@ fn periodicity(type_id: &str, param: &str) -> Option<f32> {
             | ("node.loop_camera", "yaw" | "pitch" | "roll")
     );
     orientation.then_some(std::f32::consts::TAU)
+}
+
+// Peel's existing clip-hit graph adds the burst to its base curl. Adding an
+// independent scalar preserves angular periodicity. Qualify this small authored
+// shape by its wires, including every use, rather than trusting control names.
+fn additive_angle_period(graph: &EffectGraphDef, id: &NodeId) -> Option<f32> {
+    fn scope<'a>(
+        nodes: &'a [EffectGraphNode],
+        wires: &'a [EffectGraphWire],
+        id: &NodeId,
+    ) -> Option<(&'a [EffectGraphNode], &'a [EffectGraphWire])> {
+        if nodes.iter().any(|node| &node.node_id == id) {
+            return Some((nodes, wires));
+        }
+        nodes
+            .iter()
+            .filter_map(|node| node.group.as_deref())
+            .find_map(|group| scope(&group.nodes, &group.wires, id))
+    }
+    let (nodes, wires) = scope(&graph.nodes, &graph.wires, id)?;
+    let value = nodes.iter().find(|node| &node.node_id == id)?;
+    if wires
+        .iter()
+        .any(|wire| wire.to_node == value.id && wire.to_port == "value")
+    {
+        return None;
+    }
+    let uses: Vec<_> = wires
+        .iter()
+        .filter(|wire| wire.from_node == value.id)
+        .collect();
+    if uses.is_empty() {
+        return None;
+    }
+    for wire in uses {
+        if wire.from_port != "out" || !matches!(wire.to_port.as_str(), "a" | "b") {
+            return None;
+        }
+        let add = nodes.iter().find(|node| node.id == wire.to_node)?;
+        if add.type_id != "node.math"
+            || !matches!(
+                add.params.get("op"),
+                None | Some(SerializedParamValue::Enum { value: 0 })
+            )
+            || wires
+                .iter()
+                .any(|wire| wire.to_node == add.id && wire.to_port == "op")
+        {
+            return None;
+        }
+        let outputs: Vec<_> = wires
+            .iter()
+            .filter(|wire| wire.from_node == add.id)
+            .collect();
+        if outputs.is_empty() {
+            return None;
+        }
+        for output in outputs {
+            let leaf = nodes.iter().find(|node| node.id == output.to_node)?;
+            if output.from_port != "out"
+                || periodicity(&leaf.type_id, &output.to_port) != Some(std::f32::consts::TAU)
+            {
+                return None;
+            }
+        }
+    }
+    Some(std::f32::consts::TAU)
+}
+
+fn upgrade_recon_rotation_range(def: &mut EffectGraphDef) -> bool {
+    let old_range = |p: &ParamSpecDef| {
+        (p.min + std::f32::consts::FRAC_PI_2).abs() < 4.0 * f32::EPSILON
+            && (p.max - std::f32::consts::FRAC_PI_2).abs() < 4.0 * f32::EPSILON
+    };
+    let mut upgraded = BTreeSet::new();
+    let mut changed = false;
+    for modifier in &mut def.scene_modifiers {
+        let graph = &mut modifier.graph;
+        let Some(meta) = &graph.preset_metadata else {
+            continue;
+        };
+        if !matches!(meta.id.as_str(), "OrderedRecon" | "OrderedReconHit") {
+            continue;
+        }
+        let bindings: Vec<_> = meta
+            .bindings
+            .iter()
+            .filter(|b| b.id == "rotation")
+            .collect();
+        if bindings.len() != 1 {
+            continue;
+        }
+        let binding = bindings[0];
+        let BindingTarget::Node { node_id, param } = &binding.target else {
+            continue;
+        };
+        if param != "rotation"
+            || binding.convert != ParamConvert::Float
+            || binding.scale != 1.0
+            || binding.offset != 0.0
+            || find_unique_node(&graph.nodes, node_id)
+                .is_none_or(|node| node.type_id != "node.ordered_recon_mesh")
+        {
+            continue;
+        }
+        let Some(spec) = graph
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|p| p.id == "rotation")
+        else {
+            continue;
+        };
+        if old_range(spec) {
+            spec.min = -std::f32::consts::PI;
+            spec.max = std::f32::consts::PI;
+            changed = true;
+        }
+        if span_is_periodic(spec.min, spec.max, 1.0, std::f32::consts::TAU) {
+            upgraded.insert(modifier.id.as_str().to_string());
+        }
+    }
+    if let Some(meta) = &mut def.preset_metadata {
+        for spec in &mut meta.params {
+            if !old_range(spec) {
+                continue;
+            }
+            let bindings: Vec<_> = meta.bindings.iter().filter(|b| b.id == spec.id).collect();
+            if bindings.len() == 1
+                && bindings[0].convert == ParamConvert::Float
+                && bindings[0].scale == 1.0
+                && bindings[0].offset == 0.0
+                && matches!(&bindings[0].target, BindingTarget::SceneModifier { modifier_id, param_id }
+                    if upgraded.contains(modifier_id.as_str()) && param_id == "rotation")
+            {
+                spec.min = -std::f32::consts::PI;
+                spec.max = std::f32::consts::PI;
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 fn find_unique_node<'a>(
@@ -524,9 +676,9 @@ mod tests {
             ("node.mesh_spatial_mask", "pitch", true),
             ("node.mesh_spatial_mask", "center_x", false),
             ("node.transform_mesh_patches", "yaw", true),
-            ("node.transform_mesh_patches", "orbit", false),
-            ("node.transform_mesh_patches", "rotation", false),
-            ("node.ordered_recon_mesh", "rotation", false),
+            ("node.transform_mesh_patches", "orbit", true),
+            ("node.transform_mesh_patches", "rotation", true),
+            ("node.ordered_recon_mesh", "rotation", true),
             ("node.loop_camera", "fov_y", false),
         ] {
             let mut graph = owner(
@@ -548,5 +700,113 @@ mod tests {
                 "{type_id}.{name}"
             );
         }
+    }
+
+    #[test]
+    fn curl_addition_preserves_periodicity_but_other_uses_do_not() {
+        let mut value = node("node.value", "curl_base", &["value"]);
+        value["id"] = json!(1);
+        let mut add = node("node.math", "curl_add", &[]);
+        add["id"] = json!(2);
+        add["params"]["op"] = json!({"type":"Enum", "value":0});
+        let mut patch = node("node.transform_mesh_patches", "patch", &["rotation"]);
+        patch["id"] = json!(3);
+        let mut local = local_graph(
+            json!([param("curl", 0.0, std::f32::consts::TAU)]),
+            json!([binding("curl", "curl_base", "value", 1.0)]),
+            json!([value, add, patch]),
+        );
+        local["wires"] = json!([
+            {"fromNode":1,"fromPort":"out","toNode":2,"toPort":"a"},
+            {"fromNode":2,"fromPort":"out","toNode":3,"toPort":"rotation"}
+        ]);
+        let make = |local| {
+            owner(
+                local,
+                json!([param("host_curl", 0.0, std::f32::consts::TAU)]),
+                json!([{
+                    "id":"host_curl", "label":"Curl", "defaultValue":0.4,
+                    "target":{"kind":"sceneModifier","modifierId":"modifier","paramId":"curl"}
+                }]),
+            )
+        };
+        let mut graph = make(local.clone());
+        let original_bindings = graph.preset_metadata.as_ref().unwrap().bindings.clone();
+        assert!(repair_scene_modifier_periodicity(&mut graph));
+        assert!(graph.preset_metadata.as_ref().unwrap().params[0].wraps);
+        assert_eq!(
+            graph.preset_metadata.as_ref().unwrap().bindings,
+            original_bindings
+        );
+        assert!(!repair_scene_modifier_periodicity(&mut graph));
+        let mut roundtrip = serde_json::from_value(serde_json::to_value(&graph).unwrap()).unwrap();
+        assert!(!repair_scene_modifier_periodicity(&mut roundtrip));
+        assert_eq!(graph, roundtrip);
+
+        let mut multiply = local.clone();
+        multiply["nodes"][1]["params"]["op"]["value"] = json!(2);
+        assert!(!repair_scene_modifier_periodicity(&mut make(multiply)));
+        let mut wired_op = local.clone();
+        wired_op["wires"].as_array_mut().unwrap().push(json!({
+            "fromNode":3,"fromPort":"out","toNode":2,"toPort":"op"
+        }));
+        assert!(!repair_scene_modifier_periodicity(&mut make(wired_op)));
+        local["wires"].as_array_mut().unwrap().push(json!({
+            "fromNode":1,"fromPort":"out","toNode":3,"toPort":"separation"
+        }));
+        assert!(!repair_scene_modifier_periodicity(&mut make(local)));
+    }
+
+    #[test]
+    fn upgrades_only_stock_recon_half_turn_ranges_without_changing_values() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let make = |min, max, host_scale| {
+            let mut spec = param("rotation", min, max);
+            spec["defaultValue"] = json!(0.45);
+            let mut local = local_graph(
+                json!([spec.clone()]),
+                json!([binding("rotation", "recon", "rotation", 1.0)]),
+                json!([node("node.ordered_recon_mesh", "recon", &["rotation"])]),
+            );
+            local["presetMetadata"]["id"] = json!("OrderedRecon");
+            owner(
+                local,
+                json!([spec]),
+                json!([{
+                    "id":"rotation","label":"Rotation","defaultValue":0.45,"scale":host_scale,
+                    "target":{"kind":"sceneModifier","modifierId":"modifier","paramId":"rotation"}
+                }]),
+            )
+        };
+        let mut graph = make(-FRAC_PI_2, FRAC_PI_2, 1.0);
+        let nodes = graph.scene_modifiers[0].graph.nodes.clone();
+        let bindings = graph.preset_metadata.as_ref().unwrap().bindings.clone();
+        assert!(repair_scene_modifier_periodicity(&mut graph));
+        for meta in [
+            graph.preset_metadata.as_ref().unwrap(),
+            graph.scene_modifiers[0]
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap(),
+        ] {
+            assert_eq!((meta.params[0].min, meta.params[0].max), (-PI, PI));
+            assert_eq!(meta.params[0].default_value, 0.45);
+            assert!(meta.params[0].wraps);
+            assert_eq!(meta.params.len(), 1);
+        }
+        assert_eq!(graph.scene_modifiers[0].graph.nodes, nodes);
+        assert_eq!(graph.preset_metadata.as_ref().unwrap().bindings, bindings);
+        assert!(!repair_scene_modifier_periodicity(&mut graph));
+
+        let mut custom = make(-0.5, 0.5, 1.0);
+        let before = custom.clone();
+        assert!(!repair_scene_modifier_periodicity(&mut custom));
+        assert_eq!(custom, before);
+        let mut calibrated = make(-FRAC_PI_2, FRAC_PI_2, 0.5);
+        assert!(repair_scene_modifier_periodicity(&mut calibrated));
+        let host = &calibrated.preset_metadata.as_ref().unwrap().params[0];
+        assert_eq!((host.min, host.max), (-FRAC_PI_2, FRAC_PI_2));
+        assert!(!host.wraps);
     }
 }

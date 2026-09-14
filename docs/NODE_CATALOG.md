@@ -203,7 +203,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
 | Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
-| Ordered Recon | `node.ordered_recon_mesh` | Filter | Reassembles an incoming mesh in directional bands, with each band settling as a rigid group. |
+| Ordered Recon | `node.ordered_recon_mesh` | Filter | Reassembles an incoming mesh in directional bands, with each band settling from a periodic pose blend. |
 | Plane Mesh | `node.plane_mesh` | Source | Builds a flat rectangular sheet of mesh ready to skin with another layer's output. The surface for placing live video in a 3D scene. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
@@ -230,7 +230,7 @@ _Generated from the node registry. Do not hand-edit. 282 nodes registered, group
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
-| Transform Mesh Patches | `node.transform_mesh_patches` | Filter | Moves textured mesh patches as rigid cells using a reference triangle stream. |
+| Transform Mesh Patches | `node.transform_mesh_patches` | Filter | Moves textured mesh patches with periodic full-angle poses and weighted translations using a reference triangle stream. |
 | Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency. |
 | Tube From Path | `node.tube_from_path` | Source | Sweeps a tube of adjustable thickness along a path — the way you'd build a vine, cable, or ribbon from a center-line curve. Thickness and lift can vary per poi… |
 | Twist Mesh | `node.twist_mesh` | Filter | Twists a mesh around its own length, like wringing out a cloth or spinning a vine. Position and lighting normals both rotate exactly, so continuous saw-LFO spi… |

@@ -14795,10 +14795,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Animate an incoming Array<MeshVertex> through ordered rigid bands using a reference mesh only for stable centroid ordering. Each reference triangle is assigned by its centroid projection onto a normalized direction; staggered smoothstep progress makes bands settle in sequence. Waiting bands rotate around a shared directional pivot and translate by restrained separation/spread. UVs and smooth frame attributes remain attached, and progress >= 1 returns the incoming record exactly.",
+      "purpose": "Animate an incoming Array<MeshVertex> through ordered pose-blended bands using a reference mesh only for stable centroid ordering. Each reference triangle is assigned by its centroid projection onto a normalized direction; staggered smoothstep progress makes bands settle in sequence. Waiting bands evaluate a full rotation around a shared directional pivot, blend the rotated pose by `away`, and translate by restrained separation/spread. UVs and orthonormalized frame attributes remain attached, and progress >= 1 returns the incoming record exactly.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Reassembles an incoming mesh in directional bands, with each band settling as a rigid group.",
+      "summary": "Reassembles an incoming mesh in directional bands, with each band settling from a periodic pose blend.",
       "type_id": "node.ordered_recon_mesh"
     },
     {
@@ -24367,10 +24367,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Apply one shared rigid transform to each reference triangle's fixed spatial cell. Reference centroids plus source offset are normalized by scale and quantized into cell_size cubes; all three corners of a triangle use the same cell center, so faces stay rigid. Current vertices are coincident; reference vertices are BufferGather. UVs, padding, smooth normals, tangent xyz, and tangent.w are preserved.",
+      "purpose": "Apply one shared fixed-cell pose blend to each reference triangle. Reference centroids plus source offset are normalized by scale and quantized into cell_size cubes; all three corners of a triangle use the same cell center. Rotation and orbit evaluate as full poses, then blend position and orthonormalized frames by the spatial weight, so driven angles are periodic; weighted separation/spread translation remains additive. Current vertices are coincident; reference vertices are BufferGather. UVs, padding, smooth normals, tangent xyz, and tangent.w are preserved.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Moves textured mesh patches as rigid cells using a reference triangle stream.",
+      "summary": "Moves textured mesh patches with periodic full-angle poses and weighted translations using a reference triangle stream.",
       "type_id": "node.transform_mesh_patches"
     },
     {
