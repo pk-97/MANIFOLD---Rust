@@ -65,6 +65,9 @@ crate::primitive! {
     role: Source,
     aliases: ["layer", "skin", "layer feed", "cross-layer"],
     boundary_reason: IoBridge,
+    extra_fields: {
+        source_id: Option<LayerId> = None,
+    },
 }
 
 impl Primitive for LayerSource {
@@ -88,11 +91,16 @@ impl Primitive for LayerSource {
         // (mock-backend tests, standalone validation) → None, which emits
         // transparent black directly below. Never pool leftovers, never a
         // panic, and the `layer` param is only ever read.
-        let layer_id = match ctx.params.get("layer") {
-            Some(ParamValue::String(s)) if !s.is_empty() => Some(LayerId::new(s.as_str())),
+        let layer_name = match ctx.params.get("layer") {
+            Some(ParamValue::String(s)) if !s.is_empty() => Some(s.as_str()),
             _ => None,
         };
-        let source = layer_id
+        // Layer IDs own their text. Retain the resolved ID between frames;
+        // a live mask must not allocate the same ID on every render.
+        if self.source_id.as_ref().map(|id| id.as_str()) != layer_name {
+            self.source_id = layer_name.map(LayerId::new);
+        }
+        let source = self.source_id
             .as_ref()
             .and_then(|id| ctx.layer_skin_registry.map(|registry| registry.get(id)));
 

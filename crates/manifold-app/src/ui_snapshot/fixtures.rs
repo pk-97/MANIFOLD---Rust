@@ -33,6 +33,15 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
+        "modifiergroup" => {
+            let mut scene = inspector_scene();
+            let target = manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id: lid("glow") };
+            let mut command = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
+                target, vec![0, 1], "Modifier Group".into(),
+            );
+            manifold_editing::command::Command::execute(&mut command, &mut scene.project);
+            Some(scene)
+        }
         "bug060" => Some(bug060_scene()),
         "bug060heavy" => Some(bug060heavy_scene()),
         "bug047" => Some(bug047_scene()),

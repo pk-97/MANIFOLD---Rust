@@ -66,7 +66,7 @@ make that impossible; the invariant list (section 9) is what a review must attac
 | `node_graph/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
 | `node_graph/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
 | `node_graph/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
-| `preset_runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. | — |
+| `preset_runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. `groups.rs` owns membership validation/filtering and wet/dry/mask Mix assembly. | — |
 | `generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
 | `chain_dispatch.rs` | Calls `pump_segment_results()` each dispatch (drains the chain-fusion worker). | — |
 

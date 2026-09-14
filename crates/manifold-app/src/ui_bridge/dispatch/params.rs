@@ -14,6 +14,8 @@
 
 use crate::content_command::ContentCommand;
 use manifold_core::effects::PresetInstance;
+use manifold_core::effect_graph_def::SerializedParamValue;
+use manifold_core::GraphTarget;
 use manifold_editing::command::Command;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::{
@@ -410,10 +412,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             {
                 let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
             }
             DispatchResult::structural()
@@ -423,9 +422,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let target = super::resolve_effect_target(tab, active_layer, ctx.project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
             {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
@@ -439,8 +436,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // Multi-select reorder: move a group of effects to the target position.
             let tab = effective_tab;
             let target = super::resolve_effect_target(tab, active_layer, ctx.project);
-            let (effects_mut, _target) = resolve_effects_mut(tab, ctx.project, active_layer, ctx.selection);
-            if let Some(effects) = effects_mut {
+            let (effects_ref, _target) = resolve_effects_read(tab, ctx.project, active_layer, ctx.selection);
+            if let Some(original) = effects_ref {
+                let mut effects = original.to_vec();
                 // Snapshot before
                 let old_effects = effects.clone();
 
@@ -468,9 +466,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 // Snapshot after and create undoable command
                 let new_effects = effects.clone();
                 let cmd = ReorderEffectGroupCommand::new(target, old_effects, new_effects);
-                // State already applied — send for undo stack only (don't re-execute)
+                // The content thread validates and applies the proposed order.
                 let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(boxed));
             }
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
@@ -539,10 +537,75 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ctx.ui.inspector.clear_effect_selection(&mut ctx.ui.tree);
             DispatchResult::handled()
         }
-        ParamsAction::CardRightClicked(_) | ParamsAction::ModifierCardClicked(_) => {
+        ParamsAction::CardRightClicked(_) | ParamsAction::ModifierCardClicked(_)
+        | ParamsAction::EffectGroupAddModifierClicked(_) => {
             // Handled by UIRoot::try_open_dropdown (opens the card context menu)
             // — should not reach dispatch.
             DispatchResult::handled()
+        }
+        ParamsAction::AddMask { preset_id, source_layer, .. }
+        | ParamsAction::AddEffectGroupMask { preset_id, source_layer, .. } => {
+            let target = match action {
+                ParamsAction::AddEffectGroupMask { group_id, .. } => {
+                    if ctx.project.settings.master_effect_groups.as_ref()
+                        .is_some_and(|groups| groups.iter().any(|group| group.id == *group_id))
+                    {
+                        EffectTarget::Master
+                    } else if let Some(layer) = ctx.project.timeline.layers.iter().find(|layer| {
+                        layer.effect_groups.as_ref()
+                            .is_some_and(|groups| groups.iter().any(|group| group.id == *group_id))
+                    }) {
+                        EffectTarget::Layer { layer_id: layer.layer_id.clone() }
+                    } else {
+                        return DispatchResult::handled();
+                    }
+                }
+                ParamsAction::AddMask { target: gpt, .. } => {
+                    let Some(GraphTarget::Effect(_)) = resolve_graph_target(
+                        gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+                    ) else {
+                        return DispatchResult::handled();
+                    };
+                    match effective_tab {
+                        InspectorTab::Master => EffectTarget::Master,
+                        InspectorTab::Layer | InspectorTab::Group => {
+                            let Some(layer_id) = active_layer.clone() else {
+                                return DispatchResult::handled();
+                            };
+                            EffectTarget::Layer { layer_id }
+                        }
+                        InspectorTab::Clip => return DispatchResult::handled(),
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let effect_type = manifold_core::PresetTypeId::from_string(preset_id.clone());
+            let mut mask = manifold_core::preset_definition_registry::create_default(&effect_type);
+            if let Some(layer_id) = source_layer {
+                let Some(mut graph) = manifold_renderer::node_graph::bundled_preset_def(&effect_type).cloned() else {
+                    ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected("Layer mask preset is unavailable".into()));
+                    return DispatchResult::handled();
+                };
+                let Some(node) = graph.nodes.iter_mut().find(|node| node.node_id.as_str() == "layer") else {
+                    ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected("Layer mask source is unavailable".into()));
+                    return DispatchResult::handled();
+                };
+                node.params.insert(
+                    "layer".to_string(),
+                    SerializedParamValue::String { value: layer_id.to_string() },
+                );
+                mask.graph = Some(graph);
+            }
+            use manifold_editing::commands::effect_groups::AddGroupMaskCommand;
+            let cmd = match action {
+                ParamsAction::AddEffectGroupMask { group_id, .. } =>
+                    AddGroupMaskCommand::for_group(target, group_id.clone(), mask),
+                ParamsAction::AddMask { selected_indices, .. } =>
+                    AddGroupMaskCommand::new(target, selected_indices.clone(), mask),
+                _ => unreachable!(),
+            };
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+            DispatchResult::structural()
         }
         ParamsAction::CopyGenerator => {
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);

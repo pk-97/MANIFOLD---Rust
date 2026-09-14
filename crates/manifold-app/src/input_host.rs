@@ -402,20 +402,19 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn handle_effect_group(&mut self) -> bool {
         let tab = self.ui_root.inspector.last_effect_tab();
         let indices = self.ui_root.inspector.get_selected_effect_indices();
-        if indices.len() < 2 {
+        if indices.is_empty() {
             return false;
         }
         let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
         let cmd = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
             target,
             indices,
-            "Group".to_string(),
+            "Modifier Group".to_string(),
         );
-        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-        boxed.execute(self.project);
+        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
         ContentCommand::send(
             self.content_tx,
-            crate::content_command::ContentCommand::Execute(boxed),
+            crate::content_command::ContentCommand::ExecuteOnContent(boxed),
         );
         *self.needs_rebuild = true;
         true
@@ -437,11 +436,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(gid) = group_id {
             let cmd =
                 manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(target, gid);
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(self.project);
+            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             ContentCommand::send(
                 self.content_tx,
-                crate::content_command::ContentCommand::Execute(boxed),
+                crate::content_command::ContentCommand::ExecuteOnContent(boxed),
             );
             *self.needs_rebuild = true;
             true
@@ -2027,6 +2025,51 @@ mod automation_clipboard_host_tests {
         project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
             .iter().find(|l| l.param_id.as_ref() == param).unwrap().points.iter()
             .map(|p| (p.beat.0, p.value)).collect()
+    }
+
+    #[test]
+    fn cmd_g_wraps_one_or_multiple_effects_in_undoable_modifier_group() {
+        for count in [1, 2] {
+            let mut h = Harness::new();
+            let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
+            let layer_id = layer.layer_id.clone();
+            let effects = (0..count).map(|_| PresetInstance::new(PresetTypeId::new("Mirror"))).collect::<Vec<_>>();
+            let surfaces = effects.iter().enumerate().map(|(index, effect)| {
+                manifold_ui::param_surface::ParamSurface {
+                    kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+                    title: "Mirror".into(), collapsed: false, enabled: true,
+                    effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
+                    has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
+                    rows: Vec::new(), string_params: Vec::new(), audio: Default::default(),
+                    relight: Default::default(),
+                }
+            }).collect::<Vec<_>>();
+            layer.effects = Some(effects);
+            h.project.timeline.layers.push(layer);
+            h.active_layer = Some(layer_id.clone());
+            h.ui_root.inspector.configure_layer_effects(&surfaces, Some(&layer_id));
+            assert!(h.ui_root.inspector.select_all_effects());
+            let mut input = crate::input_handler::InputHandler::new();
+            input.inspector_has_focus = true;
+            assert!(input.handle_keyboard_input(
+                &winit::keyboard::Key::Character("g".into()),
+                manifold_ui::input::Modifiers { command: true, ..Default::default() },
+                &mut h.host(),
+            ));
+            assert!(h.project.timeline.layers[0].effect_groups.is_none(), "UI must not mutate the model");
+            let ContentCommand::ExecuteOnContent(mut command) = h.rx.try_recv().expect("group queued") else {
+                panic!("group must execute on content thread");
+            };
+            command.execute(&mut h.project);
+            let layer = &h.project.timeline.layers[0];
+            let groups = layer.effect_groups.as_ref().unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].name, "Modifier Group");
+            assert!(groups[0].mask_effect_id.is_none());
+            assert!(layer.effects.as_ref().unwrap().iter().all(|effect| effect.group_id.as_ref() == Some(&groups[0].id)));
+            command.undo(&mut h.project);
+            assert!(h.project.timeline.layers[0].effects.as_ref().unwrap().iter().all(|effect| effect.group_id.is_none()));
+        }
     }
 
     #[test]

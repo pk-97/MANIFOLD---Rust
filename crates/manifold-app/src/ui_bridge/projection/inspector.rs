@@ -9,6 +9,7 @@ use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
 use manifold_ui::panels::param_card::RowMod;
 use manifold_ui::panels::param_slider_shared::{AudioCardState, AudioRowState};
+use manifold_ui::panels::inspector::RackGroupConfig;
 use manifold_ui::param_surface::ParamSurface;
 use manifold_ui::view::UiGraphTarget;
 use crate::app::SelectionState;
@@ -33,6 +34,31 @@ fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_
             row.modulation.automation_selected = row.id.as_ref() == param_id.as_ref();
         }
     }
+}
+
+fn rack_groups(
+    groups: &[manifold_core::effects::EffectGroup],
+    effects: &[PresetInstance],
+) -> Vec<RackGroupConfig> {
+    groups
+        .iter()
+        .filter_map(|group| {
+            let member_ids = effects
+                .iter()
+                .filter(|effect| effect.group_id.as_ref() == Some(&group.id))
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>();
+            (!member_ids.is_empty()).then(|| RackGroupConfig {
+                id: group.id.clone(),
+                name: match group.name.as_str() {
+                    "Group" | "Masked Group" => "Modifier Group".to_string(),
+                    _ => group.name.clone(),
+                },
+                member_ids,
+                has_mask: group.mask_effect_id.is_some(),
+            })
+        })
+        .collect()
 }
 
 /// Map the content thread's `LedPreview` across the projection boundary for
@@ -72,6 +98,18 @@ pub fn sync_inspector_data(
     led_preview: Option<&crate::content_state::LedPreview>,
 ) {
     let driver_timing = (ui.driver_bpm.unwrap_or(project.settings.bpm), project.settings.frame_rate);
+    // The same stable layer projection feeds the mask-source picker and the
+    // audio clip detector. Keep groups out: layer_source resolves visual
+    // surfaces, while group compositing is not a source texture.
+    ui.set_clip_detect_layers(
+        project
+            .timeline
+            .layers
+            .iter()
+            .filter(|layer| matches!(layer.layer_type, LayerType::Video | LayerType::Generator))
+            .map(|layer| (layer.layer_id.clone(), layer.name.clone()))
+            .collect(),
+    );
     let selected_automation = |layer_id: &manifold_core::LayerId| {
         if !selection.automation_mode_visible { return None; }
         selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
@@ -1131,6 +1169,13 @@ pub fn sync_inspector_data(
     );
     attach_audio_sends(&mut master_configs, &project.audio_setup);
     ui.inspector.configure_master_effects(&master_configs);
+    ui.inspector.configure_rack_groups(
+        manifold_ui::InspectorTab::Master,
+        &rack_groups(
+            project.settings.master_effect_groups.as_deref().unwrap_or(&[]),
+            &project.settings.master_effects,
+        ),
+    );
 
     // LED composite preview (LED_STRIPS_DESIGN MVP-P4): the band lives only on
     // a DMX lane's generator card (D22). Presence is structural — set before
@@ -1195,6 +1240,10 @@ pub fn sync_inspector_data(
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector
                 .configure_layer_effects(&layer_effects, Some(&layer.layer_id));
+            ui.inspector.configure_rack_groups(
+                manifold_ui::InspectorTab::Layer,
+                &rack_groups(layer.effect_groups.as_deref().unwrap_or(&[]), layer.effects.as_deref().unwrap_or(&[])),
+            );
 
             // Generator params — find clip's string_params for text fields.
             // Use selected clip if on this layer, otherwise first clip.
@@ -1275,6 +1324,7 @@ pub fn sync_inspector_data(
             }
         } else {
             ui.inspector.configure_layer_effects(&[], None);
+            ui.inspector.configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
             ui.inspector.configure_gen_params(None, None);
             ui.inspector.configure_modifier_cards(&[], None, false, Vec::new());
             ui.inspector
@@ -1283,6 +1333,7 @@ pub fn sync_inspector_data(
         }
     } else {
         ui.inspector.configure_layer_effects(&[], None);
+        ui.inspector.configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
         ui.inspector.configure_gen_params(None, None);
         ui.inspector.configure_modifier_cards(&[], None, false, Vec::new());
         ui.inspector

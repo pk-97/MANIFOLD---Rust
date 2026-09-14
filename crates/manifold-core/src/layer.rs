@@ -958,33 +958,59 @@ impl Layer {
         // Fresh clip IDs.
         cloned.clips = self.clips.iter().map(|c| c.clone_with_new_id()).collect();
 
-        // Remap effect groups: build old→new EffectGroupId map, update group_id refs on effects.
-        if let Some(groups) = &self.effect_groups {
-            let mut id_map: AHashMap<EffectGroupId, EffectGroupId> = AHashMap::new();
-            let new_groups: Vec<EffectGroup> = groups
-                .iter()
-                .map(|g| {
-                    let new_group = g.clone_with_new_id();
-                    id_map.insert(g.id.clone(), new_group.id.clone());
-                    new_group
-                })
-                .collect();
-            cloned.effect_groups = Some(new_groups);
+        // Remap effect groups and their references. A mask is addressed by an
+        // EffectId just like every other card, so both the group id and the
+        // mask card id must follow the duplicated instances. Parent groups use
+        // the same old→new map.
+        let (mut new_groups, group_id_map): (Option<Vec<EffectGroup>>, AHashMap<EffectGroupId, EffectGroupId>) =
+            self.effect_groups.as_ref().map_or_else(
+                || (None, AHashMap::new()),
+                |groups| {
+                    let mut id_map = AHashMap::new();
+                    let cloned_groups: Vec<EffectGroup> = groups
+                        .iter()
+                        .map(|group| {
+                            let cloned = group.clone_with_new_id();
+                            id_map.insert(group.id.clone(), cloned.id.clone());
+                            cloned
+                        })
+                        .collect();
+                    (Some(cloned_groups), id_map)
+                },
+            );
 
-            if let Some(effects) = &mut cloned.effects {
-                for effect in effects.iter_mut() {
-                    *effect = effect.duplicated();
-                    if let Some(ref old_gid) = effect.group_id.clone()
-                        && let Some(new_gid) = id_map.get(old_gid)
-                    {
-                        effect.group_id = Some(new_gid.clone());
-                    }
+        let mut effect_id_map = AHashMap::new();
+        if let Some(effects) = &mut cloned.effects {
+            for (source, effect) in self
+                .effects
+                .as_ref()
+                .into_iter()
+                .flatten()
+                .zip(effects.iter_mut())
+            {
+                let old_id = source.id.clone();
+                *effect = source.duplicated();
+                effect_id_map.insert(old_id, effect.id.clone());
+                if let Some(ref old_gid) = effect.group_id.clone()
+                    && let Some(new_gid) = group_id_map.get(old_gid)
+                {
+                    effect.group_id = Some(new_gid.clone());
                 }
             }
-        } else if let Some(effects) = &mut cloned.effects {
-            for effect in effects.iter_mut() {
-                *effect = effect.duplicated();
+        }
+
+        if let (Some(groups), Some(new_groups)) = (&self.effect_groups, &mut new_groups) {
+            for (source, group) in groups.iter().zip(new_groups.iter_mut()) {
+                group.parent_group_id = source
+                    .parent_group_id
+                    .as_ref()
+                    .and_then(|old| group_id_map.get(old).cloned());
+                group.mask_effect_id = source
+                    .mask_effect_id
+                    .as_ref()
+                    .and_then(|old| effect_id_map.get(old).cloned());
             }
+            cloned.effect_groups = Some(new_groups.clone());
         }
 
         cloned
@@ -1151,6 +1177,40 @@ mod tests {
             new_clip_fx.id, src_clip_fx.id,
             "clip effect gets a fresh EffectId"
         );
+    }
+
+    #[test]
+    fn group_mask_layer_clone_remaps_group_parent_and_mask_ids() {
+        let mut layer = Layer::new("Masked".into(), LayerType::Video, 0);
+        let parent = EffectGroup::new("Parent".into());
+        let mut child = EffectGroup::new("Masked Group".into());
+        child.parent_group_id = Some(parent.id.clone());
+
+        let mut colour = PresetInstance::new(crate::PresetTypeId::new("Colour"));
+        colour.group_id = Some(child.id.clone());
+        let mut mask = PresetInstance::new(crate::PresetTypeId::new("Mask"));
+        mask.group_id = Some(child.id.clone());
+        child.mask_effect_id = Some(mask.id.clone());
+        layer.effects = Some(vec![colour, mask]);
+        layer.effect_groups = Some(vec![parent, child]);
+
+        let cloned = layer.clone_with_new_ids();
+        let source_groups = layer.effect_groups.as_ref().unwrap();
+        let clone_groups = cloned.effect_groups.as_ref().unwrap();
+        let source_child = &source_groups[1];
+        let clone_child = &clone_groups[1];
+
+        assert_ne!(clone_groups[0].id, source_groups[0].id);
+        assert_ne!(clone_child.id, source_child.id);
+        assert_eq!(clone_child.parent_group_id, Some(clone_groups[0].id.clone()));
+        assert_ne!(clone_child.mask_effect_id, source_child.mask_effect_id);
+        assert_eq!(
+            clone_child.mask_effect_id,
+            Some(cloned.effects.as_ref().unwrap()[1].id.clone())
+        );
+        assert!(cloned.effects.as_ref().unwrap().iter().all(|effect| {
+            effect.group_id.as_ref() == Some(&clone_child.id)
+        }));
     }
 
     #[test]

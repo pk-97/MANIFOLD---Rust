@@ -3079,6 +3079,8 @@
       "category": "Color & Tone",
       "examples": [
         "DigitalDrift",
+        "MaskImage",
+        "MaskLayer",
         "ParticleText",
         "StarField",
         "StrangeAttractor",
@@ -3289,7 +3291,8 @@
         "LED Shaped Pulse",
         "LED Strip Fire",
         "LED Strobe",
-        "LED Studio Light"
+        "LED Studio Light",
+        "MaskCircle"
       ],
       "fusion": "source",
       "inputs": [
@@ -10548,6 +10551,11 @@
         "LED Step Chase",
         "LED Strip Fire",
         "LED Strobe",
+        "MaskCircle",
+        "MaskGradient",
+        "MaskImage",
+        "MaskLayer",
+        "MaskRectangle",
         "MriVolume",
         "StrangeAttractor",
         "StylizedFeedback"
@@ -10743,7 +10751,9 @@
         "cross-layer"
       ],
       "category": "Generate",
-      "examples": [],
+      "examples": [
+        "MaskLayer"
+      ],
       "fusion": "boundary:io_bridge",
       "inputs": [],
       "label": "Layer Source",
@@ -11549,7 +11559,9 @@
         "Gradient Texture"
       ],
       "category": "Generate",
-      "examples": [],
+      "examples": [
+        "MaskGradient"
+      ],
       "fusion": "source",
       "inputs": [
         {
@@ -17599,7 +17611,8 @@
         "DepthOfField",
         "LED Pixel Walk",
         "LED Step Scan",
-        "LED Studio Mask"
+        "LED Studio Mask",
+        "MaskRectangle"
       ],
       "fusion": "source",
       "inputs": [
@@ -20080,6 +20093,11 @@
         "LED Step Chase",
         "LED Strobe",
         "Lightning",
+        "MaskCircle",
+        "MaskGradient",
+        "MaskImage",
+        "MaskLayer",
+        "MaskRectangle",
         "MetallicGlass",
         "ParticleText",
         "QuadMirror",
@@ -23046,6 +23064,8 @@
         "Infrared",
         "LED Strobe",
         "Lantern",
+        "MaskImage",
+        "MaskLayer",
         "MriVolume",
         "OilyFluid",
         "StylizedFeedback"
@@ -26459,6 +26479,11 @@
         "LightOrbit",
         "Lightning",
         "Lissajous",
+        "MaskCircle",
+        "MaskGradient",
+        "MaskImage",
+        "MaskLayer",
+        "MaskRectangle",
         "MetallicGlass",
         "Mirror",
         "MriVolume",
@@ -26754,6 +26779,11 @@
         "Infrared",
         "Invert",
         "Kaleidoscope",
+        "MaskCircle",
+        "MaskGradient",
+        "MaskImage",
+        "MaskLayer",
+        "MaskRectangle",
         "Mirror",
         "QuadMirror",
         "SoftFocus",
@@ -26781,7 +26811,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 78,
+  "preset_count": 83,
   "presets": [
     {
       "category": "Geometry",
@@ -32789,6 +32819,247 @@
           "max": "1",
           "min": "0",
           "name": "Clip Trigger"
+        }
+      ]
+    },
+    {
+      "category": "Spatial",
+      "id": "MaskCircle",
+      "is_line_based": false,
+      "kind": "effect",
+      "name": "Mask Circle",
+      "params": [
+        {
+          "default": "0.5",
+          "id": "position_x",
+          "max": "2",
+          "min": "-1",
+          "name": "Position X"
+        },
+        {
+          "default": "0.5",
+          "id": "position_y",
+          "max": "2",
+          "min": "-1",
+          "name": "Position Y"
+        },
+        {
+          "default": "0.25",
+          "id": "size_x",
+          "max": "4",
+          "min": "0",
+          "name": "Size X"
+        },
+        {
+          "default": "0.25",
+          "id": "size_y",
+          "max": "4",
+          "min": "0",
+          "name": "Size Y"
+        },
+        {
+          "default": "0",
+          "id": "rotation",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation"
+        },
+        {
+          "default": "0",
+          "id": "feather",
+          "max": "2",
+          "min": "0",
+          "name": "Feather"
+        },
+        {
+          "default": "0",
+          "id": "invert",
+          "max": "1",
+          "min": "0",
+          "name": "Invert"
+        },
+        {
+          "default": "1",
+          "id": "amount",
+          "max": "1",
+          "min": "0",
+          "name": "Amount"
+        }
+      ]
+    },
+    {
+      "category": "Spatial",
+      "id": "MaskGradient",
+      "is_line_based": false,
+      "kind": "effect",
+      "name": "Mask Gradient",
+      "params": [
+        {
+          "default": "0.5",
+          "id": "position_x",
+          "max": "2",
+          "min": "-1",
+          "name": "Position X"
+        },
+        {
+          "default": "0.5",
+          "id": "position_y",
+          "max": "2",
+          "min": "-1",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "rotation",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation"
+        },
+        {
+          "default": "1",
+          "id": "feather",
+          "max": "2",
+          "min": "0",
+          "name": "Feather"
+        },
+        {
+          "default": "0",
+          "id": "invert",
+          "max": "1",
+          "min": "0",
+          "name": "Invert"
+        },
+        {
+          "default": "1",
+          "id": "amount",
+          "max": "1",
+          "min": "0",
+          "name": "Amount"
+        }
+      ]
+    },
+    {
+      "category": "Spatial",
+      "id": "MaskImage",
+      "is_line_based": false,
+      "kind": "effect",
+      "name": "Mask Image",
+      "params": [
+        {
+          "default": "0",
+          "id": "channel",
+          "max": "1",
+          "min": "0",
+          "name": "Channel"
+        },
+        {
+          "default": "0",
+          "id": "invert",
+          "max": "1",
+          "min": "0",
+          "name": "Invert"
+        },
+        {
+          "default": "1",
+          "id": "amount",
+          "max": "1",
+          "min": "0",
+          "name": "Amount"
+        }
+      ]
+    },
+    {
+      "category": "Spatial",
+      "id": "MaskLayer",
+      "is_line_based": false,
+      "kind": "effect",
+      "name": "Mask Layer",
+      "params": [
+        {
+          "default": "0",
+          "id": "channel",
+          "max": "1",
+          "min": "0",
+          "name": "Channel"
+        },
+        {
+          "default": "0",
+          "id": "invert",
+          "max": "1",
+          "min": "0",
+          "name": "Invert"
+        },
+        {
+          "default": "1",
+          "id": "amount",
+          "max": "1",
+          "min": "0",
+          "name": "Amount"
+        }
+      ]
+    },
+    {
+      "category": "Spatial",
+      "id": "MaskRectangle",
+      "is_line_based": false,
+      "kind": "effect",
+      "name": "Mask Rectangle",
+      "params": [
+        {
+          "default": "0.5",
+          "id": "position_x",
+          "max": "2",
+          "min": "-1",
+          "name": "Position X"
+        },
+        {
+          "default": "0.5",
+          "id": "position_y",
+          "max": "2",
+          "min": "-1",
+          "name": "Position Y"
+        },
+        {
+          "default": "0.25",
+          "id": "size_x",
+          "max": "4",
+          "min": "0",
+          "name": "Size X"
+        },
+        {
+          "default": "0.25",
+          "id": "size_y",
+          "max": "4",
+          "min": "0",
+          "name": "Size Y"
+        },
+        {
+          "default": "0",
+          "id": "rotation",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation"
+        },
+        {
+          "default": "0",
+          "id": "feather",
+          "max": "2",
+          "min": "0",
+          "name": "Feather"
+        },
+        {
+          "default": "0",
+          "id": "invert",
+          "max": "1",
+          "min": "0",
+          "name": "Invert"
+        },
+        {
+          "default": "1",
+          "id": "amount",
+          "max": "1",
+          "min": "0",
+          "name": "Amount"
         }
       ]
     },

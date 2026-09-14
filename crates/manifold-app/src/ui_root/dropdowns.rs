@@ -78,6 +78,33 @@ fn automation_lane_context_items(
     items
 }
 
+/// Shared mask sources for the card context menu and group modifier picker.
+fn mask_menu_items(
+    prefix: &str,
+    layers: &[(manifold_core::LayerId, String)],
+    action: impl Fn(String, Option<manifold_core::LayerId>) -> ParamsAction,
+) -> Vec<DropdownItem> {
+    let mut items = Vec::new();
+    for (label, preset_id) in [
+        ("Circle", "MaskCircle"),
+        ("Rectangle", "MaskRectangle"),
+        ("Gradient", "MaskGradient"),
+        ("Image", "MaskImage"),
+    ] {
+        items.push(DropdownItem::new(&format!("{prefix} — {label}"))
+            .with_action(PanelAction::Params(action(preset_id.to_string(), None))));
+    }
+    if layers.is_empty() {
+        items.push(DropdownItem::disabled(&format!("{prefix} — Layer (no visual layers)")));
+    } else {
+        for (layer_id, layer_name) in layers {
+            items.push(DropdownItem::new(&format!("{prefix} — Layer: {layer_name}"))
+                .with_action(PanelAction::Params(action("MaskLayer".to_string(), Some(layer_id.clone())))));
+        }
+    }
+    items
+}
+
 /// PRESET_BROWSER_AUDITION D8/§3.4 gate: may a preset whose metadata
 /// carries `layer_types` appear on `invoking`? `None` on the preset = every
 /// layer type; `Some(list)` = only the listed types. `None` as the invoking
@@ -1377,6 +1404,13 @@ impl UIRoot {
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
+            PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id)) => {
+                let items = mask_menu_items("Mask", &self.clip_detect_layers, |preset_id, source_layer| {
+                    ParamsAction::AddEffectGroupMask { group_id: group_id.clone(), preset_id, source_layer }
+                });
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             PanelAction::Params(ParamsAction::CardRightClicked(gpt)) => {
                 // Generators carry Copy/Paste (their own clipboard); both kinds
                 // share Make Unique / Export / Import. The menu CONTENTS differ
@@ -1385,6 +1419,22 @@ impl UIRoot {
                 // Typed (2b.11): each item carries its action keyed by the card's
                 // target, so the dispatch runs one path for effects + generators.
                 let mut items = Vec::new();
+                if let GraphParamTarget::Effect(clicked_idx) = gpt {
+                    let selected = self.inspector.get_selected_effect_indices();
+                    let selected_indices = if selected.contains(clicked_idx) {
+                        selected
+                    } else {
+                        vec![*clicked_idx]
+                    };
+                    items.extend(mask_menu_items("Add Mask", &self.clip_detect_layers, |preset_id, source_layer| {
+                        ParamsAction::AddMask {
+                            target: gpt.clone(),
+                            selected_indices: selected_indices.clone(),
+                            preset_id,
+                            source_layer,
+                        }
+                    }));
+                }
                 if matches!(gpt, GraphParamTarget::Generator) {
                     if let Some(layer) = self.inspector.modifier_scope_id().cloned()
                         && self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0)
