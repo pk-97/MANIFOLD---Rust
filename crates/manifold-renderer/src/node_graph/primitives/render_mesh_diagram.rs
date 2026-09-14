@@ -202,7 +202,28 @@ impl Primitive for RenderMeshDiagram {
             self.history_len = 0;
             self.last_vertex_count = vertex_count;
         }
-        let toggled = |name: &str| u32::from(ctx.scalar_or_param(name, 1.0) > 0.5);
+        // Toggle ports shadow the Bool params. Resolve the connected value
+        // first, then accept either the typed Bool or a modulatable Float
+        // from the param table before falling back to the declared default.
+        let toggled = |name: &str| {
+            let as_toggle = |value: &ParamValue| {
+                value
+                    .as_scalar()
+                    .map(|scalar| scalar > 0.5)
+                    .or_else(|| match value {
+                        ParamValue::Bool(enabled) => Some(*enabled),
+                        _ => None,
+                    })
+            };
+            let enabled = ctx
+                .inputs
+                .scalar(name)
+                .as_ref()
+                .and_then(as_toggle)
+                .or_else(|| ctx.params.get(name).and_then(as_toggle))
+                .unwrap_or(true);
+            u32::from(enabled)
+        };
         let view_proj = camera.view_proj(out.width as f32 / out.height as f32);
         let Some(inv_view_proj) = super::render_scene::mat4_inverse(view_proj) else {
             log::error!("Math View cannot project the world grid: singular scene camera");

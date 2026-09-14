@@ -146,9 +146,11 @@ fn grid_lines(p: vec2<f32>, footprint: vec2<f32>, spacing: f32) -> f32 {
     let distance = abs(fract(cell + vec2<f32>(0.5)) - vec2<f32>(0.5)) * spacing;
     let pixels = distance / footprint;
     let coverage = vec2<f32>(1.0) - smoothstep(vec2<f32>(u.line_width * 0.35), vec2<f32>(u.line_width * 0.35 + 1.0), pixels);
-    // Fade each line family independently before subpixel cells alias.
-    let resolved = vec2<f32>(1.0) - smoothstep(vec2<f32>(0.1), vec2<f32>(0.5), footprint / spacing);
-    return max(coverage.x * resolved.x, coverage.y * resolved.y);
+    // Retire the whole graduation together. Independent axis fades leave
+    // a dense fan of longitudinal lines after the transverse cells vanish
+    // at a grazing camera angle, especially around the vanishing point.
+    let resolved = 1.0 - smoothstep(0.05, 0.2, max(footprint.x, footprint.y) / spacing);
+    return max(coverage.x, coverage.y) * resolved;
 }
 
 fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
@@ -172,7 +174,7 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     let distance = length(world - u.camera_pos_far.xyz);
     let fade_end = u.camera_pos_far.w * 0.9;
     let fade = 1.0 - smoothstep(fade_end * 0.35, fade_end, distance);
-    let horizon = smoothstep(0.0, 0.04, abs(ray.y) / max(length(ray), 0.000001));
+    let horizon = smoothstep(0.02, 0.08, abs(ray.y) / max(length(ray), 0.000001));
     let visible = select(0.0, 1.0, t > 0.0 && t < 1.0 && u.grid != 0u);
     return vec4<f32>(0.18, 0.35, 0.40, alpha * fade * horizon * visible);
 }

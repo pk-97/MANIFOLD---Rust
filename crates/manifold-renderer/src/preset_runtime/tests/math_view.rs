@@ -166,6 +166,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     let moved = render(&mut runtime, &params, 3);
     assert_ne!(initial, moved, "Orbit must move the sampled authored graph");
     assert_ne!(scene, moved, "Math must replace the scene");
+
     let rgba = crate::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
     assert!(
         rgba.chunks_exact(4)
@@ -219,4 +220,22 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         render(&mut runtime, &params, 5),
         render(&mut baseline, &params, 5)
     );
+
+    // Exercise the full macro -> compiled multi-object graph -> primitive
+    // path. Only the first diagram has a Grid wire; the second has Bool(false).
+    // The final image has opaque alpha, so blankness concerns RGB only.
+    assert_eq!(owner.scene_modifiers[0].mesh_frames.len(), 2);
+    set(&owner, &mut params, "math_view_mode", 1.0);
+    for control in ["grid", "fragments", "ghosts", "vectors", "trails"] {
+        set(&owner, &mut params, &format!("math_view_{control}"), 0.0);
+    }
+    let black = |pixels: &[u8]| pixels.chunks_exact(8).all(|pixel| pixel[..6] == [0; 6]);
+    for (name, runtime) in [("standalone", &mut runtime), ("fused", &mut fused)] {
+        assert!(black(&render(runtime, &params, 20)), "{name}: all marks off must be black");
+        set(&owner, &mut params, "math_view_grid", 1.0);
+        assert!(!black(&render(runtime, &params, 21)), "{name}: scalar Grid on must override Bool(false)");
+        set(&owner, &mut params, "math_view_grid", 0.0);
+        assert!(black(&render(runtime, &params, 22)), "{name}: Grid off must clear every object diagram");
+    }
+
 }

@@ -153,4 +153,31 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
         }
         previous = Some(reference);
     }
+
+    // A shallow, level camera exposes perspective minification at the
+    // horizon that the downward-looking projection checks do not exercise.
+    let grazing = Camera::look_at(
+        [0.0, 1.0, 8.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        1.0,
+        0.05,
+        1000.0,
+    );
+    let image = render(grazing, Transform::default(), 1);
+    assert!(image.chunks_exact(2).all(|bytes| {
+        half::f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]])).is_finite()
+    }));
+    // A level camera's horizon crosses the image midpoint. The unresolved
+    // first six rows beneath it must be clear rather than a surviving fan.
+    for row in H / 2..H / 2 + 6 {
+        for pixel in image[(row * W * 8) as usize..((row + 1) * W * 8) as usize].chunks_exact(8) {
+            let alpha = half::f16::from_bits(u16::from_le_bytes([pixel[6], pixel[7]])).to_f32();
+            assert_eq!(alpha, 0.0, "unresolved horizon graduation at row {row}");
+        }
+    }
+    if let Ok(path) = std::env::var("MANIFOLD_MATH_GRID_PREVIEW") {
+        let rgba = crate::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+        std::fs::write(path, crate::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
+    }
 }
