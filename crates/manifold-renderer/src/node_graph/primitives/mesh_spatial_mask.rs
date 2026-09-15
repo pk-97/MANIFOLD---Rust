@@ -499,8 +499,18 @@ mod gpu_tests {
         assert!(identity_values.iter().all(|v| *v == 1.0));
     }
 
+    /// BUG-x72p: the old pin asserted `generate_fused` fails for a gathered
+    /// region — stale once the `BufferGather` admission landed — and passed
+    /// only because its hand-built region was MALFORMED (one input source vs
+    /// two `BufferGather` access entries, a shape `BadInput`), pinning the
+    /// validation, not the gather semantics. The atom's true live-path status:
+    /// the gathered kernel IS expressible, and the identity probe PASSES
+    /// (`weights` capacity = the `in` capacity) — what refuses fusion is the
+    /// derived uniform: `weights_len:u32` has NO registered recompute, so
+    /// install's `has_recompute` gate fails any region containing it closed
+    /// (unfused, always correct). Same shape as `node.mesh_stagger_envelope`.
     #[test]
-    fn overnight_modifier_mesh_spatial_mask_gather_is_explicit_boundary() {
+    fn overnight_modifier_mesh_spatial_mask_refuses_at_derived_uniform_recompute() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -508,7 +518,7 @@ mod gpu_tests {
                 fusion_kind: FusionKind::Pointwise,
                 body: MeshSpatialMask::WGSL_BODY.unwrap(),
                 params: MeshSpatialMask::PARAMS,
-                inputs: vec![InputSource::External(0)],
+                inputs: vec![InputSource::External(0), InputSource::External(1)],
                 input_access: vec![InputAccess::BufferGather, InputAccess::BufferGather],
                 node_inputs: MeshSpatialMask::INPUTS,
                 node_outputs: MeshSpatialMask::OUTPUTS,
@@ -520,7 +530,7 @@ mod gpu_tests {
                 stencil_fetch: false,
                 quantize_f16: false,
             }],
-            num_external_inputs: 1,
+            num_external_inputs: 2,
             outputs: vec![(id(0), "weights".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
@@ -529,6 +539,24 @@ mod gpu_tests {
             sampled_externals: Vec::new(),
             camera_externals: 0,
         };
-        assert!(generate_fused(&region).is_err());
+        let g = generate_fused(&region).expect("the gathered mask kernel fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused gathered mask kernel parses:\n{}",
+            g.wgsl
+        );
+        let prim = MeshSpatialMask::new();
+        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        assert_eq!(
+            node.array_output_capacity("weights", &Default::default(), &[("in", 1009), ("weights", 2009)]),
+            Some(1009),
+            "identity capacity — passes the gather identity probe"
+        );
+        assert!(
+            !crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+                MeshSpatialMask::TYPE_ID
+            ),
+            "weights_len has no registered recompute — install refuses the region"
+        );
     }
 }
