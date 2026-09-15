@@ -3391,7 +3391,7 @@ mod tests {
                 { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
             ]
         }"#;
-        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let regions = partition_regions(&def, &registry());
         assert_eq!(regions.len(), 1, "smooth + blend form one region");
         let r = &regions[0];
@@ -3448,7 +3448,7 @@ mod tests {
                 { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
             ]
         }"#;
-        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let regions = partition_regions(&def, &registry());
         assert_eq!(regions.len(), 1, "smooth_b + blend fuse");
         let r = &regions[0];
@@ -3492,7 +3492,7 @@ mod tests {
                 { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
             ]
         }"#;
-        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let regions = partition_regions(&def, &registry());
         assert!(
             regions.is_empty(),
