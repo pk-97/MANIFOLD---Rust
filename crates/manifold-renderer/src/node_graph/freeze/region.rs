@@ -307,24 +307,25 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     candidates.sort_unstable(); // deterministic merge order → reproducible regions
     candidates.dedup();
 
-    // D4/P6 (multi-output bridging): a gather-consumed wire's producer must
-    // NEVER end up a member of the SAME region as its consumer (`build_region`
-    // bails on exactly this — "gather input wired from a member" — because a
-    // register can't carry a whole texture the body samples at a computed
-    // coord). Before this phase every multi-output candidate was Boundary, so
-    // it could never bridge two components that only interact through such a
-    // wire. Now a multi-output node's TWO ports can each union independently
-    // (one feeds branch A coincidentally, the other feeds branch B
-    // coincidentally) and merge A and B into one component even though A and
-    // B ALSO share an unrelated gather wire between two of their OTHER
-    // members (Glitch: block_displace_field's `offset`→combine_offset→remap
-    // bridges into `hash`→exposure→...→masked_mix, and remap's output feeds
-    // rgb_split's GATHER `in` input — remap and rgb_split were never unioned
-    // by that wire directly, but the multi-output bridge puts them in one
-    // component anyway). Same shape as the cycle check just below: track
-    // every gather-consumed eligible→eligible pair and refuse any union that
-    // would collapse both endpoints into one region — the two components
-    // stay separate and connect via the SAME cross-region gather the
+    // D4/P6 (multi-output bridging) + BufferGather admission: a gather-consumed
+    // wire's producer must NEVER end up a member of the SAME region as its
+    // consumer (`build_region` bails on exactly this — "gather input wired from
+    // a member" — because a register can't carry a whole texture/array the body
+    // reads at a computed coord/index). Before these phases every multi-output /
+    // BufferGather candidate was Boundary, so it could never bridge two
+    // components that only interact through such a wire. Now a multi-output
+    // node's TWO ports can each union independently (one feeds branch A
+    // coincidentally, the other feeds branch B coincidentally) and merge A and
+    // B into one component even though A and B ALSO share an unrelated gather
+    // wire between two of their OTHER members (Glitch: block_displace_field's
+    // `offset`→combine_offset→remap bridges into `hash`→exposure→...→masked_mix,
+    // and remap's output feeds rgb_split's GATHER `in` input — remap and
+    // rgb_split were never unioned by that wire directly, but the multi-output
+    // bridge puts them in one component anyway). Same shape as the cycle check
+    // just below: track every gather-consumed eligible→eligible pair — texture
+    // OR Array (a `BufferGather` wire is the buffer-domain twin) — and refuse
+    // any union that would collapse both endpoints into one region — the two
+    // components stay separate and connect via the SAME cross-region gather the
     // multi-region model already relies on (`generate_fused`'s doc: "two
     // distinct regions can only be directly texture-wired through a GATHER").
     let gather_pairs: Vec<(u32, u32)> = def
@@ -333,8 +334,8 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         .filter(|w| {
             eligible.contains(&w.from_node)
                 && eligible.contains(&w.to_node)
-                && is_texture_wire(def, registry, w)
                 && !wire_coincident_consumed(def, registry, w)
+                && (is_texture_wire(def, registry, w) || is_array_wire(def, registry, w))
         })
         .map(|w| (w.from_node, w.to_node))
         .collect();
@@ -1382,9 +1383,10 @@ pub(crate) fn substituted_body(
 /// in [`classify_node`]: the atom must match the buffer codegen contract
 /// ([`super::codegen::generate_fused`]'s buffer branch) — ≥1 Array input threaded
 /// as an element register, exactly one Array output (no texture output), no
-/// `BufferGather`, no atomic output — and its non-Array wires must be region
-/// edges, gathered texture externals (wired plain `Texture2D` only — the body
-/// samples them at element-computed coords), or re-anchorable scalar params,
+/// atomic output — and its non-Array wires must be region edges, gathered
+/// externals (a `BufferGather` array input or a sampled texture — the body
+/// indexes/samples them at element-computed coords, bound as `src_<slot>`
+/// externals, never threaded as registers), or re-anchorable scalar params,
 /// and it must not be a control PRODUCER. Anything else is a `Boundary`. The
 /// standalone naga-parse gate the texture path uses is NOT applied here (it
 /// threads no `wgsl_includes`, so a noise-based buffer body would falsely fail);
@@ -1434,12 +1436,18 @@ fn classify_buffer_node(
             return NodeClass::Boundary;
         }
     }
-    // A BufferGather input (neighbor_smooth) indexes its global itself — it can't
-    // thread one element register, so it stays a boundary (the gathered producer
-    // is kept external; the finder never unions a gather-consumed wire).
-    if n.input_access().iter().any(|a| a.is_gather()) {
-        return NodeClass::Boundary;
-    }
+    // A `BufferGather` input (neighbor_smooth, reflect_array) indexes its input
+    // array global itself — it can't thread one element register, so the
+    // gathered wire stays EXTERNAL: the finder never unions a gather-consumed
+    // wire (`wire_coincident_consumed`), `build_region` keeps the producer out
+    // of the region (bailing defensively if one ever landed inside), and the
+    // fused buffer codegen binds the wire as a read-only `src_<slot>` storage
+    // array the body indexes itself — the wire stays external, the NODE
+    // admits, exactly like a texture `Gather`. What still refuses downstream:
+    // a member whose array output capacity is a non-identity function of its
+    // inputs (the reflect_array 2x mirror multiplier) — probed in
+    // `build_region`, because the fused count/dst model only expresses
+    // one-output-element-per-input-element.
     // Frame-derived-uniform integrators (euler_step's dt_scaled, the forces'
     // frame_count, flatten_to_camera_plane's cam_fwd_x/_y/_z) FUSE: the fused
     // buffer codegen emits each derived uniform as an `n{i}_<name>` Params field
@@ -1755,6 +1763,57 @@ fn build_region(
     // multi-output (fan-out) as before.
     if is_buffer && outputs.len() != 1 {
         return Err("fan-out buffer region (v1 is single-output)");
+    }
+
+    // BufferGather admission (BUG-x72p): a gathered array external joins the
+    // region, so the fused count — min over the ARRAY externals, which is also
+    // how `node.wgsl_compute` sizes the fresh `dst` — must be EVERY member's
+    // unfused dispatch count. That holds iff each member's array output
+    // capacity is the IDENTITY of its input capacities (one output element per
+    // dispatched element — every shipped buffer atom: in-capacity or
+    // min-clamped). The known non-identity atom is reflect_array (2x input
+    // capacity — the mirrored half): fused, its register would silently cover
+    // only the passthrough range. Probe each member with distinct ascending
+    // synthetic capacities and refuse anything that isn't the minimum — fail
+    // closed, the region renders unfused.
+    if is_buffer
+        && members
+            .iter()
+            .any(|m| m.input_access.contains(&InputAccess::BufferGather))
+    {
+        for &doc_id in &order {
+            let node = def
+                .nodes
+                .iter()
+                .find(|n| n.id == doc_id)
+                .ok_or("member id missing from def")?;
+            let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+            let arr_inputs: Vec<&str> = constructed
+                .inputs()
+                .iter()
+                .filter(|i| matches!(i.ty, PortType::Array(_)))
+                .map(|i| i.name.as_ref())
+                .collect();
+            let out_port = constructed
+                .outputs()
+                .iter()
+                .find(|o| matches!(o.ty, PortType::Array(_)))
+                .map(|o| o.name.as_ref())
+                .ok_or("member has no array output")?;
+            // Distinct ascending probes: the identity/min family answers the
+            // FIRST probe (the minimum); a multiplier (2x) or a wider selector
+            // (max) answers something larger and is refused.
+            let caps: Vec<(&str, u32)> = arr_inputs
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (*name, 1009u32.saturating_add(1000 * i as u32)))
+                .collect();
+            let identity = caps.first().map(|(_, c)| *c);
+            match constructed.array_output_capacity(out_port, &Default::default(), &caps) {
+                Some(c) if Some(c) == identity => {}
+                _ => return Err("non-identity array output capacity in a gathered region"),
+            }
+        }
     }
 
     // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
@@ -3307,6 +3366,139 @@ mod tests {
             "the fragment-form wgsl_compute fuses between the two atoms"
         );
         assert!(regions[0].virtual_chains.is_empty());
+    }
+
+    /// BUG-x72p (scene-mirror-blocked-gather-input-fusion): a `BufferGather`
+    /// atom ADMITS into buffer regions — the gathered wire stays external, the
+    /// node fuses. scatter → neighbor_smooth (gathered `in`) and scatter →
+    /// blend_copies.a (coincident) read the SAME producer port, so the finder
+    /// dedupes them into ONE external slot read both ways; smooth joins the
+    /// region through its coincident consumer (blend_copies.b).
+    #[test]
+    fn buffer_gather_atom_fuses_with_gathered_wire_external() {
+        let json = r#"{
+            "version": 1,
+            "nodes": [
+                { "id": 0, "typeId": "node.scatter_on_mesh", "nodeId": "scatter" },
+                { "id": 1, "typeId": "node.neighbor_smooth", "nodeId": "smooth" },
+                { "id": 2, "typeId": "node.blend_copies", "nodeId": "blend" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "instances", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "instances", "toNode": 2, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "smooth + blend form one region");
+        let r = &regions[0];
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2],
+            "the BufferGather atom joined through its coincident consumer"
+        );
+        assert_eq!(r.externals.len(), 1, "scatter.instances deduped to one slot");
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(r.externals[0].from_port, "instances");
+        let smooth = r.members.iter().find(|m| m.doc_id == 1).unwrap();
+        assert_eq!(smooth.inputs, vec![RegionInput::External(0)]);
+        assert_eq!(smooth.input_access, vec![InputAccess::BufferGather]);
+        let blend = r.members.iter().find(|m| m.doc_id == 2).unwrap();
+        assert_eq!(
+            blend.inputs,
+            vec![RegionInput::External(0), RegionInput::Member(1)],
+            "blend.a reads the same slot coincidently, blend.b threads smooth"
+        );
+        assert_eq!(
+            blend.input_access,
+            vec![InputAccess::Coincident, InputAccess::Coincident]
+        );
+        assert_eq!(r.outputs, vec![(2, "out".to_string())]);
+    }
+
+    /// BUG-x72p companion: the gather-bridge guard covers ARRAY wires too. A
+    /// gathered producer must never land in the same region as its consumer,
+    /// even when the merge is convexity-clean (`gather_pairs` is what refuses
+    /// it). Ids matter: smooth_b (id 1, the gather consumer) merges with blend
+    /// first — convex there — and smooth_a's later merge (id 2, the gathered
+    /// producer feeding blend.a) would collapse the gather pair (2, 1) into
+    /// one region without the guard, which `build_region` would then refuse
+    /// whole ("gather input wired from a member"). With the guard, smooth_b +
+    /// blend fuse and read smooth_a's output as an external — one slot,
+    /// read both ways (gathered by smooth_b, coincident by blend.a).
+    #[test]
+    fn buffer_gather_bridge_guard_keeps_producer_out_of_consumer_region() {
+        let json = r#"{
+            "version": 1,
+            "nodes": [
+                { "id": 0, "typeId": "node.scatter_on_mesh", "nodeId": "scatter" },
+                { "id": 1, "typeId": "node.neighbor_smooth", "nodeId": "smooth_b" },
+                { "id": 2, "typeId": "node.neighbor_smooth", "nodeId": "smooth_a" },
+                { "id": 3, "typeId": "node.blend_copies", "nodeId": "blend" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "instances", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "b" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "smooth_b + blend fuse");
+        let r = &regions[0];
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "smooth_a is kept out of its gathered consumer's region"
+        );
+        assert_eq!(r.externals.len(), 1, "smooth_a.out deduped to one slot");
+        assert_eq!(r.externals[0].from_node, 2);
+        let smooth_b = r.members.iter().find(|m| m.doc_id == 1).unwrap();
+        assert_eq!(smooth_b.input_access, vec![InputAccess::BufferGather]);
+        let blend = r.members.iter().find(|m| m.doc_id == 3).unwrap();
+        assert_eq!(
+            blend.inputs,
+            vec![RegionInput::External(0), RegionInput::Member(1)],
+            "blend.a reads the same slot coincidently, blend.b threads smooth_b"
+        );
+    }
+
+    /// BUG-x72p soundness gate: reflect_array's output capacity is a fixed 2x
+    /// its input (the mirrored half) — a non-identity function the fresh-`dst`
+    /// fused model can't size. `build_region` probes every member's array
+    /// output capacity when a BufferGather input is present and refuses the
+    /// region, so reflect_array renders unfused (always correct) until the
+    /// output-capacity-multiplier work lands.
+    #[test]
+    fn buffer_gather_identity_probe_refuses_reflect_array_region() {
+        let json = r#"{
+            "version": 1,
+            "nodes": [
+                { "id": 0, "typeId": "node.scatter_on_mesh", "nodeId": "scatter" },
+                { "id": 1, "typeId": "node.reflect_array", "nodeId": "reflect" },
+                { "id": 2, "typeId": "node.blend_copies", "nodeId": "blend" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "instances", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "instances", "toNode": 2, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert!(
+            regions.is_empty(),
+            "the 2x-capacity probe refuses the region; singletons are below \
+             MIN_REGION_LEN — nothing fuses, render unfused (always correct)"
+        );
     }
 
 }

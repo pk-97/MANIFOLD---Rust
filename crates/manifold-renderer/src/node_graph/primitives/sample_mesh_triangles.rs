@@ -153,8 +153,16 @@ mod tests {
         assert_eq!(SampleMeshTriangles::WGSL_INCLUDES.len(), 1);
     }
 
+    /// BUG-x72p: a `BufferGather` input no longer forces Boundary — the fused
+    /// buffer codegen binds the gathered wire as an external `src_<slot>` the
+    /// body indexes itself (proven by the freeze codegen tests). What keeps
+    /// THIS atom out of fused regions is its output capacity: a FIXED 1536
+    /// vertices, a non-identity function of the input capacity. `build_region`
+    /// probes every member's `array_output_capacity` when a `BufferGather`
+    /// input is present and refuses anything that isn't the input minimum, so
+    /// a region containing this atom renders unfused — always correct.
     #[test]
-    fn gather_input_is_an_explicit_fusion_boundary() {
+    fn fixed_output_capacity_refuses_the_gather_identity_probe() {
         let id = |n| crate::node_graph::effect_node::NodeInstanceId(n);
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -183,7 +191,18 @@ mod tests {
             sampled_externals: Vec::new(),
             camera_externals: 0,
         };
-        assert!(generate_fused(&region).is_err());
+        // The codegen can EMIT the gathered kernel (the mechanism is general);
+        // the refusal this atom needs is the finder's identity probe:
+        // 1536 != the input capacity, so `build_region` drops any region
+        // containing it and it renders unfused.
+        assert!(generate_fused(&region).is_ok());
+        let prim = SampleMeshTriangles::new();
+        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        assert_eq!(
+            node.array_output_capacity("vertices", &Default::default(), &[("in", 1009)]),
+            Some(SAMPLE_MESH_TRIANGLES_CAPACITY),
+            "fixed capacity is the non-identity the probe refuses"
+        );
     }
 }
 

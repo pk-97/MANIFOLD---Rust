@@ -143,8 +143,19 @@ unfused, which is always correct. Order matters; from `classify_node`:
 **Buffer-atom gates (`classify_buffer_node`):** ≥1 Array in, exactly 1 Array
 out; no texture output; texture *inputs* must be wired sampled 2D/3D (unwired
 optional = boundary — the fused node's port would be required and silently kill
-the dispatch); no `BufferGather` (neighbor_smooth); no atomic outputs
-(scatter); same wire/control-producer rules. **Derived uniforms, ANY declared
+the dispatch); no atomic outputs (scatter); same wire/control-producer rules. A
+`BufferGather` array input (neighbor_smooth, reflect_array) ADMITS: the
+gathered wire stays external — the finder never unions a gather-consumed wire,
+`build_region` keeps the producer out (bailing defensively otherwise), and the
+fused buffer codegen binds it as a read-only `src_<slot>` storage array the
+body indexes itself (`buf_<port>` renamed to `src_<slot>`, no pre-read, no body
+arg — a coincident pre-read would run off the end of an input shorter than the
+dispatch count). Two more gates keep the admission sound: every member's array
+output capacity must be the identity of its inputs (probed with distinct
+synthetic capacities in `build_region` — the reflect_array 2x mirror
+multiplier refuses, tracked as the output-capacity-multiplier follow-on), and a
+gathered slot can never be an in-place alias (read-write race within one
+dispatch). **Derived uniforms, ANY declared
 name (P0/D7, 2026-07-12, superseding the old name-whitelist rule below):** a
 member with `derived_uniforms()` fuses (texture or buffer path) iff its
 type_id has a registered recompute in `freeze::derived_uniform_registry`

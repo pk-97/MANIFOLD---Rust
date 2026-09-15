@@ -4,7 +4,9 @@
 // scale (.w) and rotation (.rot) pass through unchanged. Border instances fall
 // back to self for missing neighbours. GATHER form — the body reads arbitrary
 // neighbour elements from the input array global `buf_in` and computes its own
-// indices, so it is a fusion boundary (standalone single-source only).
+// indices. `BufferGather`-tagged: the atom fuses into buffer regions — the
+// wire feeding `in` stays external (bound `src_<slot>`, renamed from
+// `buf_in`), never a threaded register.
 //
 // ABI (buffer standalone codegen): the input array port `in` is bound as the
 // global `buf_in: array<Element>`, where the codegen synthesizes

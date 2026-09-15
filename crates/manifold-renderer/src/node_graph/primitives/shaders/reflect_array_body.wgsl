@@ -8,11 +8,14 @@
 //
 // ABI (buffer standalone codegen): the `in` port is a BufferGather input —
 // this body indexes buf_in itself (slot idx % cap; a coincident pre-read
-// would run off the end of the smaller input array). GATHER form, so the
-// atom is a fusion boundary today (same as node.neighbor_smooth): the fused
-// buffer wrapper keys its dispatch on the INPUT array length and cannot
-// express a 2x-capacity output. Standalone-only until the compiler grows
-// that expression — tracked debt, not a quiet exemption.
+// would run off the end of the smaller input array). GATHER form: the atom
+// ADMITS into buffer regions (the gathered wire stays external, bound
+// `src_<slot>`), but `build_region` probes every member's array output
+// capacity and refuses a non-identity one — this atom's fixed 2x output
+// capacity is exactly that, so its regions still render unfused. Standalone-
+// only until the compiler grows a non-coincident output capacity (the
+// output-capacity-multiplier follow-on) — tracked debt, not a quiet
+// exemption.
 //
 // Marker (D5): rot.w = mirror plane component + 1 on mirrored slots
 // (1 = x, 2 = y, 3 = z), 0 on originals. The plane is the same for +axis
