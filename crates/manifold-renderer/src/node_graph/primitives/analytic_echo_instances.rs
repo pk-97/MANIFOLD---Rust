@@ -14,6 +14,7 @@ use manifold_gpu::GpuBinding;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -141,6 +142,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/analytic_echo_instances_body.wgsl"),
     input_access: [BufferGather],
+    output_capacity: FusedOutputCapacity::MultipleOf { input: "instances", factor: ECHO_CAPACITY },
 }
 
 impl Primitive for AnalyticEchoInstances {

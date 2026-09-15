@@ -1848,6 +1848,7 @@ pub(crate) fn fuse_canonical_def_masked(
             virtual_chains,
             sampled_externals: region.sampled_externals.clone(),
             camera_externals: camera_ext_producers.len(),
+            output_capacity: region.output_capacity.clone(),
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline

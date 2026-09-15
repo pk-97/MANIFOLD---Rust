@@ -1275,6 +1275,16 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// DECLARED fused output-capacity shape for buffer-region fusion
+    /// (BUG-orm4) — see
+    /// [`PrimitiveSpec::FUSED_OUTPUT_CAPACITY`](crate::node_graph::primitive::PrimitiveSpec::FUSED_OUTPUT_CAPACITY).
+    /// Default [`FusedOutputCapacity::MinInputs`] (identity: out capacity =
+    /// min over wired array input capacities); the macro forwards
+    /// `P::FUSED_OUTPUT_CAPACITY`.
+    fn fused_output_capacity(&self) -> crate::node_graph::freeze::classify::FusedOutputCapacity {
+        crate::node_graph::freeze::classify::FusedOutputCapacity::MinInputs
+    }
+
     /// Names of texture inputs whose consumption differentiates or
     /// horizon-tests the value (`docs/DEPTH_RELIGHT_DESIGN.md` D6(a)) — see
     /// the doc comment on
