@@ -400,7 +400,7 @@ pub(super) fn dispatch_project(
                 layer,
                 selected,
             ) {
-                Ok(clipboard) => ui.scene_modifier_clipboard = Some(clipboard),
+                Ok(clipboard) => ui.set_scene_modifier_clipboard(Some(clipboard)),
                 Err(reason) => ContentCommand::send(
                     content_tx,
                     ContentCommand::GraphEditRejected(reason),

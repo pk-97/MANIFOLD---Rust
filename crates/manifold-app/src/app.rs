@@ -169,9 +169,6 @@ pub struct Application {
     /// `active` slot.
     pub(crate) scrub: crate::ui_bridge::ScrubState,
 
-    // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
-    pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
-
     /// D4 (docs/TIMELINE_INGEST_DESIGN.md): the general pasteboard's
     /// `changeCount` at the moment the app last copied clips internally.
     /// `None` until the first internal copy — the D4 arbitration treats
@@ -586,7 +583,6 @@ impl Application {
             selection: UIState::new(),
             active_layer_id: None,
             scrub: crate::ui_bridge::ScrubState::default(),
-            effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: None,
             content_pipeline_output: None,

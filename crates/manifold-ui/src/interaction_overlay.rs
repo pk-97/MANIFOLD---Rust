@@ -1194,11 +1194,22 @@ impl InteractionOverlay {
         let mut group_lanes: Vec<AutomationGroupLaneState> = Vec::new();
         for r in &ui_state.selected_automation_points {
             // The selected set can contain points outside the current visible
-            // beat range. Lane geometry still supplies the value range, while
-            // the full host snapshot supplies the authoritative point data.
-            let Some(lane) = lanes.iter().find(|l| l.target == r.target && l.param_id == r.param_id) else {
-                continue;
-            };
+            // beat range AND lanes whose track has scrolled off screen — the
+            // screen list is culled, so fall back to the viewport's unculled
+            // lane model for the value range. Dropping the point here would
+            // silently exclude it from the move AND from the rebuilt
+            // selection at drag end. The full host snapshot supplies the
+            // authoritative point data either way.
+            let (param_min, param_max, whole_numbers) =
+                match lanes.iter().find(|l| l.target == r.target && l.param_id == r.param_id) {
+                    Some(lane) => (lane.param_min, lane.param_max, lane.whole_numbers),
+                    None => match viewport.automation_lane_meta(&r.target, &r.param_id) {
+                        Some(meta) => meta,
+                        // Lane genuinely gone (deleted since selection) —
+                        // skipping is correct, not a silent drop.
+                        None => continue,
+                    },
+                };
             let snapshot_index = self.capture_automation_lane_snapshot(host, r.target.clone(), r.param_id.clone());
             let Some(original_points) = self.automation_lane_snapshots[snapshot_index].points.as_ref() else {
                 continue;
@@ -1210,24 +1221,24 @@ impl InteractionOverlay {
                 index
             } else {
                 group_lanes.push(AutomationGroupLaneState {
-                    target: lane.target.clone(),
-                    param_id: lane.param_id.clone(),
+                    target: r.target.clone(),
+                    param_id: r.param_id.clone(),
                     snapshot_index,
                     working: Vec::with_capacity(original_points.len()),
                 });
                 group_lanes.len() - 1
             };
             points.push(AutomationGroupPointState {
-                target: lane.target.clone(),
-                param_id: lane.param_id.clone(),
+                target: r.target.clone(),
+                param_id: r.param_id.clone(),
                 lane_index: lane_slot,
                 original_beat,
                 last_beat: original_beat,
                 original_value: value,
                 shape,
-                param_min: lane.param_min,
-                param_max: lane.param_max,
-                whole_numbers: lane.whole_numbers,
+                param_min,
+                param_max,
+                whole_numbers,
                 last_value: value,
             });
         }
@@ -4070,6 +4081,108 @@ mod p1_4_gesture_integrity_tests {
             host.automation_group_move_commits[0].len(),
             2,
             "both selected points must move together"
+        );
+    }
+
+    #[test]
+    fn automation_group_move_includes_points_on_scrolled_off_lanes() {
+        use crate::panels::viewport::ViewportAutomationLane;
+        use crate::view::{UiAutomationLane, UiAutomationPoint};
+        use manifold_foundation::EffectId;
+
+        // Four tracks (~360px each with one lane strip) in a ~756px viewport,
+        // so scrolling to the bottom culls track 0 completely. Lanes live on
+        // track 0 ("amount") and track 3 ("blend").
+        let mut tree = UITree::new();
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(vec![TrackInfo::default(); 4]);
+        panel.set_clips(vec![]);
+        let ui_layer = |name: &str, lanes: usize| UiLayer {
+            layer_id: LayerId::new(name),
+            parent_layer_id: None,
+            layer_type: LayerType::Video,
+            is_collapsed: false,
+            automation_lane_count: lanes,
+        };
+        panel.rebuild_mapper_layout(&[
+            ui_layer("layer-0", 1),
+            ui_layer("layer-1", 0),
+            ui_layer("layer-2", 0),
+            ui_layer("layer-3", 1),
+        ]);
+        let lane = |effect: &str, param: &'static str, layer_index: usize| ViewportAutomationLane {
+            layer_index,
+            lane: UiAutomationLane {
+                effect_id: EffectId::new(effect),
+                param_id: ParamId::Borrowed(param),
+                target: UiGraphTarget::Effect(EffectId::new(effect)),
+                label: format!("{effect}: {param}"),
+                points: vec![
+                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                ],
+                param_min: 0.0,
+                param_max: 1.0,
+                whole_numbers: false,
+                placeholder: false,
+            },
+        };
+        panel.set_automation_lanes(vec![
+            lane("fx-top", "amount", 0),
+            lane("fx-bottom", "blend", 3),
+        ]);
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.timeline_split_ratio = 0.70;
+        panel.build(&mut tree, &layout);
+
+        let mut host = GestureTestHost::new(&["layer-0", "layer-1", "layer-2", "layer-3"]);
+        let mut state = UIState::new();
+
+        // Marquee-select the beat-4 point on each lane (selection refs are
+        // data — they don't need the lane on screen).
+        state.selected_automation_points = ["fx-top", "fx-bottom"]
+            .into_iter()
+            .map(|effect| UiAutomationPointRef {
+                target: UiGraphTarget::Effect(EffectId::new(effect)),
+                param_id: ParamId::Borrowed(if effect == "fx-top" { "amount" } else { "blend" }),
+                beat: Beats(4.0),
+            })
+            .collect();
+
+        // Scroll to the bottom: track 0 (the "amount" lane) culls off the top.
+        assert!(panel.set_scroll(0.0, 10_000.0), "setup: scroll must take");
+        let visible = panel.automation_lane_screens(&[]);
+        assert!(
+            visible.iter().all(|lane| lane.param_id != ParamId::Borrowed("amount")),
+            "setup: top lane must be culled"
+        );
+        let blend_lane = visible
+            .iter()
+            .find(|lane| lane.param_id == ParamId::Borrowed("blend"))
+            .expect("setup: bottom lane visible")
+            .clone();
+
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.set_modifiers(Modifiers { command: true, ..Modifiers::NONE });
+        let press = Vec2::new(
+            panel.beat_to_pixel(blend_lane.dots[0].beat),
+            blend_lane.y_at_norm(blend_lane.dots[0].value_norm),
+        );
+        overlay.on_begin_drag(press, &mut host, &mut state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationGroupMove);
+        let destination = Vec2::new(panel.beat_to_pixel(Beats(12.0)), press.y);
+        overlay.on_drag(destination, &mut host, &mut state, &mut panel);
+        overlay.on_end_drag(&mut host);
+
+        assert_eq!(host.automation_group_move_commits.len(), 1, "one batched commit");
+        let moves = &host.automation_group_move_commits[0];
+        assert_eq!(moves.len(), 2, "the scrolled-off lane's point must move too");
+        assert!(moves.iter().any(|m| m.param_id == ParamId::Borrowed("amount") && m.old.0 == Beats(4.0) && m.new.0 == Beats(12.0)));
+        assert!(moves.iter().any(|m| m.param_id == ParamId::Borrowed("blend") && m.old.0 == Beats(4.0) && m.new.0 == Beats(12.0)));
+        assert_eq!(
+            state.selected_automation_points.len(),
+            2,
+            "selection must keep the scrolled-off lane's point after the move"
         );
     }
 

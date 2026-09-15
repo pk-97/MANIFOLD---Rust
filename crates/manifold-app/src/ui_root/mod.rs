@@ -271,9 +271,13 @@ pub struct UIRoot {
     /// Effect clipboard count (set by app.rs, used by browser popup).
     pub effect_clipboard_count: usize,
 
+    /// Effect clipboard for copy/paste between effect chains.
+    pub effect_clipboard: manifold_editing::clipboard::EffectClipboard,
     /// Generator clipboard for copy/paste between generator layers.
     pub gen_clipboard: manifold_editing::clipboard::GeneratorClipboard,
     /// UI-owned immutable scene-modifier snapshot used by copy/paste.
+    /// Written only through `set_scene_modifier_clipboard` so the latest
+    /// copy wins across both clipboards.
     pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.
@@ -477,6 +481,7 @@ impl UIRoot {
             scene_setup_drag_start_width: 0.0,
             overlay_dirty: false,
             effect_clipboard_count: 0,
+            effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             scene_modifier_clipboard: None,
             cursor_hover_actions: Vec::new(),
@@ -504,6 +509,19 @@ impl UIRoot {
             closed_overlays: smallvec::SmallVec::new(),
             warmup: None,
         }
+    }
+
+    /// Single write path for the scene-modifier clipboard. A successful
+    /// modifier copy supersedes the effect clipboard: the latest copy wins
+    /// across both, in both directions.
+    pub fn set_scene_modifier_clipboard(
+        &mut self,
+        clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
+    ) {
+        if clipboard.is_some() {
+            self.effect_clipboard.clear();
+        }
+        self.scene_modifier_clipboard = clipboard;
     }
 
     /// Set detected display resolutions from winit monitors.

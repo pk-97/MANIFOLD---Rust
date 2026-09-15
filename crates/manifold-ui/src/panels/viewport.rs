@@ -1032,6 +1032,23 @@ impl TimelineViewportPanel {
     ///
     /// `latched` is `ContentState::automation_latched_params` — a lane whose
     /// `(effect_id, param_id)` appears there draws grayed instead of red.
+    /// Unculled lane metadata for editing gestures: the screen list above is
+    /// clipped to visible tracks, but a marquee selection can span lanes whose
+    /// track has scrolled off — a group drag must still resolve those lanes'
+    /// value ranges or it silently drops their points from the move.
+    /// Returns `(param_min, param_max, whole_numbers)`.
+    pub fn automation_lane_meta(
+        &self,
+        target: &crate::view::UiGraphTarget,
+        param_id: &ParamId,
+    ) -> Option<(f32, f32, bool)> {
+        self.automation_lanes_by_layer
+            .iter()
+            .flatten()
+            .find(|lane| lane.target == *target && lane.param_id == *param_id)
+            .map(|lane| (lane.param_min, lane.param_max, lane.whole_numbers))
+    }
+
     pub fn automation_lane_screens(
         &self,
         latched: &[(EffectId, ParamId)],
