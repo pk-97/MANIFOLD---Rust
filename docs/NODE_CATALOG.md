@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 286 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 290 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -159,7 +159,7 @@ _Generated from the node registry. Do not hand-edit. 286 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (75)
+### 3D Geometry (79)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -172,6 +172,8 @@ _Generated from the node registry. Do not hand-edit. 286 nodes registered, group
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Copy Positions | `node.copy_positions` | Map | Turns copy transforms into homogeneous XYZ positions for downstream fields and geometry math. |
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
+| Cut Mesh Bands | `node.cut_mesh_bands` | Source | Cuts mesh triangles into directional bands while retaining source-triangle provenance. |
+| Cut Mesh Cells | `node.cut_mesh_cells` | Source | Cuts mesh triangles into grid cells while retaining source-triangle provenance. |
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
 | Displace Copies | `node.displace_copies` | Filter | Moves copies along a chosen direction according to a scalar field while preserving their transform metadata. |
@@ -212,6 +214,8 @@ _Generated from the node registry. Do not hand-edit. 286 nodes registered, group
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | Reflect Array | `node.reflect_array` | Filter | Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset. |
+| Remap Cut Weights | `node.remap_cut_weights` | Filter | Carries per-vertex masks through a triangle cut map. |
+| Remap Mesh Cut | `node.remap_mesh_cut` | Filter | Applies a triangle and barycentric cut map to a mesh while preserving its shading frame. |
 | Render Copies | `node.render_copies` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
 | Render Mesh | `node.render_mesh` | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
 | Mesh Diagram | `node.render_mesh_diagram` | Filter | Draws sparse evaluated mesh samples as a transparent native diagram. |
