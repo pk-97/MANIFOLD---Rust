@@ -2575,7 +2575,6 @@ impl Application {
                     has_output_window: self.window_registry.has_output_window(),
                     pending_close_output: &mut self.pending_close_output,
                     pending_export: &mut self.pending_export,
-                    effect_clipboard: &mut self.effect_clipboard,
                     project_io: &mut self.project_io,
                     #[cfg(target_os = "macos")]
                     internal_clipboard_change_count: &mut self.internal_clipboard_change_count,
