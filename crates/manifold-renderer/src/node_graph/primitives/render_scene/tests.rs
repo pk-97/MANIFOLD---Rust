@@ -1039,6 +1039,101 @@ fn render_mode_wireframe_draws_lines_and_substitutes_unlit_line_material() {
 }
 
 #[test]
+fn render_mode_solid_substitutes_phong_clay_material() {
+    // D7: under Solid every object's effective material is a synthesized
+    // Phong carrying the wire's flat clay_color with neutral specular, and
+    // the color pass still draws Fill (Solid is a shading substitution,
+    // not a topology change).
+    let mode = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_SOLID,
+        clay_color: [0.7, 0.4, 0.2, 1.0],
+        ..Default::default()
+    };
+    assert_eq!(
+        color_pass_fill_mode(&mode),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "Solid draws filled triangles, not lines"
+    );
+    let material = clay_material(&mode);
+    assert_eq!(
+        material.kind,
+        crate::node_graph::material::MaterialKind::Phong,
+        "D7: Solid rides the existing Phong pipeline — every object's effective kind is Phong"
+    );
+    assert_eq!(
+        material.base_color, mode.clay_color,
+        "clay_color flows from the wire into the synthesized material"
+    );
+    // Neutral specular/emission — the struct defaults, independent of the
+    // object's own material, with zero emission so the flat clay reads as
+    // lit surface only.
+    assert_eq!(material.specular_color, [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(material.specular_power, 32.0);
+    assert_eq!(material.emission, [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(material.ambient, 0.0);
+    assert_eq!(
+        material.alpha_mode,
+        crate::node_graph::material::AlphaMode::Opaque,
+        "clay is opaque coverage regardless of the object's own alpha mode"
+    );
+}
+
+#[test]
+fn render_mode_solid_rt_enabled_collapses_to_rendered() {
+    // INV-R4 for Solid: rt_enabled + Solid produces the Rendered uniform
+    // set — the effective mode collapses to default, so no clay material
+    // ever reaches the gi_materials table.
+    let solid = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_SOLID,
+        ..Default::default()
+    };
+    let effective = effective_render_mode(&solid, true);
+    assert_eq!(
+        effective,
+        crate::node_graph::render_mode::RenderMode::default(),
+        "rt_enabled must ignore the wire (D4)"
+    );
+    assert_eq!(
+        color_pass_fill_mode(&effective),
+        manifold_gpu::GpuTriangleFillMode::Fill
+    );
+    // Without RT the same wire applies — the gate is rt_enabled, not the
+    // wire's presence.
+    assert_eq!(
+        effective_render_mode(&solid, false).mode,
+        crate::node_graph::render_mode::RENDER_MODE_SOLID
+    );
+}
+
+#[test]
+fn render_mode_wireframe_and_solid_compose_at_one_match() {
+    // The two substitution arms must live in ONE match at the gather site
+    // (P2 brief): same site, same mechanism, one branch per mode — never
+    // two scattered conditionals reading the mode separately.
+    let source = include_str!("../render_scene.rs");
+    let gather = source
+        .split_once("fn collect_object_draws<'ctx, 'gpu>")
+        .unwrap()
+        .1
+        .split_once("\n    fn ")
+        .unwrap()
+        .0;
+    assert_eq!(
+        gather.matches("let material = match render_mode.mode").count(),
+        1,
+        "the material substitution must be a single match on the mode"
+    );
+    assert!(
+        gather.contains("RENDER_MODE_WIREFRAME => wireframe_material(&render_mode)"),
+        "wireframe arm must live in the shared match"
+    );
+    assert!(
+        gather.contains("RENDER_MODE_SOLID => clay_material(&render_mode)"),
+        "clay arm must live in the shared match"
+    );
+}
+
+#[test]
 fn render_mode_rt_enabled_ignores_the_wire() {
     // INV-R4: rt_enabled + wireframe produces the Rendered uniform set —
     // the effective mode collapses to default, so fill mode is Fill and
@@ -1133,8 +1228,9 @@ fn render_mode_branch_touches_no_uniforms_outside_the_draw_flags() {
     for line in &mentions {
         let allowed = line.contains("objects, cam, envmap_wired, atmosphere, render_mode,")
             || line.contains("let render_mode = effective_render_mode(render_mode, *rt_enabled)")
-            || line.contains("let wireframe = render_mode.mode")
+            || line.contains("let material = match render_mode.mode")
             || line.contains("wireframe_material(&render_mode)")
+            || line.contains("clay_material(&render_mode)")
             || line.contains("fill_mode: color_pass_fill_mode(&render_mode)");
         assert!(
             allowed,
@@ -1142,8 +1238,17 @@ fn render_mode_branch_touches_no_uniforms_outside_the_draw_flags() {
         );
     }
     assert!(
-        mentions.len() >= 5,
+        mentions.len() >= 6,
         "the mode branch must exist: destructure, effective-mode gate, \
-         wireframe flag, material substitution, fill_mode field"
+         substitution match, wireframe arm, clay arm, fill_mode field"
+    );
+    // INV-R1 (Rendered parity): the match's fall-through arm hands the
+    // object's own material through by name — Rendered and Points leave the
+    // gathered material untouched, so a Rendered/default value is
+    // byte-identical to no mode at all.
+    assert!(
+        gather.contains("_ => material,"),
+        "the substitution match must pass the object's material through \
+         unchanged for Rendered/Points (INV-R1)"
     );
 }

@@ -1708,6 +1708,23 @@ fn wireframe_material(render_mode: &crate::node_graph::render_mode::RenderMode) 
     )
 }
 
+/// D7: solid shading = a synthesized Phong material carrying the wire's flat
+/// `clay_color` and neutral specular, so the scene's own lights still shade
+/// every object. Rides the existing `fs_phong` pipeline (via `pipeline_for`)
+/// — no shader change, no new pipeline. The substitution happens at
+/// material-gather time, upstream of `pipeline_for`, so pipeline caching is
+/// untouched.
+fn clay_material(render_mode: &crate::node_graph::render_mode::RenderMode) -> Material {
+    Material::phong(
+        render_mode.clay_color,
+        0.0,
+        [1.0, 1.0, 1.0],
+        32.0,
+        [0.0; 3],
+        0.0,
+    )
+}
+
 /// D6: the color pass draws `Lines` under wireframe, `Fill` otherwise.
 /// The depth prepass and shadow passes never read this — they force
 /// `Fill` in the encoder (INV-R3).
@@ -1829,7 +1846,6 @@ impl RenderScene {
         // here, the gi_materials table the RT pass builds from these draws
         // never sees a wireframe override either.
         let render_mode = effective_render_mode(render_mode, *rt_enabled);
-        let wireframe = render_mode.mode == crate::node_graph::render_mode::RENDER_MODE_WIREFRAME;
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(*objects);
@@ -1940,16 +1956,17 @@ impl RenderScene {
                 }
                 return None;
             };
-            // SCENE_RENDER_MODE_DESIGN.md D6: wireframe replaces the object's
-            // material with a synthesized unlit `line_color × brightness`
-            // surface at the gather site — the same mechanism D7 specifies
-            // for Solid's clay substitute. Upstream of `pipeline_for`, so
-            // the Unlit pipeline (fs_unlit) is picked by the ordinary cache
-            // and no shader changes.
-            let material = if wireframe {
-                wireframe_material(&render_mode)
-            } else {
-                material
+            // SCENE_RENDER_MODE_DESIGN.md D6/D7: ONE match on the mode
+            // substitutes the object's material at the gather site —
+            // wireframe gets the unlit line surface, solid the clay Phong,
+            // Rendered (and Points, owned by P3) pass the object's own
+            // material through untouched. Upstream of `pipeline_for`, so
+            // the ordinary per-kind pipeline cache picks the substitute's
+            // shader and no shader changes.
+            let material = match render_mode.mode {
+                crate::node_graph::render_mode::RENDER_MODE_WIREFRAME => wireframe_material(&render_mode),
+                crate::node_graph::render_mode::RENDER_MODE_SOLID => clay_material(&render_mode),
+                _ => material,
             };
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.error(format!(
