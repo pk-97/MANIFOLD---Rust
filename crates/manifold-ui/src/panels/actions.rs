@@ -99,9 +99,9 @@ pub enum EditingAction {
         AutomationShape,
     ),
     /// Opens the existing point value editor for the addressed point.
-    AutomationPointEditValue(UiGraphTarget, ParamId, Beats),
+    AutomationPointEditValue(UiGraphTarget, ParamId, Beats, f32),
     /// Opens the existing point time editor for the addressed point.
-    AutomationPointEditTime(UiGraphTarget, ParamId, Beats),
+    AutomationPointEditTime(UiGraphTarget, ParamId, Beats, f32),
     LayerHeaderRightClicked(LayerId),
     ContextSplitAtPlayhead(String),  // clip_id
     ContextDeleteClip(String),       // clip_id
@@ -295,10 +295,10 @@ pub enum ProjectAction {
         is_angle: bool,
     },
     MidiTriggerModeClicked(LayerId),
-    /// "Clear Automation" context-menu item: empties the lane's points,
+    /// "Clear points" context-menu item: empties the lane's points,
     /// keeping the (now-empty) lane — `ClearLaneCommand`.
     ContextClearAutomationLane(UiGraphTarget, ParamId),
-    /// "Remove Lane" context-menu item: deletes the whole lane —
+    /// "Clear Automation" context-menu item: deletes the whole lane —
     /// `RemoveLaneCommand`.
     ContextRemoveAutomationLane(UiGraphTarget, ParamId),
     /// Resume arrangement playback for one lane after a live automation
@@ -567,6 +567,8 @@ pub enum ParamsAction {
     ParamLabelRightClick(GraphParamTarget, ParamId),
     /// Reveal this parameter's arrangement lane without touching its value.
     ShowAutomation(GraphParamTarget, ParamId),
+    /// Remove all arrangement automation for this parameter, with undo.
+    ClearAutomation(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu
     /// Open the Add-Effect browser. Carries the invocation context the
     /// button rendered from — tab plus the inspected layer's id

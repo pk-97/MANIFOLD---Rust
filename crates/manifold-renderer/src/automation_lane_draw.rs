@@ -1,6 +1,7 @@
 //! Automation geometry and interaction feedback share the UI hit-test contract.
 use crate::ui_renderer::UIRenderer;
 use manifold_ui::automation_hit_tester::AutomationOperation;
+use manifold_ui::bitmap_renderer::timing_grid_lines;
 use manifold_ui::node::{Color32, Rect};
 use manifold_ui::panels::viewport::AutomationLaneScreen;
 use manifold_ui::{UIState, color};
@@ -18,15 +19,31 @@ fn dot(ui: &mut UIRenderer, x: f32, y: f32, radius: f32, tint: Color32) {
 }
 
 /// Stack formatting keeps moving readouts off the allocator.
-fn readout(ui: &mut UIRenderer, x: f32, y: f32, beat: Option<f64>, beats_per_bar: f32, value: f32) {
+fn readout(
+    ui: &mut UIRenderer,
+    x: f32,
+    y: f32,
+    beat: Option<f64>,
+    beats_per_bar: f32,
+    value: f32,
+    whole_numbers: bool,
+) {
     let mut bytes = [0_u8; 512];
     let mut text = std::io::Cursor::new(bytes.as_mut_slice());
     if let Some(beat) = beat {
         let (bar, beat_in_bar, subbeat) = musical_position(beat, beats_per_bar);
-        write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.3}")
-            .expect("numeric readout fits");
+        if whole_numbers {
+            write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.0}")
+        } else {
+            write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.3}")
+        }
+        .expect("numeric readout fits");
     } else {
-        write!(text, "{value:.3}").expect("numeric value fits");
+        if whole_numbers {
+            write!(text, "{value:.0}").expect("numeric value fits");
+        } else {
+            write!(text, "{value:.3}").expect("numeric value fits");
+        }
     }
     let len = text.position() as usize;
     let text = std::str::from_utf8(&bytes[..len]).expect("numeric readout is UTF-8");
@@ -43,30 +60,47 @@ fn readout(ui: &mut UIRenderer, x: f32, y: f32, beat: Option<f64>, beats_per_bar
 /// The final field is thousandths of a beat, matching the point time editor.
 fn musical_position(beat: f64, beats_per_bar: f32) -> (i64, u32, u32) {
     let beat = if beat.is_finite() { beat.max(0.0) } else { 0.0 };
-    let beats_per_bar = if beats_per_bar.is_finite() { beats_per_bar.max(1.0) as f64 } else { 1.0 };
+    let beats_per_bar = if beats_per_bar.is_finite() {
+        beats_per_bar.max(1.0) as f64
+    } else {
+        1.0
+    };
     let rounded = (beat * 1000.0).round() / 1000.0;
     let bar = (rounded / beats_per_bar).floor() as i64 + 1;
     let in_bar = rounded % beats_per_bar;
-    (bar, in_bar.floor() as u32 + 1, (in_bar.fract() * 1000.0).round() as u32)
+    (
+        bar,
+        in_bar.floor() as u32 + 1,
+        (in_bar.fract() * 1000.0).round() as u32,
+    )
 }
 
-/// The grid is intentionally emitted as scalar line commands. Keeping the
-/// walk bounded protects a malformed snapshot (NaN/zero metadata) and avoids
-/// allocating a temporary vertex list on the frame hot path.
-const MAX_AUTOMATION_GRID_LINES: usize = 4096;
+fn feedback_matches_point(
+    feedback: &manifold_ui::automation_hit_tester::AutomationFeedback,
+    lane: &AutomationLaneScreen,
+    point: manifold_ui::panels::viewport::AutomationDotScreen,
+) -> bool {
+    if feedback.point_beat != Some(point.beat) {
+        return false;
+    }
+    if feedback.operation != AutomationOperation::Point {
+        return true;
+    }
+    let range = lane.param_max - lane.param_min;
+    range.is_finite()
+        && range.abs() > f32::EPSILON
+        && ((feedback.value - lane.param_min) / range - point.value_norm).abs() <= 0.001
+}
+
 const AUTOMATION_DOT_CLIP_PAD: f32 = 8.0;
 
 fn draw_timing_grid(ui: &mut UIRenderer, lane: &AutomationLaneScreen, graph: Rect) {
     let ppb = lane.pixels_per_beat;
     let visible_start = lane.visible_beat_start;
-    let step = lane.grid_step;
     let bpb = lane.beats_per_bar;
-    let bar_skip = lane.bar_skip.max(1);
     if !ppb.is_finite()
         || ppb <= 0.0
         || !visible_start.is_finite()
-        || !step.is_finite()
-        || step <= 0.0
         || !bpb.is_finite()
         || bpb <= 0.0
         || graph.width <= 0.0
@@ -75,42 +109,12 @@ fn draw_timing_grid(ui: &mut UIRenderer, lane: &AutomationLaneScreen, graph: Rec
         return;
     }
 
-    let first_beat = (visible_start / step).floor() * step;
-    if !first_beat.is_finite() {
-        return;
-    }
-    let end_x = graph.x_max();
-    let mut beat = first_beat;
-    for _ in 0..MAX_AUTOMATION_GRID_LINES {
-        if !beat.is_finite() {
-            break;
-        }
+    let visible_end = visible_start + graph.width / ppb;
+    for (beat, kind) in timing_grid_lines(visible_start, visible_end, ppb, bpb) {
         let x = lane.beat_to_pixel(beat);
-        if x > end_x {
-            break;
-        }
         if x >= graph.x {
-            let beat_in_bar = beat - (beat / bpb).floor() * bpb;
-            let is_bar = beat_in_bar.abs() < 0.001 || (beat_in_bar - bpb).abs() < 0.001;
-            let is_beat = (beat - beat.round()).abs() < 0.001;
-            let (line_color, thickness, skip) = if is_bar {
-                let bar_num = (beat / bpb).round() as i64;
-                let skip = bar_num >= 0 && (bar_num as u32).is_multiple_of(bar_skip);
-                (color::GRID_BAR_LINE, 2.0, !skip)
-            } else if is_beat {
-                (color::GRID_BEAT_LINE, 1.0, false)
-            } else if (step - 0.25).abs() < 0.001
-                && ((beat * 2.0) - (beat * 2.0).round()).abs() < 0.001
-            {
-                (color::GRID_SUBDIVISION_LINE, 1.0, false)
-            } else {
-                (color::GRID_SIXTEENTH_LINE, 1.0, false)
-            };
-            if !skip {
-                ui.draw_line(x, graph.y, x, graph.y_max(), thickness, line_color);
-            }
+            ui.draw_grid_line(x, graph.y, x, graph.y_max(), kind);
         }
-        beat += step;
     }
 }
 
@@ -199,7 +203,7 @@ pub fn emit_automation_lanes(
             }
             for norm in [0.0, 0.5, 1.0] {
                 let y = lane.y_at_norm(norm);
-                ui.draw_line(
+                ui.draw_aa_line(
                     graph.x,
                     y,
                     graph.x_max(),
@@ -215,6 +219,7 @@ pub fn emit_automation_lanes(
                         None,
                         lane.beats_per_bar,
                         lane.param_min + norm * (lane.param_max - lane.param_min),
+                        lane.whole_numbers,
                     );
                 }
             }
@@ -239,7 +244,7 @@ pub fn emit_automation_lanes(
             let (x0, y0) = pair[0];
             let (x1, y1) = pair[1];
             let segment_hot = hot_segment.is_some_and(|(left, right)| x0 >= left && x1 <= right);
-            ui.draw_line(
+            ui.draw_aa_line(
                 x0,
                 y0,
                 x1,
@@ -271,16 +276,20 @@ pub fn emit_automation_lanes(
                 continue;
             }
             let selected = selection.is_some_and(|s| {
-                s.automation_point_selected(&lane.target, &lane.param_id, point.beat)
+                s.automation_point_selected(
+                    &lane.target,
+                    &lane.param_id,
+                    point.beat,
+                    point.value_norm,
+                )
             });
             let hot = feedback.is_some_and(|f| {
-                f.point_beat == Some(point.beat)
-                    && matches!(
-                        f.operation,
-                        AutomationOperation::Point
-                            | AutomationOperation::Segment
-                            | AutomationOperation::Bend
-                    )
+                matches!(
+                    f.operation,
+                    AutomationOperation::Point
+                        | AutomationOperation::Segment
+                        | AutomationOperation::Bend
+                ) && feedback_matches_point(f, lane, *point)
             });
             if hot {
                 dot(ui, point.x, point.y, 8.0, Color32::new(91, 190, 220, 75));
@@ -310,7 +319,7 @@ pub fn emit_automation_lanes(
             color::AUTOMATION_LABEL_COLOR
         };
         for offset in [-1.0, 1.0] {
-            ui.draw_line(
+            ui.draw_aa_line(
                 grip.x + 4.0,
                 grip.y + grip.height * 0.5 + offset,
                 grip.x + 28.0,
@@ -339,7 +348,7 @@ pub fn emit_automation_lanes(
                     | AutomationOperation::Insert
                     | AutomationOperation::Draw
             ) {
-                ui.draw_line(
+                ui.draw_aa_line(
                     f.position.x,
                     graph.y,
                     f.position.x,
@@ -347,7 +356,7 @@ pub fn emit_automation_lanes(
                     1.0,
                     Color32::new(91, 190, 220, 85),
                 );
-                ui.draw_line(
+                ui.draw_aa_line(
                     graph.x,
                     f.position.y,
                     graph.x_max(),
@@ -356,39 +365,84 @@ pub fn emit_automation_lanes(
                     Color32::new(91, 190, 220, 55),
                 );
             }
-            // Fixed lane footer avoids chasing the pointer or obscuring its hit target.
             if r.height >= 64.0 {
-                let y = r.y_max() - 20.0;
+                let footer_y = r.y_max() - 20.0;
                 ui.draw_rect(
                     r.x + 34.0,
-                    y,
+                    footer_y,
                     (r.width - 34.0).max(0.0),
                     20.0,
                     Color32::new(20, 23, 28, 245),
                 );
                 ui.draw_text(
                     r.x + 40.0,
-                    y + 3.0,
+                    footer_y + 3.0,
                     f.hint,
                     color::AUTOMATION_LABEL_FONT as f32,
                     color::TEXT_WHITE_C32,
                 );
-                if r.width > 750.0
-                    && !matches!(
-                        f.operation,
-                        AutomationOperation::Header
-                            | AutomationOperation::Resize
-                            | AutomationOperation::Blocked
-                    )
-                {
+            }
+            // The operation hint stays in the footer; the nearby point tooltip
+            // is deliberately compact so long hints never overflow the lane.
+            if r.width >= 64.0 && r.height >= 24.0 {
+                let show_point_tooltip = matches!(
+                    f.operation,
+                    AutomationOperation::Point
+                        | AutomationOperation::Insert
+                        | AutomationOperation::Draw
+                        | AutomationOperation::Segment
+                        | AutomationOperation::Bend
+                );
+                let bubble_w = r.width.min(190.0);
+                let bubble_h = 20.0;
+                let gap = 8.0;
+                let min_x = r.x;
+                let max_x = (r.x_max() - bubble_w).max(min_x);
+                let min_y = r.y;
+                let max_y = (r.y_max() - bubble_h).max(min_y);
+                let candidates = [
+                    (f.position.x + gap, f.position.y - bubble_h - gap),
+                    (f.position.x - bubble_w - gap, f.position.y - bubble_h - gap),
+                    (f.position.x + gap, f.position.y + gap),
+                    (f.position.x - bubble_w - gap, f.position.y + gap),
+                ];
+                let mut bubble = None;
+                if show_point_tooltip {
+                    for (x, y) in candidates {
+                        let x = x.clamp(min_x, max_x);
+                        let y = y.clamp(min_y, max_y);
+                        let overlaps = f.position.x >= x
+                            && f.position.x <= x + bubble_w
+                            && f.position.y >= y
+                            && f.position.y <= y + bubble_h;
+                        if !overlaps {
+                            bubble = Some((x, y));
+                            break;
+                        }
+                    }
+                }
+                if let Some((bubble_x, bubble_y)) = bubble {
+                    // Lines are batched after rectangles at each depth. Lift
+                    // this local readout so the curve cannot cross its text.
+                    ui.push_depth(ui.current_depth().above(1));
+                    ui.draw_rounded_rect(
+                        bubble_x,
+                        bubble_y,
+                        bubble_w,
+                        bubble_h,
+                        Color32::new(20, 23, 28, 245),
+                        3.0,
+                    );
                     readout(
                         ui,
-                        r.x_max() - 240.0,
-                        y + 3.0,
+                        bubble_x + 6.0,
+                        bubble_y + 3.0,
                         Some(f.beat.0),
                         lane.beats_per_bar,
                         f.value,
+                        lane.whole_numbers,
                     );
+                    ui.pop_depth();
                 }
             }
         }

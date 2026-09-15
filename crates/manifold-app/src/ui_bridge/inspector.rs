@@ -511,6 +511,46 @@ mod scene_card_convergence_tests {
         }
 
         #[test]
+        fn clear_automation_removes_bound_lane_and_undo_restores_it() {
+            use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+            let (mut project, layer_a, layer_b) = two_scene_layer_project();
+            let mut h = Harness::new(Some(layer_b));
+            let pid = materialized_param(&mut h, &mut project, &layer_a);
+            let target = manifold_core::GraphTarget::Generator(layer_a.clone());
+            let points = vec![AutomationPoint {
+                beat: manifold_core::Beats(2.0), value: 0.4, shape: SegmentShape::Hold,
+            }];
+            project.with_preset_graph_mut(&target, |inst| {
+                inst.automation_lanes = Some(vec![AutomationLane {
+                    param_id: pid.clone(), enabled: true, points: points.clone(),
+                }]);
+            });
+            let ui_target = manifold_ui::view::UiGraphTarget::Generator(layer_a.clone());
+            h.selection.set_chosen_automation_param(layer_a.clone(), ui_target.clone(), pid.clone());
+            h.ui.pending_automation_reveal = Some((ui_target, pid.clone()));
+            let mut content_project = project.clone();
+            h.dispatch(&PanelAction::Params(ParamsAction::ClearAutomation(
+                manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone()), pid.clone(),
+            )), &mut project);
+            assert!(gen_inst(&project, &layer_a).automation_lanes.as_ref().unwrap().is_empty());
+            assert!(!h.selection.chosen_automation_params.contains_key(&layer_a));
+            assert!(h.ui.pending_automation_reveal.is_none());
+            let mut commands = h.drain();
+            assert_eq!(commands.len(), 2);
+            assert!(matches!(commands.remove(0), ContentCommand::FinishAutomationRecording),
+                "finish an active take before clearing so it cannot recreate the envelope");
+            let ContentCommand::Execute(mut command) = commands.remove(0) else { panic!("expected edit"); };
+            command.execute(&mut content_project);
+            assert!(gen_inst(&content_project, &layer_a).automation_lanes.as_ref().unwrap().is_empty());
+            command.undo(&mut content_project);
+            let restored = &gen_inst(&content_project, &layer_a).automation_lanes.as_ref().unwrap()[0];
+            assert_eq!(restored.param_id, pid);
+            assert_eq!(restored.points, points);
+            command.execute(&mut content_project);
+            assert!(gen_inst(&content_project, &layer_a).automation_lanes.as_ref().unwrap().is_empty());
+        }
+
+        #[test]
         fn show_automation_expands_through_content_without_creating_an_envelope() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
@@ -1670,6 +1710,7 @@ mod scene_card_convergence_tests {
                 assert_eq!(lane.points, vec![
                     AutomationPoint { beat: Beats(4.0), ..original[0] },
                     AutomationPoint { beat: Beats(8.0), ..original[1] },
+                    original[2],
                 ]);
             }
             let after = serde_json::to_value(&project).unwrap();
@@ -1738,8 +1779,10 @@ mod scene_card_convergence_tests {
             assert_eq!(commits, 1);
             let committed = engine.project().unwrap().preset_instance(&target).unwrap()
                 .automation_lanes.as_ref().unwrap()[0].points.clone();
-            assert_eq!(committed.len(), 1);
+            assert_eq!(committed.len(), 2);
+            assert_eq!(committed[0].beat, Beats(4.0));
             assert_eq!(committed[0].value, 0.35);
+            assert_eq!(committed[1], original[1]);
             assert!(service.undo(engine.project_mut().unwrap()));
             assert_eq!(engine.project().unwrap().preset_instance(&target).unwrap()
                 .automation_lanes.as_ref().unwrap()[0].points, original);

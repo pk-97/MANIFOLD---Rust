@@ -817,6 +817,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         target: &UiGraphTarget,
         param_id: &ParamId,
         from_beat: Beats,
+        from_value: f32,
         to_beat: Beats,
         to_value: f32,
     ) {
@@ -828,7 +829,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             && let Some(p) = lane
                 .points
                 .iter_mut()
-                .find(|p| p.beat.0 == from_beat.0)
+                .find(|p| p.beat == from_beat && p.value == from_value)
         {
             p.beat = to_beat;
             p.value = to_value;
@@ -866,15 +867,19 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         );
     }
 
-    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats) {
+    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) {
         let graph_target = to_graph_target(target);
         let param_id_str = param_id.as_ref();
         let index = self.project.preset_instance(&graph_target).and_then(|inst| {
+            let param = inst.params.get(param_id_str)?;
             inst.automation_lanes.as_ref().and_then(|lanes| {
                 lanes
                     .iter()
                     .find(|l| l.param_id.as_ref() == param_id_str)
-                    .and_then(|lane| lane.points.iter().position(|p| p.beat.0 == beat.0))
+                    .and_then(|lane| lane.points.iter().position(|p| {
+                        let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(p.value, param.spec.min, param.spec.max);
+                        p.beat == beat && norm == value_norm
+                    }))
             })
         });
         let Some(index) = index else {
@@ -895,6 +900,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         target: &UiGraphTarget,
         param_id: &ParamId,
         left_beat: Beats,
+        left_value: f32,
         bend: f32,
     ) {
         let target = to_graph_target(target);
@@ -902,7 +908,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         if let Some(inst) = self.project.preset_instance_mut(&target)
             && let Some(lanes) = inst.automation_lanes.as_mut()
             && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
-            && let Some(p) = lane.points.iter_mut().find(|p| p.beat.0 == left_beat.0)
+            && let Some(p) = lane.points.iter_mut().find(|p| p.beat == left_beat && p.value == left_value)
         {
             p.shape = SegmentShape::Curved(bend);
         }
@@ -914,8 +920,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         target: &UiGraphTarget,
         param_id: &ParamId,
         left_beat: Beats,
+        left_from_value: f32,
         left_value: f32,
         right_beat: Beats,
+        right_from_value: f32,
         right_value: f32,
     ) {
         let target = to_graph_target(target);
@@ -924,10 +932,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             && let Some(lanes) = inst.automation_lanes.as_mut()
             && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
         {
-            if let Some(p) = lane.points.iter_mut().find(|p| p.beat.0 == left_beat.0) {
+            if let Some(p) = lane.points.iter_mut().find(|p| p.beat == left_beat && p.value == left_from_value) {
                 p.value = left_value;
             }
-            if let Some(p) = lane.points.iter_mut().find(|p| p.beat.0 == right_beat.0) {
+            if let Some(p) = lane.points.iter_mut().find(|p| p.beat == right_beat && p.value == right_from_value) {
                 p.value = right_value;
             }
         }

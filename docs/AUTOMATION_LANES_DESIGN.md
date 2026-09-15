@@ -225,7 +225,12 @@ The corresponding inspector parameter receives a selection outline. Modifier
 changes and lane geometry changes refresh feedback without requiring mouse motion.
 
 The AUTOMATION and DRAW buttons expose mode state. Beat/bar/subdivision grid lines
-align with the ruler. Readouts and exact time entry use one-based
+share one grid policy with the layer and ruler, including subdivision visibility
+and physical pixel widths. Curves include every breakpoint and draw Hold and
+same-time transitions vertically; curved segments use adaptive screen-space
+sampling and antialiased strokes. Drag readouts follow the point in an
+edge-clamped tooltip, and numeric editors open beside the addressed point.
+Readouts and exact time entry use one-based
 `bar.beat.fraction`, with a three-digit fraction in thousandths of a beat.
 The lane menu exposes Cut, Copy, Paste Here, Duplicate, Select All, Delete,
 exact point value/time entry, and Insert Shape. Shapes replace the selected
@@ -256,10 +261,12 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 - Every lane uses single-click insertion, including empty placeholders.
   Shift-click away from the line deselects without changing the curve.
   Selected dots draw larger and white. A moved point remains selected at its new
-  beat; hiding automation or undo/redo clears beat-addressed selections.
+  beat and value; hiding automation or undo/redo clears point selections.
   Point dragging preserves the grab offset and Shift scales value movement to
-  one quarter. Landing on an occupied beat replaces that breakpoint, with exact
-  lane restoration on undo. Moving past it during preview restores it.
+  one quarter. Different values may share one beat to create an instant step.
+  Equal-beat order is preserved; playback takes the last point at the exact beat.
+  Only an identical beat/value position replaces a breakpoint, with exact lane
+  restoration on undo. Moving past another point during preview restores it.
   Segments remain editable when either endpoint is outside the viewport.
 - **Show Automation** in an effect/generator parameter's context menu reveals
   its lane without touching the parameter, arming recording, or creating points.
@@ -267,6 +274,10 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   path. Layer-owned parameter rows also expose an AUTO button. Revealing a lane
   scrolls it into view and opens enough timeline space to edit; an existing
   session lane height is kept.
+  Right-clicking AUTO opens the same parameter menu as its label. **Clear
+  Automation** removes the parameter's complete lane in one undoable command,
+  clears stale selection/reveal state, and closes its placeholder. The lane
+  menu also offers **Clear points** to keep an empty lane open.
   Master and group automation editors remain deferred.
 - **Drag the grip at the bottom-left of a lane** to resize it from 64–240px.
   Heights are session-only UI state keyed by the existing target/parameter

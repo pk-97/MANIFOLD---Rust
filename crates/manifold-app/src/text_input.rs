@@ -245,6 +245,7 @@ pub struct AutomationPointEditCtx {
     pub target: manifold_ui::view::UiGraphTarget,
     pub param_id: manifold_core::effects::ParamId,
     pub original_beat: manifold_core::Beats,
+    pub original_value_norm: f32,
     pub param_min: f32,
     pub param_max: f32,
     pub whole_numbers: bool,

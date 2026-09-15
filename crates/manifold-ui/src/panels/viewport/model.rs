@@ -8,6 +8,7 @@
 //! See `docs/TIMELINE_API_DESIGN.md` section 3.2.
 
 use super::*;
+use crate::view::{UiAutomationLane, UiSegmentShape};
 
 /// A clip to be rendered in the timeline viewport.
 #[derive(Debug, Clone)]
@@ -356,9 +357,8 @@ impl AutomationLaneScreen {
 /// and edit it — the point-level counterpart to [`AutomationLaneScreen`]'s
 /// lane-level target/range fields. `beat`/`value_norm`/`shape` are copied
 /// verbatim from the `UiAutomationPoint` this dot was sampled from, so a
-/// drag-grab or delete can reconstruct the exact pre-edit `AutomationPoint`
-/// (by-beat identity, matching `manifold-editing/src/commands/automation.rs`'s
-/// point-matching convention) without re-deriving it from pixels.
+/// drag-grab or delete can resolve the exact stored `(beat, value)` tuple from
+/// the full lane snapshot without re-deriving its identity from pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct AutomationDotScreen {
     pub x: f32,
@@ -366,6 +366,116 @@ pub struct AutomationDotScreen {
     pub beat: Beats,
     pub value_norm: f32,
     pub shape: crate::view::UiSegmentShape,
+}
+
+/// Build the automation stroke from segment geometry rather than a fixed
+/// screen-space sampler. Breakpoints are always emitted at their exact x
+/// coordinate; Hold segments emit both sides of their vertical step there.
+/// The returned points are screen-space and ordered by beat/x.
+pub(crate) fn build_automation_polyline(
+    lane: &UiAutomationLane,
+    min_beat: f32,
+    max_beat: f32,
+    x0: f32,
+    x1: f32,
+    graph: Rect,
+    pixels_per_beat: f32,
+) -> Vec<(f32, f32)> {
+    if !min_beat.is_finite() || !max_beat.is_finite() || max_beat < min_beat
+        || x1 < x0 || !pixels_per_beat.is_finite() || pixels_per_beat <= 0.0
+    {
+        return Vec::new();
+    }
+    let min = f64::from(min_beat);
+    let max = f64::from(max_beat);
+    let screen = |beat: f64, norm: f32| (
+        x0 + (beat as f32 - min_beat) * pixels_per_beat,
+        graph.y + graph.height * (1.0 - norm.clamp(0.0, 1.0)),
+    );
+    let mut out = Vec::new();
+    if lane.points.len() < 2
+        || lane.points.first().is_some_and(|p| p.beat.0 > min)
+        || lane.points.last().is_some_and(|p| p.beat.0 < min)
+    {
+        push_curve_point(&mut out, screen(min, lane.value_at_norm(Beats(min))));
+    }
+    // Keep one adjacent endpoint on each side; work scales with the visible
+    // interval, not the length of an entire performance envelope.
+    let lower = lane.points.partition_point(|p| p.beat.0 < min).saturating_sub(1);
+    let upper = (lane.points.partition_point(|p| p.beat.0 <= max) + 1).min(lane.points.len());
+    for pair in lane.points[lower..upper].windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (start, end) = (a.beat.0, b.beat.0);
+        if end < min || start > max { continue; }
+        if end == start {
+            push_curve_point(&mut out, screen(start, a.value_norm));
+            push_curve_point(&mut out, screen(end, b.value_norm));
+            continue;
+        }
+        if end < start { continue; }
+        let from = start.max(min);
+        let to = end.min(max);
+        let t0 = ((from - start) / (end - start)) as f32;
+        let t1 = ((to - start) / (end - start)) as f32;
+        if a.shape == UiSegmentShape::Hold {
+            push_curve_point(&mut out, screen(from, a.value_norm));
+            push_curve_point(&mut out, screen(to, a.value_norm));
+            if to == end { push_curve_point(&mut out, screen(end, b.value_norm)); }
+        } else {
+            let sample = |t: f32| {
+                if t == 0.0 { return screen(start, a.value_norm); }
+                if t == 1.0 { return screen(end, b.value_norm); }
+                screen(
+                    start + f64::from(t) * (end - start),
+                    a.value_norm + (b.value_norm - a.value_norm) * a.shape.sample(t),
+                )
+            };
+            let p0 = sample(t0);
+            let p1 = sample(t1);
+            push_curve_point(&mut out, p0);
+            if a.shape == UiSegmentShape::Linear {
+                push_curve_point(&mut out, p1);
+            } else {
+                append_curve_segment(&mut out, &sample, t0, t1, p0, p1, 0);
+            }
+        }
+    }
+    push_curve_point(&mut out, screen(max, lane.value_at_norm(Beats(max))));
+    out
+}
+
+fn push_curve_point(out: &mut Vec<(f32, f32)>, point: (f32, f32)) {
+    if out.last() != Some(&point) { out.push(point); }
+}
+
+fn curve_chord_error_sq(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len_sq = dx * dx + dy * dy;
+    let t = if len_sq > 0.0 {
+        (((point.0 - a.0) * dx + (point.1 - a.1) * dy) / len_sq).clamp(0.0, 1.0)
+    } else { 0.0 };
+    (point.0 - a.0 - t * dx).powi(2) + (point.1 - a.1 - t * dy).powi(2)
+}
+
+/// A bounded stack subdivision spends vertices where a bend needs them.
+/// Quarter samples also catch bends whose midpoint nearly meets the chord.
+fn append_curve_segment(
+    out: &mut Vec<(f32, f32)>,
+    sample: &impl Fn(f32) -> (f32, f32),
+    t0: f32, t1: f32,
+    p0: (f32, f32), p1: (f32, f32),
+    depth: u8,
+) {
+    let mid = (t0 + t1) * 0.5;
+    let pm = sample(mid);
+    let error = [sample((t0 + mid) * 0.5), pm, sample((mid + t1) * 0.5)]
+        .into_iter().map(|p| curve_chord_error_sq(p, p0, p1)).fold(0.0_f32, f32::max);
+    if depth >= 14 || error <= 0.15 * 0.15 {
+        push_curve_point(out, p1);
+    } else {
+        append_curve_segment(out, sample, t0, mid, p0, pm, depth + 1);
+        append_curve_segment(out, sample, mid, t1, pm, p1, depth + 1);
+    }
 }
 
 // ── Marker node group for update-in-place ──────────────────────
@@ -422,6 +532,21 @@ impl CollapsedGroupBitmap {
 #[cfg(test)]
 mod automation_lane_geometry_tests {
     use super::*;
+    use crate::view::UiAutomationPoint;
+
+    fn ui_lane(points: Vec<UiAutomationPoint>) -> UiAutomationLane {
+        UiAutomationLane {
+            effect_id: EffectId::new("fx"),
+            param_id: ParamId::from("amount"),
+            target: crate::view::UiGraphTarget::Effect(EffectId::new("fx")),
+            label: "Fx: amount".into(),
+            points,
+            param_min: 0.0,
+            param_max: 1.0,
+            whole_numbers: false,
+            placeholder: false,
+        }
+    }
 
     fn lane() -> AutomationLaneScreen {
         AutomationLaneScreen {
@@ -463,5 +588,79 @@ mod automation_lane_geometry_tests {
         assert_eq!(lane.dots.len(), 0);
         assert!(lane.beats_per_bar >= 1.0);
         assert!(lane.bar_skip >= 1);
+    }
+
+    #[test]
+    fn automation_polyline_keeps_exact_points_and_hold_step() {
+        let lane = ui_lane(vec![
+            UiAutomationPoint {
+                beat: Beats(1.0),
+                value_norm: 0.2,
+                shape: UiSegmentShape::Hold,
+            },
+            UiAutomationPoint {
+                beat: Beats(3.0),
+                value_norm: 0.8,
+                shape: UiSegmentShape::Linear,
+            },
+        ]);
+        let points = build_automation_polyline(
+            &lane,
+            0.0,
+            4.0,
+            10.0,
+            210.0,
+            Rect::new(10.0, 0.0, 200.0, 100.0),
+            50.0,
+        );
+        let at_break = points
+            .iter()
+            .enumerate()
+            .filter(|(_, (x, _))| (*x - 160.0).abs() < 0.001)
+            .map(|(_, (_, y))| *y)
+            .collect::<Vec<_>>();
+        assert_eq!(at_break.len(), 2, "Hold needs both sides of its step");
+        assert!((at_break[0] - 80.0).abs() < 0.001);
+        assert!((at_break[1] - 20.0).abs() < 0.001);
+        assert!(points.iter().any(|(x, _)| (*x - 60.0).abs() < 0.001));
+        assert!(points.iter().any(|(x, _)| (*x - 160.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn automation_polyline_connects_both_sides_of_same_time_points() {
+        let lane = ui_lane(vec![
+            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.2, shape: UiSegmentShape::Linear },
+            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+            UiAutomationPoint { beat: Beats(3.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+        ]);
+        for min in [0.0, 1.0] {
+            let points = build_automation_polyline(&lane, min, 4.0, 0.0, 200.0,
+                Rect::new(0.0, 0.0, 200.0, 100.0), 50.0);
+            let x = (1.0 - min) * 50.0;
+            assert!(points.windows(2).any(|p| p[0].0 == x && p[1].0 == x
+                && (p[0].1 - 80.0).abs() < 0.001 && (p[1].1 - 20.0).abs() < 0.001));
+            assert!(points.windows(2).all(|p| p[0].0 <= p[1].0));
+        }
+    }
+
+    #[test]
+    fn automation_curves_stay_within_subpixel_chord_error() {
+        for bend in [-1.0, -0.2, 0.2, 1.0] {
+            for width in [12.0, 1200.0] {
+                let lane = ui_lane(vec![
+                    UiAutomationPoint { beat: Beats(0.0), value_norm: 0.0, shape: UiSegmentShape::Curved(bend) },
+                    UiAutomationPoint { beat: Beats(4.0), value_norm: 1.0, shape: UiSegmentShape::Linear },
+                ]);
+                let points = build_automation_polyline(&lane, 0.0, 4.0, 0.0, width,
+                    Rect::new(0.0, 0.0, width, 160.0), width / 4.0);
+                for step in 0..=1000 {
+                    let t = step as f32 / 1000.0;
+                    let sample = (width * t, 160.0 * (1.0 - lane.points[0].shape.sample(t)));
+                    let error = points.windows(2).map(|p| curve_chord_error_sq(sample, p[0], p[1]))
+                        .fold(f32::INFINITY, f32::min);
+                    assert!(error < 0.25 * 0.25, "bend {bend}, width {width}, t {t}, error {error}");
+                }
+            }
+        }
     }
 }

@@ -308,6 +308,7 @@ pub trait TimelineEditingHost {
         target: &UiGraphTarget,
         param_id: &ParamId,
         from_beat: Beats,
+        from_value: f32,
         to_beat: Beats,
         to_value: f32,
     );
@@ -326,7 +327,7 @@ pub trait TimelineEditingHost {
     /// Remove the breakpoint at `beat` (double-click or Delete key). Looks up
     /// the point's current index within the lane at call time. No-op if no
     /// point exists at that beat. Executes + sends immediately.
-    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats);
+    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32);
 
     // ── Automation lane editing — segment gestures (P4 Unit B,
     // `docs/AUTOMATION_LANES_DESIGN.md` section 7's "drag a segment" / "modifier-drag
@@ -343,6 +344,7 @@ pub trait TimelineEditingHost {
         target: &UiGraphTarget,
         param_id: &ParamId,
         left_beat: Beats,
+        left_value: f32,
         bend: f32,
     );
 
@@ -354,8 +356,10 @@ pub trait TimelineEditingHost {
         target: &UiGraphTarget,
         param_id: &ParamId,
         left_beat: Beats,
+        left_from_value: f32,
         left_value: f32,
         right_beat: Beats,
+        right_from_value: f32,
         right_value: f32,
     );
 

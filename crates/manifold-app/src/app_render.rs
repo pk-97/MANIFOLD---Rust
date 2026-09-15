@@ -1378,16 +1378,18 @@ impl Application {
                     target,
                     param_id,
                     beat,
+                    value_norm,
                 )) => {
-                    crate::app::automation_point_input::begin_value(self, target, param_id, *beat);
+                    crate::app::automation_point_input::begin_value(self, target, param_id, *beat, *value_norm);
                     continue;
                 }
                 PanelAction::Editing(EditingAction::AutomationPointEditTime(
                     target,
                     param_id,
                     beat,
+                    value_norm,
                 )) => {
-                    crate::app::automation_point_input::begin_time(self, target, param_id, *beat);
+                    crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
                     continue;
                 }
                 PanelAction::Root(RootAction::BeginParamTextInput {

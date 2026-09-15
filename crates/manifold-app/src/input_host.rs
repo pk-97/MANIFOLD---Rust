@@ -1558,9 +1558,12 @@ impl TimelineInputHost for AppInputHost<'_> {
                     .iter()
                     .find(|l| l.param_id.as_ref() == param_id_str)
                     .and_then(|lane| {
-                        lane.points
-                            .iter()
-                            .position(|p| p.beat.0 == point_ref.beat.0)
+                        let param = inst.params.get(param_id_str)?;
+                        lane.points.iter().position(|p| {
+                            let range = (param.spec.max - param.spec.min).abs().max(f32::EPSILON);
+                            let norm = ((p.value - param.spec.min) / range).clamp(0.0, 1.0);
+                            p.beat == point_ref.beat && norm == point_ref.value_norm
+                        })
                     })
             })
         });
@@ -2005,7 +2008,21 @@ mod automation_clipboard_host_tests {
         fn select(&mut self, points: &[(&str, f64)]) {
             let target = UiGraphTarget::Effect(self.effect_id());
             self.selection.selected_automation_points = points.iter().map(|(param, beat)| {
-                UiAutomationPointRef { target: target.clone(), param_id: manifold_core::effects::ParamId::from((*param).to_string()), beat: Beats(*beat) }
+                let effect = &self.project.settings.master_effects[0];
+                let param_spec = effect.params.get(param).expect("clipboard fixture parameter").spec.clone();
+                let lane = effect.automation_lanes.as_ref().expect("clipboard fixture lanes")
+                    .iter().find(|lane| lane.param_id.as_ref() == *param)
+                    .expect("clipboard fixture lane");
+                let point = lane.points.iter().find(|point| point.beat == Beats(*beat))
+                    .expect("clipboard fixture point");
+                UiAutomationPointRef {
+                    target: target.clone(),
+                    param_id: manifold_core::effects::ParamId::from((*param).to_string()),
+                    beat: Beats(*beat),
+                    value_norm: manifold_ui::slider::BitmapSlider::value_to_normalized(
+                        point.value, param_spec.min, param_spec.max,
+                    ),
+                }
             }).collect();
             self.selection.selected_automation_point = None;
         }
@@ -2258,7 +2275,7 @@ mod automation_clipboard_host_tests {
         h.select(&[("amount", 2.0), ("amount", 6.0), ("steps", 4.0), ("steps", 8.0)]);
         let before = h.project.clone();
         { let mut host = h.host(); host.copy_selected_automation(); host.paste_automation(10.0); }
-        assert_eq!(points(&h.project, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.2), (14.0, 0.6)]);
+        assert_eq!(points(&h.project, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8), (10.0, 0.2), (14.0, 0.6)]);
         assert_eq!(points(&h.project, "steps"), vec![(4.0, 2.0), (8.0, 8.0), (12.0, 2.0), (16.0, 8.0)]);
         let mut authoritative = before.clone();
         let mut service = EditingService::new();
@@ -2276,7 +2293,12 @@ mod automation_clipboard_host_tests {
         let target = UiGraphTarget::Effect(h.effect_id());
         h.select(&[("amount", 2.0), ("amount", 6.0)]);
         { let mut host = h.host(); host.copy_selected_automation(); }
-        h.selection.selected_automation_point = Some(UiAutomationPointRef { target, param_id: "steps".into(), beat: Beats(4.0) });
+        h.selection.selected_automation_point = Some(UiAutomationPointRef {
+            target,
+            param_id: "steps".into(),
+            beat: Beats(4.0),
+            value_norm: manifold_ui::slider::BitmapSlider::value_to_normalized(2.0, 0.0, 10.0),
+        });
         h.selection.selected_automation_points.clear();
         { let mut host = h.host(); host.paste_automation(20.0); }
         assert!(points(&h.project, "steps").contains(&(20.0, 2.0)));

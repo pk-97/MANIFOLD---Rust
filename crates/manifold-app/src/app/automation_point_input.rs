@@ -9,6 +9,7 @@ use manifold_core::{Beats, GraphTarget};
 use manifold_editing::command::Command;
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
 use manifold_ui::view::UiGraphTarget;
+use manifold_ui::slider::BitmapSlider;
 
 use crate::app::Application;
 use crate::text_input::{AnchorRect, AutomationPointEditCtx, TextInputField};
@@ -22,8 +23,9 @@ pub(crate) fn begin_value(
     target: &UiGraphTarget,
     param_id: &ParamId,
     beat: Beats,
+    value_norm: f32,
 ) {
-    let Some((point, param)) = point_and_param(app, target, param_id, beat) else {
+    let Some((point, param)) = point_and_param(app, target, param_id, beat, value_norm) else {
         invalid(app, "Automation point is no longer available");
         return;
     };
@@ -31,6 +33,7 @@ pub(crate) fn begin_value(
         target: target.clone(),
         param_id: param_id.clone(),
         original_beat: beat,
+        original_value_norm: value_norm,
         param_min: param.spec.min,
         param_max: param.spec.max,
         whole_numbers: param.whole_numbers(),
@@ -41,10 +44,14 @@ pub(crate) fn begin_value(
     } else {
         format!("{:.4}", point.value)
     };
+    let Some(anchor) = point_anchor(app, target, param_id, beat, value_norm) else {
+        invalid(app, "Automation point is off-screen");
+        return;
+    };
     app.text_input.begin(
         TextInputField::AutomationPointValue,
         &initial,
-        point_anchor(app),
+        anchor,
         11.0,
     );
     app.text_input.automation_point_edit = Some(ctx);
@@ -56,8 +63,9 @@ pub(crate) fn begin_time(
     target: &UiGraphTarget,
     param_id: &ParamId,
     beat: Beats,
+    value_norm: f32,
 ) {
-    let Some((_, param)) = point_and_param(app, target, param_id, beat) else {
+    let Some((_, param)) = point_and_param(app, target, param_id, beat, value_norm) else {
         invalid(app, "Automation point is no longer available");
         return;
     };
@@ -66,16 +74,21 @@ pub(crate) fn begin_time(
         target: target.clone(),
         param_id: param_id.clone(),
         original_beat: beat,
+        original_value_norm: value_norm,
         param_min: param.spec.min,
         param_max: param.spec.max,
         whole_numbers: param.whole_numbers(),
         beats_per_bar: bpb,
     };
     let initial = format_bar_beat(beat, bpb);
+    let Some(anchor) = point_anchor(app, target, param_id, beat, value_norm) else {
+        invalid(app, "Automation point is off-screen");
+        return;
+    };
     app.text_input.begin(
         TextInputField::AutomationPointTime,
         &initial,
-        point_anchor(app),
+        anchor,
         11.0,
     );
     app.text_input.automation_point_edit = Some(ctx);
@@ -108,7 +121,7 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
     };
 
     let graph_target = crate::editing_host::to_graph_target(&ctx.target);
-    let Some(old_point) = find_point(app, &graph_target, &ctx.param_id, ctx.original_beat) else {
+    let Some(old_point) = find_point(app, &graph_target, &ctx.param_id, ctx.original_beat, ctx.original_value_norm) else {
         invalid(app, "Automation point moved before the edit was committed");
         return;
     };
@@ -142,11 +155,13 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
     app.send_content_cmd(crate::content_command::ContentCommand::Execute(Box::new(
         command,
     )));
-    if field == TextInputField::AutomationPointTime {
+    let new_value_norm = BitmapSlider::value_to_normalized(value, ctx.param_min, ctx.param_max);
+    if field == TextInputField::AutomationPointTime || field == TextInputField::AutomationPointValue {
         app.selection.selected_automation_point = Some(manifold_ui::view::UiAutomationPointRef {
             target: ctx.target,
             param_id: ctx.param_id,
             beat: new_beat,
+            value_norm: new_value_norm,
         });
         app.selection.selected_automation_points.clear();
     }
@@ -159,6 +174,7 @@ fn point_and_param<'a>(
     target: &UiGraphTarget,
     param_id: &ParamId,
     beat: Beats,
+    value_norm: f32,
 ) -> Option<(&'a AutomationPoint, &'a manifold_core::params::Param)> {
     let graph_target = crate::editing_host::to_graph_target(target);
     let inst = app.local_project.preset_instance(&graph_target)?;
@@ -167,8 +183,11 @@ fn point_and_param<'a>(
         .as_ref()?
         .iter()
         .find(|lane| lane.param_id.as_ref() == param_id.as_ref())?;
-    let point = lane.points.iter().find(|point| point.beat == beat)?;
     let param = inst.params.get(param_id.as_ref())?;
+    let point = lane.points.iter().find(|point| {
+        point.beat == beat
+            && BitmapSlider::value_to_normalized(point.value, param.spec.min, param.spec.max) == value_norm
+    })?;
     Some((point, param))
 }
 
@@ -177,27 +196,38 @@ fn find_point(
     target: &GraphTarget,
     param_id: &ParamId,
     beat: Beats,
+    value_norm: f32,
 ) -> Option<AutomationPoint> {
-    app.local_project
-        .preset_instance(target)?
+    let inst = app.local_project.preset_instance(target)?;
+    let param = inst.params.get(param_id.as_ref())?;
+    inst
         .automation_lanes
         .as_ref()?
         .iter()
         .find(|lane| lane.param_id.as_ref() == param_id.as_ref())?
         .points
         .iter()
-        .find(|point| point.beat == beat)
+        .find(|point| point.beat == beat && BitmapSlider::value_to_normalized(point.value, param.spec.min, param.spec.max) == value_norm)
         .copied()
 }
 
-fn point_anchor(app: &Application) -> AnchorRect {
-    let pos = app.cursor_pos;
+fn point_anchor(app: &Application, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) -> Option<AnchorRect> {
+    let dot = app.ws.ui_root.viewport.automation_lane_screens(&[])
+        .iter()
+        .find(|lane| lane.target == *target && lane.param_id == *param_id)
+        .and_then(|lane| lane.dots.iter().find(|dot| dot.beat == beat && dot.value_norm == value_norm).copied())?;
     let layout = &app.ws.ui_root.layout;
-    AnchorRect::new(
-        pos.x.clamp(0.0, (layout.screen_width - INPUT_WIDTH).max(0.0)),
-        pos.y.clamp(0.0, (layout.screen_height - INPUT_HEIGHT).max(0.0)),
-        INPUT_WIDTH, INPUT_HEIGHT,
-    )
+    Some(anchor_next_to_point(dot.x, dot.y, layout.screen_width, layout.screen_height))
+}
+
+fn anchor_next_to_point(point_x: f32, point_y: f32, screen_width: f32, screen_height: f32) -> AnchorRect {
+    let x = if point_x + 8.0 + INPUT_WIDTH <= screen_width {
+        (point_x + 8.0).max(0.0)
+    } else {
+        (point_x - 8.0 - INPUT_WIDTH).clamp(0.0, (screen_width - INPUT_WIDTH).max(0.0))
+    };
+    let y = (point_y - INPUT_HEIGHT * 0.5).clamp(0.0, (screen_height - INPUT_HEIGHT).max(0.0));
+    AnchorRect::new(x, y, INPUT_WIDTH, INPUT_HEIGHT)
 }
 
 fn beats_per_bar(app: &Application) -> u32 {
@@ -308,6 +338,16 @@ fn reject_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn point_editor_stays_adjacent_and_inside_window_edges() {
+        let middle = anchor_next_to_point(300.0, 200.0, 800.0, 600.0);
+        assert_eq!((middle.x, middle.y), (308.0, 189.5));
+        let bottom_right = anchor_next_to_point(790.0, 598.0, 800.0, 600.0);
+        assert_eq!((bottom_right.x, bottom_right.y), (654.0, 579.0));
+        let top = anchor_next_to_point(100.0, 2.0, 800.0, 600.0);
+        assert_eq!(top.y, 0.0);
+    }
 
     #[test]
     fn bar_beat_uses_non_four_signature() {

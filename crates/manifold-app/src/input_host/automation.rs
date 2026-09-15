@@ -13,8 +13,23 @@ use manifold_editing::commands::automation::{
 use manifold_ui::panels::actions::AutomationShape;
 use manifold_ui::ui_state::{AutomationClipboard, AutomationClipboardPoint, UIState};
 use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
+use manifold_ui::slider::BitmapSlider;
 
 use crate::content_command::ContentCommand;
+
+fn point_matches_ref(
+    point: &AutomationPoint,
+    point_ref: &UiAutomationPointRef,
+    min: f32,
+    max: f32,
+) -> bool {
+    if point.beat != point_ref.beat { return false; }
+    BitmapSlider::value_to_normalized(point.value, min, max) == point_ref.value_norm
+}
+
+fn normalized_value(value: f32, min: f32, max: f32) -> f32 {
+    BitmapSlider::value_to_normalized(value, min, max)
+}
 
 fn selected_refs(selection: &UIState) -> Vec<UiAutomationPointRef> {
     let mut refs = selection.selected_automation_points.clone();
@@ -64,6 +79,9 @@ pub(crate) fn select_all_in_lane(
     let Some(instance) = project.preset_instance(&graph_target) else {
         return;
     };
+    let Some(param) = instance.params.get(param_id.as_ref()) else {
+        return;
+    };
     let lane_points = instance
         .automation_lanes
         .as_ref()
@@ -77,6 +95,7 @@ pub(crate) fn select_all_in_lane(
             target: target.clone(),
             param_id: param_id.clone(),
             beat: point.beat,
+            value_norm: normalized_value(point.value, param.spec.min, param.spec.max),
         })
         .collect();
     selection.selected_automation_point = selection.selected_automation_points.first().cloned();
@@ -163,10 +182,12 @@ pub(crate) fn copy_selected(project: &manifold_core::project::Project, selection
         }) else {
             continue;
         };
+        let Some(param) = instance.params.get(point_ref.param_id.as_ref()) else { continue; };
         let Some(point) = lane
             .points
             .iter()
-            .find(|point| point.beat == point_ref.beat)
+            .find(|point| point_matches_ref(point, &point_ref, param.spec.min, param.spec.max))
+            .copied()
         else {
             continue;
         };
@@ -225,7 +246,7 @@ pub(crate) fn delete_selected(
     if refs.is_empty() {
         return;
     }
-    let mut by_lane: HashMap<(GraphTarget, String), Vec<f64>> = HashMap::new();
+    let mut by_lane: HashMap<(GraphTarget, String), Vec<UiAutomationPointRef>> = HashMap::new();
     for point in &refs {
         by_lane
             .entry((
@@ -233,10 +254,10 @@ pub(crate) fn delete_selected(
                 point.param_id.as_ref().to_string(),
             ))
             .or_default()
-            .push(point.beat.0);
+            .push(point.clone());
     }
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
-    for ((target, param_id), beats) in by_lane {
+    for ((target, param_id), refs) in by_lane {
         let Some(inst) = project.preset_instance(&target) else {
             continue;
         };
@@ -247,9 +268,10 @@ pub(crate) fn delete_selected(
         else {
             continue;
         };
-        let mut indices: Vec<usize> = beats
+        let Some(param) = inst.params.get(&param_id) else { continue; };
+        let mut indices: Vec<usize> = refs
             .iter()
-            .filter_map(|beat| lane.points.iter().position(|point| point.beat.0 == *beat))
+            .filter_map(|point_ref| lane.points.iter().position(|point| point_matches_ref(point, point_ref, param.spec.min, param.spec.max)))
             .collect();
         indices.sort_unstable_by(|a, b| b.cmp(a));
         indices.dedup();
@@ -327,22 +349,23 @@ pub(crate) fn paste(
         let Some(param) = instance.params.get(param_id.as_ref()) else {
             continue;
         };
-        let same_range = (point.source_min - param.spec.min).abs() <= f32::EPSILON
-            && (point.source_max - param.spec.max).abs() <= f32::EPSILON;
+        let (param_min, param_max, whole_numbers) = (param.spec.min, param.spec.max, param.whole_numbers());
+        let same_range = (point.source_min - param_min).abs() <= f32::EPSILON
+            && (point.source_max - param_max).abs() <= f32::EPSILON;
         let mut value = if same_range {
             point.value
         } else {
-            param.spec.min + point.value_norm * (param.spec.max - param.spec.min)
+            param_min + point.value_norm * (param_max - param_min)
         };
-        value = value.clamp(param.spec.min, param.spec.max);
-        if param.whole_numbers() {
-            value = value.round().clamp(param.spec.min, param.spec.max);
+        value = value.clamp(param_min, param_max);
+        if whole_numbers {
+            value = value.round().clamp(param_min, param_max);
         }
         let beat = target_beat + point.beat_offset;
         let point = AutomationPoint {
             beat,
             value,
-            shape: if param.whole_numbers() {
+            shape: if whole_numbers {
                 SegmentShape::Hold
             } else {
                 to_core_shape(point.shape)
@@ -355,6 +378,7 @@ pub(crate) fn paste(
             target: ui_target,
             param_id,
             beat,
+            value_norm: normalized_value(value, param_min, param_max),
         });
     }
     if commands.is_empty() {
@@ -403,21 +427,25 @@ pub(crate) fn duplicate_selected(
         }) else {
             continue;
         };
+        let Some(param) = instance.params.get(point_ref.param_id.as_ref()) else { continue; };
         let Some(point) = lane
             .points
             .iter()
-            .find(|point| point.beat == point_ref.beat)
+            .find(|point| point_matches_ref(point, &point_ref, param.spec.min, param.spec.max))
+            .copied()
         else {
             continue;
         };
+        let (point_value, point_shape) = (point.value, point.shape);
+        let (param_min, param_max) = (param.spec.min, param.spec.max);
         let beat = destination + (point.beat - Beats(min_beat));
         let mut command = AddAutomationPointCommand::new(
             target,
             point_ref.param_id.as_ref(),
             AutomationPoint {
                 beat,
-                value: point.value,
-                shape: point.shape,
+                value: point_value,
+                shape: point_shape,
             },
         );
         command.execute(project);
@@ -426,6 +454,7 @@ pub(crate) fn duplicate_selected(
             target: point_ref.target,
             param_id: point_ref.param_id,
             beat,
+            value_norm: normalized_value(point_value, param_min, param_max),
         });
     }
     if commands.is_empty() {
@@ -543,6 +572,7 @@ pub(crate) fn insert_shape(
     let Some(param) = instance.params.get(param_id.as_ref()) else {
         return;
     };
+    let (param_min, param_max, whole_numbers) = (param.spec.min, param.spec.max, param.whole_numbers());
     let lane_points = instance
         .automation_lanes
         .as_ref()
@@ -562,9 +592,9 @@ pub(crate) fn insert_shape(
         lane_points.as_deref(),
         start,
         end,
-        param.spec.min,
-        param.spec.max,
-        param.whole_numbers(),
+        param_min,
+        param_max,
+        whole_numbers,
         shape,
     );
     let old_points = lane_points;
@@ -583,6 +613,7 @@ pub(crate) fn insert_shape(
             target: target.clone(),
             param_id: param_id.clone(),
             beat: point.beat,
+            value_norm: normalized_value(point.value, param_min, param_max),
         })
         .collect();
     selection.selected_automation_point = selection.selected_automation_points.first().cloned();

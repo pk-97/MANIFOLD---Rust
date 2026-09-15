@@ -993,6 +993,7 @@ pub(super) fn dispatch_project(
         // this. Same `to_graph_target` conversion `editing_host.rs`'s
         // automation-point arms use.
         ProjectAction::ContextClearAutomationLane(target, param_id) => {
+            ContentCommand::send(content_tx, ContentCommand::FinishAutomationRecording);
             let graph_target = crate::editing_host::to_graph_target(target);
             let mut cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
                 graph_target,
@@ -1003,24 +1004,7 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
         ProjectAction::ContextRemoveAutomationLane(target, param_id) => {
-            let graph_target = crate::editing_host::to_graph_target(target);
-            let param_id_str = param_id.as_ref();
-            let index = project.preset_instance(&graph_target).and_then(|inst| {
-                inst.automation_lanes.as_ref().and_then(|lanes| {
-                    lanes
-                        .iter()
-                        .position(|l| l.param_id.as_ref() == param_id_str)
-                })
-            });
-            if let Some(index) = index {
-                let mut cmd = manifold_editing::commands::automation::RemoveLaneCommand::new(
-                    graph_target,
-                    param_id_str,
-                    index,
-                );
-                cmd.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-            }
+            remove_parameter_automation(project, content_tx, ui, _selection, target, param_id);
             DispatchResult::structural()
         }
         ProjectAction::ContextRestoreAutomationLane(target, param_id) => {
@@ -1225,6 +1209,42 @@ fn map_skin_target_map(
     match target {
         Ui::Emissive => manifold_editing::commands::graph::SkinTargetMap::Emissive,
         Ui::BaseColor => manifold_editing::commands::graph::SkinTargetMap::BaseColor,
+    }
+}
+
+/// Shared parameter/lane menu path: remove the envelope and its stale UI targets.
+pub(super) fn remove_parameter_automation(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    ui: &mut UIRoot,
+    selection: &mut SelectionState,
+    target: &manifold_ui::view::UiGraphTarget,
+    param_id: &manifold_core::effects::ParamId,
+) {
+    let graph_target = crate::editing_host::to_graph_target(target);
+    // A pending first recording take can create the lane at this boundary,
+    // before the removal resolves its parameter on the content thread.
+    crate::content_command::ContentCommand::send(content_tx,
+        crate::content_command::ContentCommand::FinishAutomationRecording);
+    let mut command = manifold_editing::commands::automation::RemoveLaneCommand::for_param(
+        graph_target, param_id.as_ref(),
+    );
+    command.execute(project);
+    crate::content_command::ContentCommand::send(content_tx,
+        crate::content_command::ContentCommand::Execute(Box::new(command)));
+    selection.chosen_automation_params.retain(|_, (t, p)| t != target || p != param_id);
+    selection.selected_automation_points.retain(|point| point.target != *target || point.param_id != *param_id);
+    if selection.selected_automation_point.as_ref().is_some_and(|p| p.target == *target && p.param_id == *param_id) {
+        selection.selected_automation_point = None;
+    }
+    if selection.automation_paste_context.as_ref().is_some_and(|(t, p)| t == target && p == param_id) {
+        selection.automation_paste_context = None;
+    }
+    if selection.automation_feedback.as_ref().is_some_and(|f| f.target == *target && f.param_id == *param_id) {
+        selection.automation_feedback = None;
+    }
+    if ui.pending_automation_reveal.as_ref().is_some_and(|(t, p)| t == target && p == param_id) {
+        ui.pending_automation_reveal = None;
     }
 }
 

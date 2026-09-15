@@ -15,15 +15,11 @@
 //! [`AddAutomationPointCommand`] and [`MoveAutomationPointCommand`] both
 //! replace collisions and restore snapshots on undo.
 //!
-//! Point identity across execute/undo: [`AutomationPoint`] carries no id, and
-//! the model's own sampler (`AutomationLane::value_at`) already assumes
-//! unique, ascending beats in normal authored data; legacy data may contain
-//! duplicate beats and is preserved by undo snapshots.
-//! [`MoveAutomationPointCommand`] therefore locates a point by matching its
-//! `beat` (exact `f64` equality is safe here — `Beats` values reaching the
-//! arrangement are never NaN, same assumption `value_at`'s binary search
-//! already relies on), not by a positional index that a mid-command sort
-//! could invalidate.
+//! Point identity across execute/undo: [`AutomationPoint`] carries no id, so
+//! commands match the exact stored `(beat, value)` key. This
+//! preserves distinct equal-beat breakpoints while allowing an exact duplicate
+//! key to be replaced. [`AutomationLane::value_at`] resolves an exact beat to
+//! the last point in its stable equal-beat order.
 
 use crate::command::Command;
 use manifold_core::effects::{AutomationLane, AutomationPoint};
@@ -31,15 +27,20 @@ use manifold_core::project::Project;
 use manifold_core::GraphTarget;
 
 /// Insert `point` into `points` at its sorted-by-beat position, maintaining
-/// the ascending-beat invariant. Ties (equal beat) insert after existing
-/// points at that beat — shouldn't occur in practice (Ableton-style unique
-/// breakpoints) but stays a stable, defined order rather than a panic.
+/// the ascending-beat invariant. Ties insert after existing points at that
+/// beat so equal-beat points retain authored order.
 fn insert_sorted(points: &mut Vec<AutomationPoint>, point: AutomationPoint) {
     let pos = points
         .iter()
         .position(|p| p.beat.0 > point.beat.0)
         .unwrap_or(points.len());
     points.insert(pos, point);
+}
+
+/// Source tuples retain the exact stored value; normalization belongs at the
+/// UI projection boundary, never in the editing identity comparison.
+fn same_point(a: &AutomationPoint, b: &AutomationPoint) -> bool {
+    a.beat == b.beat && a.value == b.value
 }
 
 /// Add a breakpoint to the automation lane for `param_id` on the instance
@@ -97,7 +98,11 @@ impl Command for AddAutomationPointCommand {
             let lanes = inst.automation_lanes_mut();
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) {
                 Some(lane) => {
-                    lane.points.retain(|p| p.beat.0 != point.beat.0);
+                    // Distinct values at one beat are independent breakpoints;
+                    // only an exact `(beat, value)` duplicate is replaced.
+                    lane.points.retain(|p| {
+                        !same_point(p, &point)
+                    });
                     insert_sorted(&mut lane.points, point);
                 }
                 None => lanes.push(AutomationLane { param_id: param_id.into(), enabled: true, points: vec![point] }),
@@ -144,10 +149,10 @@ impl Command for AddAutomationPointCommand {
     }
 }
 
-/// Move existing breakpoints within one lane, identified by their source beats.
+/// Move existing breakpoints within one lane, identified by source beat and value.
 /// Capture the entire lane on execute for exact collision undo. `new` moves one
-/// point; `for_group` removes all selected sources before inserting destinations
-/// so an overlapping phrase cannot overwrite its own points mid-command.
+/// point; `for_group` transforms all selected sources simultaneously so an
+/// overlapping phrase cannot overwrite its own points mid-command.
 #[derive(Debug)]
 pub struct MoveAutomationPointCommand {
     target: GraphTarget,
@@ -167,8 +172,7 @@ impl MoveAutomationPointCommand {
         Self::for_group(target, param_id, vec![(old_point, new_point)])
     }
 
-    /// Move all selected points in one lane simultaneously. Removing every
-    /// source before inserting destinations preserves overlapping phrases.
+    /// Move all selected points simultaneously, preserving their authored order.
     pub fn for_group(
         target: GraphTarget,
         param_id: impl Into<String>,
@@ -194,18 +198,20 @@ impl MoveAutomationPointCommand {
                 let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) else {
                     return false;
                 };
-                if moves.is_empty() || !moves.iter().all(|(from, _)| lane.points.iter().any(|p| p.beat == from.beat)) {
+                if moves.is_empty() || !moves.iter().all(|(from, _)| lane.points.iter().any(|p| same_point(p, from))) {
                     return false;
                 }
-                lane.points.retain(|p| !moves.iter().any(|(from, to)| {
-                    p.beat == from.beat || p.beat == to.beat
-                }));
-                for &(_, to) in moves {
-                    // Canonicalize a touched destination even for legacy
-                    // selections containing duplicate source beats.
-                    lane.points.retain(|p| p.beat != to.beat);
-                    insert_sorted(&mut lane.points, to);
-                }
+                // Transform in original lane order, then use a stable beat sort.
+                // This preserves step order for single and group moves alike.
+                lane.points.retain_mut(|point| {
+                    if let Some((_, to)) = moves.iter().find(|(from, _)| same_point(point, from)) {
+                        *point = *to;
+                        true
+                    } else {
+                        !moves.iter().any(|(_, to)| same_point(point, to))
+                    }
+                });
+                lane.points.sort_by(|a, b| a.beat.0.total_cmp(&b.beat.0));
                 true
             })
             .unwrap_or(false)
@@ -223,7 +229,7 @@ impl Command for MoveAutomationPointCommand {
             lanes.iter().enumerate().find(|(_, l)| {
                 l.param_id.as_ref() == self.param_id
                     && !self.moves.is_empty()
-                    && self.moves.iter().all(|(from, _)| l.points.iter().any(|p| p.beat == from.beat))
+                    && self.moves.iter().all(|(from, _)| l.points.iter().any(|p| same_point(p, from)))
             })
         }) else {
             return;
@@ -452,6 +458,10 @@ pub struct RemoveLaneCommand {
 }
 
 impl RemoveLaneCommand {
+    pub fn for_param(target: GraphTarget, param_id: impl Into<String>) -> Self {
+        Self::new(target, param_id, 0)
+    }
+
     pub fn new(target: GraphTarget, param_id: impl Into<String>, removed_index: usize) -> Self {
         Self {
             target,
@@ -464,13 +474,16 @@ impl RemoveLaneCommand {
 
 impl Command for RemoveLaneCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.removed_lane = None;
         let param_id = self.param_id.clone();
-        let idx = self.removed_index;
         let removed = project.with_preset_graph_mut(&self.target, |inst| {
             inst.automation_lanes
                 .as_mut()
-                .filter(|lanes| idx < lanes.len() && lanes[idx].param_id.as_ref() == param_id)
-                .map(|lanes| lanes.remove(idx))
+                .and_then(|lanes| {
+                    let idx = lanes.iter().position(|lane| lane.param_id.as_ref() == param_id)?;
+                    self.removed_index = idx;
+                    Some(lanes.remove(idx))
+                })
         });
         if let Some(Some(lane)) = removed {
             self.removed_lane = Some(lane);
@@ -681,7 +694,7 @@ mod tests {
                 GraphTarget::Effect(fx_id.clone()), "amount", moves.clone(),
             );
             command.execute(&mut project);
-            let mut expected = vec![if delta > 0.0 { original[0] } else { original[3] }, moves[0].1, moves[1].1];
+            let mut expected = vec![original[0], moves[0].1, moves[1].1, original[3]];
             expected.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
             assert_eq!(lane_points(&project, &fx_id), expected);
             assert!(!project.find_effect_by_id(&fx_id).unwrap().automation_lanes.as_ref().unwrap()[0].enabled);
@@ -702,7 +715,7 @@ mod tests {
             vec![(original[0], point(4.0, 0.1)), (original[1], point(8.0, 0.4))],
         );
         command.execute(&mut project);
-        assert_eq!(lane_points(&project, &fx_id), &[point(4.0, 0.1), point(8.0, 0.4)]);
+        assert_eq!(lane_points(&project, &fx_id), &[point(4.0, 0.1), point(8.0, 0.4), point(8.0, 0.7), point(8.0, 0.9)]);
         command.undo(&mut project);
         assert_eq!(lane_points(&project, &fx_id), original);
         let mut invalid = MoveAutomationPointCommand::for_group(
@@ -740,14 +753,14 @@ mod tests {
         cmd.execute(&mut project);
         assert_eq!(
             lane_points(&project, &fx_id),
-            &[point(2.0, 0.9), point(4.0, 0.8)]
+            &[original[0], original[1], point(2.0, 0.9), point(4.0, 0.8)]
         );
         cmd.undo(&mut project);
         assert_eq!(lane_points(&project, &fx_id), original.as_slice());
         cmd.execute(&mut project);
         assert_eq!(
             lane_points(&project, &fx_id),
-            &[point(2.0, 0.9), point(4.0, 0.8)]
+            &[original[0], original[1], point(2.0, 0.9), point(4.0, 0.8)]
         );
     }
 
@@ -770,14 +783,14 @@ mod tests {
         cmd.execute(&mut project);
         assert_eq!(
             lane_points(&project, &fx_id),
-            &[point(4.0, 0.9), point(8.0, 0.8)]
+            &[point(4.0, 0.9), point(4.0, 0.4), point(4.0, 0.5), point(8.0, 0.8)]
         );
         cmd.undo(&mut project);
         assert_eq!(lane_points(&project, &fx_id), original.as_slice());
         cmd.execute(&mut project);
         assert_eq!(
             lane_points(&project, &fx_id),
-            &[point(4.0, 0.9), point(8.0, 0.8)]
+            &[point(4.0, 0.9), point(4.0, 0.4), point(4.0, 0.5), point(8.0, 0.8)]
         );
     }
 
@@ -856,6 +869,63 @@ mod tests {
         let points = lane_points(&project, &fx_id);
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].beat.0, 4.0);
+    }
+
+    #[test]
+    fn add_distinct_values_at_one_beat_and_undo_preserves_both() {
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        let mut low = AddAutomationPointCommand::new(target.clone(), "amount", point(4.0, 0.2));
+        low.execute(&mut project);
+        let mut high = AddAutomationPointCommand::new(target, "amount", point(4.0, 0.8));
+        high.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), &[point(4.0, 0.2), point(4.0, 0.8)]);
+        high.undo(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), &[point(4.0, 0.2)]);
+    }
+
+    #[test]
+    fn moving_across_an_existing_tie_preserves_distinct_points_and_order() {
+        let (mut project, fx_id) = project_with_effect();
+        install_lane(&mut project, &fx_id, vec![point(0.0, 0.1), point(4.0, 0.4), point(4.0, 0.5)]);
+        let mut mv = MoveAutomationPointCommand::new(
+            GraphTarget::Effect(fx_id.clone()), "amount", point(0.0, 0.1), point(4.0, 0.9),
+        );
+        mv.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), &[point(4.0, 0.9), point(4.0, 0.4), point(4.0, 0.5)]);
+    }
+
+    #[test]
+    fn moving_later_point_left_places_it_after_existing_tie() {
+        let (mut project, fx_id) = project_with_effect();
+        install_lane(&mut project, &fx_id, vec![point(4.0, 0.4), point(4.0, 0.5), point(8.0, 0.9)]);
+        let mut mv = MoveAutomationPointCommand::new(
+            GraphTarget::Effect(fx_id.clone()), "amount", point(8.0, 0.9), point(4.0, 0.8),
+        );
+        mv.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), &[point(4.0, 0.4), point(4.0, 0.5), point(4.0, 0.8)]);
+    }
+
+    #[test]
+    fn group_move_preserves_step_order_in_both_directions_and_undo() {
+        for destination in [0.0, 8.0] {
+            let (mut project, fx_id) = project_with_effect();
+            let original = vec![point(4.0, 0.1234567), point(4.0, 0.7654321)];
+            install_lane(&mut project, &fx_id, original.clone());
+            // Selection order must not change the authored step order.
+            let mut command = MoveAutomationPointCommand::for_group(
+                GraphTarget::Effect(fx_id.clone()), "amount",
+                vec![(original[1], point(destination, original[1].value)),
+                     (original[0], point(destination, original[0].value))],
+            );
+            command.execute(&mut project);
+            let moved = vec![point(destination, original[0].value), point(destination, original[1].value)];
+            assert_eq!(lane_points(&project, &fx_id), moved);
+            command.undo(&mut project);
+            assert_eq!(lane_points(&project, &fx_id), original);
+            command.execute(&mut project);
+            assert_eq!(lane_points(&project, &fx_id), moved);
+        }
     }
 
     #[test]

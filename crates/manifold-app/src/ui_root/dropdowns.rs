@@ -29,7 +29,7 @@ fn automation_lane_context_items(
     target: &manifold_ui::view::UiGraphTarget,
     param_id: &manifold_core::effects::ParamId,
     beat: Option<manifold_core::Beats>,
-    point_menu: bool,
+    point_value_norm: Option<f32>,
 ) -> Vec<DropdownItem> {
     let mut items = Vec::new();
     if let Some(beat) = beat {
@@ -57,22 +57,22 @@ fn automation_lane_context_items(
             EditingAction::ContextOpenAutomationShapePicker(target.clone(), param_id.clone(), beat),
         )));
     }
-    if point_menu {
+    if let Some(value_norm) = point_value_norm {
         let beat = beat.expect("point context menu always carries its beat");
         items.push(DropdownItem::new("Edit point value…").with_action(PanelAction::Editing(
-            EditingAction::AutomationPointEditValue(target.clone(), param_id.clone(), beat),
+            EditingAction::AutomationPointEditValue(target.clone(), param_id.clone(), beat, value_norm),
         )));
         items.push(DropdownItem::new("Edit point time…").with_separator().with_action(PanelAction::Editing(
-            EditingAction::AutomationPointEditTime(target.clone(), param_id.clone(), beat),
+            EditingAction::AutomationPointEditTime(target.clone(), param_id.clone(), beat, value_norm),
         )));
     }
     items.push(DropdownItem::new("Restore automation").with_action(PanelAction::Project(
         ProjectAction::ContextRestoreAutomationLane(target.clone(), param_id.clone()),
     )));
-    items.push(DropdownItem::new("Clear automation").with_action(PanelAction::Project(
+    items.push(DropdownItem::new("Clear points").with_action(PanelAction::Project(
         ProjectAction::ContextClearAutomationLane(target.clone(), param_id.clone()),
     )));
-    items.push(DropdownItem::new("Delete lane").with_action(PanelAction::Project(
+    items.push(DropdownItem::new("Clear Automation").with_action(PanelAction::Project(
         ProjectAction::ContextRemoveAutomationLane(target.clone(), param_id.clone()),
     )));
     items
@@ -206,6 +206,24 @@ mod tests {
     use manifold_core::{LayerId, NodeId};
     use manifold_ui::panels::{PanelAction, ProjectAction, RootAction};
     use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption, ModifierObjectRef};
+
+    #[test]
+    fn automation_numeric_menu_captures_the_clicked_point_value() {
+        let target = manifold_ui::view::UiGraphTarget::Generator(LayerId::new("layer"));
+        let items = super::automation_lane_context_items(&target, &"amount".into(), Some(manifold_core::Beats(4.0)), Some(0.8));
+        for (label, is_value) in [("Edit point value…", true), ("Edit point time…", false)] {
+            let action = items.iter().find(|item| item.label == label).unwrap().action.as_ref().unwrap();
+            let (actual_target, param, beat, value) = match action {
+                PanelAction::Editing(manifold_ui::EditingAction::AutomationPointEditValue(t, p, b, v)) if is_value => (t, p, b, v),
+                PanelAction::Editing(manifold_ui::EditingAction::AutomationPointEditTime(t, p, b, v)) if !is_value => (t, p, b, v),
+                _ => panic!("numeric menu must capture point identity"),
+            };
+            assert_eq!(*actual_target, target);
+            assert_eq!(param.as_ref(), "amount");
+            assert_eq!(*beat, manifold_core::Beats(4.0));
+            assert_eq!(*value, 0.8);
+        }
+    }
 
     /// LED presets (`layer_types: [Dmx]`) must be unreachable from a video /
     /// generator layer's picker and reachable from a DMX layer (§4
@@ -1154,13 +1172,13 @@ impl UIRoot {
             PanelAction::Editing(EditingAction::AutomationLaneRightClicked(target, param_id)) => {
                 use manifold_ui::automation_hit_tester::{AutomationHit, hit_test_automation};
                 let lanes = self.viewport.automation_lane_screens(&[]);
-                let point_beat = match hit_test_automation(right_click_pos, &lanes) {
-                    Some(AutomationHit::Dot { lane_index, dot_index }) => Some(lanes[lane_index].dots[dot_index].beat),
+                let point = match hit_test_automation(right_click_pos, &lanes) {
+                    Some(AutomationHit::Dot { lane_index, dot_index }) => Some(lanes[lane_index].dots[dot_index]),
                     _ => None,
                 };
-                let beat = point_beat.unwrap_or_else(|| self.viewport.snap_to_grid(
+                let beat = point.map(|dot| dot.beat).unwrap_or_else(|| self.viewport.snap_to_grid(
                     self.viewport.pixel_to_beat(right_click_pos.x)).max(manifold_core::Beats::ZERO));
-                let items = automation_lane_context_items(target, param_id, Some(beat), point_beat.is_some());
+                let items = automation_lane_context_items(target, param_id, Some(beat), point.map(|dot| dot.value_norm));
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
@@ -1270,6 +1288,9 @@ impl UIRoot {
                 {
                     items.push(DropdownItem::new("Show Automation").with_action(
                         PanelAction::Params(ParamsAction::ShowAutomation(gpt.clone(), param_id.clone())),
+                    ));
+                    items.push(DropdownItem::new("Clear Automation").with_action(
+                        PanelAction::Params(ParamsAction::ClearAutomation(gpt.clone(), param_id.clone())),
                     ).with_separator());
                 }
                 for i in 0..manifold_core::MACRO_COUNT {

@@ -22,6 +22,161 @@ use crate::panels::viewport::SelectionRegion;
 const MAX_TEXTURE_WIDTH: usize = 8192; // doubled from 4096 for 2x HiDPI headroom
 const MIN_TEXTURE_WIDTH: usize = 4;
 
+/// The visible timing grid policy shared by bitmap layers, automation lanes,
+/// and the ruler. The policy is expressed in beats; callers choose their own
+/// screen mapping so logical and physical render targets stay aligned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingGridLineKind {
+    Bar,
+    Beat,
+    Eighth,
+    Sixteenth,
+}
+
+impl TimingGridLineKind {
+    pub const fn physical_width(self) -> f32 {
+        match self {
+            Self::Bar => 2.0,
+            Self::Beat | Self::Eighth | Self::Sixteenth => 1.0,
+        }
+    }
+
+    pub const fn color(self) -> Color32 {
+        match self {
+            Self::Bar => color::GRID_BAR_LINE,
+            Self::Beat => color::GRID_BEAT_LINE,
+            Self::Eighth => color::GRID_SUBDIVISION_LINE,
+            Self::Sixteenth => color::GRID_SIXTEENTH_LINE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimingGridPolicy {
+    pub subdivisions_per_beat: u32,
+    pub show_beat_lines: bool,
+    pub bar_skip: u32,
+}
+
+pub fn timing_grid_policy(logical_ppb: f32, beats_per_bar: f32) -> TimingGridPolicy {
+    let ppb = if logical_ppb.is_finite() {
+        logical_ppb.max(0.0)
+    } else {
+        0.0
+    };
+    let bpb = if beats_per_bar.is_finite() {
+        beats_per_bar.max(1.0)
+    } else {
+        1.0
+    };
+    let subdivisions_per_beat = if ppb * 0.25 >= 4.0 {
+        4
+    } else if ppb * 0.5 >= 6.0 {
+        2
+    } else {
+        1
+    };
+    let bar_px = ppb * bpb;
+    let bar_skip = if bar_px >= 8.0 {
+        1
+    } else if bar_px >= 4.0 {
+        2
+    } else if bar_px >= 2.0 {
+        4
+    } else {
+        8
+    };
+    TimingGridPolicy {
+        subdivisions_per_beat,
+        show_beat_lines: ppb >= 6.0,
+        bar_skip,
+    }
+}
+
+/// Allocation-free iterator over visible timing grid lines. `max_beat` is
+/// inclusive, matching the viewport/ruler convention.
+pub struct TimingGridLines {
+    beat: f32,
+    max_beat: f32,
+    step: f32,
+    beats_per_bar: f32,
+    policy: TimingGridPolicy,
+    remaining: usize,
+}
+
+pub fn timing_grid_lines(
+    min_beat: f32,
+    max_beat: f32,
+    logical_ppb: f32,
+    beats_per_bar: f32,
+) -> TimingGridLines {
+    let bpb = if beats_per_bar.is_finite() {
+        beats_per_bar.max(1.0)
+    } else {
+        1.0
+    };
+    let policy = timing_grid_policy(logical_ppb, bpb);
+    let divisions = policy.subdivisions_per_beat as f32;
+    let step = if !policy.show_beat_lines && policy.subdivisions_per_beat == 1 {
+        bpb * policy.bar_skip as f32
+    } else {
+        1.0 / divisions
+    };
+    let first = if min_beat.is_finite() {
+        (min_beat / step).floor() * step
+    } else {
+        f32::INFINITY
+    };
+    TimingGridLines {
+        beat: first,
+        max_beat,
+        step,
+        beats_per_bar: bpb,
+        policy,
+        remaining: 4096,
+    }
+}
+
+impl Iterator for TimingGridLines {
+    type Item = (f32, TimingGridLineKind);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.remaining > 0 && self.beat.is_finite() && self.beat <= self.max_beat + 0.0001 {
+            self.remaining -= 1;
+            let beat = self.beat;
+            self.beat += self.step;
+            if self.beat <= beat { self.beat = f32::INFINITY; }
+            let beat_in_bar = beat - (beat / self.beats_per_bar).floor() * self.beats_per_bar;
+            let is_bar = beat_in_bar.abs() < 0.001;
+            let is_beat = (beat - beat.round()).abs() < 0.001;
+            if is_bar {
+                let bar = (beat / self.beats_per_bar).round() as i64;
+                if bar.rem_euclid(self.policy.bar_skip as i64) != 0 {
+                    continue;
+                }
+                return Some((beat, TimingGridLineKind::Bar));
+            }
+            if is_beat {
+                if self.policy.show_beat_lines {
+                    return Some((beat, TimingGridLineKind::Beat));
+                }
+                continue;
+            }
+            return Some((
+                beat,
+                if self.policy.subdivisions_per_beat == 2
+                    || ((beat * 2.0) - (beat * 2.0).round()).abs() < 0.001
+                {
+                    TimingGridLineKind::Eighth
+                } else {
+                    TimingGridLineKind::Sixteenth
+                },
+            ));
+        }
+        None
+    }
+}
+
 /// Manages a single CPU pixel buffer for one layer track's grid lines.
 /// Drawn as a full-width quad UNDER the GPU clip bodies.
 pub struct LayerBitmapRenderer {
@@ -245,7 +400,13 @@ impl LayerBitmapRenderer {
 /// by `delta_px` (positive = scrolled right → shift left, expose the right
 /// strip; negative = the mirror) and clear the newly-exposed strip. `abs_delta`
 /// is `|delta_px|` and is assumed `0 < abs_delta < tex_w`.
-fn shift_buffer(buffer: &mut [Color32], tex_w: usize, tex_h: usize, delta_px: i32, abs_delta: usize) {
+fn shift_buffer(
+    buffer: &mut [Color32],
+    tex_w: usize,
+    tex_h: usize,
+    delta_px: i32,
+    abs_delta: usize,
+) {
     for y in 0..tex_h {
         let row = y * tex_w;
         if delta_px > 0 {
@@ -282,92 +443,33 @@ fn paint_grid_lines(
     if scaled_ppb < 1.0 || time_sig_numerator < 1 || paint_x0 >= paint_x1 {
         return;
     }
-
-    // Subdivision thresholds use logical ppb (matches GridOverlay exactly)
-    let eighth_pixel_width = logical_ppb / 2.0;
-    let sixteenth_pixel_width = logical_ppb / 4.0;
-    let subdivisions_per_beat: i32 = if sixteenth_pixel_width >= 4.0 {
-        4
-    } else if eighth_pixel_width >= 6.0 {
-        2
-    } else {
-        1
-    };
-    let show_beat_lines = logical_ppb >= 6.0;
-
-    // At very zoomed-out levels, bar lines themselves become too dense.
-    // Skip bars to maintain minimum spacing (adaptive multi-bar grid).
-    let beats_per_bar = time_sig_numerator as f32;
-    let bar_px = logical_ppb * beats_per_bar;
-    let bar_skip: u32 = if bar_px >= 8.0 {
-        1 // Show every bar
-    } else if bar_px >= 4.0 {
-        2 // Every 2 bars
-    } else if bar_px >= 2.0 {
-        4 // Every 4 bars
-    } else {
-        8 // Every 8 bars
-    };
-
-    let bar_color = color::GRID_BAR_LINE;
-    let beat_color = color::GRID_BEAT_LINE;
-    let eighth_color = color::GRID_SUBDIVISION_LINE;
-    let sixteenth_color = color::GRID_SIXTEENTH_LINE;
-
-    // Walk subdivisions across viewport (use scaled ppb for pixel spacing)
-    let subdiv_width = scaled_ppb / subdivisions_per_beat as f32;
+    let policy = timing_grid_policy(logical_ppb, time_sig_numerator as f32);
+    let subdiv_width = scaled_ppb / policy.subdivisions_per_beat as f32;
     if subdiv_width < 1.0 {
         return;
     }
 
-    // Find the first subdivision at or before viewport start
-    let step = 1.0 / subdivisions_per_beat as f32;
-    let first_subdiv_beat =
-        (viewport_min_beat * subdivisions_per_beat as f32).floor() / subdivisions_per_beat as f32;
-
-    let mut subdiv_beat = first_subdiv_beat;
-    loop {
+    let viewport_max_beat = viewport_min_beat + paint_x1 as f32 / scaled_ppb;
+    for (subdiv_beat, kind) in timing_grid_lines(
+        viewport_min_beat,
+        viewport_max_beat,
+        logical_ppb,
+        time_sig_numerator as f32,
+    ) {
         let px = (subdiv_beat - viewport_min_beat) * scaled_ppb;
         let col = px.round() as i32;
         if col >= paint_x1 as i32 {
             break;
         }
         if col < 0 || (col as usize) < paint_x0 {
-            subdiv_beat += step;
             continue;
         }
 
-        // Determine line type (Unity lines 386-413)
-        let beat_in_bar = subdiv_beat - (subdiv_beat / beats_per_bar).floor() * beats_per_bar;
-        let is_bar = beat_in_bar.abs() < 0.001 || (beat_in_bar - beats_per_bar).abs() < 0.001;
-        let is_beat = (subdiv_beat - subdiv_beat.round()).abs() < 0.001;
-
-        let (line_color, line_width) = if is_bar {
-            // At extreme zoom-out, skip intermediate bars
-            if bar_skip > 1 {
-                let bar_num = (subdiv_beat / beats_per_bar).round() as u32;
-                if !bar_num.is_multiple_of(bar_skip) {
-                    subdiv_beat += step;
-                    continue;
-                }
-            }
-            (bar_color, 2.min(tex_w as i32 - col))
-        } else if is_beat {
-            if !show_beat_lines {
-                subdiv_beat += step;
-                continue;
-            }
-            (beat_color, 1)
-        } else if subdivisions_per_beat == 4
-            && ((subdiv_beat * 2.0) - (subdiv_beat * 2.0).round()).abs() < 0.001
-        {
-            (eighth_color, 1)
-        } else {
-            (sixteenth_color, 1)
-        };
+        let line_color = kind.color();
+        let line_width = kind.physical_width() as i32;
 
         // Paint vertical column — direct write.
-        for lx in 0..line_width {
+        for lx in 0..line_width.min(tex_w as i32 - col) {
             let cx = col + lx;
             if cx >= paint_x1 as i32 {
                 break;
@@ -377,8 +479,6 @@ fn paint_grid_lines(
                 buffer[y * tex_w + cx] = line_color;
             }
         }
-
-        subdiv_beat += step;
     }
 }
 
@@ -491,5 +591,33 @@ mod tests {
         // At ppb=100, bar lines at beat 0 should be painted
         // Check pixel column 0 has something (bar line)
         assert_ne!(buf[0], Color32::TRANSPARENT);
+    }
+
+    #[test]
+    fn timing_grid_policy_matches_zoom_thresholds() {
+        assert_eq!(timing_grid_policy(5.0, 4.0).subdivisions_per_beat, 1);
+        assert_eq!(timing_grid_policy(12.0, 4.0).subdivisions_per_beat, 2);
+        assert_eq!(timing_grid_policy(16.0, 4.0).subdivisions_per_beat, 4);
+        assert_eq!(timing_grid_policy(1.0, 4.0).bar_skip, 2);
+    }
+
+    #[test]
+    fn timing_grid_marks_eighths_and_terminates_at_large_beats() {
+        assert_eq!(timing_grid_lines(0.5, 0.5, 12.0, 4.0).next(), Some((0.5, TimingGridLineKind::Eighth)));
+        assert!(timing_grid_lines(1.0e20, 1.0e21, 24.0, 4.0).count() <= 1);
+        assert_eq!(timing_grid_lines(f32::NAN, 4.0, 24.0, 4.0).count(), 0);
+    }
+
+    #[test]
+    fn timing_grid_lines_skips_intermediate_bars_consistently() {
+        let lines = timing_grid_lines(0.0, 16.0, 1.0, 4.0).collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            vec![
+                (0.0, TimingGridLineKind::Bar),
+                (8.0, TimingGridLineKind::Bar),
+                (16.0, TimingGridLineKind::Bar),
+            ]
+        );
     }
 }

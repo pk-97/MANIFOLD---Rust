@@ -471,14 +471,13 @@ impl TimelineViewportPanel {
         let (min_beat, max_beat) = self.visible_beat_range();
         let bpb = self.beats_per_bar as f32;
         let ppb = self.mapper.pixels_per_beat();
-        let subdiv = self.grid_subdivision();
+        let grid_policy = crate::bitmap_renderer::timing_grid_policy(ppb, bpb);
 
         // ── Tick step (controls which tick marks appear) ──
-        let tick_step = match subdiv {
-            GridSubdivision::Bar => bpb,
-            GridSubdivision::Beat => 1.0,
-            GridSubdivision::Eighth => 0.5,
-            GridSubdivision::Sixteenth => 0.25,
+        let tick_step = if !grid_policy.show_beat_lines && grid_policy.subdivisions_per_beat == 1 {
+            bpb
+        } else {
+            1.0 / grid_policy.subdivisions_per_beat as f32
         };
 
         // ── Label step (adaptive — ensures labels never overlap) ──
@@ -501,7 +500,7 @@ impl TimelineViewportPanel {
             bpb * n_bars
         };
 
-        let bar_skip = self.bar_skip();
+        let bar_skip = grid_policy.bar_skip;
         let start = (min_beat / tick_step).floor() * tick_step;
         let mut beat = start;
         let mut count = 0;
@@ -870,13 +869,12 @@ impl TimelineViewportPanel {
         let (min_beat, max_beat) = self.visible_beat_range();
         let bpb = self.beats_per_bar as f32;
         let ppb = self.mapper.pixels_per_beat();
-        let subdiv = self.grid_subdivision();
+        let grid_policy = crate::bitmap_renderer::timing_grid_policy(ppb, bpb);
 
-        let tick_step = match subdiv {
-            GridSubdivision::Bar => bpb,
-            GridSubdivision::Beat => 1.0,
-            GridSubdivision::Eighth => 0.5,
-            GridSubdivision::Sixteenth => 0.25,
+        let tick_step = if !grid_policy.show_beat_lines && grid_policy.subdivisions_per_beat == 1 {
+            bpb
+        } else {
+            1.0 / grid_policy.subdivisions_per_beat as f32
         };
 
         const MIN_LABEL_SPACING: f32 = 50.0;
@@ -893,7 +891,7 @@ impl TimelineViewportPanel {
             bpb * n_bars
         };
 
-        let bar_skip = self.bar_skip();
+        let bar_skip = grid_policy.bar_skip;
         let ruler_bottom = self.ruler_rect.y + self.ruler_rect.height;
         let start = (min_beat / tick_step).floor() * tick_step;
         let label_y = self.ruler_rect.y + 2.0;
