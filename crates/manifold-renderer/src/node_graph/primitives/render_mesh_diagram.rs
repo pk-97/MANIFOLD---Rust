@@ -377,8 +377,12 @@ impl Primitive for RenderMeshDiagram {
         // The capture follows the diagram pass in the same command stream,
         // after the authored graph has produced `current`. This is a GPU
         // storage-buffer copy; no CPU readback or CPU-authored trajectory is
-        // involved.
-        if vertex_count != 0 {
+        // involved. Trails off: skip the copy entirely — the ring is only
+        // read when trails render — and mark it stale so re-enabling starts
+        // clean instead of replaying pre-toggle positions.
+        if uniforms.trails == 0 {
+            self.history_reset = true;
+        } else if vertex_count != 0 {
             if self.history_reset {
                 self.history_head = 0;
                 self.history_len = 0;
