@@ -199,7 +199,14 @@ mod tests {
             label: "published",
             mip_levels: 1,
         });
-        registry.publish(LayerId::new("layer-a"), published);
+        let mut encoder = device.create_encoder("fallback proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            registry.begin_snapshots();
+            registry.publish_snapshot(&mut gpu, &LayerId::new("layer-a"), &published);
+            registry.finish_snapshots();
+        }
+        encoder.commit_and_wait_completed();
         // Unknown id → fallback (1×1), never a panic, param id untouched.
         let missing = registry.get(&LayerId::new("deleted-layer"));
         assert_eq!(missing.width, 1);

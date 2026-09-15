@@ -2576,11 +2576,15 @@ impl LayerCompositor {
 
     /// Snapshot outputs after all frame readers, including master effects.
     /// Leaf references are retained before folding removes grouped children.
+    /// Only layers read as a layer source since the last publish are
+    /// snapshotted — unreferenced layers cost nothing.
     fn publish_layer_skins(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         self.layer_skin_registry.ensure_fallback_cleared(gpu);
         self.layer_skin_registry.begin_snapshots();
         for (layer_index, texture) in &self.source_outputs_scratch {
-            if let Some(desc) = frame.find_layer(*layer_index) {
+            if let Some(desc) = frame.find_layer(*layer_index)
+                && self.layer_skin_registry.was_read(desc.layer_id)
+            {
                 self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, texture);
             }
         }
@@ -2588,7 +2592,7 @@ impl LayerCompositor {
             let Some(desc) = frame.find_layer(output.layer_index) else {
                 continue;
             };
-            if desc.is_group {
+            if desc.is_group && self.layer_skin_registry.was_read(desc.layer_id) {
                 self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, output.texture());
             }
         }
@@ -4232,12 +4236,28 @@ mod led_composite_pixel_tests {
         let device = crate::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
         let parent = LayerId::from("parent");
+        let child = LayerId::from("child");
+        // No consumer read anything: unreferenced layers are never
+        // snapshotted and serve the transparent-black fallback.
         render_layers(&mut comp, &device, &[
             group_spec("parent", 0),
             mirror_spec("child", 1, Some(parent.clone()), SRC),
         ], &[]);
-        for id in [parent, LayerId::from("child")] {
-            let texture = comp.layer_skin_registry.get(&id);
+        for id in [&parent, &child] {
+            let texture = comp.layer_skin_registry.get(id);
+            assert_eq!(texture.width, 1, "{id}: unreferenced layer was snapshotted");
+        }
+        assert!(comp.layer_skin_registry.is_empty());
+        // Simulate a consumer: the recorded reads make the next publish
+        // snapshot both the group and its folded child.
+        comp.layer_skin_registry.get(&parent);
+        comp.layer_skin_registry.get(&child);
+        render_layers(&mut comp, &device, &[
+            group_spec("parent", 0),
+            mirror_spec("child", 1, Some(parent.clone()), SRC),
+        ], &[]);
+        for id in [&parent, &child] {
+            let texture = comp.layer_skin_registry.get(id);
             assert_eq!(texture.width, COMP_W, "{id}: source lost during folding");
             let pixels = readback_raw_halves(&device, texture, COMP_W, COMP_H);
             assert_solid(&decode_halves(&pixels), "published source");
