@@ -1,6 +1,6 @@
 # Scene Render Mode — wireframe / solid / points as a scene modifier card
 
-**Status:** PROPOSED · 2026-09-15 · k3 (lead) — awaiting Peter's approval
+**Status:** SHIPPED — P1–P3 (2026-09-16, k3 lead / k27 lanes). Owed: VD bead — modifier round-trip verified L1, L3 journey open. Card rows + gates are the cited contract.
 **Prerequisites:** none — the file-authored scene-modifier regime this design
 rides is on main (`assets/scene-modifier-presets/SceneFog.json` et al.).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
