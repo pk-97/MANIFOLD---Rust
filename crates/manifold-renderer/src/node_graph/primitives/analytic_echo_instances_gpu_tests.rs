@@ -210,15 +210,18 @@ use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
 use crate::node_graph::primitive::PrimitiveSpec;
 
-/// BUG-x72p: a `BufferGather` input no longer forces Boundary — the fused
-/// buffer codegen emits the gathered kernel (the wire stays external, bound
-/// read-only, the body indexes it whole). What keeps the echo unfused on the
-/// live path is its OUTPUT CAPACITY: `ECHO_CAPACITY` x the input — a
-/// non-identity function the fresh-`dst` fused model can't size.
-/// `build_region` probes every member's `array_output_capacity` when a region
-/// has a gathered member and refuses anything that isn't the input minimum.
+/// BUG-orm4: the echo's multiplicative capacity no longer refuses fusion —
+/// the atom DECLARES it (`FusedOutputCapacity::MultipleOf { instances, 8 }`),
+/// so a region containing the echo composes its count to
+/// `8 x arrayLength(&src_0)` and the fused dispatch writes the whole echo
+/// stride. This pin guards both halves of that contract: the black-box
+/// capacity fn the probe verifies against (8x, overflow → None), and the
+/// WIDENED FUSED KERNEL — the count anchor must be the composed expression
+/// (not the identity min-over-externals), the fresh dst must carry the
+/// `// @fused_output_capacity:` marker so `node.wgsl_compute` sizes it to
+/// the same 8x count, and a numeric dispatch must write every echo slot.
 #[test]
-fn structured_modifier_echo_indexed_capacity_refuses_the_gather_identity_probe() {
+fn structured_modifier_echo_indexed_capacity_widens_the_fused_count() {
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![RegionNode {
@@ -246,13 +249,29 @@ fn structured_modifier_echo_indexed_capacity_refuses_the_gather_identity_probe()
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        // What `build_region` composes for a region whose output member
+        // declares MultipleOf { instances, ECHO_CAPACITY }.
+        output_capacity: Some(crate::node_graph::freeze::classify::CapacityExpr::Mul(
+            ECHO_CAPACITY,
+            Box::new(crate::node_graph::freeze::classify::CapacityExpr::Slot(0)),
+        )),
     };
-    // The gathered kernel IS expressible — fusion refusal is not the
-    // codegen's job anymore.
-    let g = generate_fused(&region).expect("the gathered echo kernel fuses");
+    let g = generate_fused(&region).expect("the widened gathered echo kernel fuses");
     assert!(
         naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
-        "fused gathered echo kernel parses:\n{}",
+        "fused widened echo kernel parses:\n{}",
+        g.wgsl
+    );
+    assert!(
+        g.wgsl.contains("let count = 8u * arrayLength(&src_0);"),
+        "the count anchor is the COMPOSED 8x expression — the identity \
+         min-over-externals would leave the echo stride undispatched:\n{}",
+        g.wgsl
+    );
+    assert!(
+        g.wgsl.contains("@fused_output_capacity: mul(8,s0)"),
+        "the dst sizing marker mirrors the composed expression so \
+         node.wgsl_compute sizes dst to the same 8x count:\n{}",
         g.wgsl
     );
     let prim = AnalyticEchoInstances::new();
@@ -260,7 +279,6 @@ fn structured_modifier_echo_indexed_capacity_refuses_the_gather_identity_probe()
     assert_eq!(
         node.array_output_capacity("instances", &Default::default(), &[("instances", 1009)]),
         Some(1009 * ECHO_CAPACITY),
-        "multiplicative capacity — the identity probe refuses the region, \
-         so the echo renders unfused (always correct)"
+        "multiplicative capacity — the black-box fn the region probe verifies against"
     );
 }

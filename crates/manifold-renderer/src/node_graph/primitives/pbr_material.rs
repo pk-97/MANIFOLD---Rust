@@ -954,23 +954,41 @@ impl Primitive for PbrMaterial {
         let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
         // RAYTRACING_DESIGN.md section 16 TL3.
         let translucency = ctx.scalar_or_param("translucency", 0.0);
-        // One folded per-map UV affine per family (G-P4). The closure keeps
-        // the 30 reads mechanical; identity defaults are exactly inert.
-        let uv_xf = |prefix: &str| -> [f32; 6] {
+        // One folded per-map UV affine per family (G-P4); identity defaults
+        // are exactly inert. The map families are a fixed set, so the lookup
+        // keys are static strs — building them with format! would allocate
+        // per frame per node on the render path.
+        const UV_XF_KEYS: [[&str; 6]; 5] = [
+            ["uv_m00", "uv_m01", "uv_m10", "uv_m11", "uv_tx", "uv_ty"],
             [
-                ctx.scalar_or_param(&format!("{prefix}m00"), 1.0),
-                ctx.scalar_or_param(&format!("{prefix}m01"), 0.0),
-                ctx.scalar_or_param(&format!("{prefix}m10"), 0.0),
-                ctx.scalar_or_param(&format!("{prefix}m11"), 1.0),
-                ctx.scalar_or_param(&format!("{prefix}tx"), 0.0),
-                ctx.scalar_or_param(&format!("{prefix}ty"), 0.0),
+                "nrm_uv_m00", "nrm_uv_m01", "nrm_uv_m10", "nrm_uv_m11", "nrm_uv_tx",
+                "nrm_uv_ty",
+            ],
+            [
+                "mr_uv_m00", "mr_uv_m01", "mr_uv_m10", "mr_uv_m11", "mr_uv_tx",
+                "mr_uv_ty",
+            ],
+            [
+                "occ_uv_m00", "occ_uv_m01", "occ_uv_m10", "occ_uv_m11", "occ_uv_tx",
+                "occ_uv_ty",
+            ],
+            [
+                "em_uv_m00", "em_uv_m01", "em_uv_m10", "em_uv_m11", "em_uv_tx",
+                "em_uv_ty",
+            ],
+        ];
+        let uv_xf = |keys: [&str; 6]| -> [f32; 6] {
+            [
+                ctx.scalar_or_param(keys[0], 1.0),
+                ctx.scalar_or_param(keys[1], 0.0),
+                ctx.scalar_or_param(keys[2], 0.0),
+                ctx.scalar_or_param(keys[3], 1.0),
+                ctx.scalar_or_param(keys[4], 0.0),
+                ctx.scalar_or_param(keys[5], 0.0),
             ]
         };
-        let base_color_uv_transform = uv_xf("uv_");
-        let normal_uv_transform = uv_xf("nrm_uv_");
-        let mr_uv_transform = uv_xf("mr_uv_");
-        let occlusion_uv_transform = uv_xf("occ_uv_");
-        let emissive_uv_transform = uv_xf("em_uv_");
+        let [base_color_uv_transform, normal_uv_transform, mr_uv_transform, occlusion_uv_transform, emissive_uv_transform] =
+            UV_XF_KEYS.map(uv_xf);
 
         // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
         // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
@@ -997,19 +1015,25 @@ impl Primitive for PbrMaterial {
                 _ => manifold_gpu::GpuFilterMode::Linear,
             }
         };
-        let map_sampler = |prefix: &str| -> MapSamplerDesc {
+        // Same static-key treatment as UV_XF_KEYS above: 20 more format!
+        // allocations per frame otherwise.
+        const SAMPLER_KEYS: [[&str; 4]; 5] = [
+            ["wrap_u", "wrap_v", "mag_filter", "min_filter"],
+            ["nrm_wrap_u", "nrm_wrap_v", "nrm_mag_filter", "nrm_min_filter"],
+            ["mr_wrap_u", "mr_wrap_v", "mr_mag_filter", "mr_min_filter"],
+            ["occ_wrap_u", "occ_wrap_v", "occ_mag_filter", "occ_min_filter"],
+            ["em_wrap_u", "em_wrap_v", "em_mag_filter", "em_min_filter"],
+        ];
+        let map_sampler = |keys: [&str; 4]| -> MapSamplerDesc {
             MapSamplerDesc {
-                wrap_u: wrap_mode(enum_or(&format!("{prefix}wrap_u"))),
-                wrap_v: wrap_mode(enum_or(&format!("{prefix}wrap_v"))),
-                mag_filter: filter_mode(enum_or(&format!("{prefix}mag_filter"))),
-                min_filter: filter_mode(enum_or(&format!("{prefix}min_filter"))),
+                wrap_u: wrap_mode(enum_or(keys[0])),
+                wrap_v: wrap_mode(enum_or(keys[1])),
+                mag_filter: filter_mode(enum_or(keys[2])),
+                min_filter: filter_mode(enum_or(keys[3])),
             }
         };
-        let base_color_sampler = map_sampler("");
-        let normal_sampler = map_sampler("nrm_");
-        let mr_sampler = map_sampler("mr_");
-        let occlusion_sampler = map_sampler("occ_");
-        let emissive_sampler = map_sampler("em_");
+        let [base_color_sampler, normal_sampler, mr_sampler, occlusion_sampler, emissive_sampler] =
+            SAMPLER_KEYS.map(map_sampler);
 
         let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],

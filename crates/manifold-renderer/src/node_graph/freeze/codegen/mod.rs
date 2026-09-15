@@ -21,6 +21,7 @@ mod uniforms;
 mod entry_points;
 mod standalone;
 mod fused;
+mod fused_buffer;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 #[cfg(test)]

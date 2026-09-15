@@ -46,7 +46,7 @@ use manifold_gpu::{GpuAddressMode, GpuBinding, GpuComputePipeline, GpuSampler, G
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
-use crate::node_graph::freeze::classify::FusionKind;
+use crate::node_graph::freeze::classify::{CapacityExpr, FusionKind};
 use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
@@ -180,6 +180,16 @@ pub struct WgslCompute {
     /// integrators, which dispatch only live particles. The kernel carries the
     /// matching in-bounds guard, so this is purely a perf cap.
     dispatch_count_param: Option<String>,
+    /// `// @fused_output_capacity: <expr>` marker (BUG-orm4, emitted by the
+    /// fused buffer codegen when a region member declared
+    /// `FusedOutputCapacity::MultipleOf`): the fresh `@fused_output` dst's
+    /// capacity expression over the array input slots. `array_output_capacity`
+    /// evaluates it over the wired input capacities instead of the
+    /// min-over-inputs default, sizing dst exactly to the kernel's (widened)
+    /// dispatch count — the default would cut the multiplied range (mirror
+    /// half, echo stride) out of the buffer. `None` for identity regions
+    /// (no marker; the default IS the legacy min anchor).
+    fused_output_capacity: Option<CapacityExpr>,
     /// `// @derived_uniform_member:` markers (D7/P0), resolved against the
     /// uniform layout: one per fused member with non-empty `derived_uniforms`.
     /// `evaluate()` refreshes each frame via `derived_uniform_registry::recompute`
@@ -361,6 +371,7 @@ impl WgslCompute {
             source_pure: false,
             last_reset_trigger: None,
             dispatch_count_param: None,
+            fused_output_capacity: None,
             derived_uniform_members: Vec::new(),
             pipeline: None,
             sampler: None,
@@ -456,6 +467,7 @@ impl WgslCompute {
         self.reset_gated = parsed.reset_gated;
         self.source_pure = parsed.source_pure;
         self.dispatch_count_param = parsed.dispatch_count_param;
+        self.fused_output_capacity = parsed.fused_output_capacity;
         self.derived_uniform_members = parsed.derived_uniform_members;
         // P7/D8: rebuild the leaked access/precision views from the source's
         // markers, aligned to the texture inputs in declaration order. No
@@ -637,6 +649,9 @@ struct ParsedShader {
     reset_gated: bool,
     source_pure: bool,
     dispatch_count_param: Option<String>,
+    /// Resolved `// @fused_output_capacity:` marker (BUG-orm4). See
+    /// [`WgslCompute::fused_output_capacity`].
+    fused_output_capacity: Option<CapacityExpr>,
     /// Resolved `// @derived_uniform_member:` markers (D7/P0). See
     /// [`DerivedUniformMember`].
     derived_uniform_members: Vec<DerivedUniformMember>,
@@ -716,6 +731,10 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // `// @dispatch_count_param: <field>`: the named uniform param caps the
     // array dispatch grid at the live element count (fused buffer codegen).
     let dispatch_count_param = extract_dispatch_count_param(source);
+    // BUG-orm4: `// @fused_output_capacity: <expr>` — the fresh dst's capacity
+    // expression over the array input slots (fused buffer codegen, widened
+    // regions only). An unparseable payload fails closed (treated as absent).
+    let fused_output_capacity = extract_fused_output_capacity(source);
     // D7/P0: `// @camera_external:` / `// @derived_uniform_member:` markers —
     // see `emit_derived_uniform_markers` in `freeze/codegen.rs` for what emits
     // them and the resolution block below for what consumes them.
@@ -1074,6 +1093,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         reset_gated,
         source_pure,
         dispatch_count_param,
+        fused_output_capacity,
         derived_uniform_members,
     })
 }
@@ -1530,6 +1550,21 @@ fn extract_dispatch_count_param(source: &str) -> Option<String> {
     let stripped = strip_block_comments(source);
     stripped.lines().find_map(|line| match Marker::parse(line) {
         Some(Marker::DispatchCountParam { field }) => Some(field),
+        _ => None,
+    })
+}
+
+/// Scan for a `// @fused_output_capacity: <expr>` marker (BUG-orm4, emitted by
+/// the fused buffer codegen when a region member declared
+/// `FusedOutputCapacity::MultipleOf`): the fresh `@fused_output` dst's capacity
+/// expression over the array input slots. `Marker::parse` already rejects a
+/// malformed payload (`None`), which this scan then treats as absent — the
+/// loader's min-over-inputs default applies, which for a widened kernel is a
+/// loud under-size at the allocation audit, not a silent one.
+fn extract_fused_output_capacity(source: &str) -> Option<CapacityExpr> {
+    let stripped = strip_block_comments(source);
+    stripped.lines().find_map(|line| match Marker::parse(line) {
+        Some(Marker::FusedOutputCapacity { expr }) => Some(expr),
         _ => None,
     })
 }
@@ -2000,6 +2035,15 @@ impl EffectNode for WgslCompute {
             matches!(&b.kind, BindingKind::StorageArrayWriteOut { port, .. } if port == port_name)
         });
         if is_fused_out {
+            // BUG-orm4: a widened region (a member declared
+            // `FusedOutputCapacity::MultipleOf`) carries its composed capacity
+            // expression in the `// @fused_output_capacity:` marker — evaluate
+            // it over the wired input capacities so dst is sized exactly to
+            // the kernel's widened dispatch count. No marker = identity: the
+            // min-over-inputs default IS the legacy count anchor.
+            if let Some(expr) = &self.fused_output_capacity {
+                return expr.eval(input_capacities);
+            }
             return input_capacities.iter().map(|(_, c)| *c).min();
         }
         // Otherwise fall back to the trait default (explicit `max_capacity` param).
@@ -2581,6 +2625,47 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             cap,
             Some(4),
             "dst sized to the smallest input (no never-written tail), not max (BUG-011)",
+        );
+    }
+
+    /// BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity): the
+    /// `// @fused_output_capacity:` marker widens the fresh dst sizing past
+    /// the min-over-inputs default. Without it the loader would allocate
+    /// `min` and the widened kernel would write the mirrored tail out of the
+    /// buffer.
+    #[test]
+    fn fused_output_capacity_marker_widens_dst_sizing() {
+        let src = r#"
+struct P { a: vec4<f32>, b: vec4<f32>, };
+struct Params { t: f32, };
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<P>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<P>;
+// @fused_output_capacity: mul(2,s0)
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= 2u * arrayLength(&src_0) { return; }
+    _ = params.t;
+    dst[idx] = src_0[idx % arrayLength(&src_0)];
+}
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed, "widened kernel must introspect:\n{src}");
+        let out_port = node
+            .outputs
+            .iter()
+            .find(|o| matches!(o.ty, PortType::Array(_)))
+            .expect("the @fused_output storage array is an Array output port")
+            .name
+            .clone();
+        let cap = node.array_output_capacity(&out_port, &Default::default(), &[("src_0", 7)]);
+        assert_eq!(
+            cap,
+            Some(14),
+            "dst sized to the marker expression (2x the gathered input), not the min default"
         );
     }
 

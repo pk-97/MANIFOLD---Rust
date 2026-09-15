@@ -142,6 +142,22 @@ pub trait PrimitiveSpec: Send {
     /// also defaults to `Coincident`.
     const INPUT_ACCESS: &'static [crate::node_graph::freeze::classify::InputAccess] = &[];
 
+    /// DECLARED fused output-capacity shape (BUG-orm4) — how the atom's array
+    /// output capacity relates to its array input capacities when it fuses
+    /// into a buffer region. The default [`FusedOutputCapacity::MinInputs`]
+    /// is every identity buffer atom (out capacity = min over wired array
+    /// input capacities). An atom whose output is a fixed multiple of one
+    /// gathered input (reflect_array's 2x mirror, analytic_echo_instances'
+    /// 8x echo stride) declares `MultipleOf` — the region builder composes it
+    /// into the fused count anchor so the widened output range is actually
+    /// dispatched and written. The declaration is verified against the
+    /// black-box `array_output_capacity` at region build; a mismatch refuses
+    /// the region (renders unfused, always correct). Set via the macro's
+    /// `output_capacity:` field; the named port must be the atom's only
+    /// array input and tagged [`InputAccess::BufferGather`].
+    const FUSED_OUTPUT_CAPACITY: crate::node_graph::freeze::classify::FusedOutputCapacity =
+        crate::node_graph::freeze::classify::FusedOutputCapacity::MinInputs;
+
     /// Names of texture inputs whose CONSUMPTION differentiates or
     /// horizon-tests the value — a finite-difference gradient, a raymarch
     /// penetration test, a thin-lens CoC derivation — where fp16's ~10-bit
@@ -463,6 +479,14 @@ pub trait Primitive: PrimitiveSpec {
     /// count instead of the buffer capacity. Default: `None`.
     fn fused_dispatch_count_param(&self) -> Option<&'static str> {
         None
+    }
+
+    /// Mirror of
+    /// [`EffectNode::fused_output_capacity`](crate::node_graph::effect_node::EffectNode::fused_output_capacity).
+    /// Default forwards the [`PrimitiveSpec::FUSED_OUTPUT_CAPACITY`]
+    /// declaration.
+    fn fused_output_capacity(&self) -> crate::node_graph::freeze::classify::FusedOutputCapacity {
+        Self::FUSED_OUTPUT_CAPACITY
     }
 
     /// Mirror of
@@ -791,6 +815,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
         P::INPUT_ACCESS
     }
+    fn fused_output_capacity(&self) -> crate::node_graph::freeze::classify::FusedOutputCapacity {
+        P::FUSED_OUTPUT_CAPACITY
+    }
     fn precision_critical_inputs(&self) -> &'static [&'static str] {
         P::PRECISION_CRITICAL_INPUTS
     }
@@ -925,6 +952,7 @@ macro_rules! primitive {
         $( param_contracts: [ $(($contract_param:literal, $contract_expr:expr)),* $(,)? ], )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
+        $( output_capacity: $out_cap:expr, )?
         $( precision_critical: [ $($prec_crit:literal),* $(,)? ], )?
         $( stencil_fetch: $stencil:literal, )?
         $( wgsl_specialization: [ $(($tok:literal, $tok_param:literal)),* $(,)? ], )?
@@ -990,6 +1018,8 @@ macro_rules! primitive {
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
+            $( const FUSED_OUTPUT_CAPACITY: $crate::node_graph::freeze::classify::FusedOutputCapacity =
+                $out_cap; )?
             $( const PRECISION_CRITICAL_INPUTS: &'static [&'static str] =
                 &[ $($prec_crit),* ]; )?
             $( const STENCIL_FETCH: bool = $stencil; )?

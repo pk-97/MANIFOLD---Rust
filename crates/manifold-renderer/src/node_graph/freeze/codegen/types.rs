@@ -1,5 +1,5 @@
 use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
+use crate::node_graph::freeze::classify::{CapacityExpr, FusionKind, InputAccess};
 use crate::node_graph::parameters::{ParamDef, ParamType};
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, NodeInput, NodeOutput, PortType};
 
@@ -473,6 +473,18 @@ pub struct FusionRegion<'a> {
     /// shape is its WGSL text). Zero for every region with no camera-derived
     /// member — the overwhelmingly common case, byte-identical to prior codegen.
     pub camera_externals: usize,
+    /// BUFFER regions only (BUG-orm4): a composed output-capacity expression
+    /// over the ARRAY external slots, resolved by `build_region` when a member
+    /// declares `FusedOutputCapacity::MultipleOf`. `Some(expr)` replaces the
+    /// legacy count anchor (`min(arrayLength(&src_e), …)`) with `expr`'s WGSL
+    /// rendering — the widened dispatch count that actually writes the
+    /// multiplied range (the mirror half, the echo stride) — and is mirrored
+    /// to `node.wgsl_compute` via the `// @fused_output_capacity:` marker so
+    /// the fresh `dst` is sized to the same count. `None` = identity, the
+    /// pre-BUG-orm4 anchor, byte-identical. Refused combination: `Some` +
+    /// [`Self::in_place_alias`] (writing a widened range back over the shorter
+    /// loop buffer would corrupt it).
+    pub output_capacity: Option<CapacityExpr>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
