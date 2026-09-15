@@ -9,13 +9,11 @@
 // ABI (buffer standalone codegen): the `in` port is a BufferGather input —
 // this body indexes buf_in itself (slot idx % cap; a coincident pre-read
 // would run off the end of the smaller input array). GATHER form: the atom
-// ADMITS into buffer regions (the gathered wire stays external, bound
-// `src_<slot>`), but `build_region` probes every member's array output
-// capacity and refuses a non-identity one — this atom's fixed 2x output
-// capacity is exactly that, so its regions still render unfused. Standalone-
-// only until the compiler grows a non-coincident output capacity (the
-// output-capacity-multiplier follow-on) — tracked debt, not a quiet
-// exemption.
+// fuses into buffer regions, declaring FusedOutputCapacity::MultipleOf
+// { input: "in", factor: 2 } (BUG-orm4) — the region's count composes to
+// 2 x the input length and the fused dispatch writes both halves; the body
+// is bounds-safe at ANY idx (the modulo + the idx < in_cap branch), which is
+// what makes the widened count sound.
 //
 // Marker (D5): rot.w = mirror plane component + 1 on mirrored slots
 // (1 = x, 2 = y, 3 = z), 0 on originals. The plane is the same for +axis

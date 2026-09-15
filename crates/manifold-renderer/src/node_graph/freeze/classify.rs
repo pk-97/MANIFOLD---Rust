@@ -139,6 +139,154 @@ pub enum InputAccess {
     BufferIndex,
 }
 
+/// A buffer atom's DECLARED fused output-capacity shape (BUG-orm4,
+/// output-capacity-multiplier): how many output elements the atom produces
+/// per element of its array inputs, as a small closed expression the region
+/// builder can compose, the codegen can emit into the fused count anchor, and
+/// `node.wgsl_compute` can mirror into the fresh `dst` sizing. Declared via
+/// the `primitive!` macro's `output_capacity:` field; the region builder
+/// still PROBES the black-box [`EffectNode::array_output_capacity`] against
+/// the declared shape on synthetic capacities and refuses on any disagreement
+/// — the declaration selects the expression, the probe keeps it honest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusedOutputCapacity {
+    /// One output element per dispatched element: the output capacity is the
+    /// minimum over the member's wired array input capacities (every shipped
+    /// identity buffer atom: in-capacity or min-clamped). The fused count
+    /// anchor is `min(arrayLength(&src_e), …)` over the region's array
+    /// externals — the pre-BUG-orm4 behavior, byte-identical.
+    MinInputs,
+    /// Output capacity is `factor` × the named array input's capacity
+    /// (reflect_array's 2x mirror half, analytic_echo_instances' 8x echo
+    /// stride). The named port MUST be tagged [`InputAccess::BufferGather`]
+    /// and be the member's ONLY array input: the body indexes the input whole
+    /// at self-computed indices (its own modulo/division guards keep any
+    /// dispatched idx in bounds), so widening the dispatch count past the
+    /// input's length is safe — a coincident pre-read at the widened `idx`
+    /// would run off the end.
+    MultipleOf { input: &'static str, factor: u32 },
+}
+
+/// A region output's capacity expression over the ARRAY external slots,
+/// composed at `build_region` from the members' declared
+/// [`FusedOutputCapacity`] shapes (identity members compose `Min` over their
+/// input sources; a `MultipleOf` member composes `Mul(factor, Slot)` over its
+/// gathered external). Emitted verbatim into the fused kernel's count anchor
+/// and mirrored to `node.wgsl_compute` through the
+/// `// @fused_output_capacity:` marker so the fresh `dst` buffer is sized
+/// EXACTLY to the kernel's dispatch count — a widened region whose dst fell
+/// back to the min-over-inputs default would leave the mirrored tail outside
+/// the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapacityExpr {
+    /// `min(...)` over the child expressions — an identity member's capacity
+    /// is the minimum over its array inputs' capacities. A single child
+    /// renders as the child itself (matches the legacy single-external text).
+    Min(Vec<CapacityExpr>),
+    /// `factor` × the child — a `MultipleOf` member's declared shape.
+    Mul(u32, Box<CapacityExpr>),
+    /// The live length of ARRAY external slot `usize` (`arrayLength(&src_n)`).
+    Slot(usize),
+}
+
+impl CapacityExpr {
+    /// Render as the WGSL count-anchor expression (u32 arithmetic,
+    /// `arrayLength(&src_n)` leaves, left-folded `min` — the same fold the
+    /// legacy identity anchor used, so a plain min-over-slots tree renders
+    /// byte-identically to pre-BUG-orm4 text).
+    pub fn to_wgsl(&self) -> String {
+        match self {
+            CapacityExpr::Slot(n) => format!("arrayLength(&src_{n})"),
+            CapacityExpr::Mul(f, x) => format!("{f}u * {}", x.to_wgsl()),
+            CapacityExpr::Min(v) => {
+                let mut it = v.iter();
+                let first = it.next().map(CapacityExpr::to_wgsl).unwrap_or_default();
+                it.fold(first, |acc, e| format!("min({acc}, {})", e.to_wgsl()))
+            }
+        }
+    }
+
+    /// Render as the `// @fused_output_capacity:` marker payload — a compact
+    /// grammar (`min(<e>,…)`, `mul(<u32>,<e>)`, `s<slot>`), single-sourced
+    /// with [`Self::parse_marker_payload`]; `Marker::emit`/`Marker::parse`
+    /// delegate to these so the wire grammar lives in one place.
+    pub fn to_marker_payload(&self) -> String {
+        match self {
+            CapacityExpr::Slot(n) => format!("s{n}"),
+            CapacityExpr::Mul(f, x) => format!("mul({f},{})", x.to_marker_payload()),
+            CapacityExpr::Min(v) => {
+                let inner: Vec<String> = v.iter().map(CapacityExpr::to_marker_payload).collect();
+                format!("min({})", inner.join(","))
+            }
+        }
+    }
+
+    /// Parse a [`Self::to_marker_payload`] rendering back (the marker
+    /// consumer's half of the single-sourced grammar). `None` on any
+    /// malformed or trailing input — introspection then treats the marker as
+    /// absent (fail closed: the loader refuses the unsized output loudly).
+    pub fn parse_marker_payload(text: &str) -> Option<CapacityExpr> {
+        let (expr, rest) = Self::parse_payload_node(text)?;
+        rest.trim().is_empty().then_some(expr)
+    }
+
+    /// Parse one node, returning the expression and the unconsumed remainder.
+    fn parse_payload_node(text: &str) -> Option<(CapacityExpr, &str)> {
+        let text = text.trim_start();
+        if let Some(rest) = text.strip_prefix("min(") {
+            let mut children = Vec::new();
+            let mut rest = rest;
+            loop {
+                let (child, after) = Self::parse_payload_node(rest)?;
+                children.push(child);
+                let after = after.trim_start();
+                if let Some(next) = after.strip_prefix(',') {
+                    rest = next;
+                } else if let Some(next) = after.strip_prefix(')') {
+                    return Some((CapacityExpr::Min(children), next));
+                } else {
+                    return None;
+                }
+            }
+        } else if let Some(rest) = text.strip_prefix("mul(") {
+            let (f_str, rest) = rest.split_once(',')?;
+            let factor: u32 = f_str.trim().parse().ok()?;
+            let (child, rest) = Self::parse_payload_node(rest)?;
+            let rest = rest.trim_start().strip_prefix(')')?;
+            Some((CapacityExpr::Mul(factor, Box::new(child)), rest))
+        } else if let Some(rest) = text.strip_prefix('s') {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                return None;
+            }
+            let n: usize = digits.parse().ok()?;
+            Some((CapacityExpr::Slot(n), &rest[digits.len()..]))
+        } else {
+            None
+        }
+    }
+
+    /// Evaluate over named input capacities (`("src_0", cap), …` — the
+    /// `array_output_capacity` convention). `None` when a referenced slot has
+    /// no wired capacity or a multiplication overflows (mirroring
+    /// `analytic_echo_instances`' own overflow → `None` contract).
+    pub fn eval(&self, input_capacities: &[(&str, u32)]) -> Option<u32> {
+        match self {
+            CapacityExpr::Slot(n) => {
+                let name = format!("src_{n}");
+                input_capacities.iter().find(|(p, _)| *p == name).map(|(_, c)| *c)
+            }
+            CapacityExpr::Mul(f, x) => x.eval(input_capacities)?.checked_mul(*f),
+            CapacityExpr::Min(v) => v
+                .iter()
+                .map(|e| e.eval(input_capacities))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .min(),
+        }
+    }
+}
+
 /// Why a Boundary primitive is excused from the codegen-path mandate
 /// (`docs/ADDING_PRIMITIVES.md` section "The codegen path is mandatory",
 /// `docs/GRAPH_TOOLING_DESIGN.md` D4). A closed enum: every currently-Boundary

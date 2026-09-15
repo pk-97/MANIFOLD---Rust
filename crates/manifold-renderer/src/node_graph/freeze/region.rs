@@ -45,7 +45,7 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 
 use crate::node_graph::PrimitiveRegistry;
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
-use crate::node_graph::freeze::classify::InputAccess;
+use crate::node_graph::freeze::classify::{CapacityExpr, FusedOutputCapacity, InputAccess};
 use crate::node_graph::freeze::codegen::param_wgsl_type;
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
@@ -214,6 +214,19 @@ pub struct Region {
     /// read (recomputed per tap corner instead of round-tripped through a
     /// canvas texture). Empty for every non-stencil region.
     pub virtual_chains: Vec<VirtualChain>,
+    /// BUFFER regions only: the composed output-capacity expression over the
+    /// ARRAY external slots (BUG-orm4). `None` = identity (the fused count
+    /// anchors on `min(arrayLength(&src_e), …)` over every array external —
+    /// every pre-BUG-orm4 region). `Some(expr)` = a member declared
+    /// [`FusedOutputCapacity::MultipleOf`] and the region's whole output
+    /// capacity composes to `expr` (e.g. `Mul(2, Slot(0))` for a
+    /// reflect_array-headed region) — the codegen emits `expr` as the count
+    /// anchor so the widened range (the mirrored half, the echo stride) is
+    /// actually dispatched and written, and mirrors it to
+    /// `node.wgsl_compute` through the `// @fused_output_capacity:` marker so
+    /// the fresh `dst` is sized to match. Resolved in `build_region`; texture
+    /// regions keep `None`.
+    pub output_capacity: Option<CapacityExpr>,
 }
 
 /// Partition a flattened def into its maximal pointwise-fusion regions. Returns
@@ -1765,23 +1778,54 @@ fn build_region(
         return Err("fan-out buffer region (v1 is single-output)");
     }
 
-    // BufferGather admission (BUG-x72p): a gathered array external joins the
-    // region, so the fused count — min over the ARRAY externals, which is also
-    // how `node.wgsl_compute` sizes the fresh `dst` — must be EVERY member's
-    // unfused dispatch count. That holds iff each member's array output
-    // capacity is the IDENTITY of its input capacities (one output element per
-    // dispatched element — every shipped buffer atom: in-capacity or
-    // min-clamped). The known non-identity atom is reflect_array (2x input
-    // capacity — the mirrored half): fused, its register would silently cover
-    // only the passthrough range. Probe each member with distinct ascending
-    // synthetic capacities and refuse anything that isn't the minimum — fail
-    // closed, the region renders unfused.
+    // BufferGather output-capacity admission (BUG-x72p + BUG-orm4): a gathered
+    // array external joins the region, so the fused count — min over the ARRAY
+    // externals, which is also how `node.wgsl_compute` sizes the fresh `dst`
+    // — must be EVERY member's unfused dispatch count. Each member DECLARES
+    // its capacity shape (`FusedOutputCapacity`, via the `primitive!`
+    // `output_capacity:` field): `MinInputs` (identity — one output element
+    // per dispatched element, every shipped identity buffer atom) composes a
+    // `Min` over its input sources; `MultipleOf { input, factor }`
+    // (reflect_array's 2x mirror, analytic_echo_instances' 8x stride)
+    // composes `Mul(factor, Slot(e))` over its gathered external and WIDENS
+    // the region's count so the mirrored/echoed range is actually dispatched
+    // and written. The declaration is verified against the black-box
+    // `array_output_capacity` on distinct ascending synthetic capacities —
+    // the declaration selects the expression, the probe keeps it honest; a
+    // disagreement (e.g. ordered_recon_mesh's conditional identity, `Some`
+    // only when `in` == `reference`) refuses the region, which renders
+    // unfused (always correct). Fail closed at every step.
+    let mut output_capacity: Option<CapacityExpr> = None;
     if is_buffer
         && members
             .iter()
             .any(|m| m.input_access.contains(&InputAccess::BufferGather))
     {
-        for &doc_id in &order {
+        // Per-member composed capacity expression, indexed by POSITION in
+        // `order` (topo order — a member's register producers are always
+        // earlier, so composition is a single forward pass).
+        let mut member_expr: Vec<Option<CapacityExpr>> = vec![None; order.len()];
+        // Doc ids of the region's MultipleOf members (the widened gates
+        // below admit gathered reads only on these members' named inputs).
+        let mut multiplier_docs: Vec<u32> = Vec::new();
+        let mut widened = false;
+        // Synthetic capacities for the probe: one DISTINCT ASCENDING value
+        // per external SLOT (`CapacityExpr::Slot(e)` renders as `src_<e>`,
+        // the same key `eval` looks up). Slot-distinct catches the non-min
+        // selector families (max, conditional) the way input-distinct probes
+        // did pre-BUG-orm4.
+        let slot_synthetics: Vec<(String, u32)> = externals
+            .iter()
+            .enumerate()
+            .map(|(e, _)| (format!("src_{e}"), 1009u32.saturating_add(1000 * e as u32)))
+            .collect();
+        let slot_syn_refs: Vec<(&str, u32)> =
+            slot_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        for (pos, &doc_id) in order.iter().enumerate() {
+            let member = members
+                .iter()
+                .find(|m| m.doc_id == doc_id)
+                .ok_or("member id missing from members")?;
             let node = def
                 .nodes
                 .iter()
@@ -1800,20 +1844,169 @@ fn build_region(
                 .find(|o| matches!(o.ty, PortType::Array(_)))
                 .map(|o| o.name.as_ref())
                 .ok_or("member has no array output")?;
-            // Distinct ascending probes: the identity/min family answers the
-            // FIRST probe (the minimum); a multiplier (2x) or a wider selector
-            // (max) answers something larger and is refused.
-            let caps: Vec<(&str, u32)> = arr_inputs
-                .iter()
-                .enumerate()
-                .map(|(i, name)| (*name, 1009u32.saturating_add(1000 * i as u32)))
-                .collect();
-            let identity = caps.first().map(|(_, c)| *c);
-            match constructed.array_output_capacity(out_port, &Default::default(), &caps) {
-                Some(c) if Some(c) == identity => {}
-                _ => return Err("non-identity array output capacity in a gathered region"),
+            // The member's array input SOURCES, aligned to `arr_inputs`
+            // (buffer members resolve array inputs first — see the codegen's
+            // input-shape comment).
+            let sources: Vec<&RegionInput> = member.inputs.iter().take(arr_inputs.len()).collect();
+
+            let declared = constructed.fused_output_capacity();
+            let expr = match declared {
+                FusedOutputCapacity::MinInputs => {
+                    // Identity: min over the member's own array input
+                    // capacities — external slots read directly, member
+                    // registers composing the producer's expression. A unary
+                    // min collapses to the child itself (a single-source
+                    // identity member inherits its producer's shape
+                    // unchanged — e.g. jitter-after-reflect composes to the
+                    // reflect's Mul, not Min([Mul])).
+                    let mut children: Vec<CapacityExpr> = Vec::with_capacity(sources.len());
+                    for src in &sources {
+                        match src {
+                            RegionInput::External(e) => children.push(CapacityExpr::Slot(*e)),
+                            RegionInput::Member(producer) => {
+                                let ppos = order
+                                    .iter()
+                                    .position(|id| id == producer)
+                                    .ok_or("register producer not a region member")?;
+                                children.push(
+                                    member_expr[ppos]
+                                        .as_ref()
+                                        .ok_or("register producer lacks a capacity expression")?
+                                        .clone(),
+                                );
+                            }
+                            // A BufferGather source never unions (the finder
+                            // keeps the producer external), and unwired array
+                            // inputs don't fuse — reaching either is a finder
+                            // bug; refuse rather than guess.
+                            _ => return Err("identity member with a non-register array input"),
+                        }
+                    }
+                    match children.len() {
+                        1 => children.pop().expect("one child"),
+                        _ => CapacityExpr::Min(children),
+                    }
+                }
+                FusedOutputCapacity::MultipleOf { input, factor } => {
+                    // The named port must be the member's ONLY array input,
+                    // tagged BufferGather, wired to an external slot: the
+                    // body indexes that array whole at self-computed indices
+                    // (its own guards keep any dispatched idx in bounds), and
+                    // the widened count is factor × the slot's live length.
+                    if arr_inputs.len() != 1 || arr_inputs.first() != Some(&input) {
+                        return Err("MultipleOf names a port that is not the member's only array input");
+                    }
+                    match sources.first() {
+                        Some(RegionInput::External(e))
+                            if member.input_access.first() == Some(&InputAccess::BufferGather) =>
+                        {
+                            widened = true;
+                            multiplier_docs.push(doc_id);
+                            CapacityExpr::Mul(factor, Box::new(CapacityExpr::Slot(*e)))
+                        }
+                        _ => return Err("MultipleOf input is not a gathered external"),
+                    }                }
+            };
+
+            // Probe honesty: the black-box capacity fn must AGREE with the
+            // composed expression on the synthetic slot capacities — the
+            // declaration selects the expression, the probe keeps it honest.
+            // The black-box probe is keyed by PORT NAME: a port fed by an
+            // external slot gets that slot's synthetic; a port fed by a
+            // member register gets the producer's composed synthetic. A
+            // conditional identity (ordered_recon_mesh: `Some` only when
+            // `in` == `reference`) answers None on distinct slots and
+            // refuses here.
+            let port_caps: Vec<(&str, u32)> = {
+                let mut caps = Vec::with_capacity(sources.len());
+                for (name, src) in arr_inputs.iter().zip(sources.iter()) {
+                    let cap = match src {
+                        RegionInput::External(e) => slot_syn_refs
+                            .get(*e)
+                            .map(|(_, c)| *c)
+                            .ok_or("array input names an unknown external slot")?,
+                        RegionInput::Member(producer) => {
+                            let ppos = order
+                                .iter()
+                                .position(|id| id == producer)
+                                .ok_or("register producer not a region member")?;
+                            member_expr[ppos]
+                                .as_ref()
+                                .ok_or("register producer lacks a capacity expression")?
+                                .eval(&slot_syn_refs)
+                                .ok_or("register producer capacity does not evaluate")?
+                        }
+                        _ => return Err("member has a non-register array input"),
+                    };
+                    caps.push((*name, cap));
+                }
+                caps
+            };
+            let composed = expr.eval(&slot_syn_refs);
+            match (composed, constructed.array_output_capacity(out_port, &Default::default(), &port_caps)) {
+                (Some(a), Some(b)) if a == b => {}
+                _ => return Err("array output capacity disagrees with the declared fused shape"),
+            }
+            member_expr[pos] = Some(expr);
+        }
+
+        // Widened-region soundness gates. The dispatch count now exceeds the
+        // gathered input's length, so reads that were safe at the identity
+        // count are not, in general, safe at the widened one:
+        //  - a COINCIDENT array external read (`src_e[idx]` pre-read) would
+        //    run off the end of an input shorter than the widened count;
+        //  - another member's BufferGather self-indexing (neighbor_smooth's
+        //    `buf_in[idx ± 1]`) is only bounds-safe at ITS OWN dispatch
+        //    count, which the region count no longer is.
+        // Only a MultipleOf member's own named input may be a gathered
+        // array external, and no array external may be read coincidently;
+        // every other array input threads a register from an earlier member
+        // (whose capacity composes to the widened count — sound). Texture
+        // inputs are unaffected (sampler-clamped, index-free).
+        if widened {
+            for member in &members {
+                let is_multiplier = multiplier_docs.contains(&member.doc_id);
+                // Only the ARRAY-input prefix is gated — texture inputs are
+                // sampled (index-free, sampler-clamped) and unaffected by the
+                // widened count.
+                let node = def
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == member.doc_id)
+                    .ok_or("member id missing from def")?;
+                let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+                let arr_len = constructed
+                    .inputs()
+                    .iter()
+                    .filter(|i| matches!(i.ty, PortType::Array(_)))
+                    .count();
+                for (k, src) in member.inputs.iter().take(arr_len).enumerate() {
+                    let gathered = member.input_access.get(k).copied().unwrap_or_default()
+                        == InputAccess::BufferGather;
+                    if gathered && !is_multiplier {
+                        return Err(
+                            "a gathered read by a non-multiplier member in a widened region"
+                        );
+                    }
+                    if !gathered && matches!(src, RegionInput::External(_)) {
+                        return Err("a coincident array external in a widened region");
+                    }
+                }
             }
         }
+
+        // The region's output expression: the output member's composed
+        // capacity. `None` (all-identity) keeps the legacy min-over-externals
+        // anchor; `Some` widens the count and reaches the codegen + the
+        // dst-sizing marker.
+        let out_doc = outputs[0].0;
+        let out_pos = order
+            .iter()
+            .position(|id| *id == out_doc)
+            .ok_or("region output not a member")?;
+        output_capacity = member_expr[out_pos]
+            .clone()
+            .filter(|_| widened);
     }
 
     // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
@@ -1881,7 +2074,15 @@ fn build_region(
         Some(region_space)
     };
 
-    Ok(Region { members, externals, outputs, space, sampled_externals, virtual_chains: Vec::new() })
+    Ok(Region {
+        members,
+        externals,
+        outputs,
+        space,
+        sampled_externals,
+        virtual_chains: Vec::new(),
+        output_capacity,
+    })
 }
 
 /// The element space of `id`'s (single) texture output in the unfused plan —
@@ -3469,14 +3670,17 @@ mod tests {
         );
     }
 
-    /// BUG-x72p soundness gate: reflect_array's output capacity is a fixed 2x
-    /// its input (the mirrored half) — a non-identity function the fresh-`dst`
-    /// fused model can't size. `build_region` probes every member's array
-    /// output capacity when a BufferGather input is present and refuses the
-    /// region, so reflect_array renders unfused (always correct) until the
-    /// output-capacity-multiplier work lands.
+    /// BUG-orm4 widened gate: reflect_array DECLARES its 2x output capacity,
+    /// so the region it heads would widen the dispatch count to
+    /// `2 x arrayLength(&src_0)`. blend.a reads the SAME producer port the
+    /// reflect gathers, as a COINCIDENT external — the pre-read
+    /// `src_0[idx]` would run off the input's end at the widened count. The
+    /// widened gate refuses the region (renders unfused, always correct).
+    /// The sound shape — the multiplier's output consumed as a register —
+    /// is pinned in reflect_array.rs's
+    /// `reflect_array_enters_a_fused_region_with_widened_count`.
     #[test]
-    fn buffer_gather_identity_probe_refuses_reflect_array_region() {
+    fn buffer_gather_widened_region_refuses_coincident_array_external() {
         let json = r#"{
             "version": 1,
             "nodes": [
@@ -3496,8 +3700,46 @@ mod tests {
         let regions = partition_regions(&def, &registry());
         assert!(
             regions.is_empty(),
-            "the 2x-capacity probe refuses the region; singletons are below \
-             MIN_REGION_LEN — nothing fuses, render unfused (always correct)"
+            "the widened gates refuse the coincident array external; \
+             singletons are below MIN_REGION_LEN — nothing fuses, render \
+             unfused (always correct)"
+        );
+    }
+
+    /// BUG-orm4 widened gate, companion: a NON-multiplier gathered member is
+    /// only bounds-safe at its OWN dispatch count — neighbor_smooth reads
+    /// `buf_in[idx ± 1]` and clamps by the grid geometry, which assumes
+    /// `idx < arrayLength`. Inside a region whose count a MultipleOf member
+    /// (reflect_array, 2x) widened, that assumption breaks. Here scatter
+    /// feeds BOTH gathers and blend merges the two chains' registers, so
+    /// convexity would put reflect + smooth + blend in ONE region — the
+    /// widened gate refuses it (renders unfused, always correct).
+    #[test]
+    fn buffer_gather_widened_region_refuses_non_multiplier_gather() {
+        let json = r#"{
+            "version": 1,
+            "nodes": [
+                { "id": 0, "typeId": "node.scatter_on_mesh", "nodeId": "scatter" },
+                { "id": 1, "typeId": "node.reflect_array", "nodeId": "reflect" },
+                { "id": 2, "typeId": "node.neighbor_smooth", "nodeId": "smooth" },
+                { "id": 3, "typeId": "node.blend_copies", "nodeId": "blend" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "instances", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "instances", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "a" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert!(
+            regions.is_empty(),
+            "the widened gate refuses smooth's non-multiplier gather; \
+             singletons are below MIN_REGION_LEN — nothing fuses, render \
+             unfused (always correct)"
         );
     }
 

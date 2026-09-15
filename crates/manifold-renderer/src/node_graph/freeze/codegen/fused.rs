@@ -460,6 +460,13 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     // buffer has no forward producer to mis-order against). The install pass only
     // sets this when the output genuinely aliases a feedback-loop input.
     let in_place = region.in_place_alias;
+    // BUG-orm4: a widened output capacity (a MultipleOf member in the region)
+    // can only write a FRESH dst sized to the widened count. Writing back
+    // IN PLACE over the shorter aliased loop buffer would run off its end —
+    // refuse (the region renders unfused, always correct).
+    if in_place.is_some() && region.output_capacity.is_some() {
+        return Err(CodegenError::BadInput);
+    }
     if let Some(k) = in_place {
         // Validity: the aliased input must exist, be an ARRAY slot, and carry the
         // output's element type (it IS the output buffer). Install guarantees
@@ -523,6 +530,15 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
             "@group(0) @binding({binding}) var<storage, read_write> dst: array<{out_ty}>;"
         )
         .unwrap();
+        // BUG-orm4: a widened output capacity rides a marker so
+        // `node.wgsl_compute` sizes this fresh dst to the SAME expression
+        // (the default min-over-inputs would cut the multiplied range —
+        // mirror half, echo stride — out of the buffer). Identity regions
+        // emit no marker: byte-identical WGSL, and the default sizing is
+        // exactly the legacy min anchor.
+        if let Some(expr) = &region.output_capacity {
+            writeln!(out, "{}", Marker::FusedOutputCapacity { expr: expr.clone() }.emit()).unwrap();
+        }
     }
     // `@dispatch_count_param` — node.wgsl_compute reads this marker and sizes
     // the dispatch grid from the named uniform field's live value (min'd with
@@ -579,21 +595,31 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     // be read out of bounds (BUG-008) — the unfused atoms clamp to
     // `min(a, b, …)` for the same reason. Equal-length regions (every shipped
     // buffer preset) are unaffected: `min` of equal lengths is that length.
+    // BUG-orm4: a region whose output capacity composes to a widened
+    // expression (a MultipleOf member — reflect_array's 2x mirror,
+    // analytic_echo_instances' 8x stride) anchors on THAT instead: the
+    // expression's WGSL rendering (e.g. `2u * arrayLength(&src_0)`), composed
+    // and verified at `build_region`, so the multiplied range is dispatched
+    // and written; the matching `// @fused_output_capacity:` marker (emitted
+    // with the bindings above) sizes the fresh dst to the same count.
     let array_ext: Vec<usize> = ext_tys
         .iter()
         .enumerate()
         .filter_map(|(e, t)| t.is_some().then_some(e))
         .collect();
     let count_anchor = *array_ext.first().ok_or(CodegenError::BadInput)?;
-    if array_ext.len() == 1 {
-        writeln!(out, "    let count = arrayLength(&src_{count_anchor});").unwrap();
-    } else {
-        let mut expr = format!("arrayLength(&src_{count_anchor})");
-        for &e in &array_ext[1..] {
-            expr = format!("min({expr}, arrayLength(&src_{e}))");
+    let anchor_expr = match &region.output_capacity {
+        Some(expr) => expr.to_wgsl(),
+        None if array_ext.len() == 1 => format!("arrayLength(&src_{count_anchor})"),
+        None => {
+            let mut expr = format!("arrayLength(&src_{count_anchor})");
+            for &e in &array_ext[1..] {
+                expr = format!("min({expr}, arrayLength(&src_{e}))");
+            }
+            expr
         }
-        writeln!(out, "    let count = {expr};").unwrap();
-    }
+    };
+    writeln!(out, "    let count = {anchor_expr};").unwrap();
     out.push_str("    if idx >= count {\n        return;\n    }\n");
     // Live-count cap (in-place loop regions): early-return past the members'
     // shared `active_count`, leaving the pool tail untouched exactly like the
@@ -1652,6 +1678,7 @@ mod tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         let g = generate_fused(&region).expect("gathered buffer region fuses");
         assert!(
@@ -1720,6 +1747,7 @@ mod tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         assert!(
             generate_fused(&region).is_err(),
@@ -1743,6 +1771,7 @@ mod tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         assert!(
             generate_fused(&region).is_err(),

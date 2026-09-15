@@ -310,6 +310,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         let fused = generate_fused(&region).expect("copy → wave → displace buffer region fuses");
         assert!(

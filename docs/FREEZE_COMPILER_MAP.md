@@ -151,11 +151,20 @@ fused buffer codegen binds it as a read-only `src_<slot>` storage array the
 body indexes itself (`buf_<port>` renamed to `src_<slot>`, no pre-read, no body
 arg — a coincident pre-read would run off the end of an input shorter than the
 dispatch count). Two more gates keep the admission sound: every member's array
-output capacity must be the identity of its inputs (probed with distinct
-synthetic capacities in `build_region` — the reflect_array 2x mirror
-multiplier refuses, tracked as the output-capacity-multiplier follow-on), and a
+output capacity must agree with its DECLARED `FusedOutputCapacity` shape
+(probed against synthetic capacities in `build_region`) — `MinInputs` (the
+default, identity) keeps the legacy `min(arrayLength(&src_e), …)` count
+anchor, while a member declaring `MultipleOf { input, factor }` composes the
+region's count anchor to the widened expression (`2u * arrayLength(&src_k)`)
+so the dispatch writes the multiplied range (reflect_array's 2x mirror,
+analytic_echo_instances' 8x echo stride — BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity));
+the fresh `dst` is sized to the
+same expression via the `// @fused_output_capacity:` marker on the kernel.
+Undeclared/non-expressible capacities (conditional, max-selector) refuse the
+region — fail closed to unfused. And a
 gathered slot can never be an in-place alias (read-write race within one
-dispatch). **Derived uniforms, ANY declared
+dispatch); the same refusal covers a widened region writing in place over a
+shorter loop buffer. **Derived uniforms, ANY declared
 name (P0/D7, 2026-07-12, superseding the old name-whitelist rule below):** a
 member with `derived_uniforms()` fuses (texture or buffer path) iff its
 type_id has a registered recompute in `freeze::derived_uniform_registry`

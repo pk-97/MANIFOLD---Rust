@@ -190,6 +190,7 @@ mod tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         // The codegen can EMIT the gathered kernel (the mechanism is general);
         // the refusal this atom needs is the finder's identity probe:
