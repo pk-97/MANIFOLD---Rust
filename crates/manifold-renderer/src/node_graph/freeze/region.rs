@@ -407,7 +407,8 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
 
     // ── Stencil tier: absorb producer chains into stencil members' gather
     // reads (recomputed per tap corner — no canvas round-trip). ──
-    absorb_virtual_chains(def, registry, &mut regions, &comp_list, spaces.as_ref(), &forward);
+    absorb_virtual_chains(def, registry, &mut regions, &comp_list, spaces.as_ref(), &forward,
+    );
 
     // A single-member region only pays once a chain folded into it (fusing one
     // node alone changes nothing — the MIN_REGION_LEN rule, applied after
@@ -477,12 +478,14 @@ fn absorb_virtual_chains(
             .first()
             .and_then(|m| comp_of.get(&m.doc_id))
             .copied();
-        let Some(region_rep) = region_rep else { continue };
+        let Some(region_rep) = region_rep else { continue;
+        };
         for member in &region.members {
             let Some(doc_node) = def.nodes.iter().find(|n| n.id == member.doc_id) else {
                 continue;
             };
-            let Some(node) = configured_construct(registry, doc_node) else { continue };
+            let Some(node) = configured_construct(registry, doc_node) else { continue;
+            };
             if !node.stencil_fetch() {
                 continue;
             }
@@ -492,7 +495,8 @@ fn absorb_virtual_chains(
                 if *access != InputAccess::Gather {
                     continue;
                 }
-                let RegionInput::External(e) = input else { continue };
+                let RegionInput::External(e) = input else { continue;
+                };
                 let prod = region.externals[*e].from_node;
                 let Some(&rep) = comp_of.get(&prod) else {
                     continue; // boundary producer — stays a real external
@@ -611,7 +615,8 @@ fn absorb_virtual_chains(
                 // tier-A in-loop rounding never applies; the codegen q16s the
                 // chain TAIL unconditionally to reproduce the f16 store the
                 // unfused chain made for the blur to sample.
-                members.push(RegionMember { doc_id, inputs, input_access, quantize_f16: false });
+                members.push(RegionMember { doc_id, inputs, input_access, quantize_f16: false,
+                });
             }
             Some((members, new_externals))
         })();
@@ -1036,8 +1041,55 @@ fn producer_tex_output_count(
         .iter()
         .find(|n| n.id == doc_id)
         .and_then(|n| configured_construct(registry, n))
-        .map(|c| c.outputs().iter().filter(|o| is_texture_port(&o.ty)).count())
+        .map(|c| {
+            c.outputs()
+                .iter()
+                .filter(|o| is_texture_port(&o.ty))
+                .count()
+        })
         .unwrap_or(0)
+}
+
+/// Conservative symbolic bound for array dispatch. Refuse an unproven relation
+/// instead of relying on the synthetic probe's particular test capacities.
+fn capacity_bounded_by(value: &CapacityExpr, limit: &CapacityExpr) -> bool {
+    value == limit
+        || matches!(value, CapacityExpr::Min(children) if children.iter().any(|child| capacity_bounded_by(child, limit)))
+        || matches!(limit, CapacityExpr::Min(children) if children.iter().all(|child| capacity_bounded_by(value, child)))
+}
+
+fn cut_reference_cache_boundary(node: &EffectGraphNode, def: &EffectGraphDef) -> bool {
+    if node.type_id != "node.remap_mesh_cut" {
+        return false;
+    }
+    let mut pending = vec![node.id];
+    let mut visited = AHashSet::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        for wire in def
+            .wires
+            .iter()
+            .filter(|wire| wire.from_node == id && wire.from_port == "out")
+        {
+            let Some(consumer) = def.nodes.iter().find(|node| node.id == wire.to_node) else {
+                continue;
+            };
+            if wire.to_port == "reference"
+                && matches!(
+                    consumer.type_id.as_str(),
+                    "node.cut_mesh_bands" | "node.cut_mesh_cells"
+                )
+            {
+                return true;
+            }
+            if wire.to_port == "in" && consumer.type_id == "node.remap_mesh_cut" {
+                pending.push(consumer.id);
+            }
+        }
+    }
+    false
 }
 
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
@@ -1055,6 +1107,14 @@ pub(crate) fn classify_node(
 
     // Boundaries by identity: the graph endpoints are always seams.
     if node.type_id == SOURCE_TYPE_ID || node.type_id == FINAL_OUTPUT_TYPE_ID {
+        return NodeClass::Boundary;
+    }
+    // Cutters cache connectivity from their reference's write generation.
+    // Keep that reference's remap chain independently cacheable: a fused
+    // motion kernel conservatively marks every output written each frame.
+    // Current-mesh remaps and reference remaps with no cutter consumer still
+    // use normal buffer fusion.
+    if cut_reference_cache_boundary(node, def) {
         return NodeClass::Boundary;
     }
     // Configured so a fragment-form `node.wgsl_compute` reports its real
@@ -1250,7 +1310,9 @@ pub(crate) fn classify_node(
             .iter()
             .filter(|i| matches!(i.ty, PortType::Array(_)))
             .enumerate()
-            .filter(|(idx, _)| n.input_access().get(tex_count + idx) == Some(&InputAccess::BufferIndex))
+            .filter(|(idx, _)| {
+                n.input_access().get(tex_count + idx) == Some(&InputAccess::BufferIndex)
+            })
             .map(|(_, i)| i.name.as_ref())
             .collect()
     };
@@ -1729,7 +1791,8 @@ fn build_region(
         let quantize_f16 = !is_buffer
             && node_on_cycle(doc_id, def)
             && !node.output_formats.values().any(|s| s.contains("32float"));
-        members.push(RegionMember { doc_id, inputs, input_access, quantize_f16 });
+        members.push(RegionMember { doc_id, inputs, input_access, quantize_f16,
+        });
     }
 
     // The region output(s): each member with ≥1 texture wire to a non-member. A
@@ -1809,6 +1872,7 @@ fn build_region(
         // below admit gathered reads only on these members' named inputs).
         let mut multiplier_docs: Vec<u32> = Vec::new();
         let mut widened = false;
+        let mut selected_input_count = false;
         // Synthetic capacities for the probe: one DISTINCT ASCENDING value
         // per external SLOT (`CapacityExpr::Slot(e)` renders as `src_<e>`,
         // the same key `eval` looks up). Slot-distinct catches the non-min
@@ -1887,6 +1951,46 @@ fn build_region(
                         _ => CapacityExpr::Min(children),
                     }
                 }
+                FusedOutputCapacity::FromInput { input } => {
+                    let selected = arr_inputs
+                        .iter()
+                        .position(|name| *name == input)
+                        .ok_or("FromInput names an unknown array input")?;
+                    if member.input_access.len() < arr_inputs.len() {
+                        return Err("FromInput lacks array read-access declarations");
+                    }
+                    for (index, access) in member
+                        .input_access
+                        .iter()
+                        .take(arr_inputs.len())
+                        .enumerate()
+                    {
+                        let expected = if index == selected {
+                            InputAccess::Coincident
+                        } else {
+                            InputAccess::BufferGather
+                        };
+                        if *access != expected {
+                            return Err(
+                                "FromInput requires one coincident anchor and bounds-checked gathers",
+                            );
+                        }
+                    }
+                    selected_input_count = true;
+                    match sources.get(selected) {
+                        Some(RegionInput::External(e)) => CapacityExpr::Slot(*e),
+                        Some(RegionInput::Member(producer)) => {
+                            let position = order
+                                .iter()
+                                .position(|id| id == producer)
+                                .ok_or("FromInput producer is not a region member")?;
+                            member_expr[position]
+                                .clone()
+                                .ok_or("FromInput producer lacks a capacity expression")?
+                        }
+                        _ => return Err("FromInput anchor is not an external or register"),
+                    }
+                }
                 FusedOutputCapacity::MultipleOf { input, factor } => {
                     // The named port must be the member's ONLY array input,
                     // tagged BufferGather, wired to an external slot: the
@@ -1894,7 +1998,8 @@ fn build_region(
                     // (its own guards keep any dispatched idx in bounds), and
                     // the widened count is factor × the slot's live length.
                     if arr_inputs.len() != 1 || arr_inputs.first() != Some(&input) {
-                        return Err("MultipleOf names a port that is not the member's only array input");
+                        return Err("MultipleOf names a port that is not the member's only array input",
+                        );
                     }
                     match sources.first() {
                         Some(RegionInput::External(e))
@@ -1905,7 +2010,8 @@ fn build_region(
                             CapacityExpr::Mul(factor, Box::new(CapacityExpr::Slot(*e)))
                         }
                         _ => return Err("MultipleOf input is not a gathered external"),
-                    }                }
+                    }
+                }
             };
 
             // Probe honesty: the black-box capacity fn must AGREE with the
@@ -1943,7 +2049,8 @@ fn build_region(
                 caps
             };
             let composed = expr.eval(&slot_syn_refs);
-            match (composed, constructed.array_output_capacity(out_port, &Default::default(), &port_caps)) {
+            match (composed, constructed.array_output_capacity(out_port, &Default::default(), &port_caps),
+            ) {
                 (Some(a), Some(b)) if a == b => {}
                 _ => return Err("array output capacity disagrees with the declared fused shape"),
             }
@@ -1985,7 +2092,7 @@ fn build_region(
                         == InputAccess::BufferGather;
                     if gathered && !is_multiplier {
                         return Err(
-                            "a gathered read by a non-multiplier member in a widened region"
+                            "a gathered read by a non-multiplier member in a widened region",
                         );
                     }
                     if !gathered && matches!(src, RegionInput::External(_)) {
@@ -2004,9 +2111,19 @@ fn build_region(
             .iter()
             .position(|id| *id == out_doc)
             .ok_or("region output not a member")?;
+        if selected_input_count {
+            let output = member_expr[out_pos]
+                .as_ref()
+                .ok_or("missing output capacity")?;
+            for expression in member_expr.iter().flatten() {
+                if !capacity_bounded_by(output, expression) {
+                    return Err("selected-input dispatch exceeds a member's capacity");
+                }
+            }
+        }
         output_capacity = member_expr[out_pos]
             .clone()
-            .filter(|_| widened);
+            .filter(|_| widened || selected_input_count);
     }
 
     // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
@@ -2163,7 +2280,8 @@ fn topo_sort(
 /// declares its input ports + their access modes only after `wgsl_source` is
 /// parsed — a bare construct sees the default kernel, so a gather input would read
 /// as coincident and wrongly union into a region.
-fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port: &str) -> InputAccess {
+fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port: &str,
+) -> InputAccess {
     let Some(node) = configured_construct(registry, node) else {
         return InputAccess::Coincident;
     };
@@ -2185,9 +2303,7 @@ fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port:
     let is_buffer_atom = node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)));
     let port_ty = node.inputs().iter().find(|i| i.name == port).map(|i| i.ty);
     let idx = match port_ty {
-        Some(ty) if is_texture_port(&ty) => {
-            node.inputs().iter().filter(|i| is_texture_port(&i.ty)).position(|i| i.name == port)
-        }
+        Some(ty) if is_texture_port(&ty) => node.inputs().iter().filter(|i| is_texture_port(&i.ty)).position(|i| i.name == port),
         Some(PortType::Array(_)) if is_buffer_atom => node
             .inputs()
             .iter()
@@ -2466,7 +2582,9 @@ fn node_is_buffer_atom(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u
         .iter()
         .find(|n| n.id == id)
         .and_then(|n| configured_construct(registry, n))
-        .map(|c| c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))))
+        .map(|c| {
+            c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)))
+        })
         .unwrap_or(false)
 }
 
@@ -2482,7 +2600,9 @@ fn region_is_buffer(nodes: &[u32], def: &EffectGraphDef, registry: &PrimitiveReg
             .iter()
             .find(|n| n.id == id)
             .and_then(|n| configured_construct(registry, n))
-            .map(|c| c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))))
+            .map(|c| {
+                c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)))
+            })
             .unwrap_or(false)
     })
 }
@@ -2530,6 +2650,88 @@ mod tests {
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    #[test]
+    fn selected_input_capacity_requires_a_bound_for_every_fused_member() {
+        let source = CapacityExpr::Slot(0);
+        let map = CapacityExpr::Slot(1);
+        assert!(!capacity_bounded_by(&map, &source));
+        assert!(!capacity_bounded_by(&source, &map));
+        let count = CapacityExpr::Min(vec![source.clone(), map.clone()]);
+        assert!(capacity_bounded_by(&count, &source));
+        assert!(capacity_bounded_by(&count, &map));
+        assert!(!capacity_bounded_by(&map, &count));
+    }
+
+    #[test]
+    fn cut_remap_region_uses_map_capacity_when_source_is_shorter() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "source", "typeId": "node.gltf_mesh_source"},
+                {"id": 1, "nodeId": "map", "typeId": "node.cut_mesh_bands"},
+                {"id": 2, "nodeId": "remap", "typeId": "node.remap_mesh_cut"},
+                {"id": 3, "nodeId": "rotate", "typeId": "node.rotate_3d"},
+                {"id": 4, "nodeId": "object", "typeId": "node.scene_object"},
+                {"id": 5, "nodeId": "render", "typeId": "node.render_scene"},
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "vertices", "toNode": 1, "toPort": "reference"},
+                {"fromNode": 0, "fromPort": "vertices", "toNode": 2, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "map", "toNode": 2, "toPort": "map"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "vertices"},
+                {"fromNode": 4, "fromPort": "object", "toNode": 5, "toPort": "object_0"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
+            ]
+        })).unwrap();
+        let regions = partition_regions(&def, &registry());
+        let region = regions.iter().find(|region| region.members.iter().any(|m| m.doc_id == 2))
+            .expect("remap and rotation must actually fuse");
+        assert!(region.members.iter().any(|m| m.doc_id == 3));
+        let capacities: Vec<_> = region.externals.iter().enumerate().map(|(i, external)|
+            (format!("src_{i}"), if external.from_node == 1 { 30 } else { 3 })).collect();
+        let refs: Vec<_> = capacities.iter().map(|(name, n)| (name.as_str(), *n)).collect();
+        assert_eq!(region.output_capacity.as_ref().unwrap().eval(&refs), Some(30));
+    }
+
+    #[test]
+    fn cut_reference_chain_keeps_cache_while_current_remap_can_fuse() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "source", "typeId": "node.gltf_mesh_source"},
+                {"id": 1, "nodeId": "map", "typeId": "node.cut_mesh_bands"},
+                {"id": 2, "nodeId": "reference", "typeId": "node.remap_mesh_cut"},
+                {"id": 3, "nodeId": "current", "typeId": "node.remap_mesh_cut"},
+                {"id": 4, "nodeId": "next_reference", "typeId": "node.remap_mesh_cut"},
+                {"id": 5, "nodeId": "next_map", "typeId": "node.cut_mesh_cells"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "vertices", "toNode": 1, "toPort": "reference"},
+                {"fromNode": 0, "fromPort": "vertices", "toNode": 2, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "map", "toNode": 2, "toPort": "map"},
+                {"fromNode": 0, "fromPort": "vertices", "toNode": 3, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "map", "toNode": 3, "toPort": "map"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "map", "toNode": 4, "toPort": "map"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "reference"}
+            ]
+        }))
+        .expect("cut reference fixture");
+        let registry = registry();
+        for id in [2, 4] {
+            assert!(matches!(
+                classify_node(&def.nodes[id], &def, &registry),
+                NodeClass::Boundary
+            ));
+        }
+        assert_eq!(
+            classify_node(&def.nodes[3], &def, &registry),
+            NodeClass::Eligible
+        );
     }
 
     fn colorgrade_def() -> EffectGraphDef {
@@ -3364,7 +3566,8 @@ mod tests {
     fn wave2_color_param_atoms_now_fuse_in_shipped_presets() {
         let registry = registry();
         let cases: &[(&str, &[&str])] = &[
-            ("OilyFluid", &["node.shininess", "node.rim_light", "node.matcap_two_tone"]),
+            ("OilyFluid", &["node.shininess", "node.rim_light", "node.matcap_two_tone"],
+            ),
             ("MetallicGlass", &["node.brightness"]),
             ("StarField", &["node.channel_mixer"]),
         ];
@@ -3417,7 +3620,8 @@ mod tests {
     fn tone_map_and_gradient_map_both_fuse_next_to_a_fusable_neighbor() {
         let registry = registry();
         for (type_id, in_port, should_fuse) in
-            [("node.tone_map", "in", true), ("node.gradient_map", "source", true)]
+            [("node.tone_map", "in", true), ("node.gradient_map", "source", true),
+        ]
         {
             let json = format!(
                 r#"{{
@@ -3464,7 +3668,8 @@ mod tests {
     fn wave3_scalar_only_atoms_fuse_next_to_a_fusable_neighbor() {
         let registry = registry();
         for (type_id, in_port, should_fuse) in
-            [("node.rotate_coordinates", "in", true), ("node.sine_wave", "field", true)]
+            [("node.rotate_coordinates", "in", true), ("node.sine_wave", "field", true),
+        ]
         {
             let json = format!(
                 r#"{{
@@ -4314,7 +4519,8 @@ mod audit {
     /// sits in a fused region of ≥2 members, and was NOT absorbed — the exact
     /// `MAX_VIRTUAL_CHAIN=1` cut); (3) region-level `build_region` drops
     /// (fan-out named explicitly, everything else Other).
-    fn census_def(def: &EffectGraphDef, registry: &PrimitiveRegistry, stats: &mut AHashMap<RefusalFamily, FamilyStats>) {
+    fn census_def(def: &EffectGraphDef, registry: &PrimitiveRegistry, stats: &mut AHashMap<RefusalFamily, FamilyStats>,
+    ) {
         let regions = partition_regions(def, registry);
         let member_of: AHashMap<u32, usize> = regions
             .iter()
@@ -4331,7 +4537,8 @@ mod audit {
         // regions together or a chain of >1 newly-eligible neighbours, so the
         // real saving from lifting a whole family is >= what's reported here.
         for n in &def.nodes {
-            let Some(family) = classify_refusal(n, def, registry) else { continue };
+            let Some(family) = classify_refusal(n, def, registry) else { continue;
+            };
             let has_eligible_neighbor = def.wires.iter().any(|w| {
                 let (other, this_is_from) = if w.from_node == n.id {
                     (w.to_node, true)
@@ -4346,7 +4553,9 @@ mod audit {
                         .nodes
                         .iter()
                         .find(|o| o.id == other)
-                        .is_some_and(|on| classify_node(on, def, registry) == NodeClass::Eligible)
+                        .is_some_and(|on| {
+                            classify_node(on, def, registry) == NodeClass::Eligible
+                        })
             });
             let e = stats.entry(family).or_default();
             e.refusals += 1;
@@ -4364,9 +4573,11 @@ mod audit {
                     if *access != InputAccess::Gather {
                         continue;
                     }
-                    let RegionInput::External(e) = input else { continue };
+                    let RegionInput::External(e) = input else { continue;
+                    };
                     let prod = r.externals[*e].from_node;
-                    let Some(&prod_region) = member_of.get(&prod) else { continue };
+                    let Some(&prod_region) = member_of.get(&prod) else { continue;
+                    };
                     if regions[prod_region].members.len() < 2 {
                         continue; // single-node chain — MAX_VIRTUAL_CHAIN=1 admits it; not this family
                     }
@@ -4512,7 +4723,9 @@ mod audit {
         }
         out.push('\n');
 
-        let get = |f: RefusalFamily| rows.iter().find(|(rf, _)| *rf == f).map(|(_, s)| *s).unwrap_or_default();
+        let get = |f: RefusalFamily| {
+            rows.iter().find(|(rf, _)| *rf == f).map(|(_, s)| *s).unwrap_or_default()
+        };
         let fan_out = get(RefusalFamily::BufferFanOut);
         let resample = get(RefusalFamily::Resample);
         let vec3 = get(RefusalFamily::ParamType);
@@ -4632,7 +4845,8 @@ mod audit {
             }
         }
         for def in &defs {
-            let Ok(flat) = manifold_core::flatten::flatten_groups(def) else { continue };
+            let Ok(flat) = manifold_core::flatten::flatten_groups(def) else { continue;
+            };
             for n in &flat.nodes {
                 // Graph endpoints are a documented exception: `classify_node`
                 // reports them Boundary (they're seams by identity), but
@@ -4687,14 +4901,16 @@ mod audit {
     fn audit_all_presets() {
         let registry = PrimitiveRegistry::with_builtin();
         eprintln!("=== EFFECT PRESETS ===");
-        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
+        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect,
+        ) {
             if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
                 let json = serde_json::to_string(&view.canonical_def).unwrap();
                 audit_one(type_id.as_str(), &json, &registry);
             }
         }
         eprintln!("=== GENERATOR PRESETS ===");
-        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator,
+        ) {
             if let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) {
                 audit_one(type_id.as_str(), &json, &registry);
             }

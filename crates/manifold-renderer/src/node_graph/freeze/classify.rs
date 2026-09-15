@@ -156,6 +156,10 @@ pub enum FusedOutputCapacity {
     /// anchor is `min(arrayLength(&src_e), …)` over the region's array
     /// externals — the pre-BUG-orm4 behavior, byte-identical.
     MinInputs,
+    /// One output per element of the named coincident input. Other array
+    /// inputs are bounds-checked gathers whose lengths do not limit dispatch
+    /// (for example, a cut map gathering a smaller source mesh).
+    FromInput { input: &'static str },
     /// Output capacity is `factor` × the named array input's capacity
     /// (reflect_array's 2x mirror half, analytic_echo_instances' 8x echo
     /// stride). The named port MUST be tagged [`InputAccess::BufferGather`]

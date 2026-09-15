@@ -1284,6 +1284,7 @@ pub struct RenderScene {
     /// for this node's irradiance accumulator. Do not add a second one
     /// (the P2 brief's negative-`rg` gate enforces this).
     rt_reset_detector: TemporalResetDetector,
+    mesh_topology_history: crate::node_graph::scene_object::MeshTopologyHistory,
     /// Set by `ensure_rt_irradiance` when it just (re)allocated the
     /// history texture this frame (dimension change) — a fresh
     /// allocation's content is undefined, so the accumulate step OR's
@@ -5628,7 +5629,16 @@ impl RenderScene {
         // max_blur_px. Consumer off→on resumes now force a reset explicitly
         // via the `*_just_resumed` latches below — that used to fall out of
         // the gated detector's time-jump.
-        let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time);
+        let topology_changed = self.mesh_topology_history.update(
+            ctx.rebuild_epoch,
+            self.object_port_names.iter().take(objects).map(|port| {
+                port_index.get(port.as_ref()).copied()
+                    .and_then(|slot| ctx.inputs.object_slot(slot))
+                    .and_then(|object| object.topology)
+            }),
+        );
+        let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time)
+            || topology_changed;
         // A cut/seek means this node's velocity history is stale too: clear
         // it so the first post-cut frame takes the "no history yet"
         // zero-velocity seeding instead of ndc deltas measured across two
@@ -6013,6 +6023,7 @@ impl RenderScene {
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
             rt_reset_detector: TemporalResetDetector::new(),
+            mesh_topology_history: Default::default(),
             rt_irr_needs_reset: false,
             denoiser_lighting_changed: false,
             denoiser_gesture_active: false,

@@ -339,7 +339,8 @@ fn prepare_scene_modifiers_impl(
     }
     builder.derived.name = owner.name.clone();
     builder.derived.description = owner.description.clone();
-    let (metadata, binding_sources) = bindings::expand_bindings_with_sources(owner, &leaf_maps)?;
+    let (metadata, mut binding_sources) =
+        bindings::expand_bindings_with_sources(owner, &leaf_maps)?;
     builder.derived.preset_metadata = metadata;
     // Host leaves have already crossed their group boundaries. Temporarily
     // remove their flattened display handles so the group flattener does not
@@ -374,6 +375,11 @@ fn prepare_scene_modifiers_impl(
     let mut prepared = bindings::seed_local_defaults(&flat)?;
     let routes = routes::build_routes(owner, &prepared, &leaf_maps, &target_maps)?;
     math_events::prepare(owner, &mut prepared, &index, &routes, math_view)?;
+    // Math View deliberately keeps its sparse original-face diagnostic graph;
+    // compact cut-map indices have no meaning to its source_face_index path.
+    if math_view.is_none() {
+        super::fragment_cuts::apply(&mut prepared, &mut binding_sources)?;
+    }
     if prepared.nodes.len() > 65_536 || prepared.wires.len() > 262_144 {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "expandedGraph".into(),

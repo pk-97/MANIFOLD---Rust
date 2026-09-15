@@ -54,6 +54,9 @@ pub struct SceneObject {
     pub mesh: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
+    /// Cut-map identity and write generation. Changes invalidate temporal
+    /// correspondence; ordinary deformation leaves this revision unchanged.
+    pub topology: Option<(Slot, u64)>,
     /// `Texture2D` slot — base colour map.
     pub base_color_map: Option<Slot>,
     /// `Texture2D` slot — normal map.
@@ -113,9 +116,49 @@ const _: () = {
     let _ = check;
 };
 
+/// Tracks connectivity independently from per-frame vertex positions.
+#[derive(Default)]
+pub(crate) struct MeshTopologyHistory(Option<u64>);
+
+impl MeshTopologyHistory {
+    pub(crate) fn update(
+        &mut self,
+        resource_epoch: u64,
+        revisions: impl Iterator<Item = Option<(Slot, u64)>>,
+    ) -> bool {
+        use std::hash::{Hash, Hasher};
+        let mut hash = ahash::AHasher::default();
+        resource_epoch.hash(&mut hash);
+        for (object, revision) in revisions.enumerate() {
+            object.hash(&mut hash);
+            revision.hash(&mut hash);
+        }
+        let current = hash.finish();
+        self.0
+            .replace(current)
+            .is_some_and(|previous| previous != current)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_topology_resets_history_without_resetting_ordinary_motion() {
+        let mut history = MeshTopologyHistory::default();
+        let revision = Some((Slot(4), 1));
+        assert!(!history.update(1, [None, revision].into_iter()));
+        // Deformation changes the mesh buffer, not this cut-map revision.
+        assert!(!history.update(1, [None, revision].into_iter()));
+        assert!(history.update(1, [None, Some((Slot(4), 2))].into_iter()));
+        assert!(!history.update(1, [None, Some((Slot(4), 2))].into_iter()));
+        // Recycled resources, changed object order and removal also reset.
+        assert!(history.update(2, [None, Some((Slot(4), 2))].into_iter()));
+        assert!(history.update(2, [Some((Slot(4), 2)), None].into_iter()));
+        assert!(history.update(2, [None, None].into_iter()));
+        assert!(!history.update(2, [None, None].into_iter()));
+    }
 
     #[test]
     fn default_shaped_object_is_invisible_with_no_resources() {
@@ -131,6 +174,7 @@ mod tests {
             material: None,
             mesh: None,
             weights: None,
+            topology: None,
             base_color_map: None,
             normal_map: None,
             mr_map: None,
@@ -166,6 +210,7 @@ mod tests {
             material: None,
             mesh: Some(Slot(0)),
             weights: None,
+            topology: None,
             base_color_map: Some(Slot(1)),
             normal_map: None,
             mr_map: None,

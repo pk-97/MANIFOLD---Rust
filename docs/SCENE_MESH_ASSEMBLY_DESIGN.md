@@ -2,7 +2,7 @@
 
 <!-- index: Reference geometry, vertex and triangle-face targets, progressive assembly, normal/tangent handling and matched-mesh morph contracts. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Ordered Recon is the approved bounded rigid-band reconstruction slice; general segmentation and arbitrary morphing remain proposed.
+**Status:** IN PROGRESS · 2026-09-15 · Codex lead. Shared precise band/cell cuts are implemented for the existing fragment modifiers (BUG-7ruj), with every current control remaining live. General segmentation and arbitrary morphing remain proposed.
 **Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; conformance treatment, with fresh source/schema verification before each phase.
 
@@ -32,11 +32,45 @@ Read the actual shader and capacity method of every reused deformer. Some purpos
 - **D1 — Three distinct targets.** Vertex changes deform surfaces; face changes apply a common transform to each triangle's three corners; object changes move the whole object. Do not label per-vertex random displacement as face shattering. In the recipe schema, mesh stages use `SceneStageScope::EachObject` plus `SceneEndpoint::Vertices`; `EachMesh` is prose shorthand, not another enum.
 - **D2 — Reference preserves every source attribute.** A cached immutable source/bind mesh is distinct from the pre-stack animated mesh. Default assembly destination is the current pre-stack mesh, so skinned/morph animation continues. A bind-pose destination is an explicit graph option, not silently captured from the first frame encountered.
 - **D3 — Deterministic Progress.** In the explicit reconstruction preset, Progress 0 is the scattered arrangement and Progress 1 returns exact reference vertices, normals, tangents and UVs. Ordinary deformation presets return Current when their offset reaches zero. Amount/Enabled bypass always returns Current, preserving upstream modifiers. No integrated velocity required.
-- **D4 — Face identity follows source topology.** Triangle ID is stable only while topology/order stays unchanged. Topology replacement is a structural rebuild that resets correspondence and temporal history explicitly. The shipped patch atom groups reference triangle centroids into fixed spatial cells; that membership is not adjacency, connected-surface segmentation or fracture topology.
+- **D4 — Face identity follows source topology.** Triangle ID is stable only while topology/order stays unchanged. Source topology replacement is a structural rebuild that resets correspondence and temporal history explicitly. Live band/cell changes regenerate cut correspondence within admitted buffer capacities and reset history through the cut-map generation. The patch atom groups refined reference triangles into fixed spatial cells; that membership is not adjacency, connected-surface segmentation or fracture topology.
 - **D5 — Existing render paths own shading and acceleration.** Modified geometry must feed raster/depth/shadow/RT consistently. No raster-only vertex shader deformation hidden from RT. Nonlinear deformations update normals/tangents using an explicit policy.
 - **D6 — Matched topology only for reliable morph.** New preset validation requires equal counts and declared source correspondence. Two unrelated scans with equal counts are not necessarily matched. General remeshing/correspondence and watertight fracture are separate projects.
 
 ## 3. Geometry contract
+
+### Shared precise cuts (BUG-7ruj)
+
+Ordered Recon/Hit, Surface Peel/Hit, Masked Peel and Vortex Fragments share
+cut preparation in the derived modifier graph. Band and cell partitioning
+produce a deterministic map of source triangle indices and barycentric
+coordinates. The same map resamples incoming geometry, reference geometry
+and aligned weights before the existing motion primitives run. Later stack
+stages receive the refined reference, preserving index correspondence.
+Saved presets retain their identities, graphs and live parameter bindings.
+Math View keeps its existing sparse source-face diagnostic representation;
+its sampled indices are not reinterpreted as compacted cut-map indices.
+
+Changing Bands, Cell Size or cut Direction evaluates new cuts on the GPU;
+none becomes a setup-only control. Stable cut maps are cached independently
+of motion. New cut vertices interpolate surface attributes; source corners
+retain their original records. Cuts remain open: caps and bevels are outside
+this change. Existing shared 4x MSAA remains the raster antialiasing path.
+Remaps use generated standalone/fused kernels with the map as their output
+capacity anchor. Reference remap chains feeding another cutter stay cached
+independently, so a moving fused output cannot invalidate stable cut maps.
+
+Cutting uses admitted, bounded buffers with explicit overflow reporting;
+partial geometry must never be silently accepted. The final cut-map identity
+and write generation reach the scene object so connectivity changes reset
+temporal history without resetting it for ordinary movement. Raster depth
+and shadows consume the same refined geometry as color. The existing
+vertex-modifier restriction on ray tracing remains in force.
+
+Acceptance requires geometric area/winding and boundary proofs, attribute
+resampling and fusion proofs, live control and mixed-stack checks, canonical
+file round trips, and a bounded render of the reported split-head behavior.
+
+### Existing motion primitives
 
 Use existing `Array<MeshVertex>` and weights. A face operation dispatches per triangle or gathers its three corners, but emits the same flat triangle-list layout. A source using indices must pass through the existing supported triangle-list conversion before this path; M3 does not change scene index-buffer ownership. Source triangle count and corner order are validated at preparation. `transform_mesh_patches` supplies a rigid fixed-cell response and reference-gather precedent. It does not provide coherent sections: the later slicing brief must decide the missing membership/response seam without changing this shipped atom's semantics.
 
