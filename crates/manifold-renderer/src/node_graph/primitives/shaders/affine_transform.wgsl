@@ -21,7 +21,8 @@ struct Uniforms {
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(source_tex);
+    // The output defines coverage and UVs when sampling a differently sized input.
+    let dims = textureDimensions(output_tex);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }

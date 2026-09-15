@@ -1091,6 +1091,43 @@ impl Runner {
     /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
+            // The live app intercepts generator string dropdowns in
+            // `app_render.rs` before they reach the bridge. The headless
+            // runner owns that action loop, so mirror the audio-send branch
+            // here; otherwise the click dispatches successfully but no
+            // dropdown overlay is minted for the next scripted pointer.
+            if let PanelAction::Params(manifold_ui::ParamsAction::GenStringParamDropdownClicked(sp_idx)) = action
+                && let Some((sp, rect)) = ui.inspector.gen_params().and_then(|gp| {
+                    let sp = gp.string_param(*sp_idx).cloned()?;
+                    (sp.key == "audioSend")
+                        .then(|| gp.string_param_rect(&ui.tree, *sp_idx).map(|rect| (sp, rect)))
+                        .flatten()
+                })
+            {
+                let items = sp
+                    .dropdown_choices
+                    .iter()
+                    .map(|choice| {
+                        if choice.disabled {
+                            manifold_ui::panels::dropdown::DropdownItem::disabled(&choice.label)
+                        } else {
+                            manifold_ui::panels::dropdown::DropdownItem::new(&choice.label)
+                                .with_action(PanelAction::Params(
+                                    manifold_ui::ParamsAction::GenStringParamSelected(
+                                        *sp_idx,
+                                        choice.value.clone(),
+                                    ),
+                                ))
+                        }
+                    })
+                    .collect();
+                ui.open_dropdown_typed(
+                    items,
+                    manifold_ui::node::Rect::new(rect.x, rect.y, rect.width, rect.height),
+                );
+                println!("ui-snap --script: opened generator audio-send dropdown");
+                continue;
+            }
             let mut dctx = crate::ui_bridge::DispatchCtx {
                 project: &mut data.project,
                 content_tx: &self.content_tx,
