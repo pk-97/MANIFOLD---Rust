@@ -174,6 +174,45 @@ fn pump_warmup_frames(
     }
 }
 
+/// Factory audio previews use deterministic sample data. Build it for any
+/// graph containing an audio visual source, regardless of whether the graph is
+/// rendered as an effect or a generator.
+fn thumbnail_audio_visuals(
+    graph: &crate::node_graph::Graph,
+) -> Option<manifold_core::audio_visual::AudioVisualRegistry> {
+    graph
+        .nodes()
+        .any(|node| matches!(
+            node.node.type_id().as_str(),
+            "node.audio_waveform" | "node.audio_spectrum"
+        ))
+        .then(|| {
+            let mut audio = manifold_core::audio_visual::AudioVisualRegistry::new();
+            let send = manifold_core::AudioSendId::new("thumbnail-audio");
+            audio.set_first_send(Some(&send));
+            audio.ensure(&send, 48_000, 128, 256);
+            let wave: Vec<f32> = (0..12_000)
+                .map(|i| {
+                    let phase = std::f32::consts::TAU * 110.0 * i as f32 / 48_000.0;
+                    0.65 * phase.sin() + 0.15 * (phase * 2.0).sin()
+                })
+                .collect();
+            audio.feed_waveform(&send, &wave);
+            for t in 0..470 {
+                let mut column = [0.0; 128];
+                for (bin, magnitude) in column.iter_mut().enumerate() {
+                    let center = 30.0 + 12.0 * (t as f32 * 0.03).sin();
+                    *magnitude = 0.7
+                        * (-((bin as f32 - center) / 3.0).powi(2)).exp()
+                        + 0.2
+                            * (-((bin as f32 - center - 24.0) / 5.0).powi(2)).exp();
+                }
+                audio.feed_spectrum(&send, &column);
+            }
+            audio
+        })
+}
+
 /// D3 at the thumbnail layer: no transparency reaches a committed PNG. The
 /// shared readbacks already composite straight alpha over black (BUG-024), so
 /// this is normally a no-op — it exists so a future readback change can't
@@ -214,6 +253,7 @@ fn render_generator(
             None,
         )
         .map_err(|e| format!("generator build failed: {e}"))?;
+    let audio_preview = thumbnail_audio_visuals(&runtime.graph);
 
     let target = RenderTarget::new(device, width, height, format, "preset-thumb-gen-target");
 
@@ -244,7 +284,7 @@ fn render_generator(
         }
     };
 
-    pump_warmup_frames(device, WARMUP_FRAMES, None, |frame, gpu| {
+    pump_warmup_frames(device, WARMUP_FRAMES, audio_preview.as_ref(), |frame, gpu| {
         // Thumbnails render every binding at its declared default — no card
         // overrides — so an empty manifest is exactly right.
         runtime.render(gpu, &target.texture, &make_ctx(frame), &ParamManifest::default());
@@ -471,30 +511,7 @@ fn render_effect(
     crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
         .map_err(|error| format!("effect resource allocation failed: {error:?}"))?;
 
-    // Factory audio previews use deterministic sample data. Runtime sources
-    // still read only the user's selected send; this registry lives here only.
-    let audio_preview = graph.nodes().any(|node| matches!(node.node.type_id().as_str(),
-        "node.audio_waveform" | "node.audio_spectrum")).then(|| {
-        let mut audio = manifold_core::audio_visual::AudioVisualRegistry::new();
-        let send = manifold_core::AudioSendId::new("thumbnail-audio");
-        audio.set_first_send(Some(&send));
-        audio.ensure(&send, 48_000, 128, 256);
-        let wave: Vec<f32> = (0..12_000).map(|i| {
-            let phase = std::f32::consts::TAU * 110.0 * i as f32 / 48_000.0;
-            0.65 * phase.sin() + 0.15 * (phase * 2.0).sin()
-        }).collect();
-        audio.feed_waveform(&send, &wave);
-        for t in 0..470 {
-            let mut column = [0.0; 128];
-            for (bin, magnitude) in column.iter_mut().enumerate() {
-                let center = 30.0 + 12.0 * (t as f32 * 0.03).sin();
-                *magnitude = 0.7 * (-((bin as f32 - center) / 3.0).powi(2)).exp()
-                    + 0.2 * (-((bin as f32 - center - 24.0) / 5.0).powi(2)).exp();
-            }
-            audio.feed_spectrum(&send, &column);
-        }
-        audio
-    });
+    let audio_preview = thumbnail_audio_visuals(&graph);
 
     // The D4 warm-up, same recipe as generators: a stateful effect
     // (temporal::Feedback prev-frame buffers, trails) develops across the 60

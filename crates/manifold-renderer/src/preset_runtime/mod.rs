@@ -138,6 +138,10 @@ mod bug080_manifest_gate_tests;
 #[path = "tests/persistent_slot.rs"]
 mod persistent_slot_tests;
 
+#[cfg(test)]
+#[path = "tests/transient_slot.rs"]
+mod transient_slot_tests;
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/generator_input.rs"]
 mod generator_input_tests;

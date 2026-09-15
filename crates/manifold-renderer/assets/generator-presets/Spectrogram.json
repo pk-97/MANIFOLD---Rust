@@ -10,17 +10,6 @@
     "isLineBased": false,
     "params": [
       {
-        "id": "amount",
-        "name": "Amount",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 1.0,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F2"
-      },
-      {
         "id": "history",
         "name": "History (s)",
         "min": 0.1,
@@ -88,19 +77,6 @@
       }
     ],
     "bindings": [
-      {
-        "id": "amount",
-        "label": "Amount",
-        "defaultValue": 1.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "mix",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
       {
         "id": "history",
         "label": "History",
@@ -204,8 +180,8 @@
   "nodes": [
     {
       "id": 0,
-      "nodeId": "source",
-      "typeId": "system.source",
+      "nodeId": "generator_input",
+      "typeId": "system.generator_input",
       "handle": "source"
     },
     {
@@ -343,22 +319,12 @@
           "type": "Float",
           "value": 1.0
         }
-      }
-    },
-    {
-      "id": 9,
-      "nodeId": "mix",
-      "typeId": "node.mix",
-      "handle": "mix",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 2
-        }
+      },
+      "outputCanvasScales": {
+        "out": [
+          1,
+          1
+        ]
       }
     },
     {
@@ -413,18 +379,6 @@
     },
     {
       "fromNode": 8,
-      "fromPort": "out",
-      "toNode": 9,
-      "toPort": "b"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 9,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 9,
       "fromPort": "out",
       "toNode": 10,
       "toPort": "in"

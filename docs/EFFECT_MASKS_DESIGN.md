@@ -1,6 +1,6 @@
 # Effect masks — spatial wet/dry for effect groups
 
-**Status:** IN PROGRESS · 2026-09-14 · Codex. Masks and Modifier Groups landed. Standalone Oscilloscope and Spectrogram implemented; source-only routing, contour and audio-to-mask routing deferred.
+**Status:** IN PROGRESS · 2026-09-14 · Codex. Masks and Modifier Groups landed. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
 
 Peter selected all three sources: shapes, the group's incoming image, and another
 layer/generator. "This gives us some very cool sidechain options too."
@@ -100,12 +100,14 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
    existing atoms. Gesture: use a separate playing layer to reveal the masked group
    without displaying the source itself. Resolve visibility against compositor
    code before authoring this slice; do not guess at hidden-layer scheduling.
-3. Separate Oscilloscope and Spectrogram effects (implemented). Each card exposes
+3. Separate Oscilloscope and Spectrogram generators (implemented). Each card exposes
    an Audio Send dropdown through the existing string-parameter rows. An explicit
    selection stores the send's stable ID in its graph node; reordering sends does
    not retarget it. `First send` is an explicit default mode. Deleted sources show
    as missing and emit zero data. Source edits use `SetGraphNodeParamCommand` and
-   normal undo/redo. Audio-to-mask routing is outside this slice.
+   normal undo/redo. These are generator layers, with no input-image blend or Amount control.
+   Spectrogram keeps its 512×256 analysis texture and samples into the canvas at
+   the display transform. Audio-to-mask routing is outside this slice.
 
    The content thread already mixes capture and audio-layer taps into one
    `StreamingSendAnalyzer` per send. A per-hop callback copies its existing raw,
@@ -125,11 +127,11 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
 
    `node.audio_waveform` supplies an array to Range, Array Math, Combine XY and
    Draw Lines. `node.audio_spectrum` supplies raw magnitude history as a texture;
-   decibel conversion, contrast, color mapping and image blending stay separate
+   decibel conversion, contrast, color mapping and canvas transforms stay separate
    graph operations. Source nodes are non-pure I/O boundaries. Any new numeric
    GPU atom uses the shared standalone/fusion code generator.
 
-   Gesture: route a playing audio layer to a send, add either effect, change its
+   Gesture: route a playing audio layer to a send, add either generator, change its
    source and waveform window or spectral history while it plays, then export.
    Focused tests cover ring bounds, waveform sampling, spectrum chronology,
    missing sources, analyzer/scope coexistence and offline feeding. GPU proofs

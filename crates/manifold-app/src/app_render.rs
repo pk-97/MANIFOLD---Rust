@@ -1623,7 +1623,11 @@ impl Application {
                     {
                         let key = sp.key.clone();
                         if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
-                            // Typed (2b.11): each font carries its GenStringParamSelected.
+                            // Typed (2b.11): each choice carries its
+                            // GenStringParamSelected. Audio-send choices are
+                            // projected onto the generator card by
+                            // `attach_audio_sends`, so this reuses the same
+                            // stable payload path as effect cards.
                             let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key
                                 == "fontFamily"
                             {
@@ -1632,6 +1636,27 @@ impl Application {
                                         .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name)
                                             .with_action(PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone()))))
                                         .collect()
+                            } else if key == "audioSend" {
+                                sp.dropdown_choices
+                                    .iter()
+                                    .map(|choice| {
+                                        if choice.disabled {
+                                            manifold_ui::panels::dropdown::DropdownItem::disabled(
+                                                &choice.label,
+                                            )
+                                        } else {
+                                            manifold_ui::panels::dropdown::DropdownItem::new(
+                                                &choice.label,
+                                            )
+                                            .with_action(PanelAction::Params(
+                                                ParamsAction::GenStringParamSelected(
+                                                    *sp_idx,
+                                                    choice.value.clone(),
+                                                ),
+                                            ))
+                                        }
+                                    })
+                                    .collect()
                             } else {
                                 vec![]
                             };

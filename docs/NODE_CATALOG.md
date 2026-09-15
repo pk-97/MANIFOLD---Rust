@@ -483,7 +483,7 @@ _Generated from the node registry. Do not hand-edit. 286 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
-| `Oscilloscope` | Oscilloscope | effect | Audio | 12 |
+| `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
@@ -491,7 +491,7 @@ _Generated from the node registry. Do not hand-edit. 286 nodes registered, group
 | `SceneStrobe` | Scene Strobe | generator | Geometry | 78 |
 | `Skin` | Skin | generator | Geometry | 61 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
-| `Spectrogram` | Spectrogram | effect | Audio | 7 |
+| `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |

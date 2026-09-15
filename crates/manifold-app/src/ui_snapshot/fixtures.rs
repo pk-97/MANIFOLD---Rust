@@ -35,11 +35,30 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {
             let mut scene = inspector_scene();
-            let mut spectrogram = effect("Spectrogram");
-            spectrogram.collapsed = true;
-            scene.project.timeline.layers[1].effects = Some(vec![
-                effect("Oscilloscope"), spectrogram,
-            ]);
+            // Audio visualizers are generator layers. Keep both in the fixture
+            // so the flow exercises the generator card projection while the
+            // selected Oscilloscope card owns the source dropdown.
+            let mut oscilloscope = Layer::new_generator(
+                "Oscilloscope".into(),
+                PresetTypeId::from_string("Oscilloscope".into()),
+                1,
+            );
+            oscilloscope.layer_id = lid("glow");
+            oscilloscope
+                .clips
+                .push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
+
+            let mut spectrogram = Layer::new_generator(
+                "Spectrogram".into(),
+                PresetTypeId::from_string("Spectrogram".into()),
+                2,
+            );
+            spectrogram.layer_id = lid("plasma");
+            spectrogram
+                .clips
+                .push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
+            scene.project.timeline.layers[1] = oscilloscope;
+            scene.project.timeline.layers[2] = spectrogram;
             scene.project.audio_setup.sends.clear();
             scene.project.audio_setup.sends.extend([
                 manifold_core::audio_setup::AudioSend::new("Music"),

@@ -190,12 +190,17 @@ pub(super) fn assign_texture2d_slots(
             {
                 continue;
             }
-            let slot = free_pool.pop().unwrap_or_else(|| {
-                let s = Slot(next_slot);
-                next_slot += 1;
-                slot_dims.push(canvas_dims);
-                s
-            });
+            let dims = crate::node_graph::execution::resolve_dims(plan, res_id, canvas_dims);
+            let slot = free_pool
+                .iter()
+                .rposition(|&slot| slot_dims[slot.0 as usize] == dims)
+                .map(|index| free_pool.swap_remove(index))
+                .unwrap_or_else(|| {
+                    let s = Slot(next_slot);
+                    next_slot += 1;
+                    slot_dims.push(dims);
+                    s
+                });
             resource_to_slot.insert(res_id, slot);
         }
         // Release dead resources — return slots to the free pool.
