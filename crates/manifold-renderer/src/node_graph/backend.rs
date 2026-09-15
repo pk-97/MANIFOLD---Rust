@@ -26,6 +26,7 @@ use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::scene_object::SceneObject;
+use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::transform::Transform;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
@@ -219,6 +220,18 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as `set_transform`.
     fn set_atmosphere(&mut self, _slot: Slot, _value: Atmosphere) {}
 
+    /// [`RenderMode`] value bound to a slot. Mirrors `atmosphere` for the
+    /// [`PortType::RenderMode`] wire shape — CPU-only struct payload set by
+    /// the producing `node.render_mode` atom's evaluate and drained by the
+    /// executor before consumers run. Default impls return `None`.
+    fn render_mode(&self, _slot: Slot) -> Option<RenderMode> {
+        None
+    }
+
+    /// Write a [`RenderMode`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as `set_atmosphere`.
+    fn set_render_mode(&mut self, _slot: Slot, _value: RenderMode) {}
+
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
     /// `node.scene_object`'s evaluate and drained by the executor before
@@ -323,6 +336,8 @@ pub struct MockBackend {
     transforms: AHashMap<Slot, Transform>,
     /// Atmosphere values written via [`Backend::set_atmosphere`] — same shape.
     atmospheres: AHashMap<Slot, Atmosphere>,
+    /// RenderMode values written via [`Backend::set_render_mode`] — same shape.
+    render_modes: AHashMap<Slot, RenderMode>,
     /// SceneObject values written via [`Backend::set_object`] — same shape.
     objects: AHashMap<Slot, SceneObject>,
     /// Skip-passthrough aliases installed this frame via
@@ -344,6 +359,7 @@ impl MockBackend {
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
+            render_modes: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
@@ -464,6 +480,14 @@ impl Backend for MockBackend {
 
     fn set_atmosphere(&mut self, slot: Slot, value: Atmosphere) {
         self.atmospheres.insert(slot, value);
+    }
+
+    fn render_mode(&self, slot: Slot) -> Option<RenderMode> {
+        self.render_modes.get(&slot).copied()
+    }
+
+    fn set_render_mode(&mut self, slot: Slot, value: RenderMode) {
+        self.render_modes.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<SceneObject> {

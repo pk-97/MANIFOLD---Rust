@@ -33,6 +33,7 @@ fn recipe(name: &str) -> EffectGraphDef {
     let file = match name {
         "SceneLoop" => include_str!("../assets/scene-modifier-presets/SceneLoop.json"),
         "SceneFog" => include_str!("../assets/scene-modifier-presets/SceneFog.json"),
+        "RenderMode" => include_str!("../assets/scene-modifier-presets/RenderMode.json"),
         "ElasticSculpture" => {
             include_str!("../assets/scene-modifier-presets/ElasticSculpture.json")
         }
@@ -181,6 +182,7 @@ fn all_stock_files_prepare_through_canonical_host_path() {
         ("VortexFragments", mushroom.clone(), true),
         ("SceneLoop", synthetic_host(), false),
         ("SceneFog", synthetic_host(), false),
+        ("RenderMode", synthetic_host(), false),
     ] {
         let attached = attach(host, name, &format!("stock_{name}"), capture);
         let prepared = prepare_scene_modifiers(&attached, &registry)
@@ -404,11 +406,68 @@ fn source_modifiers_refuse_existing_instance_or_atmosphere_producers() {
         prepare_scene_modifiers(&fog_host, &registry).is_err(),
         "Fog must reject an already-authored atmosphere producer"
     );
-    for name in ["SceneLoop", "SceneFog"] {
+    for name in ["SceneLoop", "SceneFog", "RenderMode"] {
         let metadata = recipe(name).preset_metadata.unwrap();
         assert!(
             metadata.scene_modifier.unwrap().singleton,
             "{name} remains a singleton source"
         );
     }
+}
+
+#[test]
+fn render_mode_stage_resolves_to_render_scene_render_mode_input() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let host = attach(synthetic_host(), "RenderMode", "rm_stock", false);
+    let prepared = prepare_scene_modifiers(&host, &registry).expect("render mode must prepare");
+    let producer = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_mode")
+        .expect("expanded graph must carry the node.render_mode producer");
+    let scene = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_scene")
+        .expect("synthetic host scene must survive expansion");
+    assert!(
+        prepared.def.wires.iter().any(|wire| {
+            wire.from_node == producer.id
+                && wire.from_port == "render_mode"
+                && wire.to_node == scene.id
+                && wire.to_port == "render_mode"
+        }),
+        "the stage endpoint must resolve to render_scene's `render_mode` input \
+         (SCENE_RENDER_MODE_DESIGN.md section 3)"
+    );
+    // The enable gate must be in the expanded graph: enabled × mode → Mul →
+    // the atom's port-shadowed mode scalar (D5).
+    let mul = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.math")
+        .expect("gate Mul must survive expansion");
+    assert!(
+        prepared.def.wires.iter().any(|wire| {
+            wire.from_node == mul.id && wire.to_node == producer.id && wire.to_port == "mode"
+        }),
+        "the enable gate must multiply into the atom's port-shadowed `mode` input"
+    );
+}
+
+#[test]
+fn render_mode_refuses_an_existing_render_mode_producer() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut host = synthetic_host();
+    host.nodes
+        .push(node(36, "existing_render_mode", "node.render_mode"));
+    host.wires.push(wire(36, "render_mode", 1, "render_mode"));
+    let host = attach(host, "RenderMode", "rm_conflict", false);
+    assert!(
+        prepare_scene_modifiers(&host, &registry).is_err(),
+        "Render Mode must reject an already-authored render_mode producer"
+    );
 }

@@ -794,7 +794,7 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
 
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
@@ -974,7 +974,7 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
 
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
@@ -1255,6 +1255,7 @@ impl GpuDevice {
             sample_count,
             false,
             &[],
+            None,
             label,
         )
     }
@@ -1288,6 +1289,44 @@ impl GpuDevice {
             sample_count,
             alpha_to_coverage,
             &[],
+            None,
+            label,
+        )
+    }
+
+    /// [`Self::create_render_pipeline_depth_msaa`] with a `[[point_size]]`
+    /// vertex output — the Points render-mode pipeline
+    /// (SCENE_RENDER_MODE_DESIGN.md D8). `point_size_location` names the
+    /// `vs_entry` output struct member the shader wrote as a plain
+    /// `@location(N) f32`; it is rebound to `BuiltIn::PointSize` before
+    /// SPIR-V emission (WGSL has no `point_size` builtin — see
+    /// `crate::shader_common::rebind_vertex_output_as_point_size`). Pair with
+    /// draws built via `GpuEncoder::depth_msaa_draw_points`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_render_pipeline_depth_msaa_point_size(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        point_size_location: u32,
+        color_format: GpuTextureFormat,
+        depth_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        alpha_to_coverage: bool,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        self.create_render_pipeline_depth_inner(
+            wgsl_source,
+            vs_entry,
+            fs_entry,
+            color_format,
+            depth_format,
+            blend,
+            sample_count,
+            alpha_to_coverage,
+            &[],
+            Some(point_size_location),
             label,
         )
     }
@@ -1332,6 +1371,7 @@ impl GpuDevice {
             sample_count,
             alpha_to_coverage,
             aux_color_formats,
+            None,
             label,
         )
     }
@@ -1348,6 +1388,7 @@ impl GpuDevice {
         sample_count: u32,
         alpha_to_coverage: bool,
         aux_color_formats: &[GpuTextureFormat],
+        point_size_location: Option<u32>,
         label: &str,
     ) -> GpuRenderPipeline {
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
@@ -1359,6 +1400,7 @@ impl GpuDevice {
             depth_format.hash(&mut h);
             alpha_to_coverage.hash(&mut h);
             aux_color_formats.hash(&mut h);
+            point_size_location.hash(&mut h);
             "depth".hash(&mut h);
             h.finish()
         };
@@ -1382,7 +1424,13 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                let result = compile_wgsl_to_msl_render(
+                    wgsl_source,
+                    vs_entry,
+                    fs_entry,
+                    point_size_location,
+                    label,
+                );
 
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
@@ -1582,7 +1630,7 @@ impl GpuDevice {
                     cache.record_miss();
                 }
                 drop(msl_guard);
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
                 }
@@ -1821,6 +1869,51 @@ impl GpuDevice {
             .device
             .newTextureWithDescriptor(&mtl_desc)
             .unwrap_or_else(|| panic!("{label}: MSAA memoryless texture allocation failed"));
+        unsafe { raw.setLabel(Some(&NSString::from_str(label))) };
+        GpuTexture {
+            raw,
+            width,
+            height,
+            depth: 1,
+            format,
+            retire: self.retirement_mark(),
+        }
+    }
+
+    /// Create a real-storage (private) multisample texture for MSAA render
+    /// passes. Identical shape to [`Self::create_texture_msaa_memoryless`]
+    /// but backed by VRAM, so the pass is NOT subject to the tiling
+    /// parameter-buffer budget that memoryless attachments impose — required
+    /// for point-topology draws beyond a few thousand vertices
+    /// (SCENE_RENDER_MODE_DESIGN.md D8; the memoryless variant faults with
+    /// `kIOGPUCommandBufferCallbackErrorOutOfMemoryForParameterBuffer`).
+    pub fn create_texture_msaa(
+        &self,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        sample_count: u32,
+        label: &str,
+    ) -> GpuTexture {
+        let mtl_desc = unsafe {
+            use objc2::AnyThread;
+            MTLTextureDescriptor::init(MTLTextureDescriptor::alloc())
+        };
+        unsafe {
+            mtl_desc.setPixelFormat(to_mtl_pixel_format(format));
+            mtl_desc.setWidth(width as usize);
+            mtl_desc.setHeight(height as usize);
+            mtl_desc.setDepth(1);
+            mtl_desc.setTextureType(MTLTextureType::Type2DMultisample);
+            mtl_desc.setSampleCount(sample_count as usize);
+            mtl_desc.setStorageMode(MTLStorageMode::Private);
+            mtl_desc.setUsage(MTLTextureUsage::RenderTarget);
+            mtl_desc.setMipmapLevelCount(1);
+        }
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .unwrap_or_else(|| panic!("{label}: MSAA texture allocation failed"));
         unsafe { raw.setLabel(Some(&NSString::from_str(label))) };
         GpuTexture {
             raw,

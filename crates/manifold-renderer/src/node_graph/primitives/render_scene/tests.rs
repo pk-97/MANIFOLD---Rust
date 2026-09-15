@@ -514,15 +514,23 @@
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): camera + envmap +
-        // atmosphere + light_0 + object_0 + object_1 — ONE `Object` port
-        // per object now, replacing the 21 legacy per-object port families
-        // (mesh_n/material_n/17 maps/transform_n/instances_n).
-        assert_eq!(s.inputs().len(), 3 + 1 + 2);
+        // atmosphere + render_mode + light_0 + object_0 + object_1 — ONE
+        // `Object` port per object now, replacing the 21 legacy per-object
+        // port families (mesh_n/material_n/17 maps/transform_n/instances_n).
+        assert_eq!(s.inputs().len(), 4 + 1 + 2);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
             s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().ty,
             PortType::Atmosphere
+        );
+        // SCENE_RENDER_MODE_DESIGN.md D2: the optional render_mode input,
+        // same shape as atmosphere (unwired = Rendered = byte-identical).
+        assert!(s.inputs().iter().any(|p| p.name == "render_mode"));
+        assert!(!s.inputs().iter().find(|p| p.name == "render_mode").unwrap().required);
+        assert_eq!(
+            s.inputs().iter().find(|p| p.name == "render_mode").unwrap().ty,
+            PortType::RenderMode
         );
         let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
         assert!(!by_name("object_0").required);
@@ -978,3 +986,462 @@
             "position change must flip the geo key"
         );
     }
+
+// ---- SCENE_RENDER_MODE_DESIGN.md invariants (INV-R1 / INV-R3 / INV-R4) ----
+
+#[test]
+fn render_mode_default_is_rendered_and_fills() {
+    // INV-R1: unwired = RenderMode::default() = Rendered = byte-identical
+    // to no input. The default flows through the SAME branch a wired
+    // Rendered value takes (mode 0 → no material substitution, Fill), so
+    // unwired and wired-Rendered are the identical code path by
+    // construction; these assertions pin the helper behavior both rely on.
+    let default = crate::node_graph::render_mode::RenderMode::default();
+    assert_eq!(default.mode, crate::node_graph::render_mode::RENDER_MODE_RENDERED);
+    assert_eq!(
+        color_pass_fill_mode(&default),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "Rendered (and therefore unwired) must draw Fill"
+    );
+    let wired_rendered = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_RENDERED,
+        line_color: [1.0, 0.0, 0.0, 1.0],
+        line_brightness: 4.0,
+        ..default
+    };
+    assert_eq!(
+        color_pass_fill_mode(&wired_rendered),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "a wired Rendered value must be indistinguishable from unwired"
+    );
+}
+
+#[test]
+fn render_mode_wireframe_draws_lines_and_substitutes_unlit_line_material() {
+    // D6: color pass gets Lines; shading is unlit line_color × brightness.
+    let mode = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_WIREFRAME,
+        line_color: [0.5, 1.0, 0.25, 1.0],
+        line_brightness: 2.0,
+        ..Default::default()
+    };
+    assert_eq!(
+        color_pass_fill_mode(&mode),
+        manifold_gpu::GpuTriangleFillMode::Lines
+    );
+    let material = wireframe_material(&mode);
+    assert_eq!(material.kind, crate::node_graph::material::MaterialKind::Unlit);
+    assert_eq!(
+        material.base_color,
+        [0.5 * 2.0, 1.0 * 2.0, 0.25 * 2.0, 1.0],
+        "unlit line color × line_brightness (D6)"
+    );
+}
+
+#[test]
+fn render_mode_solid_substitutes_phong_clay_material() {
+    // D7: under Solid every object's effective material is a synthesized
+    // Phong carrying the wire's flat clay_color with neutral specular, and
+    // the color pass still draws Fill (Solid is a shading substitution,
+    // not a topology change).
+    let mode = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_SOLID,
+        clay_color: [0.7, 0.4, 0.2, 1.0],
+        ..Default::default()
+    };
+    assert_eq!(
+        color_pass_fill_mode(&mode),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "Solid draws filled triangles, not lines"
+    );
+    let material = clay_material(&mode);
+    assert_eq!(
+        material.kind,
+        crate::node_graph::material::MaterialKind::Phong,
+        "D7: Solid rides the existing Phong pipeline — every object's effective kind is Phong"
+    );
+    assert_eq!(
+        material.base_color, mode.clay_color,
+        "clay_color flows from the wire into the synthesized material"
+    );
+    // Neutral specular/emission — the struct defaults, independent of the
+    // object's own material, with zero emission so the flat clay reads as
+    // lit surface only.
+    assert_eq!(material.specular_color, [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(material.specular_power, 32.0);
+    assert_eq!(material.emission, [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(material.ambient, 0.0);
+    assert_eq!(
+        material.alpha_mode,
+        crate::node_graph::material::AlphaMode::Opaque,
+        "clay is opaque coverage regardless of the object's own alpha mode"
+    );
+}
+
+#[test]
+fn render_mode_solid_rt_enabled_collapses_to_rendered() {
+    // INV-R4 for Solid: rt_enabled + Solid produces the Rendered uniform
+    // set — the effective mode collapses to default, so no clay material
+    // ever reaches the gi_materials table.
+    let solid = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_SOLID,
+        ..Default::default()
+    };
+    let effective = effective_render_mode(&solid, true);
+    assert_eq!(
+        effective,
+        crate::node_graph::render_mode::RenderMode::default(),
+        "rt_enabled must ignore the wire (D4)"
+    );
+    assert_eq!(
+        color_pass_fill_mode(&effective),
+        manifold_gpu::GpuTriangleFillMode::Fill
+    );
+    // Without RT the same wire applies — the gate is rt_enabled, not the
+    // wire's presence.
+    assert_eq!(
+        effective_render_mode(&solid, false).mode,
+        crate::node_graph::render_mode::RENDER_MODE_SOLID
+    );
+}
+
+#[test]
+fn render_mode_modes_compose_at_one_match() {
+    // The substitution arms must live in ONE match at the gather site
+    // (P2/P3 briefs): same site, same mechanism, one branch per mode — never
+    // two scattered conditionals reading the mode separately.
+    let source = include_str!("../render_scene.rs");
+    let gather = source
+        .split_once("fn collect_object_draws<'ctx, 'gpu>")
+        .unwrap()
+        .1
+        .split_once("\n    fn ")
+        .unwrap()
+        .0;
+    assert_eq!(
+        gather.matches("let material = match render_mode.mode").count(),
+        1,
+        "the material substitution must be a single match on the mode"
+    );
+    assert!(
+        gather.contains("RENDER_MODE_WIREFRAME => wireframe_material(&render_mode)"),
+        "wireframe arm must live in the shared match"
+    );
+    assert!(
+        gather.contains("RENDER_MODE_SOLID => clay_material(&render_mode)"),
+        "clay arm must live in the shared match"
+    );
+    assert!(
+        gather.contains("RENDER_MODE_POINTS => wireframe_material(&render_mode)"),
+        "points arm must live in the shared match (no fourth scattered branch)"
+    );
+}
+
+#[test]
+fn render_mode_rt_enabled_ignores_the_wire() {
+    // INV-R4: rt_enabled + wireframe produces the Rendered uniform set —
+    // the effective mode collapses to default, so fill mode is Fill and
+    // no wireframe material ever reaches the gi_materials table.
+    let wireframe = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_WIREFRAME,
+        ..Default::default()
+    };
+    let effective = effective_render_mode(&wireframe, true);
+    assert_eq!(
+        effective,
+        crate::node_graph::render_mode::RenderMode::default(),
+        "rt_enabled must ignore the wire (D4)"
+    );
+    assert_eq!(
+        color_pass_fill_mode(&effective),
+        manifold_gpu::GpuTriangleFillMode::Fill
+    );
+    // And without RT the same wire applies — the gate is rt_enabled, not
+    // the wire's presence.
+    assert_eq!(
+        effective_render_mode(&wireframe, false).mode,
+        crate::node_graph::render_mode::RENDER_MODE_WIREFRAME
+    );
+}
+
+#[test]
+fn depth_and_shadow_passes_force_fill_regardless_of_carried_fill_mode() {
+    // INV-R3: the depth-only batch entry (shadow maps + opaque depth
+    // prepass) forces GpuTriangleFillMode::Fill per draw in the encoder —
+    // a DepthMsaaDraw carrying Lines can never leak into a depth pass.
+    // Structural source check, same pattern as the topology-order tests
+    // above: the forcing site must name Fill and must NOT read the
+    // per-draw field.
+    let source = include_str!("../render_scene.rs");
+    let _ = source;
+    let encoder = include_str!("../../../../../manifold-gpu/src/metal/encoder.rs");
+    let depth_only = encoder
+        .split_once("pub fn draw_instanced_depth_only_batch")
+        .expect("depth-only batch entry must exist")
+        .1
+        .split_once("\n    /// ")
+        .unwrap()
+        .0;
+    let force = depth_only
+        .split_once("setTriangleFillMode")
+        .expect("depth-only pass must force a fill mode per draw (INV-R3)")
+        .1;
+    assert!(
+        force.contains("GpuTriangleFillMode::Fill"),
+        "depth-only pass must force Fill, not read the draw's fill_mode"
+    );
+    assert!(
+        !force.split_once(')').unwrap().0.contains("draw.fill_mode"),
+        "depth-only pass must NOT read draw.fill_mode (INV-R3)"
+    );
+    // The color-pass entries must apply the per-draw field (D6) — proving
+    // the flag reaches color draws and ONLY color draws.
+    for entry in ["pub fn draw_instanced_depth_msaa_batch_desc", "pub fn draw_instanced_depth_batch"] {
+        let body = encoder
+            .split_once(entry)
+            .expect("colour batch entry must exist")
+            .1
+            .split_once("\n    /// ")
+            .unwrap()
+            .0;
+        assert!(
+            body.contains("setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode))"),
+            "{entry} must apply the per-draw fill mode"
+        );
+    }
+}
+
+#[test]
+fn render_mode_points_draws_point_topology_with_unlit_line_shading() {
+    // D8: Points = the same vertex buffers as point primitives, shaded with
+    // the SAME unlit line surface as wireframe (D2: line_color ×
+    // line_brightness serve Points too) — a shading substitution plus a
+    // topology flag, not a new material family.
+    let mode = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_POINTS,
+        line_color: [0.25, 0.5, 1.0, 1.0],
+        line_brightness: 2.0,
+        point_size: 5.0,
+        ..Default::default()
+    };
+    assert!(
+        color_pass_points(&mode),
+        "Points mode must select point topology"
+    );
+    assert_eq!(
+        color_pass_fill_mode(&mode),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "Points is not a fill-mode change — triangles stay filled"
+    );
+    let material = wireframe_material(&mode);
+    assert_eq!(
+        material.kind,
+        crate::node_graph::material::MaterialKind::Unlit,
+        "Points rides the synthesized unlit line material, same as wireframe"
+    );
+    assert_eq!(
+        material.base_color,
+        [0.25 * 2.0, 0.5 * 2.0, 1.0 * 2.0, 1.0],
+        "point shading = line_color × line_brightness (D2)"
+    );
+    // Unwired/Rendered never selects points — INV-R1 parity by construction.
+    assert!(
+        !color_pass_points(&crate::node_graph::render_mode::RenderMode::default()),
+        "Rendered (and therefore unwired) must draw triangles"
+    );
+    // The wire's point_size must reach the uniform slot every draw carries
+    // (build_uniforms is the sole RenderSceneUniforms producer).
+    let material = crate::node_graph::material::Material::default_unlit_white();
+    let cam = crate::node_graph::camera::Camera::default_perspective();
+    let uniforms = build_uniforms(
+        [[0.0; 4]; 4],
+        [[0.0; 4]; 4],
+        &cam,
+        &material,
+        0.0,
+        0.0,
+        &crate::node_graph::atmosphere::Atmosphere::default(),
+        [[0.0; 4]; 4],
+        [[0.0; 4]; 4],
+        1.0,
+        false,
+        mode.point_size,
+    );
+    assert_eq!(
+        uniforms.render_mode,
+        [5.0, 0.0, 0.0, 0.0],
+        "point_size must flow wire → uniform render_mode.x (D8)"
+    );
+}
+
+#[test]
+fn render_mode_points_rt_enabled_collapses_to_rendered() {
+    // INV-R4 for Points: rt_enabled + Points produces the Rendered uniform
+    // set — the effective mode collapses to default, so no point topology
+    // and no unlit line material ever reach the raster path.
+    let points = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_POINTS,
+        ..Default::default()
+    };
+    let effective = effective_render_mode(&points, true);
+    assert_eq!(
+        effective,
+        crate::node_graph::render_mode::RenderMode::default(),
+        "rt_enabled must ignore the wire (D4)"
+    );
+    assert!(
+        !color_pass_points(&effective),
+        "rt_enabled + Points must not select point topology"
+    );
+    assert_eq!(
+        effective_render_mode(&points, false).mode,
+        crate::node_graph::render_mode::RENDER_MODE_POINTS,
+        "without RT the same wire applies"
+    );
+}
+
+#[test]
+fn color_passes_apply_draw_topology_and_depth_forces_triangles() {
+    // INV-R3, topology half: the depth-only batch entry (shadow maps +
+    // opaque depth prepass) hardcodes MTLPrimitiveType::Triangle — a
+    // DepthMsaaDraw carrying Point can never leak into a depth pass. The
+    // colour batches map the per-draw field (D8), same shape as the
+    // fill-mode check above.
+    let encoder = include_str!("../../../../../manifold-gpu/src/metal/encoder.rs");
+    let depth_only = encoder
+        .split_once("pub fn draw_instanced_depth_only_batch")
+        .expect("depth-only batch entry must exist")
+        .1
+        .split_once("\n    /// ")
+        .unwrap()
+        .0;
+    let draw_call = depth_only
+        .split_once("drawPrimitives_vertexStart_vertexCount_instanceCount")
+        .expect("depth-only pass must encode a draw (INV-R3)")
+        .1;
+    assert!(
+        draw_call.contains("MTLPrimitiveType::Triangle"),
+        "depth-only pass must force Triangle topology"
+    );
+    assert!(
+        !draw_call.split_once(')').unwrap().0.contains("draw.primitive"),
+        "depth-only pass must NOT read draw.primitive (INV-R3)"
+    );
+    for entry in ["pub fn draw_instanced_depth_msaa_batch_desc", "pub fn draw_instanced_depth_batch"] {
+        let body = encoder
+            .split_once(entry)
+            .expect("colour batch entry must exist")
+            .1
+            .split_once("\n    /// ")
+            .unwrap()
+            .0;
+        assert!(
+            body.contains("to_mtl_primitive_type(draw.primitive)"),
+            "{entry} must apply the per-draw topology"
+        );
+    }
+    // The points constructor must set Point topology + Fill fill mode.
+    let ctor = encoder
+        .split_once("pub fn depth_msaa_draw_points")
+        .expect("points draw constructor must exist")
+        .1
+        .split_once("\n    /// ")
+        .unwrap()
+        .0;
+    assert!(
+        ctor.contains("GpuPrimitiveType::Point"),
+        "depth_msaa_draw_points must carry Point topology"
+    );
+    assert!(
+        ctor.contains("GpuTriangleFillMode::Fill"),
+        "points draws must not carry a fill mode"
+    );
+}
+
+#[test]
+fn points_mode_switches_the_scene_pass_to_real_attachments() {
+    // D8 root fix: the tiling parameter buffer caps TOTAL point primitives
+    // per memoryless-attachment pass at a few thousand (measured on Apple
+    // Silicon: 2048 points pass, 4096 fault), so a Points-active frame must
+    // swap the scene pass to real-storage MSAA attachments, and must NOT
+    // declare memoryless aux attachments (they would reimpose the budget and
+    // mismatch the single-attachment points pipeline). Structural checks on
+    // both sites.
+    let source = include_str!("../render_scene.rs");
+    let ensure = source
+        .split_once("fn ensure_msaa_targets(")
+        .expect("ensure_msaa_targets must exist")
+        .1
+        .split_once("\n    fn ")
+        .unwrap()
+        .0;
+    assert!(
+        ensure.contains("create_texture_msaa("),
+        "Points-active frames must allocate REAL MSAA attachments"
+    );
+    assert!(
+        ensure.contains("create_texture_msaa_memoryless("),
+        "triangle-mode frames keep the memoryless pair"
+    );
+    assert!(
+        ensure.contains("self.msaa_real == points_active"),
+        "the flavor must flip back to memoryless when Points turns off"
+    );
+    assert!(
+        source.matches("!points_active").count() >= 7,
+        "every aux-attachment pairing (velocity, ao_mask, five denoise feeds) \
+         must be gated off under Points"
+    );
+}
+
+#[test]
+fn render_mode_branch_touches_no_uniforms_outside_the_draw_flags() {
+    // INV-R1 (parity half): the mode branch may only (a) substitute the
+    // object's material, (b) set the draw's fill/topology flags, and (c) put
+    // the wire's point_size into the always-carried uniform slot (inert
+    // unless the points pipeline reads it) — nothing else in
+    // collect_object_draws may read render_mode, so a Rendered/default
+    // value leaves every uniform and pipeline decision untouched.
+    let source = include_str!("../render_scene.rs");
+    let gather = source
+        .split_once("fn collect_object_draws<'ctx, 'gpu>")
+        .unwrap()
+        .1
+        .split_once("\n    fn ")
+        .unwrap()
+        .0;
+    let mentions: Vec<&str> = gather
+        .lines()
+        .filter(|line| line.contains("render_mode"))
+        .collect();
+    for line in &mentions {
+        let allowed = line.contains("objects, cam, envmap_wired, atmosphere, render_mode,")
+            || line.contains("let render_mode = effective_render_mode(render_mode, *rt_enabled)")
+            || line.contains("let material = match render_mode.mode")
+            || line.contains("wireframe_material(&render_mode)")
+            || line.contains("clay_material(&render_mode)")
+            || line.contains("fill_mode: color_pass_fill_mode(&render_mode)")
+            || line.contains("let points = color_pass_points(&render_mode)")
+            || line.contains("render_mode.point_size,")
+            || line.trim() == "points,";
+        assert!(
+            allowed,
+            "collect_object_draws touched render_mode outside the mode branch: {line}"
+        );
+    }
+    assert!(
+        mentions.len() >= 9,
+        "the mode branch must exist: destructure, effective-mode gate, \
+         substitution match, three arms, fill_mode field, points flag, \
+         point_size uniform"
+    );
+    // INV-R1 (Rendered parity): the match's fall-through arm hands the
+    // object's own material through by name — Rendered and Points leave the
+    // gathered material untouched, so a Rendered/default value is
+    // byte-identical to no mode at all.
+    assert!(
+        gather.contains("_ => material,"),
+        "the substitution match must pass the object's material through \
+         unchanged for Rendered/Points (INV-R1)"
+    );
+}

@@ -147,3 +147,43 @@ fn scene_modifier_v3_owner_frames_and_local_snapshot_survive_project_reload() {
     assert_eq!(back.embedded_presets[0].def, graph);
     assert_eq!(back.project_version, "1.15.0");
 }
+
+#[test]
+fn render_mode_stock_recipe_roundtrips_with_gate_and_labels() {
+    // SCENE_RENDER_MODE_DESIGN.md round-trip gate (recipe level): the
+    // RenderMode card's serialized shape — enable gate wiring, mode labels,
+    // per-mode floats, and the render_mode stage endpoint — must survive
+    // save → reload byte-for-byte. Project-level apply/save/reopen rides
+    // the generic scene-modifier instance path (journey-tested for
+    // SurfacePeel); this pins the new recipe's persistence format.
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/scene-modifier-presets/RenderMode.json"
+    ));
+    let parsed = deserialize_preset(source).expect("RenderMode stock recipe parses");
+    let metadata = parsed.preset_metadata.as_ref().expect("recipe metadata");
+    assert_eq!(metadata.id.as_str(), "RenderMode");
+    assert_eq!(metadata.params.len(), 10, "enabled + mode + 8 per-mode rows");
+    let mode = metadata.params.iter().find(|p| p.id == "mode").unwrap();
+    assert_eq!(
+        mode.value_labels,
+        vec!["Rendered", "Solid", "Wireframe", "Points"],
+        "INV-R2 rides the wire as labels: index 0 must stay Rendered"
+    );
+    assert!(mode.whole_numbers, "mode is an integral card row");
+    let recipe = metadata.scene_modifier.as_ref().expect("recipe block");
+    assert!(recipe.singleton);
+    assert_eq!(recipe.enabled_param, "enabled");
+    assert_eq!(recipe.stages.len(), 1);
+    assert_eq!(recipe.stages[0].scope, manifold_core::scene_modifier_preset::SceneStageScope::Scene);
+    assert_eq!(recipe.stages[0].outputs.len(), 1);
+    assert_eq!(
+        recipe.stages[0].outputs[0].endpoint,
+        manifold_core::scene_modifier_preset::SceneEndpoint::RenderMode,
+        "the stage endpoint must resolve to render_scene's render_mode input"
+    );
+
+    let saved = serialize_preset(&parsed).expect("RenderMode recipe serializes");
+    let reparsed = deserialize_preset(&saved).expect("serialized RenderMode reparses");
+    assert_eq!(parsed, reparsed, "save → reload must be lossless");
+}

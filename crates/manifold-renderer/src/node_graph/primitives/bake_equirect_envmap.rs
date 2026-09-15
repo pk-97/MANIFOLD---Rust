@@ -918,6 +918,7 @@ mod gate_gpu_tests {
         let mut material_ws = Vec::new();
         let mut transform_ws = Vec::new();
         let mut atmosphere_ws = Vec::new();
+        let mut render_mode_ws = Vec::new();
         let mut object_ws = Vec::new();
         let backend_ref: &dyn Backend = backend;
         let inputs = NodeInputs::new(&[], backend_ref, &[]);
@@ -930,6 +931,7 @@ mod gate_gpu_tests {
             &mut material_ws,
             &mut transform_ws,
             &mut atmosphere_ws,
+            &mut render_mode_ws,
             &mut object_ws,
         );
         let mut native_enc = device.create_encoder("bake-env-gate-test");

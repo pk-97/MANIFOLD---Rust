@@ -28,6 +28,17 @@ pub(crate) fn parse_and_validate_wgsl(
 ) -> (naga::Module, naga::valid::ModuleInfo) {
     let module = naga::front::wgsl::parse_str(wgsl_source)
         .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
+    validate_module(module, label)
+}
+
+/// Validate a (possibly mutated) naga module with the full validator —
+/// the shared tail of [`parse_and_validate_wgsl`] and
+/// [`rebind_vertex_output_as_point_size`], both of which must surface shader
+/// errors loudly at boot rather than swallow them at runtime.
+fn validate_module(
+    module: naga::Module,
+    label: &str,
+) -> (naga::Module, naga::valid::ModuleInfo) {
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -35,6 +46,59 @@ pub(crate) fn parse_and_validate_wgsl(
     .validate(&module)
     .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
     (module, info)
+}
+
+/// Rebind one vertex-output struct member from `@location(N)` to
+/// `BuiltIn::PointSize`, in place, before validation and SPIR-V emission.
+///
+/// WGSL has no `point_size` builtin — core WGSL omits point topology
+/// entirely and naga's WGSL frontend rejects `@builtin(point_size)` — but
+/// every stage after the parse honors it: naga's IR, naga's SPIR-V backend
+/// (`OpMemberDecorate BuiltIn PointSize`), and SPIRV-Cross's MSL backend
+/// (`[[point_size]]`, gated on `enable_point_size_builtin` which defaults
+/// on) all carry it. So the shader authors the member as a plain
+/// `@location(N) f32` output and this pass flips the binding post-parse.
+/// On a Vulkan backend the same decorated SPIR-V maps to
+/// `VK_DYNAMIC_STATE...`/pipeline viewport state with no extra work here.
+///
+/// `vs_entry` names the vertex entry point whose RESULT struct must carry
+/// the member. Panics on any mismatch — bundled shader source is a
+/// compile-time input, so a wrong entry name or location is a developer
+/// error that must surface at boot (same doctrine as
+/// [`parse_and_validate_wgsl`]).
+pub(crate) fn rebind_vertex_output_as_point_size(
+    module: naga::Module,
+    vs_entry: &str,
+    location: u32,
+    label: &str,
+) -> (naga::Module, naga::valid::ModuleInfo) {
+    let mut module = module;
+    let entry_index = module
+        .entry_points
+        .iter()
+        .position(|ep| ep.name == vs_entry)
+        .unwrap_or_else(|| panic!("{label}: point-size entry '{vs_entry}' not found in module"));
+    let result_ty = module.entry_points[entry_index]
+        .function
+        .result
+        .as_ref()
+        .unwrap_or_else(|| panic!("{label}: point-size entry '{vs_entry}' returns void"))
+        .ty;
+    // `UniqueArena` exposes no mutable accessor — clone the type, flip the
+    // member's binding in the clone, swap it back.
+    let mut ty = module.types[result_ty].clone();
+    let naga::TypeInner::Struct { ref mut members, .. } = ty.inner else {
+        panic!("{label}: point-size entry '{vs_entry}' result must be a struct")
+    };
+    let member = members
+        .iter_mut()
+        .find(|m| matches!(m.binding, Some(naga::Binding::Location { location: loc, .. }) if loc == location))
+        .unwrap_or_else(|| {
+            panic!("{label}: point-size entry '{vs_entry}' has no @location({location}) output")
+        });
+    member.binding = Some(naga::Binding::BuiltIn(naga::BuiltIn::PointSize));
+    module.types.replace(result_ty, ty);
+    validate_module(module, label)
 }
 
 /// Generate optimised SPIR-V from a naga module:

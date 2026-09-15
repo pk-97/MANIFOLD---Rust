@@ -233,6 +233,7 @@ mod tests {
                 "One Euro Filter",
                 "Orbit Camera",
                 "Peak",
+                "Render Mode",
                 "Sample & Hold",
                 "Scale + Offset (value)",
                 "Scene Object",

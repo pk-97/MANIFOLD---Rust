@@ -178,6 +178,7 @@ fn spawn_background_content_thread() -> Arc<AtomicBool> {
                 frame,
                 false,
                 ct.editing_service.data_version(),
+                None, // no audio-visual registry in this verify harness
             );
             frame += 1;
             std::thread::sleep(std::time::Duration::from_millis(16));

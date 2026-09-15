@@ -217,6 +217,11 @@ struct Uniforms {
     // baked in, so the velocity fragment subtracts `xy - zw`. All zeros
     // when temporal_upscale is off — velocity byte-identical to before.
     velocity_jitter: vec4<f32>,
+    // SCENE_RENDER_MODE_DESIGN.md D8 (P3): render-mode params, scene-wide.
+    // x = point_size (px, read by vs_points ONLY — every other vertex entry
+    // ignores it, so Rendered/Solid/Wireframe are byte-identical with any
+    // value here). y/z/w reserved.
+    render_mode: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -766,11 +771,12 @@ struct VsOut {
 // (unwired instances_n) collapses `rot` to the identity matrix and
 // `inst_pos`/`inst_normal` to `v.position`/`v.normal` unchanged, so this
 // is byte-identical to the pre-P8 vertex shader for every unwired object.
-@vertex
-fn vs_main(
-    @builtin(vertex_index) vid: u32,
-    @builtin(instance_index) iid: u32,
-) -> VsOut {
+//
+// The body is a shared helper (not inlined in vs_main) so vs_points can
+// reuse it verbatim — ONE source of truth for the instance/mirror/tangent
+// transform chain. spirv-opt's InlineExhaustive pass inlines it back into
+// every caller, so vs_main's compiled output is unchanged by the split.
+fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let v = verts[vid];
     let inst = instances[iid];
     let rot = euler_xyz(inst.rot_pad.xyz);
@@ -825,6 +831,56 @@ fn vs_main(
         out.appearance_weight = 1.0;
     }
     return out;
+}
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) iid: u32,
+) -> VsOut {
+    return scene_vs_body(vid, iid);
+}
+
+// SCENE_RENDER_MODE_DESIGN.md D8 (P3): the Points pipeline's vertex output.
+// Identical user varyings to VsOut (the points pipeline pairs with
+// fs_unlit, which reads locations 0/2/6 only — the rest ride along
+// untouched) plus the point size. The size member is authored as a plain
+// `@location(7) f32` because WGSL has no point_size builtin; the pipeline
+// is created via `create_render_pipeline_depth_msaa_point_size`, which
+// rebinds this member to `BuiltIn::PointSize` before SPIR-V emission so
+// SPIRV-Cross emits `[[point_size]]`. A separate struct (not VsOut plus a
+// field) because a PointSize builtin may not appear in a fragment entry's
+// inputs — and every fs below takes `VsOut`.
+struct VsOutPoints {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(5) world_tangent: vec4<f32>,
+    @location(6) appearance_weight: f32,
+    @location(7) point_size: f32,
+};
+
+// Points mode draws the SAME vertex buffers with point topology — every
+// vertex becomes a dot. No velocity/ao_mask fields: the points pipeline is
+// the plain (no-aux) variant, so under Points those targets stay at their
+// clear values for the frame (documented v1 scope — Points is a shading
+// audit mode, not a temporal-upscale input).
+@vertex
+fn vs_points(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) iid: u32,
+) -> VsOutPoints {
+    let o = scene_vs_body(vid, iid);
+    return VsOutPoints(
+        o.clip_pos,
+        o.world_pos,
+        o.world_normal,
+        o.uv,
+        o.world_tangent,
+        o.appearance_weight,
+        u.render_mode.x,
+    );
 }
 
 // Appearance weights are a coverage/brightness control. Values below one

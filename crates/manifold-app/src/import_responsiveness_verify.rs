@@ -167,6 +167,7 @@ fn content_thread_keeps_advancing_while_a_large_import_runs_in_the_background() 
                 frame,
                 false,
                 ct.editing_service.data_version(),
+                None, // no audio-visual registry in this verify harness
             );
             frame += 1;
             counter_clone.store(frame, Ordering::Relaxed);

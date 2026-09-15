@@ -294,6 +294,10 @@ const PORT_TRANSFORM_COLOR: Color32 = Color32::new(255, 128, 199, 255);
 /// blue-grey — reads as "atmosphere", hue ~210°, clear of Transform's magenta
 /// (~326°) and Camera's salmon (~0°).
 const PORT_ATMOSPHERE_COLOR: Color32 = Color32::new(150, 185, 215, 255);
+/// `PortType::RenderMode` (scene shading-mode wire, `node.render_mode`).
+/// Violet-cyan — hue ~185°, between Atmosphere's ~210° and Array's ~134°,
+/// clear of both by ≥25°.
+const PORT_RENDER_MODE_COLOR: Color32 = Color32::new(110, 220, 235, 255); // design-token-exempt: port-type palette is the grandfathered graph-editor family (design_tokens.rs DEBT note); tokenizes with the section-15 ramp
 /// `PortType::Object` (one scene object's full bundle, `node.scene_object`).
 /// Chartreuse — hue ~93°, the widest open gap on the wheel (between Light's
 /// ~53° and Array's ~134°, ≥40° from each neighbour).

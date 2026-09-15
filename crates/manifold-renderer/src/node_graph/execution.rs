@@ -83,6 +83,8 @@ pub struct Executor {
     /// Sibling scratch for [`PortType::Transform`] writes — same drain pattern.
     transform_write_scratch: Vec<(Slot, crate::node_graph::transform::Transform)>,
     /// Sibling scratch for [`PortType::Atmosphere`] writes — same drain pattern.
+    /// Sibling scratch for [`PortType::RenderMode`] writes — same drain pattern.
+    render_mode_write_scratch: Vec<(Slot, crate::node_graph::render_mode::RenderMode)>,
     atmosphere_write_scratch: Vec<(Slot, crate::node_graph::atmosphere::Atmosphere)>,
     /// Sibling scratch for [`PortType::Object`] writes — same drain pattern.
     object_write_scratch: Vec<(Slot, crate::node_graph::scene_object::SceneObject)>,
@@ -408,6 +410,7 @@ impl Executor {
             material_write_scratch: Vec::new(),
             transform_write_scratch: Vec::new(),
             atmosphere_write_scratch: Vec::new(),
+            render_mode_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
@@ -1358,6 +1361,7 @@ impl Executor {
                     self.material_write_scratch.clear();
                     self.transform_write_scratch.clear();
                     self.atmosphere_write_scratch.clear();
+                    self.render_mode_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
                     {
@@ -1373,6 +1377,7 @@ impl Executor {
                             &mut self.material_write_scratch,
                             &mut self.transform_write_scratch,
                             &mut self.atmosphere_write_scratch,
+                            &mut self.render_mode_write_scratch,
                             &mut self.object_write_scratch,
                         );
                         // Canvas dims are no longer hung off the
@@ -1479,6 +1484,10 @@ impl Executor {
                     // Atmosphere writes use the same drain shape.
                     for (slot, value) in self.atmosphere_write_scratch.drain(..) {
                         self.backend.set_atmosphere(slot, value);
+                    }
+                    // RenderMode writes use the same drain shape.
+                    for (slot, value) in self.render_mode_write_scratch.drain(..) {
+                        self.backend.set_render_mode(slot, value);
                     }
                     // Object writes use the same drain shape.
                     for (slot, value) in self.object_write_scratch.drain(..) {
@@ -1756,6 +1765,7 @@ impl Executor {
                 self.material_write_scratch.clear();
                 self.transform_write_scratch.clear();
                 self.atmosphere_write_scratch.clear();
+                self.render_mode_write_scratch.clear();
                 self.object_write_scratch.clear();
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
@@ -1770,6 +1780,7 @@ impl Executor {
                     &mut self.material_write_scratch,
                     &mut self.transform_write_scratch,
                     &mut self.atmosphere_write_scratch,
+                    &mut self.render_mode_write_scratch,
                     &mut self.object_write_scratch,
                 );
                 let mut ctx = EffectNodeContext::with_state(

@@ -1,0 +1,492 @@
+{
+  "version": 3,
+  "name": "Render Mode",
+  "presetMetadata": {
+    "id": "RenderMode",
+    "displayName": "Render Mode",
+    "category": "Atmosphere",
+    "oscPrefix": "render_mode",
+    "available": true,
+    "params": [
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "valueLabels": ["Rendered", "Solid", "Wireframe", "Points"]
+      },
+      {
+        "id": "clay_color_r",
+        "name": "Clay Color R",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.8
+      },
+      {
+        "id": "clay_color_g",
+        "name": "Clay Color G",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.8
+      },
+      {
+        "id": "clay_color_b",
+        "name": "Clay Color B",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.8
+      },
+      {
+        "id": "line_color_r",
+        "name": "Line Color R",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.1
+      },
+      {
+        "id": "line_color_g",
+        "name": "Line Color G",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.9
+      },
+      {
+        "id": "line_color_b",
+        "name": "Line Color B",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "line_brightness",
+        "name": "Line Brightness",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "point_size",
+        "name": "Point Size",
+        "min": 1.0,
+        "max": 16.0,
+        "defaultValue": 2.0
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_mode",
+          "param": "value"
+        }
+      },
+      {
+        "id": "clay_color_r",
+        "label": "Clay Color R",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_clay_r",
+          "param": "value"
+        }
+      },
+      {
+        "id": "clay_color_g",
+        "label": "Clay Color G",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_clay_g",
+          "param": "value"
+        }
+      },
+      {
+        "id": "clay_color_b",
+        "label": "Clay Color B",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_clay_b",
+          "param": "value"
+        }
+      },
+      {
+        "id": "line_color_r",
+        "label": "Line Color R",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_line_r",
+          "param": "value"
+        }
+      },
+      {
+        "id": "line_color_g",
+        "label": "Line Color G",
+        "defaultValue": 0.9,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_line_g",
+          "param": "value"
+        }
+      },
+      {
+        "id": "line_color_b",
+        "label": "Line Color B",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_line_b",
+          "param": "value"
+        }
+      },
+      {
+        "id": "line_brightness",
+        "label": "Line Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_brightness",
+          "param": "value"
+        }
+      },
+      {
+        "id": "point_size",
+        "label": "Point Size",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "rm_point_size",
+          "param": "value"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": true,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "rm_scene_stage",
+          "scope": "scene",
+          "inputs": [],
+          "outputs": [
+            {
+              "port": "render_mode",
+              "endpoint": "renderMode"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "rm_scene_stage",
+      "typeId": "group",
+      "handle": "RenderModeStage",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "render_mode",
+              "portType": "RenderMode"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "rm_atm",
+            "typeId": "node.render_mode",
+            "handle": "rm_atm",
+            "params": {
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "clay_color_r": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "clay_color_g": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "clay_color_b": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "line_color_r": {
+                "type": "Float",
+                "value": 0.1
+              },
+              "line_color_g": {
+                "type": "Float",
+                "value": 0.9
+              },
+              "line_color_b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "line_brightness": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "point_size": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": 2,
+            "nodeId": "rm_enabled",
+            "typeId": "node.value",
+            "handle": "rm_enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "rm_mode",
+            "typeId": "node.value",
+            "handle": "rm_mode",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "rm_clay_r",
+            "typeId": "node.value",
+            "handle": "rm_clay_r",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.8
+              }
+            }
+          },
+          {
+            "id": 5,
+            "nodeId": "rm_clay_g",
+            "typeId": "node.value",
+            "handle": "rm_clay_g",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.8
+              }
+            }
+          },
+          {
+            "id": 6,
+            "nodeId": "rm_clay_b",
+            "typeId": "node.value",
+            "handle": "rm_clay_b",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.8
+              }
+            }
+          },
+          {
+            "id": 7,
+            "nodeId": "rm_line_r",
+            "typeId": "node.value",
+            "handle": "rm_line_r",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.1
+              }
+            }
+          },
+          {
+            "id": 8,
+            "nodeId": "rm_line_g",
+            "typeId": "node.value",
+            "handle": "rm_line_g",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.9
+              }
+            }
+          },
+          {
+            "id": 9,
+            "nodeId": "rm_line_b",
+            "typeId": "node.value",
+            "handle": "rm_line_b",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 10,
+            "nodeId": "rm_brightness",
+            "typeId": "node.value",
+            "handle": "rm_brightness",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 11,
+            "nodeId": "rm_point_size",
+            "typeId": "node.value",
+            "handle": "rm_point_size",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": 12,
+            "nodeId": "rm_mul",
+            "typeId": "node.math",
+            "handle": "rm_mul",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "mode"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "clay_color_r"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "clay_color_g"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "clay_color_b"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "line_color_r"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "line_color_g"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "line_color_b"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "line_brightness"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "point_size"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "render_mode",
+            "toNode": 13,
+            "toPort": "render_mode"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

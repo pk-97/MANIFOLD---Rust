@@ -254,6 +254,11 @@ pub enum GpuTriangleFillMode {
 pub enum GpuPrimitiveType {
     Triangle,
     Line,
+    /// Point sprites — one point per vertex, size from the vertex shader's
+    /// point-size output (SCENE_RENDER_MODE_DESIGN.md D8; the pipeline is
+    /// built via `GpuDevice::create_render_pipeline_depth_msaa_point_size`
+    /// so the WGSL `@location` output is rebound to `BuiltIn::PointSize`).
+    Point,
 }
 
 // ─── Vertex Layout ───────────────────────────────────────────────────

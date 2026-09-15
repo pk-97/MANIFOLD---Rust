@@ -166,6 +166,10 @@ pub struct MetalBackend {
     /// Same shape as `transforms` — drained after `node.atmosphere`'s
     /// `evaluate`.
     atmospheres: AHashMap<Slot, crate::node_graph::atmosphere::Atmosphere>,
+    /// CPU-only [`RenderMode`] values written via [`Backend::set_render_mode`].
+    /// Same shape as `atmospheres` — drained after `node.render_mode`'s
+    /// `evaluate`.
+    render_modes: AHashMap<Slot, crate::node_graph::render_mode::RenderMode>,
     /// CPU-only [`SceneObject`] values written via [`Backend::set_object`].
     /// Same shape as `atmospheres` — drained after `node.scene_object`'s
     /// `evaluate`.
@@ -210,6 +214,7 @@ impl MetalBackend {
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
+            render_modes: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -243,6 +248,7 @@ impl MetalBackend {
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
+            render_modes: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -689,6 +695,14 @@ impl Backend for MetalBackend {
 
     fn set_atmosphere(&mut self, slot: Slot, value: crate::node_graph::atmosphere::Atmosphere) {
         self.atmospheres.insert(slot, value);
+    }
+
+    fn render_mode(&self, slot: Slot) -> Option<crate::node_graph::render_mode::RenderMode> {
+        self.render_modes.get(&slot).copied()
+    }
+
+    fn set_render_mode(&mut self, slot: Slot, value: crate::node_graph::render_mode::RenderMode) {
+        self.render_modes.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<crate::node_graph::scene_object::SceneObject> {
