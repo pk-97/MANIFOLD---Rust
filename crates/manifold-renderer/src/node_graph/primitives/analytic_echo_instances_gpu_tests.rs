@@ -210,8 +210,15 @@ use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
 use crate::node_graph::primitive::PrimitiveSpec;
 
+/// BUG-x72p: a `BufferGather` input no longer forces Boundary — the fused
+/// buffer codegen emits the gathered kernel (the wire stays external, bound
+/// read-only, the body indexes it whole). What keeps the echo unfused on the
+/// live path is its OUTPUT CAPACITY: `ECHO_CAPACITY` x the input — a
+/// non-identity function the fresh-`dst` fused model can't size.
+/// `build_region` probes every member's `array_output_capacity` when a region
+/// has a gathered member and refuses anything that isn't the input minimum.
 #[test]
-fn structured_modifier_echo_indexed_gather_is_fusion_boundary() {
+fn structured_modifier_echo_indexed_capacity_refuses_the_gather_identity_probe() {
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![RegionNode {
@@ -240,8 +247,20 @@ fn structured_modifier_echo_indexed_gather_is_fusion_boundary() {
         sampled_externals: Vec::new(),
         camera_externals: 0,
     };
+    // The gathered kernel IS expressible — fusion refusal is not the
+    // codegen's job anymore.
+    let g = generate_fused(&region).expect("the gathered echo kernel fuses");
     assert!(
-        generate_fused(&region).is_err(),
-        "indexed expansion must remain a standalone boundary"
+        naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+        "fused gathered echo kernel parses:\n{}",
+        g.wgsl
+    );
+    let prim = AnalyticEchoInstances::new();
+    let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+    assert_eq!(
+        node.array_output_capacity("instances", &Default::default(), &[("instances", 1009)]),
+        Some(1009 * ECHO_CAPACITY),
+        "multiplicative capacity — the identity probe refuses the region, \
+         so the echo renders unfused (always correct)"
     );
 }
