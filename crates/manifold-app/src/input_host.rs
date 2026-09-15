@@ -40,7 +40,6 @@ pub struct AppInputHost<'a> {
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,
     pub pending_export: &'a mut bool,
-    pub effect_clipboard: &'a mut manifold_editing::clipboard::EffectClipboard,
     /// D5 (docs/TIMELINE_INGEST_DESIGN.md): Finder-pasted files route through
     /// the same ingest path a Finder drag-drop uses.
     pub project_io: &'a mut crate::project_io::ProjectIOService,
@@ -206,9 +205,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                     .filter_map(|&i| effects.get(i).cloned())
                     .collect();
                 if selected.len() == 1 {
-                    self.effect_clipboard.copy_single(&selected[0]);
+                    self.ui_root.effect_clipboard.copy_single(&selected[0]);
                 } else if !selected.is_empty() {
-                    self.effect_clipboard.copy_all(&selected);
+                    self.ui_root.effect_clipboard.copy_all(&selected);
                 }
                 if !selected.is_empty() {
                     self.ui_root.scene_modifier_clipboard = None;
@@ -228,7 +227,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 &layer,
                 &selected,
             ) {
-                Ok(clipboard) => self.ui_root.scene_modifier_clipboard = Some(clipboard),
+                Ok(clipboard) => self.ui_root.set_scene_modifier_clipboard(Some(clipboard)),
                 Err(reason) => ContentCommand::send(
                     self.content_tx,
                     ContentCommand::GraphEditRejected(reason),
@@ -255,9 +254,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .filter_map(|&i| effects.get(i).cloned())
                 .collect();
             if selected.len() == 1 {
-                self.effect_clipboard.copy_single(&selected[0]);
+                self.ui_root.effect_clipboard.copy_single(&selected[0]);
             } else if !selected.is_empty() {
-                self.effect_clipboard.copy_all(&selected);
+                self.ui_root.effect_clipboard.copy_all(&selected);
             }
             if !selected.is_empty() {
                 self.ui_root.scene_modifier_clipboard = None;
@@ -308,7 +307,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
             return true;
         }
-        if !self.effect_clipboard.has_content() {
+        if !self.ui_root.effect_clipboard.has_content() {
             return false;
         }
         let tab = self.ui_root.inspector.last_effect_tab();
@@ -326,7 +325,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             effects_len
         };
 
-        let clones = self.effect_clipboard.get_paste_clones();
+        let clones = self.ui_root.effect_clipboard.get_paste_clones();
         for (offset, fx) in clones.into_iter().enumerate() {
             // Fresh, independent copy: new EffectId + dropped hardware bindings.
             // Drop group membership too — this is a cross-chain paste, so the
@@ -1936,7 +1935,6 @@ mod automation_clipboard_host_tests {
         current_project_path: Option<std::path::PathBuf>,
         pending_close_output: bool,
         pending_export: bool,
-        effect_clipboard: manifold_editing::clipboard::EffectClipboard,
         project_io: crate::project_io::ProjectIOService,
         #[cfg(target_os = "macos")]
         internal_clipboard_change_count: Option<i64>,
@@ -1979,7 +1977,6 @@ mod automation_clipboard_host_tests {
                 selection: UIState::new(), active_layer: None, needs_rebuild: false,
                 needs_structural_sync: false, scroll_dirty: Default::default(),
                 current_project_path: None, pending_close_output: false, pending_export: false,
-                effect_clipboard: Default::default(),
                 project_io: crate::project_io::ProjectIOService::new(&crate::user_prefs::UserPrefs::in_memory()),
                 #[cfg(target_os = "macos")]
                 internal_clipboard_change_count: None,
@@ -1999,7 +1996,7 @@ mod automation_clipboard_host_tests {
                 current_project_path: &self.current_project_path, has_output_window: false,
                 pending_close_output: &mut self.pending_close_output,
                 pending_export: &mut self.pending_export,
-                effect_clipboard: &mut self.effect_clipboard, project_io: &mut self.project_io,
+                project_io: &mut self.project_io,
                 #[cfg(target_os = "macos")]
                 internal_clipboard_change_count: &mut self.internal_clipboard_change_count,
             }
@@ -2114,14 +2111,14 @@ mod automation_clipboard_host_tests {
             .and_then(|owner| owner.graph.as_ref())
             .expect("source graph");
         let modifier_id = source_graph.scene_modifiers[0].id.clone();
-        h.ui_root.scene_modifier_clipboard = Some(
+        h.ui_root.set_scene_modifier_clipboard(Some(
             crate::scene_modifier_transfer::ModifierClipboard::capture(
                 &h.project,
                 &layer_id,
                 std::slice::from_ref(&modifier_id),
             )
             .expect("modifier clipboard capture"),
-        );
+        ));
         h.ui_root
             .inspector
             .configure_modifier_cards(&[], Some(&destination_id), true, Vec::new());
@@ -2163,6 +2160,96 @@ mod automation_clipboard_host_tests {
         assert!(h.host().handle_effect_paste());
         assert!(matches!(h.rx.try_recv().unwrap(), ContentCommand::Execute(_)));
         assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn modifier_copy_supersedes_effect_clipboard() {
+        // Latest copy wins across both clipboards: a modifier copy made after
+        // an effect copy must clear the effect clipboard, or a later paste
+        // resurrects the stale effect.
+        let mut h = Harness::new();
+        let effect = h.project.settings.master_effects[0].clone();
+        let surface = manifold_ui::param_surface::ParamSurface {
+            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+            title: "ClipboardTest".into(), collapsed: false, enabled: true,
+            effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
+            has_graph_mod: false, layer_id: None, modifier: None,
+            rows: Vec::new(), string_params: Vec::new(), audio: Default::default(),
+            relight: Default::default(),
+        };
+        let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
+        let layer_id = layer.layer_id.clone();
+        layer.effects = Some(vec![effect]);
+        h.project.timeline.layers.push(layer);
+        h.active_layer = Some(layer_id.clone());
+        h.ui_root.inspector.configure_layer_effects(&[surface], Some(&layer_id));
+        assert!(h.ui_root.inspector.select_all_effects());
+        assert!(h.host().handle_effect_copy());
+        assert!(h.ui_root.effect_clipboard.has_content());
+
+        // Scene-modifier scope on a generator layer, one SceneFog applied.
+        let mut gen_layer = Layer::new_generator(
+            "WaveGrid".into(),
+            PresetTypeId::new("WaveGrid"),
+            0,
+        );
+        let gen_layer_id = LayerId::new("supersede-gen");
+        gen_layer.layer_id = gen_layer_id.clone();
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
+            .expect("WaveGrid fixture")
+            .clone();
+        gen_layer.gen_params_or_init().graph = Some(graph);
+        gen_layer.gen_params_or_init().refresh_manifest_from_graph();
+        h.project.timeline.layers.push(gen_layer);
+        let mut add = crate::scene_modifier_edit::build_action(
+            &h.project,
+            crate::scene_modifier_edit::SceneModifierAction::Add(gen_layer_id.clone(), "SceneFog".into()),
+        )
+        .expect("scene modifier add");
+        add.execute(&mut h.project);
+        let modifier_id = h
+            .project
+            .graph_target_owner(&GraphTarget::Generator(gen_layer_id.clone()))
+            .and_then(|owner| owner.graph.as_ref())
+            .expect("source graph")
+            .scene_modifiers[0]
+            .id
+            .clone();
+        let mod_surface = manifold_ui::param_surface::ParamSurface {
+            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+            title: "SceneFog".into(),
+            rows: Vec::new(),
+            string_params: Vec::new(),
+            audio: Default::default(),
+            modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
+                instance_id: modifier_id.clone(),
+                layer_id: gen_layer_id.clone(),
+                enabled_label: "Enabled".into(),
+                stack_index: 0,
+                stack_len: 1,
+                targets_all: true,
+                objects: Vec::new(),
+            }),
+            effect_index: 0,
+            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{}", modifier_id)),
+            enabled: true,
+            collapsed: false,
+            supports_envelopes: true,
+            has_graph_mod: false,
+            layer_id: None,
+            relight: Default::default(),
+        };
+        h.ui_root
+            .inspector
+            .configure_modifier_cards(&[mod_surface], Some(&gen_layer_id), true, Vec::new());
+        h.ui_root.inspector.clear_effect_selection(&mut h.ui_root.tree);
+        assert!(h.ui_root.inspector.select_all_modifiers());
+        assert!(h.host().handle_effect_copy());
+        assert!(h.ui_root.scene_modifier_clipboard.is_some());
+        assert!(
+            !h.ui_root.effect_clipboard.has_content(),
+            "modifier copy must clear the effect clipboard"
+        );
     }
 
     #[test]

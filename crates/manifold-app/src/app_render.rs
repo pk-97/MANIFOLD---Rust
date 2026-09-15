@@ -1024,7 +1024,7 @@ impl Application {
         self.ws.ui_root.intercept_overlay_actions(&mut actions);
 
         // Update effect clipboard count for browser popup
-        self.ws.ui_root.effect_clipboard_count = self.effect_clipboard.count();
+        self.ws.ui_root.effect_clipboard_count = self.ws.ui_root.effect_clipboard.count();
 
         // Trigger Ableton re-discovery when the picker opens so it shows fresh data.
         if self.ws.ui_root.ableton_rediscovery_needed {
@@ -1307,7 +1307,7 @@ impl Application {
                             .map(|c| c.effects.len())
                             .unwrap_or(0),
                     };
-                    let clones = self.effect_clipboard.get_paste_clones();
+                    let clones = self.ws.ui_root.effect_clipboard.get_paste_clones();
                     for (offset, fx) in clones.into_iter().enumerate() {
                         // Fresh, independent copy: new EffectId + dropped hardware
                         // bindings. Drop group membership too — cross-chain paste,
