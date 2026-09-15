@@ -3,9 +3,9 @@
 
 use super::SceneModifierExpandError;
 use crate::node_graph::{Graph, ParamValue};
-use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_modifier_preset::SceneEndpoint;
+use manifold_core::NodeId;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct PreparedModifierParameterGuards {
@@ -55,7 +55,7 @@ impl PreparedModifierParameterGuards {
             }
             sources.push((source.node_id.clone(), params));
         }
-        let raster_scenes = owner
+        let mut raster_scenes: Vec<NodeId> = owner
             .scene_modifiers
             .iter()
             .filter(|modifier| {
@@ -75,6 +75,47 @@ impl PreparedModifierParameterGuards {
             })
             .map(|modifier| modifier.scene.node.clone())
             .collect();
+        // Legacy v2 graphs have no scene-modifier metadata. Their fragment
+        // stages survive inside flattened groups, so discover every render
+        // scene reachable downstream from those stages and apply the same
+        // canonical raster guard used by modern stacks.
+        let fragment_ids: BTreeSet<u32> = index
+            .flat
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.type_id.as_str(),
+                    "node.ordered_recon_mesh" | "node.transform_mesh_patches"
+                )
+            })
+            .map(|node| node.id)
+            .collect();
+        let mut pending: Vec<u32> = fragment_ids.iter().copied().collect();
+        let mut visited = BTreeSet::new();
+        while let Some(from_node) = pending.pop() {
+            for wire in index
+                .flat
+                .wires
+                .iter()
+                .filter(|wire| wire.from_node == from_node)
+            {
+                if !visited.insert(wire.to_node) {
+                    continue;
+                }
+                let Some(target) = index.flat.nodes.iter().find(|node| node.id == wire.to_node)
+                else {
+                    continue;
+                };
+                if target.type_id == "node.render_scene" {
+                    if !target.node_id.is_empty() && !raster_scenes.contains(&target.node_id) {
+                        raster_scenes.push(target.node_id.clone());
+                    }
+                } else {
+                    pending.push(target.id);
+                }
+            }
+        }
         Ok(Self {
             sources,
             raster_scenes,
@@ -152,5 +193,29 @@ impl PreparedModifierParameterGuards {
                 .map_err(|error| invalid(scene.to_string(), error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LEGACY_SURFACE_PEEL: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/scene-modifiers/surface_peel_applied_v2.json"
+    ));
+
+    #[test]
+    fn legacy_fragment_reaches_only_its_render_scene_guard() {
+        let owner: EffectGraphDef =
+            serde_json::from_str(LEGACY_SURFACE_PEEL).expect("legacy fixture parses");
+        let guards = PreparedModifierParameterGuards::prepare(&owner)
+            .expect("legacy fragment graph should prepare");
+        assert_eq!(
+            guards.raster_scenes,
+            vec![NodeId::new("scan_render")],
+            "only the downstream render scene receives the raster guard"
+        );
+        assert!(guards.sources.is_empty());
     }
 }

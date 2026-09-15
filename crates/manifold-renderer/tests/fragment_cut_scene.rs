@@ -247,3 +247,46 @@ fn mixed_fragment_wave_and_mask_stack_shares_cut_maps() {
             .any(|wire| wire.to_port == "topology")
     );
 }
+
+#[test]
+fn legacy_cut_preparation_is_idempotent_and_keeps_inner_controls_live() {
+    use manifold_renderer::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+    use manifold_renderer::node_graph::{EffectGraphDefExt, ParamValue};
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/scene-modifiers/surface_peel_applied_v2.json");
+    let mut owner: EffectGraphDef = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
+    assert!(
+        prepared
+            .def
+            .nodes
+            .iter()
+            .any(|node| node.type_id == "node.cut_mesh_cells")
+    );
+    let second = prepare_scene_modifiers(&prepared.def, &registry).unwrap();
+    assert_eq!(
+        prepared.def, second.def,
+        "derived preparation must be an exact no-op"
+    );
+    let mut graph = prepared.def.clone().into_graph(&registry).unwrap();
+    let writes =
+        PreparedGraphValueWrites::prepare(&owner, &prepared.routes, &graph, &Default::default())
+            .unwrap();
+    assert!(set_leaf(
+        &mut owner.nodes,
+        "node.transform_mesh_patches",
+        "cell_size",
+        0.13
+    ));
+    writes.apply(&owner, &mut graph).unwrap();
+    for type_id in ["node.transform_mesh_patches", "node.cut_mesh_cells"] {
+        assert!(
+            graph
+                .nodes()
+                .any(|node| node.node.type_id().as_str() == type_id
+                    && node.params.get("cell_size") == Some(&ParamValue::Float(0.13))),
+            "{type_id}"
+        );
+    }
+}

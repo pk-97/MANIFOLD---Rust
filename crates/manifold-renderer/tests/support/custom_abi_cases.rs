@@ -6,7 +6,18 @@ pub struct CustomAbiCase {
     pub shader_struct: &'static str,
     pub aliases: &'static [(&'static str, &'static str)],
 }
+
+/// Both cut-map primitives dispatch the same custom `CutMapUniforms` ABI.
+pub const CUT_MAP_TYPE_IDS: &[&str] = &["node.cut_mesh_bands", "node.cut_mesh_cells"];
+
 pub const CASES: &[CustomAbiCase] = &[
+    CustomAbiCase {
+        source: "mesh_cut_map.rs",
+        rust_struct: "CutMapUniforms",
+        shader: "shaders/mesh_cut_map.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
     CustomAbiCase {
         source: "render_mesh_diagram.rs",
         rust_struct: "DiagramUniforms",

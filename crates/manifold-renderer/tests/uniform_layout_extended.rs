@@ -126,6 +126,38 @@ mod custom {
     }
 
     #[test]
+    fn cut_map_primitives_use_the_reflected_shared_custom_abi() {
+        let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+        for type_id in custom_abi_cases::CUT_MAP_TYPE_IDS {
+            assert!(
+                registry.construct(type_id).is_some(),
+                "cut-map primitive is not registered: {type_id}"
+            );
+        }
+        let case = custom_abi_cases::CASES
+            .iter()
+            .find(|case| case.rust_struct == "CutMapUniforms")
+            .expect("shared cut-map custom ABI case");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        let source = std::fs::read_to_string(root.join(case.source)).expect("cut-map source");
+        assert!(
+            source.contains(case.shader),
+            "cut-map source must include its shader"
+        );
+        let shader = std::fs::read_to_string(root.join(case.shader)).expect("cut-map shader");
+        let declaration =
+            shader_declaration(&shader, case.shader_struct).expect("Params declaration");
+        assert_wgsl_layout(
+            &root.join(case.source),
+            case.rust_struct,
+            &declaration,
+            case.shader_struct,
+            case.aliases,
+        )
+        .expect("shared CutMapUniforms ABI");
+    }
+
+    #[test]
     fn every_production_primitive_mirror_has_a_proof() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
         let mut expected: BTreeSet<(String, String)> = texture_abi_cases::CASES
@@ -177,8 +209,7 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count,
-            72,
+            scalar_count, 72,
             "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles, covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");

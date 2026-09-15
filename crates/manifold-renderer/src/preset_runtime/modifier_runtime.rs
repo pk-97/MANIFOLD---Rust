@@ -71,7 +71,9 @@ impl PresetRuntime {
         math_view: Option<(&manifold_core::NodeId, crate::node_graph::scene_modifier_expand::MathViewScope)>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let (render_def, authoring) =
-            if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc) {
+            if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
+                || crate::node_graph::scene_modifier_expand::contains_fragments(&doc)
+            {
                 let prepared = match math_view {
                     Some((modifier_id, scope)) => crate::node_graph::scene_modifier_expand::prepare_scene_modifier_math_view(&doc, registry, modifier_id, scope)?,
                     None => crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(&doc, registry)?,

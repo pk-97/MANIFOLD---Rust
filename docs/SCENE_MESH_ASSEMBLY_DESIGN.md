@@ -47,6 +47,8 @@ coordinates. The same map resamples incoming geometry, reference geometry
 and aligned weights before the existing motion primitives run. Later stack
 stages receive the refined reference, preserving index correspondence.
 Saved presets retain their identities, graphs and live parameter bindings.
+Frozen legacy graphs use the same derived cut preparation, so migrating a
+preset preserves its rendered result. Re-preparing a derived graph is a no-op.
 Math View keeps its existing sparse source-face diagnostic representation;
 its sampled indices are not reinterpreted as compacted cut-map indices.
 

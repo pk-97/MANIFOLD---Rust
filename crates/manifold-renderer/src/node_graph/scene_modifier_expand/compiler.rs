@@ -179,11 +179,23 @@ fn prepare_scene_modifiers_impl(
         });
     }
     if owner.scene_modifiers.is_empty() {
+        if !super::fragment_cuts::contains_fragments(owner) {
+            return Ok(PreparedSceneModifierGraph {
+                def: owner.clone(), routes: Vec::new(), event_routes: Vec::new(),
+                binding_sources: Vec::new(),
+            });
+        }
+        let mut def = manifold_core::flatten::flatten_groups(owner).map_err(|error| invalid(
+            "fragmentCuts", format!("legacy graph flattening failed: {error}"),
+        ))?;
+        let binding_count = def.preset_metadata.as_ref().map_or(0, |metadata| metadata.bindings.len());
+        let mut binding_sources = vec![None; binding_count];
+        super::fragment_cuts::apply(&mut def, &mut binding_sources)?;
         return Ok(PreparedSceneModifierGraph {
-            def: owner.clone(),
+            def,
             routes: Vec::new(),
             event_routes: Vec::new(),
-            binding_sources: Vec::new(),
+            binding_sources,
         });
     }
     if let Some(request) = math_view

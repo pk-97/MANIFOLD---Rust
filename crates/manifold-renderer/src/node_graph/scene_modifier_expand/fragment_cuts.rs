@@ -109,6 +109,41 @@ fn is_fragment(type_id: &str) -> bool {
     )
 }
 
+fn already_cut(def: &EffectGraphDef, fragment: &EffectGraphNode) -> bool {
+    let expected =
+        namespace::namespace_node_id(&["fragment_cut", fragment.node_id.as_str(), "map"]);
+    let Some(map) = def.nodes.iter().find(|node| {
+        node.node_id == expected
+            && matches!(
+                node.type_id.as_str(),
+                "node.cut_mesh_bands" | "node.cut_mesh_cells"
+            )
+    }) else {
+        return false;
+    };
+    ["in", "reference"].iter().all(|port| {
+        input(def, fragment.id, port).is_some_and(|wire| {
+            node(def, wire.from_node).is_some_and(|remap| remap.type_id == "node.remap_mesh_cut")
+                && input(def, wire.from_node, "map")
+                    .is_some_and(|wire| wire.from_node == map.id && wire.from_port == "map")
+        })
+    })
+}
+
+/// Also covers frozen legacy graphs whose fragment atoms remain inside groups.
+pub(crate) fn contains_fragments(def: &EffectGraphDef) -> bool {
+    fn nodes_contain(nodes: &[EffectGraphNode]) -> bool {
+        nodes.iter().any(|node| {
+            is_fragment(&node.type_id)
+                || node
+                    .group
+                    .as_deref()
+                    .is_some_and(|group| nodes_contain(&group.nodes))
+        })
+    }
+    nodes_contain(&def.nodes)
+}
+
 fn is_mesh_multi(type_id: &str) -> bool {
     type_id == "node.morph_mesh"
 }
@@ -284,8 +319,22 @@ pub(super) fn apply(
     def: &mut EffectGraphDef,
     binding_sources: &mut Vec<Option<super::bindings::SceneModifierBindingSource>>,
 ) -> Result<(), SceneModifierExpandError> {
-    if !def.nodes.iter().any(|node| is_fragment(&node.type_id)) {
+    let mut unprepared = false;
+    let mut prepared = false;
+    for fragment in def.nodes.iter().filter(|node| is_fragment(&node.type_id)) {
+        if already_cut(def, fragment) {
+            prepared = true;
+        } else {
+            unprepared = true;
+        }
+    }
+    if !unprepared {
         return Ok(());
+    }
+    if prepared {
+        return Err(invalid(
+            "partially prepared cut graph; rebuild from its authored definition",
+        ));
     }
     let ids: Vec<u32> = def.nodes.iter().map(|node| node.id).collect();
     let order = topo_order(def, &ids)?;
