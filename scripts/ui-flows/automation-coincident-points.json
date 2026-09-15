@@ -60,80 +60,6 @@
     }
   },
   {
-    "Key": {
-      "key": "Z",
-      "modifiers": {
-        "command": true
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Surface": {
-          "surface": "automation_lanes",
-          "kind": "automation_point",
-          "label": "Mirror: Amount pt1"
-        }
-      },
-      "check": {
-        "RectWithin": {
-          "x": 607.0,
-          "y": 645.6,
-          "width": 14.0,
-          "height": 14.0
-        }
-      }
-    }
-  },
-  {
-    "Key": {
-      "key": "Z",
-      "modifiers": {
-        "command": true,
-        "shift": true
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Surface": {
-          "surface": "automation_lanes",
-          "kind": "automation_point",
-          "label": "Mirror: Amount pt0"
-        }
-      },
-      "check": {
-        "RectWithin": {
-          "x": 223.0,
-          "y": 730.4,
-          "width": 14.0,
-          "height": 14.0
-        }
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Surface": {
-          "surface": "automation_lanes",
-          "kind": "automation_point",
-          "label": "Mirror: Amount pt1"
-        }
-      },
-      "check": {
-        "RectWithin": {
-          "x": 223.0,
-          "y": 645.6,
-          "width": 14.0,
-          "height": 14.0
-        }
-      }
-    }
-  },
-  {
     "Pointer": {
       "target": {
         "Surface": {
@@ -171,6 +97,20 @@
           "width": 14.0,
           "height": 14.0
         }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt1"
+        }
+      },
+      "check": {
+        "Count": 0
       }
     }
   },
