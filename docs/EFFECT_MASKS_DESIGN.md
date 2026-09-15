@@ -1,6 +1,6 @@
 # Effect masks — spatial wet/dry for effect groups
 
-**Status:** IN PROGRESS · 2026-09-14 · Codex. Masks and Modifier Groups landed. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
+**Status:** IN PROGRESS · 2026-09-15 · Codex. Masks, Modifier Groups landed; snapshot publish narrowed to read layer sources. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
 
 Peter selected all three sources: shapes, the group's incoming image, and another
 layer/generator. "This gives us some very cool sidechain options too."
@@ -80,10 +80,13 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
   proofs. Shape motion updates values without changing topology.
 - Cross-layer reads use owned snapshots, published after master effects. Grouped
   children remain addressable. GPU tests cover target reuse and stale sources.
-- Snapshot storage is reused; each rendered source costs one texture and one copy
-  per frame. Projects containing masks conservatively disable occlusion render-skip
-  so potential sidechain sources advance. Narrow dependency tracking is a future
-  optimization; presentation still skips occluded pixels.
+- Snapshot storage is reused, and narrow dependency tracking is landed: only
+  layers read as a layer source since the last publish are snapshotted — one
+  texture and one copy per REFERENCED source per frame, not per rendered layer.
+  Unreferenced layers serve the transparent-black fallback. Projects containing
+  masks still conservatively disable occlusion render-skip so potential
+  sidechain sources advance; render-set narrowing remains open, while
+  presentation still skips occluded pixels.
 - `inspector-add-mask.json` covers the card context menu and undo after card exit
   animation; `inspector-modifier-group.json` covers the group picker and undo/redo.
   Input-host tests cover grouping one or several selected effects. `group_mask_circle_moves_over_infrared_without_rebuild`
