@@ -72,8 +72,11 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/uniforms.rs", 150),
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/entry_points.rs", 200),
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/standalone.rs", 1050),
-    // D2 named ceiling (+5%): fused emission is one seam, no buffer/texture sub-split
-    ("crates/manifold-renderer/src/node_graph/freeze/codegen/fused.rs", 1600),
+    // D2 named ceiling: fused emission is one seam, no buffer/texture sub-split.
+    // Bumped 1600 → 1850 (Peter 2026-09-15): e3d0af80c admitted BufferGather
+    // buffer atoms into fused regions (+250), changing D2's no-buffer premise.
+    // A split is tracked as follow-up work, not blocked on landings.
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/fused.rs", 1850),
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/dispatch_contract_tests.rs", 250),
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/gpu_tests.rs", 3450),
     // preset_runtime/ (P3-R split + P3-A ChainBuildInputs/FrameContextInputs)
