@@ -108,13 +108,15 @@ fn group_mask_layer_source_reaches_dispatch_and_survives_reload() {
     for (channel, present, expected) in [(0.0, true, 0.8), (1.0, true, 0.35), (0.0, false, 0.2)] {
         effects[0].set_base_param("channel", channel);
         registry.clear();
-        if present { registry.publish(LayerId::new("source-layer"), feed.texture.clone()); }
         let mut encoder = device.create_encoder("mask-sidechain-proof");
         let output = {
             let mut gpu = GpuEncoder::new(&mut encoder, &device);
             gpu.clear_texture(&input.texture, 0.2, 0.2, 0.2, 0.3);
             gpu.clear_texture(&feed.texture, 1.0, 1.0, 1.0, 0.25);
             registry.ensure_fallback_cleared(&mut gpu);
+            registry.begin_snapshots();
+            if present { registry.publish_snapshot(&mut gpu, &LayerId::new("source-layer"), &feed.texture); }
+            registry.finish_snapshots();
             crate::chain_dispatch::dispatch_chain(&mut cache, &mut gpu, &input.texture,
                 &effects, &groups, &ctx, None, "group-mask-test", false,
                 crate::node_graph::RtQuality::default(), &registry).unwrap().clone()

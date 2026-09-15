@@ -1,12 +1,19 @@
 //! Layer-skin registry: previous-frame composited output per layer.
 //!
-//! The compositor publishes every layer's final post-effect texture here at
-//! end of frame. Graph execution reads from the registry next frame, so a
-//! layer bound as a scene object's emissive/base-color map is always the
-//! previous frame — loops become one-frame feedback instead of a render-order
-//! hazard. Missing or deleted layers emit a 1×1 transparent-black fallback.
+//! The compositor snapshots the final post-effect texture of every layer that
+//! was READ as a layer source (via `get`) since the last publish. Graph
+//! execution reads from the registry next frame, so a layer bound as a scene
+//! object's emissive/base-color map is always the previous frame — loops
+//! become one-frame feedback instead of a render-order hazard. Missing,
+//! deleted, or unreferenced layers emit a 1×1 transparent-black fallback.
+//!
+//! Content thread only. The read set is interior mutability (`RefCell`)
+//! because `get` takes `&self` — readers hold shared references through
+//! `LayerSkinPtr` while the compositor owns the registry mutably.
 
-use ahash::AHashMap;
+use std::cell::RefCell;
+
+use ahash::{AHashMap, AHashSet};
 use manifold_core::LayerId;
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -22,6 +29,11 @@ struct LayerSkin {
 /// Production publication copies pixels after all graph readers finish.
 pub struct LayerSkinRegistry {
     textures: AHashMap<LayerId, LayerSkin>,
+    /// Layers read via `get` since the last `finish_snapshots` — the
+    /// snapshot candidates for the next publish. Holds "reads since last
+    /// publish", not "reads this frame": no frame-start ordering
+    /// dependency, and warmup/thumbnail reads count too (harmless superset).
+    reads: RefCell<AHashSet<LayerId>>,
     fallback: GpuTexture,
     /// Metal texture contents are undefined at creation — the fallback is
     /// cleared to transparent black once, lazily, at the first publish
@@ -45,6 +57,7 @@ impl LayerSkinRegistry {
         });
         Self {
             textures: AHashMap::new(),
+            reads: RefCell::new(AHashSet::new()),
             fallback,
             fallback_cleared: false,
             format,
@@ -60,17 +73,6 @@ impl LayerSkinRegistry {
         }
         gpu.clear_texture(&self.fallback, 0.0, 0.0, 0.0, 0.0);
         self.fallback_cleared = true;
-    }
-
-    /// Store `texture` as the skin for `layer_id`. The texture is retained by
-    /// clone (one atomic refcount bump), so the original can continue to live
-    /// in the compositor's ping-pong or effect chain.
-    pub fn publish(&mut self, layer_id: LayerId, texture: GpuTexture) {
-        self.textures.insert(layer_id, LayerSkin {
-            texture,
-            owned_snapshot: false,
-            visible: true,
-        });
     }
 
     /// Begin end-of-frame publication while keeping reusable snapshot storage.
@@ -117,13 +119,25 @@ impl LayerSkinRegistry {
         entry.visible = true;
     }
 
-    /// Drop sources which did not render this frame, including deleted layers.
+    /// Drop sources which did not render this frame, including deleted
+    /// layers, and clear the read set so the next publish tracks fresh reads.
     pub(crate) fn finish_snapshots(&mut self) {
+        self.reads.borrow_mut().clear();
         self.textures.retain(|_, entry| entry.visible);
     }
 
-    /// Borrow the texture for `layer_id`, or the fallback if absent.
+    /// Whether `layer_id` was read since the last `finish_snapshots`. The
+    /// compositor's publish loop uses this to snapshot only referenced
+    /// layers; `publish_snapshot` itself stays unconditional.
+    pub(crate) fn was_read(&self, layer_id: &LayerId) -> bool {
+        self.reads.borrow().contains(layer_id)
+    }
+
+    /// Borrow the texture for `layer_id`, or the fallback if absent. Records
+    /// the read BEFORE the lookup, on both hit and fallback paths — a read of
+    /// a missing layer must trigger snapshotting at the next publish.
     pub fn get(&self, layer_id: &LayerId) -> &GpuTexture {
+        self.reads.borrow_mut().insert(layer_id.clone());
         self.textures.get(layer_id)
             .filter(|entry| entry.visible)
             .map_or(&self.fallback, |entry| &entry.texture)
@@ -228,7 +242,14 @@ mod tests {
             label: "published",
             mip_levels: 1,
         });
-        registry.publish(layer_id.clone(), published);
+        let mut encoder = device.create_encoder("round-trip proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            registry.begin_snapshots();
+            registry.publish_snapshot(&mut gpu, &layer_id, &published);
+            registry.finish_snapshots();
+        }
+        encoder.commit_and_wait_completed();
         assert_eq!(registry.len(), 1);
         let looked_up = registry.get(&layer_id);
         assert_eq!(looked_up.width, 64);
@@ -255,7 +276,14 @@ mod tests {
             label: "published",
             mip_levels: 1,
         });
-        registry.publish(layer_id.clone(), published);
+        let mut encoder = device.create_encoder("clear proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            registry.begin_snapshots();
+            registry.publish_snapshot(&mut gpu, &layer_id, &published);
+            registry.finish_snapshots();
+        }
+        encoder.commit_and_wait_completed();
         registry.clear();
         assert_eq!(registry.len(), 0);
         assert_eq!(registry.get(&layer_id).width, 1);
@@ -279,6 +307,48 @@ mod tests {
         let raw = crate::headless_readback::readback_raw_halves(&device, registry.get(&id), 4, 4);
         let red = half::f16::from_bits(u16::from_le_bytes([raw[0], raw[1]])).to_f32();
         assert!((red - 0.25).abs() < 0.001, "published frame changed when source was reused: {red}");
+    }
+
+    #[test]
+    fn unread_layer_is_not_snapshotted() {
+        let device = test_device();
+        let id = LayerId::new("unread-layer");
+        let mut registry = LayerSkinRegistry::new(&device, GpuTextureFormat::Rgba16Float);
+        let source = crate::render_target::RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "unread source");
+        // Publish cycle with no recorded reads → nothing snapshotted.
+        let mut encoder = device.create_encoder("unread layer proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            gpu.clear_texture(&source.texture, 1.0, 0.0, 0.0, 1.0);
+            registry.begin_snapshots();
+            registry.finish_snapshots();
+        }
+        encoder.commit_and_wait_completed();
+        assert_eq!(registry.get(&id).width, 1, "unreferenced layer must serve the fallback");
+        assert_eq!(registry.len(), 0);
+
+        // A recorded read + publish → real pixels.
+        let mut encoder = device.create_encoder("read then publish proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            registry.get(&id); // records the read
+            registry.begin_snapshots();
+            registry.publish_snapshot(&mut gpu, &id, &source.texture);
+            registry.finish_snapshots();
+        }
+        encoder.commit_and_wait_completed();
+        assert_eq!(registry.get(&id).width, 4, "referenced layer must snapshot");
+
+        // A cycle with no reads clears the set and drops the stale entry.
+        let mut encoder = device.create_encoder("stale snapshot drop proof");
+        {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            registry.begin_snapshots();
+            registry.finish_snapshots();
+        }
+        encoder.commit_and_wait_completed();
+        assert_eq!(registry.len(), 0, "stale snapshot must drop when not re-published");
+        assert_eq!(registry.get(&id).width, 1);
     }
 
 }
