@@ -66,7 +66,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use this for a continuous textured surface wave. It reads only the current mesh, so it composes after preceding mesh modifiers. `scale` should be the scene radius and source offsets should be the attachment's world-to-local correction. Phase is a direct control with no internal clock. The triangle gather is required to transport the smooth input frame from the actual displaced corner basis; it is a standalone boundary like node.transform_mesh_patches and node.facet_normals. It deliberately does not call node.facet_normals, which would replace smooth scan normals with flat ones.",
+    composition_notes: "Use this for a continuous textured surface wave. It reads only the current mesh, so it composes after preceding mesh modifiers. `scale` should be the scene radius and source offsets should be the attachment's world-to-local correction. Phase is a direct control with no internal clock. The triangle gather reads the mesh through a BufferGather input: the atom fuses into buffer regions with the mesh wire kept external (bound as a read-only storage array the body indexes at computed corners), like node.neighbor_smooth. It deliberately does not call node.facet_normals, which would replace smooth scan normals with flat ones.",
     examples: ["SurfaceWaves"],
     picker: { label: "Normal Wave Mesh", category: Atom },
     summary: "Travels a smooth directional wave across the current textured mesh while carrying its lighting frame.",
@@ -375,8 +375,17 @@ mod gpu_tests {
         assert!(dot(oblique_out[0].normal, edge_b).abs() < 2e-4);
     }
 
+    /// BUG-x72p: the triangle gather ADMITS — the `in` wire stays external
+    /// (bound read-only as `src_0`, the standalone `buf_in` global renamed
+    /// onto it), the atom fuses into buffer regions. Emission contract: NO
+    /// coincident pre-read (the body reads triangle corners at computed
+    /// indices — a pre-read at `[idx]` would run off the end), NO element
+    /// body arg, and the dispatch count anchors on the gathered array's
+    /// length. The identity probe passes (`out` capacity = `in` capacity), so
+    /// on the live path this fuses wherever a coincident consumer forms a
+    /// region.
     #[test]
-    fn structured_modifier_normal_wave_triangle_gather_is_fusion_boundary() {
+    fn structured_modifier_normal_wave_triangle_gather_fuses_as_external_array() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -405,9 +414,48 @@ mod gpu_tests {
             sampled_externals: Vec::new(),
             camera_externals: 0,
         };
+        let g = generate_fused(&region).expect("the triangle-gather kernel fuses");
         assert!(
-            generate_fused(&region).is_err(),
-            "triangle gather must remain a standalone boundary"
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused triangle-gather kernel parses:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("var<storage, read> src_0"),
+            "the mesh binds as a read-only storage array:\n{}",
+            g.wgsl
+        );
+        assert!(
+            !g.wgsl.contains("let e_0 = src_0[idx];"),
+            "no coincident pre-read on a gathered-only slot:\n{}",
+            g.wgsl
+        );
+        assert!(!g.wgsl.contains("buf_in"), "the standalone global is renamed away:\n{}", g.wgsl);
+        assert!(
+            g.wgsl.contains("src_0[base]"),
+            "the body indexes the bound slot global at computed corners:\n{}",
+            g.wgsl
+        );
+        let call = g
+            .wgsl
+            .lines()
+            .find(|l| l.contains("let r0 = n0_body("))
+            .expect("the body call");
+        assert!(
+            !call.contains("e_0"),
+            "the gather input takes NO element arg — the body reads the global:\n{}",
+            call
+        );
+        assert!(
+            g.wgsl.contains("let count = arrayLength(&src_0);"),
+            "dispatch count anchors on the gathered array length"
+        );
+        let prim = NormalWaveMesh::new();
+        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        assert_eq!(
+            node.array_output_capacity("out", &Default::default(), &[("in", 1009)]),
+            Some(1009),
+            "identity capacity — passes the gather identity probe"
         );
     }
 }

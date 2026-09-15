@@ -150,12 +150,16 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
             }
         }
         // Input shape: the finder resolves a buffer member's ARRAY inputs first
-        // (coincident element registers), then appends its TEXTURE inputs as
-        // gathered externals (the body samples each bound texture at an element-
+        // (coincident element registers, or a `BufferGather` input kept as a
+        // whole-array external), then appends its TEXTURE inputs as gathered
+        // externals (the body samples each bound texture at an element-
         // computed coord — the buffer analogue of the texture path's sampler-
         // Gather; same `tex + samp` body-arg ABI the standalone buffer kernel
-        // uses). A `BufferGather` array input (neighbor_smooth indexes its global
-        // itself) still can't thread a register — boundary.
+        // uses). A `BufferGather` array input (neighbor_smooth indexes the
+        // array global itself) stays whole-array: bound as a read-only
+        // `src_<slot>` the body references directly (`buf_<port>` renamed to
+        // `src_<slot>`), never pre-read into a per-element register — a
+        // pre-read would run off the end of an input shorter than the output.
         let arr_in: Vec<&NodeInput> =
             node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
         let tex_in: Vec<&NodeInput> =
@@ -168,9 +172,15 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         }
         for (k, access) in node.input_access.iter().enumerate() {
             let is_texture_entry = k >= arr_in.len();
-            // Array entries thread registers (never gather); texture entries are
-            // always sampler-gathered externals.
-            if is_texture_entry != access.is_gather() {
+            // Texture entries are always gathered externals. Array entries are
+            // Coincident (threaded register) or BufferGather (whole-array
+            // external) — the texture gather flavours never tag an Array port.
+            let ok = if is_texture_entry {
+                access.is_gather()
+            } else {
+                matches!(access, InputAccess::Coincident | InputAccess::BufferGather)
+            };
+            if !ok {
                 return Err(CodegenError::BadInput);
             }
         }
@@ -196,17 +206,30 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     }
 
     // Per-slot external kind: an ARRAY slot (read as a coincident element — its
-    // element type comes from the consumer's array-input specs) or a TEXTURE
-    // slot (bound as `src_<e>: texture_2d<f32>` + the shared `samp`, sampled by
-    // the consuming bodies). Every external is read by ≥1 member (the finder
-    // built the slot because a member reads it), so each resolves; one producer
-    // port has one type, so a both-ways slot is a finder bug — fail closed.
+    // element type comes from the consumer's array-input specs — or, when a
+    // `BufferGather` consumer indexes it whole, bound but never pre-read) or a
+    // TEXTURE slot (bound as `src_<e>: texture_2d<f32>` + the shared `samp`,
+    // sampled by the consuming bodies). Every external is read by ≥1 member
+    // (the finder built the slot because a member reads it), so each resolves;
+    // one producer port has one type, so a both-ways slot is a finder bug —
+    // fail closed.
     #[derive(Clone, Copy, PartialEq)]
     enum ExtKind {
         Array(&'static [ChannelSpec]),
         Texture { is_3d: bool },
     }
     let mut ext_kinds: Vec<Option<ExtKind>> = vec![None; region.num_external_inputs];
+    // Per-slot read shapes across its consuming members: `ext_gathered` — some
+    // consumer reads it through `BufferGather` (whole-array, at body-computed
+    // indices); `ext_coincident` — some consumer threads it as a per-element
+    // register (needs the `src_<e>[idx]` pre-read + an `e_<e>` body arg). A
+    // slot can be BOTH (the finder dedupes one producer port read both ways by
+    // two members into one external): then the binding serves both read
+    // shapes. A gathered-only slot is excluded from the pre-read — a
+    // coincident `src_<e>[idx]` read would run off the end of an input shorter
+    // than the dispatch count (reflect_array reads `idx % input_cap`).
+    let mut ext_gathered: Vec<bool> = vec![false; region.num_external_inputs];
+    let mut ext_coincident: Vec<bool> = vec![false; region.num_external_inputs];
     for (mi, node) in region.nodes.iter().enumerate() {
         let arr_count = member_io[mi].in_specs.len();
         for (k, src) in node.inputs.iter().enumerate() {
@@ -215,6 +238,13 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
                     return Err(CodegenError::BadInput);
                 }
                 let kind = if k < arr_count {
+                    if node.input_access.get(k).copied().unwrap_or_default()
+                        == InputAccess::BufferGather
+                    {
+                        ext_gathered[*e] = true;
+                    } else {
+                        ext_coincident[*e] = true;
+                    }
                     ExtKind::Array(member_io[mi].in_specs[k])
                 } else {
                     // Texture entries follow the array entries in node.inputs
@@ -280,6 +310,26 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
             }
         }
         let mut text = node.body.to_string();
+        // BufferGather (BUG-x72p): rewrite this member's gathered array-input
+        // global `buf_<port>` (the standalone body's local storage-global name)
+        // to the region's resolved external slot `src_<e>` — no body arg, the
+        // same ABI the texture path's BufferIndex uses. Coincident array
+        // inputs keep the `e_<e>` register arg (cs_main below).
+        let arr_ports: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        for (arr_idx, port) in arr_ports.iter().enumerate() {
+            if node.input_access.get(arr_idx).copied().unwrap_or_default()
+                != InputAccess::BufferGather
+            {
+                continue;
+            }
+            match node.inputs.get(arr_idx) {
+                Some(InputSource::External(e)) => {
+                    text = rename_ident(&text, &format!("buf_{}", port.name), &format!("src_{e}"));
+                }
+                _ => return Err(CodegenError::BadInput),
+            }
+        }
         for (k, (from, _)) in renames.iter().enumerate() {
             text = rename_ident(&text, from, &format!("__FUSED_EL{k}__"));
         }
@@ -417,6 +467,13 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         if ext_tys.get(k).and_then(|t| t.as_deref()) != Some(out_ty.as_str()) {
             return Err(CodegenError::BadInput);
         }
+        // A GATHERED aliased input would be read at body-computed neighbour
+        // indices while other invocations write it in the same dispatch — a
+        // cross-thread race the unfused multi-dispatch chain never has. Refuse
+        // (the region renders unfused, always correct).
+        if ext_gathered.get(k).copied().unwrap_or(false) {
+            return Err(CodegenError::BadInput);
+        }
     }
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
     let mut binding = 1u32;
@@ -510,12 +567,16 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
     out.push_str("    let idx = gid.x;\n");
     // Count anchor: the ARRAY externals (slot 0 first in every all-array region,
-    // keeping prior fused WGSL — a pipeline-cache key — byte-identical). Each is
-    // coincident with the output (one output element per input element) and every
-    // one is pre-read at `[idx]` below; a texture slot has no arrayLength, so skip
-    // it. With a SINGLE array external the count is that external's length exactly
-    // (unchanged text). With MORE THAN ONE, bound by the SHORTEST so a shorter
-    // input can't be read out of bounds (BUG-008) — the unfused atoms clamp to
+    // keeping prior fused WGSL — a pipeline-cache key — byte-identical). Each
+    // is coincident with the output (one output element per input element) and
+    // every one is pre-read at `[idx]` below; a texture slot has no arrayLength,
+    // so skip it. A GATHERED array slot also joins the min — never pre-read, but
+    // its length still bounds the dispatch, exactly matching how
+    // `node.wgsl_compute` sizes the fresh `dst` (min over every wired array
+    // input) so the kernel never writes past its own output. With a SINGLE
+    // array external the count is that external's length exactly (unchanged
+    // text). With MORE THAN ONE, bound by the SHORTEST so a shorter input can't
+    // be read out of bounds (BUG-008) — the unfused atoms clamp to
     // `min(a, b, …)` for the same reason. Equal-length regions (every shipped
     // buffer preset) are unaffected: `min` of equal lengths is that length.
     let array_ext: Vec<usize> = ext_tys
@@ -557,11 +618,13 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         )
         .unwrap();
     }
-    // Pre-read each ARRAY external's element `[idx]` once; texture externals are
-    // sampled by the bodies themselves (never pre-read — a register is one
-    // element, not a whole texture).
+    // Pre-read each COINCIDENT-read array external's element `[idx]` once (its
+    // `e_<e>` register arg below); gathered array externals are indexed by the
+    // bodies themselves at computed indices — never pre-read. Texture
+    // externals are sampled by the bodies themselves (never pre-read — a
+    // register is one element, not a whole texture).
     for (e, ty) in ext_tys.iter().enumerate() {
-        if ty.is_some() {
+        if ty.is_some() && ext_coincident[e] {
             writeln!(out, "    let e_{e} = src_{e}[idx];").unwrap();
         }
     }
@@ -580,6 +643,18 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
                 };
                 args.push(format!("src_{e}"));
                 args.push("samp".to_string());
+                continue;
+            }
+            if node.input_access.get(k).copied().unwrap_or_default() == InputAccess::BufferGather
+            {
+                // The body reads the bound `src_<e>` array global directly
+                // (renamed from `buf_<port>` above) — no element arg. Must be
+                // an external: the finder never unions a gather-consumed wire,
+                // so a member/unwired source here is a finder bug.
+                match src {
+                    InputSource::External(e) if *e < region.num_external_inputs => {}
+                    _ => return Err(CodegenError::BadInput),
+                }
                 continue;
             }
             match src {
@@ -1521,4 +1596,157 @@ fn chain_member_args(
         return Err(CodegenError::BadInput);
     }
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::types::{FusionRegion, InputSource, RegionNode};
+    use super::generate_fused;
+    use crate::node_graph::effect_node::NodeInstanceId;
+    use crate::node_graph::primitive::PrimitiveSpec;
+    use crate::node_graph::primitives::{LerpInstanceFields as L, NeighborSmooth as N};
+
+    fn member<P: PrimitiveSpec>(
+        i: u32,
+        inputs: Vec<InputSource>,
+    ) -> RegionNode<'static> {
+        RegionNode {
+            node_id: NodeInstanceId(i),
+            fusion_kind: P::FUSION_KIND,
+            body: P::WGSL_BODY.unwrap(),
+            params: P::PARAMS,
+            inputs,
+            input_access: P::INPUT_ACCESS.to_vec(),
+            node_inputs: P::INPUTS,
+            node_outputs: P::OUTPUTS,
+            node_includes: P::WGSL_INCLUDES,
+            derived_uniforms: P::DERIVED_UNIFORMS,
+            type_id: P::TYPE_ID.to_string(),
+            derived_camera_ext: None,
+            output_storage: "rgba16float",
+            stencil_fetch: false,
+            quantize_f16: false,
+        }
+    }
+
+    /// BUG-x72p (scene-mirror-blocked-gather-input-fusion): a `BufferGather`
+    /// member's input binds as a read-only `src_<slot>` storage array the body
+    /// indexes itself — the standalone `buf_<port>` global renamed to
+    /// `src_<slot>`, NO coincident pre-read (a pre-read at `[idx]` would run
+    /// off the end of an input shorter than the dispatch count), and NO body
+    /// arg. The same slot read coincidently by another member (the finder
+    /// dedupes one producer port into one external) still gets its `e_<slot>`
+    /// pre-read + register arg — the two read shapes share one binding.
+    #[test]
+    fn fused_buffer_gather_binds_array_global_without_preread() {
+        let region = FusionRegion {
+            nodes: vec![
+                member::<N>(0, vec![InputSource::External(0)]),
+                member::<L>(1, vec![InputSource::External(0), InputSource::Node(NodeInstanceId(0))]),
+            ],
+            num_external_inputs: 1,
+            outputs: vec![(NodeInstanceId(1), "out".to_string())],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+        };
+        let g = generate_fused(&region).expect("gathered buffer region fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused gathered buffer kernel parses through naga:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("var<storage, read> src_0"),
+            "the gathered wire binds as a read-only storage array:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("let e_0 = src_0[idx];"),
+            "the coincident consumer's pre-read is still emitted (same slot):\n{}",
+            g.wgsl
+        );
+        assert!(!g.wgsl.contains("buf_in"), "the standalone global name is renamed away:\n{}", g.wgsl);
+        assert!(
+            g.wgsl.contains("src_0[left_idx]"),
+            "the gather body indexes the bound slot global directly:\n{}",
+            g.wgsl
+        );
+        let smooth_call = g
+            .wgsl
+            .lines()
+            .find(|l| l.contains("let r0 = n0_body("))
+            .expect("smooth body call");
+        assert_eq!(
+            smooth_call.trim(),
+            "let r0 = n0_body(idx, count, params.n0_grid_size, params.n0_center_weight);",
+            "a BufferGather input takes NO element arg — the body reads the global"
+        );
+        let blend_call = g
+            .wgsl
+            .lines()
+            .find(|l| l.contains("let r1 = n1_body("))
+            .expect("blend body call");
+        assert!(
+            blend_call.contains("e_0, r0"),
+            "the coincident consumer threads the pre-read register + smooth's register:\n{}",
+            blend_call
+        );
+        assert!(
+            g.wgsl.contains("let count = arrayLength(&src_0);"),
+            "single-array-external count anchor is byte-identical to the all-coincident shape"
+        );
+        assert!(g.wgsl.contains("dst[idx] = r1;"), "region result written to the fresh output");
+    }
+
+    /// A `BufferGather` input resolved to anything but an external (a region
+    /// register, an unwired port) is a finder bug — the codegen fails closed
+    /// instead of silently threading a register.
+    #[test]
+    fn fused_buffer_gather_rejects_non_external_source() {
+        let region = FusionRegion {
+            nodes: vec![
+                member::<L>(0, vec![InputSource::External(0), InputSource::External(1)]),
+                member::<N>(1, vec![InputSource::Node(NodeInstanceId(0))]),
+            ],
+            num_external_inputs: 2,
+            outputs: vec![(NodeInstanceId(1), "out".to_string())],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+        };
+        assert!(
+            generate_fused(&region).is_err(),
+            "a gather reading a region register can't be expressed — refuse the region"
+        );
+    }
+
+    /// A gathered external can never be an in-place alias: it would be read at
+    /// body-computed neighbour indices while other invocations write it in the
+    /// same dispatch — a cross-thread race the unfused multi-dispatch chain
+    /// never has.
+    #[test]
+    fn fused_buffer_gather_rejects_gathered_inplace_alias() {
+        let region = FusionRegion {
+            nodes: vec![member::<N>(0, vec![InputSource::External(0)])],
+            num_external_inputs: 1,
+            outputs: vec![(NodeInstanceId(0), "out".to_string())],
+            in_place_alias: Some(0),
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+        };
+        assert!(
+            generate_fused(&region).is_err(),
+            "a gathered in-place alias is a read-write race — refuse the region"
+        );
+    }
 }

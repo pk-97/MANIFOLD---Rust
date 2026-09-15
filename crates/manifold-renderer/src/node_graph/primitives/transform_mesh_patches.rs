@@ -828,8 +828,16 @@ mod gpu_tests {
         }
     }
 
+    /// BUG-x72p: the reference gather ADMITS at the codegen — the kernel is
+    /// expressible. What refuses fusion is the identity probe: this atom's
+    /// output capacity is identity ONLY when `in` and `reference` share a
+    /// capacity, `None` otherwise — and the probe's distinct ascending
+    /// synthetic caps (1009, 2009) hit the `None` branch, so `build_region`
+    /// refuses the region (unfused, always correct). A same-mesh fork with
+    /// genuinely equal capacities would still refuse: the static probe cannot
+    /// see real capacities, and the conservative answer is the safe one.
     #[test]
-    fn photoscan_modifier_patch_buffer_gather_is_explicit_fusion_boundary() {
+    fn photoscan_modifier_patch_buffer_capacity_refuses_the_gather_identity_probe() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -858,9 +866,23 @@ mod gpu_tests {
             sampled_externals: Vec::new(),
             camera_externals: 0,
         };
+        let g = generate_fused(&region).expect("the reference-gather kernel fuses");
         assert!(
-            generate_fused(&region).is_err(),
-            "BufferGather reference lookup must remain an explicit fusion boundary"
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused reference-gather kernel parses:\n{}",
+            g.wgsl
+        );
+        let prim = TransformMeshPatches::new();
+        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        assert_eq!(
+            node.array_output_capacity("out", &Default::default(), &[("in", 1009), ("reference", 2009)]),
+            None,
+            "distinct capacities — the probe's case, refused"
+        );
+        assert_eq!(
+            node.array_output_capacity("out", &Default::default(), &[("in", 1009), ("reference", 1009)]),
+            Some(1009),
+            "identity when the capacities match — the atom's real precondition"
         );
     }
 }

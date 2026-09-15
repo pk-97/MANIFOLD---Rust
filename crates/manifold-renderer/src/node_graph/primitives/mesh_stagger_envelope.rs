@@ -438,8 +438,16 @@ mod gpu_tests {
         }
     }
 
+    /// BUG-x72p: the `BufferGather` inputs no longer force Boundary — the
+    /// codegen emits the gathered kernel, and the identity probe PASSES
+    /// (`weights` capacity = the `in` capacity). What keeps the envelope
+    /// unfused is its derived uniform: `weights_len:u32` has NO registered
+    /// recompute, so install's `has_recompute` gate fails any region
+    /// containing it closed (unfused, always correct). A future recompute
+    /// registration (reading the wired `weights` length) flips this atom to
+    /// fusing with no codegen change.
     #[test]
-    fn overnight_modifier_mesh_stagger_envelope_gather_is_explicit_boundary() {
+    fn overnight_modifier_mesh_stagger_envelope_refuses_at_derived_uniform_recompute() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -468,6 +476,24 @@ mod gpu_tests {
             sampled_externals: Vec::new(),
             camera_externals: 0,
         };
-        assert!(generate_fused(&region).is_err());
+        let g = generate_fused(&region).expect("the gathered envelope kernel fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused gathered envelope kernel parses:\n{}",
+            g.wgsl
+        );
+        let prim = MeshStaggerEnvelope::new();
+        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        assert_eq!(
+            node.array_output_capacity("weights", &Default::default(), &[("in", 1009), ("weights", 2009)]),
+            Some(1009),
+            "identity capacity — passes the gather identity probe"
+        );
+        assert!(
+            !crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+                MeshStaggerEnvelope::TYPE_ID
+            ),
+            "weights_len has no registered recompute — install refuses the region"
+        );
     }
 }
