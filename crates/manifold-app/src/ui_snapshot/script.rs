@@ -1407,7 +1407,7 @@ impl Runner {
     /// never into the atlas/offscreen, which would poison it for any later
     /// frame or the P0 differential shelf tool. No thumbnails here (this
     /// driver never opted into `--thumbs`, matching the old call's `false`).
-    fn write_png(&mut self, ui: &mut UIRoot, data: &SceneData, render: &mut RenderState, path: &std::path::Path) {
+    fn write_png(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState, path: &std::path::Path) {
         let (tex_w, tex_h) = (render.tex_w, render.tex_h);
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
@@ -1427,6 +1427,15 @@ impl Runner {
             .collect();
         let automation_lanes =
             ui.viewport.automation_lane_screens(&data.content.automation_latched_params);
+        // Use the live point-feedback resolver so snapshots exercise the same
+        // nearby readout and point highlight as frame/present.rs.
+        self.overlay.set_modifiers(self.modifiers);
+        if ui.background_input_blocked() {
+            data.selection.automation_feedback = None;
+        } else if let Some(&position) = self.last_gesture_points.last() {
+            self.overlay.refresh_automation_feedback(position, &automation_lanes,
+                &mut data.selection, &ui.viewport);
+        }
         let text_input = crate::text_input::TextInputState::new();
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
         // LED composite preview band (LED_STRIPS_DESIGN MVP-P4): a real

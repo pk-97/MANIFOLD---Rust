@@ -4008,7 +4008,7 @@ mod p1_4_gesture_integrity_tests {
         assert_eq!(old.0, Beats::from_f32(4.0), "old beat must be the grabbed point's original beat");
         assert!(new.1 > old.1, "dragging up must raise the value");
         assert_eq!(ui_state.selected_automation_point.as_ref().unwrap().beat, new.0);
-        assert!(ui_state.automation_point_selected(&host.automation_point_moves[0].0, &host.automation_point_moves[0].1, new.0, 0.5));
+        assert!(ui_state.automation_point_selected(&host.automation_point_moves[0].0, &host.automation_point_moves[0].1, new.0, new.1));
     }
 
     #[test]
