@@ -1788,6 +1788,15 @@ pub(crate) fn build_param_row(
     // natural height, byte-identical to the pre-motion layout (so the golden card
     // tests, which build settled, are unaffected).
     drawer_reveal: Option<f32>,
+    // Value to DRAW this build (fill + thumb + value text), for cards whose
+    // per-frame sync dirty-checks its pushes: the tree is minted fresh every
+    // frame, so a skipped push must find the last-pushed value already drawn
+    // here or the row snaps back to the default. `None` keeps the historic
+    // behavior (draw `info.spec.default`; the sync pushes the live value
+    // right after) — the perform inspector's persistent card relies on it.
+    // The reset marker below always uses `info.spec.default` regardless:
+    // that one is the reset TARGET, not the display.
+    display_value: Option<f32>,
 ) -> ParamRowIds {
     // The main slider's right-click reset — constructed up front so it can
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
@@ -1823,14 +1832,16 @@ pub(crate) fn build_param_row(
     };
     let mut cy = cy;
 
-    let norm = BitmapSlider::value_to_normalized(info.spec.default, info.spec.min, info.spec.max);
+    let shown_value = display_value.unwrap_or(info.spec.default);
+    let shown_norm = BitmapSlider::value_to_normalized(shown_value, info.spec.min, info.spec.max);
     let val_text = format_param_value(
-        info.spec.default,
+        shown_value,
         info.spec.min,
         info.spec.whole_numbers,
         info.spec.is_angle,
         info.spec.value_labels.as_deref(),
     );
+    let default_norm = BitmapSlider::value_to_normalized(info.spec.default, info.spec.min, info.spec.max);
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
     if mod_state.automation_selected.get(i).copied().unwrap_or(false) {
         tree.add_panel(parent, x - 1.0, cy - 1.0, slider_w + 2.0, ROW_HEIGHT + 2.0, UIStyle {
@@ -1927,15 +1938,14 @@ pub(crate) fn build_param_row(
         parent,
         slider_rect,
         Some(&info.spec.name),
-        norm,
+        shown_norm,
         &val_text,
         slider_colors,
         FONT_SIZE,
         label_width,
-        // `norm` above is already `value_to_normalized(info.default, ..)` — the
-        // row always builds showing the default (sync_values pushes the live
-        // value right after), so it doubles as the reset target.
-        norm,
+        // Reset marker at the DEFAULT position — the reset target, not the
+        // displayed value.
+        default_norm,
         reset,
         row_key_base.map(|base| base | ROW_ROLE_SLIDER),
     )

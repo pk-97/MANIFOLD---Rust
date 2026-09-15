@@ -629,8 +629,22 @@ struct SceneCardState {
     /// P2 slice 2a: per-row CURRENT value cache for the unified properties
     /// card's real-param rows — seeded from `ParamRow.value.base` at
     /// `configure_from_filtered`, kept fresh every frame by
-    /// `ScenePanel::sync_properties_values`.
+    /// `ScenePanel::sync_properties_values`. Multi-writer: the drag and
+    /// type-in paths also write it mid-gesture, so it is NOT a safe
+    /// dirty-check key — `last_pushed_values` is that.
     current_values: Vec<f32>,
+    /// Dirty-check key for `sync_properties_values`: the last value this
+    /// sync actually PUSHED to the tree. Single-writer (only the sync
+    /// touches it), mirroring `ParamCardPanel`'s `param_cache`. The tree is
+    /// minted fresh every frame and `build_properties_row` DRAWS this value
+    /// at build time, so a skipped push must find it already drawn or the
+    /// row snaps back to the default — gating on `current_values` regressed
+    /// exactly that way (the post-commit push was skipped and the formatted
+    /// text never updated). New slots seed NaN (the sync's `is_nan` clause
+    /// forces their first push); `configure_from_filtered` carries values
+    /// over by row id so an index that changes identity never shows a stale
+    /// row's value.
+    last_pushed_values: Vec<f32>,
     /// BUG-313: param id → local row index, rebuilt in `configure_from_filtered`
     /// from the retained rows. The JOIN KEY for the per-frame value sync —
     /// `sync_properties_values` iterates the layer's full generator manifest
@@ -671,6 +685,7 @@ impl SceneCardState {
             rows: Vec::new(),
             mod_state: ParamModState::allocate(0),
             current_values: Vec::new(),
+            last_pushed_values: Vec::new(),
             row_id_index: ahash::AHashMap::new(),
             row_value_synced: Vec::new(),
             osc_addresses: Vec::new(),
@@ -697,6 +712,10 @@ impl SceneCardState {
         self.rows.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.current_values.resize(n, 0.0);
+        // NaN seed = "never pushed"; the sync's is_nan clause forces the first
+        // push for a fresh slot. Existing slots keep their value across the
+        // per-frame rebuilds (resize_with only fills new entries).
+        self.last_pushed_values.resize_with(n, || f32::NAN);
         self.row_value_synced.resize(n, false);
         self.osc_addresses.resize(n, None);
         while self.mod_active_tab.len() < n {
@@ -744,9 +763,20 @@ impl SceneCardState {
     /// byte-for-byte exposed-param path every other card uses.
     fn configure_from_filtered(&mut self, config: &ParamSurface, retained: &[usize]) {
         let n = retained.len();
+        // Snapshot the previous id→index map and pushed-value cache BEFORE
+        // the rebuild: the per-frame sync's dirty key carries over by row id
+        // (an index that now belongs to a DIFFERENT param must not inherit
+        // the old row's pushed value — it re-pushes via the NaN seed).
+        let prev_index = std::mem::take(&mut self.row_id_index);
+        let prev_pushed = std::mem::take(&mut self.last_pushed_values);
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
         self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
+        self.last_pushed_values = self
+            .rows
+            .iter()
+            .map(|row| prev_index.get(row.id.as_ref()).map(|&j| prev_pushed[j]).unwrap_or(f32::NAN))
+            .collect();
 
         // BUG-313: rebuild the id→local-row-index join map from the retained
         // rows. The per-frame value sync joins the full manifest against this
@@ -1074,8 +1104,20 @@ impl ScenePanel {
             let Some(&i) = card.row_id_index.get(id) else {
                 continue;
             };
+            // Dirty-check on change only — same shape as
+            // `ParamCardPanel::sync_param_value` (param_card/render.rs): an
+            // unconditional push formats the value String and touches the
+            // tree for every row every frame, even when nothing moved. The
+            // key is `last_pushed_values` (single-writer, this sync only) —
+            // NOT `current_values`, which the drag/type-in paths write
+            // mid-gesture; gating on that skipped the post-commit push.
+            let prev = card.last_pushed_values[i];
             card.current_values[i] = slot.value;
-            card.row_host.push_slider_value(tree, i, slot.value, &card.rows[i].spec, None);
+            if slot.value != prev || prev.is_nan() {
+                card.last_pushed_values[i] = slot.value;
+                card.row_host
+                    .push_slider_value(tree, i, slot.value, &card.rows[i].spec, None);
+            }
             if let Some(c) = card.row_value_synced.get_mut(i) {
                 *c = true;
             }
@@ -1889,6 +1931,21 @@ impl ScenePanel {
             }
         }
 
+        // The value this row must SHOW: the sync's last-pushed value (the tree
+        // is minted fresh every frame — a row the dirty-check skipped must
+        // redraw that value here or it snaps back to the default). Never-
+        // pushed (NaN) rows fall back to the synced base, which is what the
+        // sync will compare against and push this same frame.
+        let display_value = match self.properties_card.last_pushed_values.get(slot) {
+            Some(&v) if !v.is_nan() => v,
+            _ => self
+                .properties_card
+                .current_values
+                .get(slot)
+                .copied()
+                .unwrap_or(info.spec.default),
+        };
+
         let built = build_param_row(
             tree,
             Some(self.content_parent),
@@ -1908,6 +1965,7 @@ impl ScenePanel {
             true,
             Some((slot as u64) << 8),
             None,
+            Some(display_value),
         );
         let card = &mut self.properties_card;
         let rh = &mut card.row_host;

@@ -1324,6 +1324,9 @@ impl ParamCardPanel {
                     .get(i)
                     .filter(|a| a.is_animating())
                     .map(|a| a.value()),
+                // Persistent card: the sync pushes every change unconditionally,
+                // so rows build showing the default as before.
+                None,
             );
             self.row_host.slider_ids[i] = row.slider;
             self.row_host.slider_resets[i] = Some(row.slider_reset);
@@ -1803,6 +1806,9 @@ impl ParamCardPanel {
                             .get(i)
                             .filter(|a| a.is_animating())
                             .map(|a| a.value()),
+                        // Persistent card: the sync pushes every change
+                        // unconditionally, so rows build showing the default.
+                        None,
                     );
                     self.row_host.slider_ids[i] = row.slider;
                     self.row_host.slider_resets[i] = Some(row.slider_reset);
