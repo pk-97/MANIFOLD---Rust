@@ -11,6 +11,7 @@ use manifold_gpu::{
 use crate::native_text::NativeTextRenderer;
 
 use manifold_ui::node::*;
+use manifold_ui::bitmap_renderer::TimingGridLineKind;
 use manifold_ui::text::TextMeasure;
 use manifold_ui::transform2d::Affine2;
 use manifold_ui::tree::{TraversalEvent, UITree};
@@ -245,6 +246,8 @@ struct LineCommand {
     x1: f32,
     y1: f32,
     thickness: f32,
+    antialiased: bool,
+    grid_physical_width: Option<f32>,
     color: [f32; 4],
     depth: Depth,
     /// Immediate clip captured at draw time (lines are only ever emitted via
@@ -1043,7 +1046,62 @@ impl UIRenderer {
             x1,
             y1,
             thickness,
+            antialiased: false,
+            grid_physical_width: None,
             color: color.into().0,
+            depth: self.current_depth(),
+            clip: self.immediate_clip,
+            transform: self.current_transform(),
+        });
+    }
+
+    /// Queue a rounded, antialiased line segment for fine geometry such as
+    /// automation curves. The fragment shader's existing fwidth-based SDF
+    /// supplies a one-physical-pixel edge and rounded caps.
+    pub fn draw_aa_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        thickness: f32,
+        color: impl Into<LinearColor>,
+    ) {
+        self.line_commands.push(LineCommand {
+            x0,
+            y0,
+            x1,
+            y1,
+            thickness,
+            antialiased: true,
+            grid_physical_width: None,
+            color: color.into().0,
+            depth: self.current_depth(),
+            clip: self.immediate_clip,
+            transform: self.current_transform(),
+        });
+    }
+
+    /// Queue a timing-grid line whose width is defined in physical pixels.
+    /// The line is aligned to the same starting pixel the bitmap renderer
+    /// paints, rather than centred over two neighbouring pixels.
+    pub fn draw_grid_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        kind: TimingGridLineKind,
+    ) {
+        self.line_commands.push(LineCommand {
+            x0,
+            y0,
+            x1,
+            y1,
+            thickness: kind.physical_width(),
+            antialiased: false,
+            grid_physical_width: Some(kind.physical_width()),
+            color: LinearColor::from(kind.color()).0,
             depth: self.current_depth(),
             clip: self.immediate_clip,
             transform: self.current_transform(),
@@ -1768,60 +1826,106 @@ impl UIRenderer {
         line_batches.clear();
         for &depth in &depths {
             for cmd in self.line_commands.iter().filter(|c| c.depth == depth) {
-                let dx = cmd.x1 - cmd.x0;
-                let dy = cmd.y1 - cmd.y0;
+                let mut x0 = cmd.x0;
+                let mut y0 = cmd.y0;
+                let mut x1 = cmd.x1;
+                let mut y1 = cmd.y1;
+                let thickness = if let Some(physical_width) = cmd.grid_physical_width {
+                    let sf = scale_factor as f32;
+                    let sf = sf.max(f32::EPSILON);
+                    let width = physical_width / sf;
+                    // Bitmap grid columns start at round(px) and extend to the
+                    // right. Put the oriented quad's centre half a line width
+                    // after that start, so a one-pixel line occupies one pixel.
+                    if (x1 - x0).abs() <= (y1 - y0).abs() {
+                        let start_px = ((x0 - offset_x) * sf).round();
+                        let centre = (start_px + physical_width * 0.5) / sf + offset_x;
+                        x0 = centre;
+                        x1 = centre;
+                    } else {
+                        let start_px = ((y0 - offset_y) * sf).round();
+                        let centre = (start_px + physical_width * 0.5) / sf + offset_y;
+                        y0 = centre;
+                        y1 = centre;
+                    }
+                    width
+                } else {
+                    cmd.thickness
+                };
+                let dx = x1 - x0;
+                let dy = y1 - y0;
                 let len_sq = dx * dx + dy * dy;
                 if len_sq <= f32::EPSILON {
                     continue;
                 }
                 let inv_len = len_sq.sqrt().recip();
-                let half = cmd.thickness * 0.5;
-                let nx = -dy * inv_len * half;
-                let ny = dx * inv_len * half;
-                let zero_params = [0.0; 4];
+                let half = thickness * 0.5;
+                // A capsule is centred on both endpoints. Extend its quad
+                // beyond the stroke to rasterize the OUTER half of the SDF
+                // coverage fringe; otherwise the quad edge still aliases.
+                let fringe = if cmd.antialiased { 2.0 / sf.max(f32::EPSILON) } else { 0.0 };
+                let extent = half + fringe;
+                let nx = -dy * inv_len * extent;
+                let ny = dx * inv_len * extent;
+                if cmd.antialiased {
+                    x0 -= dx * inv_len * extent;
+                    y0 -= dy * inv_len * extent;
+                    x1 += dx * inv_len * extent;
+                    y1 += dy * inv_len * extent;
+                }
+                let capsule_length = len_sq.sqrt() + thickness;
+                let rect_params = if cmd.antialiased {
+                    [capsule_length, thickness, half, 0.0]
+                } else {
+                    [0.0; 4]
+                };
+                let (u_pad, v_pad) = if cmd.antialiased {
+                    (fringe / capsule_length, fringe / thickness)
+                } else { (0.0, 0.0) };
                 let zero_border = [0.0; 4];
+                let zero_grad = [0.0; 4];
                 let base = self.vertices.len() as u32;
                 // Corner positions in local (unrotated) space, then through the
                 // command's captured affine — same treatment as rect corners.
-                let (q0x, q0y) = cmd.transform.apply((cmd.x0 + nx, cmd.y0 + ny));
-                let (q1x, q1y) = cmd.transform.apply((cmd.x1 + nx, cmd.y1 + ny));
-                let (q2x, q2y) = cmd.transform.apply((cmd.x1 - nx, cmd.y1 - ny));
-                let (q3x, q3y) = cmd.transform.apply((cmd.x0 - nx, cmd.y0 - ny));
+                let (q0x, q0y) = cmd.transform.apply((x0 + nx, y0 + ny));
+                let (q1x, q1y) = cmd.transform.apply((x1 + nx, y1 + ny));
+                let (q2x, q2y) = cmd.transform.apply((x1 - nx, y1 - ny));
+                let (q3x, q3y) = cmd.transform.apply((x0 - nx, y0 - ny));
                 self.vertices.push(UIVertex {
                     position: [q0x, q0y],
-                    uv: [0.0, 0.0],
+                    uv: [-u_pad, -v_pad],
                     color: cmd.color,
-                    rect_params: zero_params,
+                    rect_params,
                     border_color: zero_border,
                     color2: cmd.color,
-                    grad: zero_params,
+                    grad: zero_grad,
                 });
                 self.vertices.push(UIVertex {
                     position: [q1x, q1y],
-                    uv: [1.0, 0.0],
+                    uv: [1.0 + u_pad, -v_pad],
                     color: cmd.color,
-                    rect_params: zero_params,
+                    rect_params,
                     border_color: zero_border,
                     color2: cmd.color,
-                    grad: zero_params,
+                    grad: zero_grad,
                 });
                 self.vertices.push(UIVertex {
                     position: [q2x, q2y],
-                    uv: [1.0, 1.0],
+                    uv: [1.0 + u_pad, 1.0 + v_pad],
                     color: cmd.color,
-                    rect_params: zero_params,
+                    rect_params,
                     border_color: zero_border,
                     color2: cmd.color,
-                    grad: zero_params,
+                    grad: zero_grad,
                 });
                 self.vertices.push(UIVertex {
                     position: [q3x, q3y],
-                    uv: [0.0, 1.0],
+                    uv: [-u_pad, 1.0 + v_pad],
                     color: cmd.color,
-                    rect_params: zero_params,
+                    rect_params,
                     border_color: zero_border,
                     color2: cmd.color,
-                    grad: zero_params,
+                    grad: zero_grad,
                 });
                 let idx_offset = (self.indices.len() * std::mem::size_of::<u32>()) as u64;
                 self.indices

@@ -33,6 +33,8 @@ pub enum ContentCommand {
         points: Vec<manifold_core::effects::AutomationPoint>,
     },
     ClearAutomationPreviews,
+    /// Close pending recording takes before an explicit envelope clear.
+    FinishAutomationRecording,
     Undo,
     Redo,
     /// Reset editing service (clear undo, clipboard) after project load.

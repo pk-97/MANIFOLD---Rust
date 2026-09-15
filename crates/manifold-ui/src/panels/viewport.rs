@@ -45,6 +45,7 @@ mod render;
 // shared hit-tester) and surfaced here so viewport consumers and the click/drag
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
+#[cfg(test)]
 use coordinate::GridSubdivision;
 pub use model::{
     AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion,
@@ -680,11 +681,20 @@ impl TimelineViewportPanel {
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
     }
 
-    pub fn has_visible_automation_lane(&self, target: &crate::view::UiGraphTarget, param_id: &ParamId) -> bool {
-        self.automation_lanes_by_layer.iter().enumerate().any(|(index, lanes)| {
-            self.mapper.get_layer_height(index) > 0.0
-                && lanes.iter().any(|lane| &lane.target == target && &lane.param_id == param_id)
-        })
+    pub fn has_visible_automation_lane(
+        &self,
+        target: &crate::view::UiGraphTarget,
+        param_id: &ParamId,
+    ) -> bool {
+        self.automation_lanes_by_layer
+            .iter()
+            .enumerate()
+            .any(|(index, lanes)| {
+                self.mapper.get_layer_height(index) > 0.0
+                    && lanes
+                        .iter()
+                        .any(|lane| &lane.target == target && &lane.param_id == param_id)
+            })
     }
 
     /// Scroll just enough to reveal an automation lane selected by a chooser
@@ -1096,20 +1106,19 @@ impl TimelineViewportPanel {
 
                 let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
 
-                // Sample the curve at a fixed screen-space step across the
-                // visible range — smooth enough for a breakpoint line, cheap
-                // enough per frame (mirrors the graph canvas wire's bezier
-                // step count; typical scale is tens of lanes, not hundreds).
-                const STEP_PX: f32 = 6.0;
-                let mut polyline = Vec::new();
-                let mut x = tx0;
-                while x <= tx1 {
-                    let beat = self.pixel_to_beat(x);
-                    let norm = lane.value_at_norm(beat);
-                    let y = graph.y + graph.height * (1.0 - norm);
-                    polyline.push((x, y));
-                    x += STEP_PX;
-                }
+                // Segment-aware geometry keeps exact breakpoint attachment and
+                // gives Hold segments their vertical edge. Curves receive more
+                // samples as their on-screen span grows, without a fixed-step
+                // sampler skipping a breakpoint between two samples.
+                let polyline = model::build_automation_polyline(
+                    lane,
+                    min_beat,
+                    max_beat,
+                    tx0,
+                    tx1,
+                    graph,
+                    pixels_per_beat,
+                );
 
                 // Placeholder lanes (P5, section 7 addendum) carry one synthetic
                 // point at the param's current value so the flat-line

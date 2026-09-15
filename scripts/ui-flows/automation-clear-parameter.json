@@ -1,0 +1,137 @@
+[
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_automation.amount",
+          "nth": 0
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_automation.amount",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt0"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_automation.amount",
+          "nth": 0
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Clear Automation"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Clear Automation"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt0"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

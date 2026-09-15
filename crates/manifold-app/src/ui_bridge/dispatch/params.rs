@@ -86,6 +86,17 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
     }
 
     match action {
+        ParamsAction::ClearAutomation(gpt, param_id) => {
+            if let Some(target) = resolve_graph_target(
+                gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+            ) {
+                let target = crate::editing_host::to_ui_graph_target(&target);
+                super::super::project::remove_parameter_automation(
+                    ctx.project, ctx.content_tx, ctx.ui, ctx.selection, &target, param_id,
+                );
+            }
+            DispatchResult::structural()
+        }
         ParamsAction::ShowAutomation(gpt, param_id) => {
             let Some(target) = resolve_graph_target(
                 gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,

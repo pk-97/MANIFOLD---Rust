@@ -101,6 +101,8 @@
   "flows": {
     "automation-clipboard-shapes": "automation",
     "automation-show-parameter": "inspector",
+    "automation-clear-parameter": "inspector",
+    "automation-coincident-points": "automation",
     "automation-resize-lane": "automation",
     "scene-photoscan-modifiers": "gltfscene",
     "frame-align-lfo": "inspector",

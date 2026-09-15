@@ -1405,6 +1405,14 @@ mod tests {
         ));
         assert!(!actions.iter().any(|a| matches!(a, PanelAction::Scrub(..))));
 
+        let mut intents = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut intents);
+        assert!(matches!(
+            intents.resolve(&tree, Some(button), crate::intent::Gesture::RightClick),
+            Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(GraphParamTarget::Effect(0), id)))
+                if id.as_ref() == "radius"
+        ));
+
         let widget_before = tree.widget_of(button);
         tree.clear();
         panel.state.mod_state.driver_expanded[0] = true;

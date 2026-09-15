@@ -121,14 +121,14 @@ impl AutomationLane {
                 // `Beats(f64)` values that reached the arrangement (never
                 // NaN in practice), and a NaN comparison degrading to
                 // `Equal` only widens the binary search, never panics.
-                let idx = match points
-                    .binary_search_by(|p| p.beat.0.partial_cmp(&beat.0).unwrap_or(std::cmp::Ordering::Equal))
-                {
-                    Ok(i) => i,
-                    // `i > 0` is guaranteed: the `beat <= first.beat` check
-                    // above already returned for any beat at or before index 0.
-                    Err(i) => i - 1,
-                };
+                // Search for the first point strictly after `beat`, rather
+                // than using `binary_search`, whose arbitrary choice among
+                // equal keys made coincident points sample unpredictably.
+                // This makes the sampler right-continuous: the last point at
+                // an exact beat wins, while the segment leaving that point is
+                // used immediately after it.
+                let upper = points.partition_point(|p| p.beat.0 <= beat.0);
+                let idx = upper.saturating_sub(1);
                 let a = &points[idx];
                 let b = &points[idx + 1];
                 let span = (b.beat.0 - a.beat.0) as f32;
@@ -256,6 +256,22 @@ mod tests {
         };
         assert_eq!(lane.value_at(Beats(0.0)), 0.2);
         assert_eq!(lane.value_at(Beats(4.0)), 0.2);
+    }
+
+    #[test]
+    fn automation_lane_last_coincident_point_wins_at_exact_beat() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.1, SegmentShape::Linear),
+                pt(4.0, 0.2, SegmentShape::Linear),
+                pt(4.0, 0.8, SegmentShape::Hold),
+                pt(8.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(4.0)), 0.8);
+        assert!((lane.value_at(Beats(6.0)) - 0.8).abs() < 1e-6);
     }
 
     #[test]

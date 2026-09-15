@@ -337,15 +337,14 @@ impl UiAutomationLane {
     }
 }
 
-/// Identifies one breakpoint for selection / deletion — the (target, param,
-/// beat) triple is stable identity for a point that hasn't been dragged this
-/// frame (mirrors the core commands' own by-beat point identity, see
-/// `manifold-editing/src/commands/automation.rs`'s module doc).
+/// Identifies one breakpoint for selection / deletion. Equal-beat points are
+/// independent, so the rendered normalized value is part of the identity.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiAutomationPointRef {
     pub target: UiGraphTarget,
     pub param_id: ParamId,
     pub beat: Beats,
+    pub value_norm: f32,
 }
 
 impl UiAutomationLane {
@@ -365,12 +364,7 @@ impl UiAutomationLane {
                 if beat.0 >= last.beat.0 {
                     return last.value_norm;
                 }
-                let idx = match points.binary_search_by(|p| {
-                    p.beat.0.partial_cmp(&beat.0).unwrap_or(std::cmp::Ordering::Equal)
-                }) {
-                    Ok(i) => i,
-                    Err(i) => i - 1,
-                };
+                let idx = points.partition_point(|p| p.beat.0 <= beat.0).saturating_sub(1);
                 let a = &points[idx];
                 let b = &points[idx + 1];
                 let span = (b.beat.0 - a.beat.0) as f32;
@@ -457,6 +451,18 @@ mod automation_lane_tests {
             pt(4.0, 0.9, UiSegmentShape::Linear),
         ]);
         assert_eq!(l.value_at_norm(Beats(3.9)), 0.2);
+    }
+
+    #[test]
+    fn coincident_points_sample_the_last_value_at_the_shared_beat() {
+        let l = lane(vec![
+            pt(0.0, 0.1, UiSegmentShape::Linear),
+            pt(4.0, 0.2, UiSegmentShape::Linear),
+            pt(4.0, 0.8, UiSegmentShape::Hold),
+            pt(8.0, 1.0, UiSegmentShape::Linear),
+        ]);
+        assert_eq!(l.value_at_norm(Beats(4.0)), 0.8);
+        assert!((l.value_at_norm(Beats(6.0)) - 0.8).abs() < 1e-6);
     }
 
     #[test]

@@ -804,6 +804,9 @@ impl ContentThread {
             ContentCommand::ClearAutomationPreviews => {
                 self.engine.clear_automation_previews();
             }
+            ContentCommand::FinishAutomationRecording => {
+                self.commit_automation_recording(true);
+            }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
                 self.engine.clear_automation_previews();
                 let cmd = crate::scene_modifier_edit::with_admission_device(
@@ -1644,6 +1647,35 @@ mod recording_save_tests {
     use manifold_core::effects::PresetInstance;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::effect_graph_def::ParamSpecDef;
+
+    #[test]
+    fn clear_after_recording_boundary_cannot_resurrect_a_pending_first_take() {
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("ClearTest"));
+        fx.params = ParamManifest::from_params(vec![Param::bundled(ParamSpecDef {
+            id: "amount".into(), min: 0.0, max: 1.0, ..Default::default()
+        })]);
+        let id = fx.id.clone();
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(fx);
+        let mut engine = manifold_playback::engine::PlaybackEngine::new(Vec::new());
+        let mut editing = manifold_editing::service::EditingService::new();
+        engine.initialize(project);
+        engine.set_state(manifold_core::types::PlaybackState::Playing);
+        engine.set_time(Seconds(1.0));
+        engine.set_automation_armed(true);
+        engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7);
+        // Match the ordered FinishAutomationRecording -> Execute messages.
+        commit_recording(&mut engine, &mut editing, true);
+        editing.execute(Box::new(manifold_editing::commands::automation::RemoveLaneCommand::new(
+            manifold_core::GraphTarget::Effect(id.clone()), "amount", 0,
+        )), engine.project_mut().unwrap());
+        assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap().is_empty());
+        assert!(engine.finish_automation_recording().is_empty(), "no delayed take can recreate the lane");
+        assert!(editing.undo(engine.project_mut().unwrap()));
+        assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].value_at(Beats(2.0)), 0.7);
+        assert!(editing.redo(engine.project_mut().unwrap()));
+        assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap().is_empty());
+    }
 
     #[test]
     fn recording_save_snapshot_contains_final_touch_and_stays_undoable() {

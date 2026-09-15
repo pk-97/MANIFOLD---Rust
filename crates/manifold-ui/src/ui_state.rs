@@ -200,9 +200,12 @@ impl UIState {
         self.automation_paste_context = None;
     }
 
-    pub fn automation_point_selected(&self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats) -> bool {
+    pub fn automation_point_selected(&self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) -> bool {
         let matches = |point: &UiAutomationPointRef| {
-            point.target == *target && point.param_id == *param_id && point.beat == beat
+            point.target == *target
+                && point.param_id == *param_id
+                && point.beat == beat
+                && point.value_norm == value_norm
         };
         self.selected_automation_point.as_ref().is_some_and(matches)
             || self.selected_automation_points.iter().any(matches)

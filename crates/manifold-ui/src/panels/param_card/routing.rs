@@ -791,6 +791,15 @@ impl ParamCardPanel {
             }
         }
 
+        // AUTO opens the same parameter menu as the label, including clear.
+        for (pi, button) in self.row_host.automation_btn_ids.iter().enumerate() {
+            if let Some(button) = button {
+                intents.on(*button, RightClick, PanelAction::Params(
+                    ParamsAction::ParamLabelRightClick(target.clone(), self.rows[pi].id.clone()),
+                ));
+            }
+        }
+
         // Per-param perform-mapping menu.
         for (pi, slider) in self.row_host.slider_ids.iter().enumerate() {
             // Generator toggle/trigger rows have no map gesture — they fall

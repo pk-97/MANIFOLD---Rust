@@ -244,16 +244,9 @@ impl TimelineViewportPanel {
     /// At extreme zoom-out, bar lines are too dense. Returns the number of
     /// bars to skip between visible bar lines (1 = show every bar).
     pub(super) fn bar_skip(&self) -> u32 {
-        let bar_px = self.mapper.pixels_per_beat() * self.beats_per_bar as f32;
-        if bar_px >= 8.0 {
-            1
-        } else if bar_px >= 4.0 {
-            2
-        } else if bar_px >= 2.0 {
-            4
-        } else {
-            8
-        }
+        crate::bitmap_renderer::timing_grid_policy(
+            self.mapper.pixels_per_beat(), self.beats_per_bar as f32,
+        ).bar_skip
     }
 
     // ── Grid subdivision ──────────────────────────────────────────
@@ -264,13 +257,14 @@ impl TimelineViewportPanel {
     ///   - Show 8ths  when an 8th-note ≥ 6px wide
     ///   - Show beats when a beat ≥ 6px wide
     pub(super) fn grid_subdivision(&self) -> GridSubdivision {
-        let sixteenth_px = self.mapper.pixels_per_beat() * 0.25;
-        let eighth_px = self.mapper.pixels_per_beat() * 0.5;
-        if sixteenth_px >= 4.0 {
+        let policy = crate::bitmap_renderer::timing_grid_policy(
+            self.mapper.pixels_per_beat(), self.beats_per_bar as f32,
+        );
+        if policy.subdivisions_per_beat == 4 {
             GridSubdivision::Sixteenth
-        } else if eighth_px >= 6.0 {
+        } else if policy.subdivisions_per_beat == 2 {
             GridSubdivision::Eighth
-        } else if self.mapper.pixels_per_beat() >= 6.0 {
+        } else if policy.show_beat_lines {
             GridSubdivision::Beat
         } else {
             GridSubdivision::Bar

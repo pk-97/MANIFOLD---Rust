@@ -406,8 +406,8 @@ pub(super) fn dispatch_editing(
             );
             DispatchResult::structural()
         }
-        EditingAction::AutomationPointEditValue(_, _, _)
-        | EditingAction::AutomationPointEditTime(_, _, _) => {
+        EditingAction::AutomationPointEditValue(_, _, _, _)
+        | EditingAction::AutomationPointEditTime(_, _, _, _) => {
             // The app text-input owner intercepts these exact typed actions.
             DispatchResult::handled()
         }
