@@ -26,7 +26,7 @@
 
 use std::borrow::Cow;
 
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::generators::mesh_common::{InstanceTransform, MeshVertex, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -39,6 +39,7 @@ crate::primitive! {
     inputs: {
         vertices: Array(MeshVertex) optional,
         weights: Array(f32) optional,
+        topology: Array(Vec4Vertex) optional,
         transform: Transform optional,
         material: Material optional,
         base_color_map: Texture2D optional,
@@ -127,6 +128,8 @@ impl Primitive for SceneObjectNode {
         let material = ctx.inputs.material("material");
         let mesh = ctx.inputs.slot_of("vertices");
         let weights = ctx.inputs.slot_of("weights");
+        let topology = ctx.inputs.slot_of("topology")
+            .and_then(|slot| ctx.inputs.slot_generation_of(slot).map(|generation| (slot, generation)));
         let base_color_map = ctx.inputs.slot_of("base_color_map");
         let normal_map = ctx.inputs.slot_of("normal_map");
         let mr_map = ctx.inputs.slot_of("mr_map");
@@ -153,6 +156,7 @@ impl Primitive for SceneObjectNode {
             material,
             mesh,
             weights,
+            topology,
             base_color_map,
             normal_map,
             mr_map,
@@ -304,6 +308,14 @@ mod tests {
             None,
             (0, 0),
         );
+        let topology_slot = backend.acquire(
+            ResourceId(4),
+            PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::Vec4Vertex>()),
+            None,
+            (0, 0),
+        );
+        let mut generations = vec![0; topology_slot.0 as usize + 1];
+        generations[topology_slot.0 as usize] = 7;
 
         let mut params = ParamValues::default();
         params.insert(std::borrow::Cow::Borrowed("visible"), ParamValue::Float(0.0));
@@ -313,6 +325,7 @@ mod tests {
             ("vertices", mesh_slot),
             ("base_color_map", color_slot),
             ("instances", instances_slot),
+            ("topology", topology_slot),
         ];
         let outputs_bindings: &[(&'static str, Slot)] = &[("object", out_slot)];
         let mut scalar_scratch = Vec::new();
@@ -322,7 +335,7 @@ mod tests {
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
         let mut object_scratch = Vec::new();
-        let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
+        let inputs = NodeInputs::new(inputs_bindings, &backend, &generations);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,
@@ -347,6 +360,7 @@ mod tests {
         assert_eq!(object.mesh, Some(mesh_slot));
         assert_eq!(object.base_color_map, Some(color_slot));
         assert_eq!(object.instances, Some(instances_slot));
+        assert_eq!(object.topology, Some((topology_slot, 7)));
         assert_eq!(object.normal_map, None);
     }
 }

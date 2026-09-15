@@ -431,6 +431,43 @@ fn hand_uniform_structs_match_codegen_layout() {
     );
 }
 
+#[test]
+fn cut_remap_generated_params_match_shared_four_word_upload() {
+    let upload = [0_u32; 4];
+    let expected = vec![
+        Field {
+            name: "dispatch_count".into(),
+            ty: "u32",
+        },
+        Field {
+            name: "_pad0".into(),
+            ty: "u32",
+        },
+        Field {
+            name: "_pad1".into(),
+            ty: "u32",
+        },
+        Field {
+            name: "_pad2".into(),
+            ty: "u32",
+        },
+    ];
+    let registry = PrimitiveRegistry::with_builtin();
+    for type_id in ["node.remap_mesh_cut", "node.remap_cut_weights"] {
+        let node = registry
+            .construct(type_id)
+            .expect("registered cut remapper");
+        let layout = shader_fields(node.as_ref()).expect("generated remapper Params");
+        assert_eq!(layout.fields, expected, "Params fields for {type_id}");
+        assert_eq!(
+            layout.offsets,
+            vec![0, 4, 8, 12],
+            "Params offsets for {type_id}"
+        );
+        assert_eq!(layout.span, std::mem::size_of_val(&upload) as u32);
+    }
+}
+
 // These nodes do not use the standalone dispatch_count ABI. Keep exceptions
 // explicit: adding/removing an exception requires inspecting the run() path.
 const NON_STANDALONE: &[&str] = &[
@@ -464,6 +501,13 @@ const NON_STANDALONE: &[&str] = &[
     "node.torus_wrap_field",
     // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
     "system.mesh_input",
+    // Custom cut-map kernels share CutMapUniforms; their shader declaration is
+    // reflected by uniform_layout_extended, while the remappers below use the
+    // generated four-word dispatch ABI proof above.
+    "node.cut_mesh_bands",
+    "node.cut_mesh_cells",
+    "node.remap_mesh_cut",
+    "node.remap_cut_weights",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {

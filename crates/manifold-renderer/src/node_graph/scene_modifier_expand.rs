@@ -19,6 +19,8 @@ mod control_state;
 mod math_view;
 pub use control_state::PreparedModifierControlState;
 mod frames;
+mod fragment_cuts;
+pub(crate) use fragment_cuts::contains_fragments;
 mod index;
 mod namespace;
 mod parameter_guards;

@@ -151,6 +151,43 @@ impl PreparedGraphValueWrites {
                         enum_as_number: fused && parameter.ty == ParamType::Int,
                         baseline,
                     });
+                    // A fragment's cutter shares only its partition controls.
+                    // Keep these value destinations separate from preview
+                    // routes, whose copies identify the authored motion node.
+                    let cutter_id = super::namespace::namespace_node_id(&[
+                        "fragment_cut",
+                        node_id.as_str(),
+                        "map",
+                    ]);
+                    if let Some(cutter) = graph.instance_by_node_id(&cutter_id)
+                        && let Some(instance) = graph.get_node(cutter)
+                        && matches!(
+                            instance.node.type_id().as_str(),
+                            "node.cut_mesh_bands" | "node.cut_mesh_cells"
+                        )
+                        && instance
+                            .node
+                            .parameters()
+                            .iter()
+                            .any(|parameter| parameter.name == source.param)
+                    {
+                        let baseline = instance
+                            .params
+                            .get(source.param.as_str())
+                            .cloned()
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "missing installed cutter value {cutter_id}.{}",
+                                    source.param
+                                ))
+                            })?;
+                        destinations.push(Destination {
+                            node: cutter,
+                            param: source.param.clone(),
+                            enum_as_number: false,
+                            baseline,
+                        });
+                    }
                 }
                 writes.push(Write {
                     source: source.clone(),

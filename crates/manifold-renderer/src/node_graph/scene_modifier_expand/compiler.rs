@@ -179,11 +179,23 @@ fn prepare_scene_modifiers_impl(
         });
     }
     if owner.scene_modifiers.is_empty() {
+        if !super::fragment_cuts::contains_fragments(owner) {
+            return Ok(PreparedSceneModifierGraph {
+                def: owner.clone(), routes: Vec::new(), event_routes: Vec::new(),
+                binding_sources: Vec::new(),
+            });
+        }
+        let mut def = manifold_core::flatten::flatten_groups(owner).map_err(|error| invalid(
+            "fragmentCuts", format!("legacy graph flattening failed: {error}"),
+        ))?;
+        let binding_count = def.preset_metadata.as_ref().map_or(0, |metadata| metadata.bindings.len());
+        let mut binding_sources = vec![None; binding_count];
+        super::fragment_cuts::apply(&mut def, &mut binding_sources)?;
         return Ok(PreparedSceneModifierGraph {
-            def: owner.clone(),
+            def,
             routes: Vec::new(),
             event_routes: Vec::new(),
-            binding_sources: Vec::new(),
+            binding_sources,
         });
     }
     if let Some(request) = math_view
@@ -339,7 +351,8 @@ fn prepare_scene_modifiers_impl(
     }
     builder.derived.name = owner.name.clone();
     builder.derived.description = owner.description.clone();
-    let (metadata, binding_sources) = bindings::expand_bindings_with_sources(owner, &leaf_maps)?;
+    let (metadata, mut binding_sources) =
+        bindings::expand_bindings_with_sources(owner, &leaf_maps)?;
     builder.derived.preset_metadata = metadata;
     // Host leaves have already crossed their group boundaries. Temporarily
     // remove their flattened display handles so the group flattener does not
@@ -374,6 +387,11 @@ fn prepare_scene_modifiers_impl(
     let mut prepared = bindings::seed_local_defaults(&flat)?;
     let routes = routes::build_routes(owner, &prepared, &leaf_maps, &target_maps)?;
     math_events::prepare(owner, &mut prepared, &index, &routes, math_view)?;
+    // Math View deliberately keeps its sparse original-face diagnostic graph;
+    // compact cut-map indices have no meaning to its source_face_index path.
+    if math_view.is_none() {
+        super::fragment_cuts::apply(&mut prepared, &mut binding_sources)?;
+    }
     if prepared.nodes.len() > 65_536 || prepared.wires.len() > 262_144 {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "expandedGraph".into(),

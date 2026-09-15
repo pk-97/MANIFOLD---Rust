@@ -340,13 +340,8 @@ mod tests {
         assert_eq!(registry.get(&id).width, 4, "referenced layer must snapshot");
 
         // A cycle with no reads clears the set and drops the stale entry.
-        let mut encoder = device.create_encoder("stale snapshot drop proof");
-        {
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
-            registry.begin_snapshots();
-            registry.finish_snapshots();
-        }
-        encoder.commit_and_wait_completed();
+        registry.begin_snapshots();
+        registry.finish_snapshots();
         assert_eq!(registry.len(), 0, "stale snapshot must drop when not re-published");
         assert_eq!(registry.get(&id).width, 1);
     }
