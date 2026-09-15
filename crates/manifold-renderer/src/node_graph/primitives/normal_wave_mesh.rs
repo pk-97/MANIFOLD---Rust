@@ -413,6 +413,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         let g = generate_fused(&region).expect("the triangle-gather kernel fuses");
         assert!(

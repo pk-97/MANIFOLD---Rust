@@ -27,6 +27,8 @@
 //! port/param declarations), not part of the marker ABI table in
 //! `FREEZE_COMPILER_MAP.md` section 5, and not touched by this module.
 
+use crate::node_graph::freeze::classify::CapacityExpr;
+
 /// One marker on the freeze compiler's WGSL comment-based wire.
 ///
 /// `emit` and `parse` are inverses for every variant (`marker_roundtrip_every_variant`
@@ -68,6 +70,17 @@ pub enum Marker {
         type_id: String,
         camera_port: Option<String>,
     },
+    /// `// @fused_output_capacity: <expr>` — fused buffer codegen (BUG-orm4),
+    /// own line right after the fresh `// @fused_output dst` binding, only
+    /// when a region member declared `FusedOutputCapacity::MultipleOf` (the
+    /// region's count is widened past the min-over-inputs default).
+    /// `<expr>` is the composed capacity expression over the array input
+    /// slots in the `min(…)`/`mul(<u32>,…)`/`s<slot>` grammar
+    /// (`CapacityExpr::to_marker_payload`). `node.wgsl_compute` evaluates it
+    /// over the wired input capacities to size `dst` exactly to the kernel's
+    /// dispatch count. Identity regions emit no marker (byte-identical WGSL;
+    /// the min-over-inputs default is then exactly right).
+    FusedOutputCapacity { expr: CapacityExpr },
     /// `// @input_access: <port> <token>` — fused texture codegen (install),
     /// one per `src_<e>` texture input, recording how the region's members
     /// actually read it (`coincident` / `coincident_texel` / `gather` /
@@ -115,6 +128,9 @@ impl Marker {
             }
             Marker::InputAccess { port, token } => format!("// @input_access: {port} {token}"),
             Marker::PrecisionCritical { port } => format!("// @precision_critical: {port}"),
+            Marker::FusedOutputCapacity { expr } => {
+                format!("// @fused_output_capacity: {}", expr.to_marker_payload())
+            }
         }
     }
 
@@ -175,6 +191,10 @@ impl Marker {
             return (!name.is_empty())
                 .then(|| Marker::PrecisionCritical { port: name.to_string() });
         }
+        if let Some(rest) = c.strip_prefix("@fused_output_capacity:") {
+            let expr = CapacityExpr::parse_marker_payload(rest)?;
+            return Some(Marker::FusedOutputCapacity { expr });
+        }
         if let Some(rest) = c.strip_prefix("@derived_uniform_member:") {
             let mut parts = rest.split_whitespace();
             let first_field = parts.next()?;
@@ -205,6 +225,12 @@ mod tests {
         let variants = vec![
             Marker::FusedOutput,
             Marker::DispatchCountParam { field: "n0_active_count".to_string() },
+            Marker::FusedOutputCapacity {
+                expr: CapacityExpr::Min(vec![
+                    CapacityExpr::Mul(2, Box::new(CapacityExpr::Slot(0))),
+                    CapacityExpr::Slot(1),
+                ]),
+            },
             Marker::SamplerAddressMode { mode: "repeat".to_string() },
             Marker::SamplerAddressMode { mode: "mirror".to_string() },
             Marker::ResetGated,

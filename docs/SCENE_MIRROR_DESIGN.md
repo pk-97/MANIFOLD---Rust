@@ -1,6 +1,6 @@
 # Scene Mirror — whole-scene reflection as modifier kind #3
 
-**Status:** SHIPPED — P0+P1+P2 all on wave 2026-09-05, landing with the scene-mirror wave · 2026-09-05 · k3 (lead), design session with Peter
+**Status:** P0+P1 on main (node.reflect_array atom, fusing since BUG-x72p (scene-mirror-blocked-gather-input-fusion) + BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity) closed). P2 (the scene_mirror modifier kind) BLOCKED: main deleted the kind framework in favor of v3 schema presets — re-home decision tracked in beads (scene_mirror re-home after kind-framework removal). Owed: the A/B call, then redesign or land.
 **Prerequisites:** SCENE_MODIFIER_FRAMEWORK (P1 loop + fog kinds shipped), SCENE_FX (deformer family + "off is free" pattern shipped), SCENE_LOOP (P4 loop controls shipped).
 **Lifecycle: contract** — `node.reflect_array` (atom docs + gpu_tests) and the `scene_mirror` kind (scene_modifier.rs) cite this doc's D-numbers and invariants as their spec; future scene-modifier kinds build on its take-over infra (section 3.5).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
@@ -143,7 +143,7 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 5. Zero UI/app crate changes for the kind — registry-driven picker and cards are the contract (P2 negative gate).
 6. Toggle is gate-style with off-is-free identity output (D9).
 7. Flip-before construction with positive stored scale and the three-value marker — the P1-amended D5 math is the committed behavior; flip-after/negated-scale is disproven, do not re-derive it.
-8. Fusion is BLOCKED-tracked (standalone-only + region-exclusion proof), never a quiet exemption — BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity). BUG-x72p (scene-mirror-blocked-gather-input-fusion) is closed: BufferGather atoms fuse with the wire kept external.
+8. Fusion is unblocked: BUG-x72p (scene-mirror-blocked-gather-input-fusion) and BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity) are both closed — BufferGather atoms fuse with the wire kept external, and reflect_array's 2× output rides the FusedOutputCapacity expression. The fused numerical proof shipped with the orm4 landing.
 
 ## 7. Deferred
 
@@ -153,6 +153,6 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 - **Mirrored instances in RT reflections/shadows** — trigger: D7's named load-bearing case.
 - **Closed-loop 3D feedback** — tracked as BUG-q4h2 (3d-scene-feedback-and-scene-space-mirror); needs the render_scene-output seam designed separately.
 - **Mirrored shadow-depth silhouettes** (P1-known inconsistency): `shadow_depth.wgsl` reads the raw TRS, so a marked instance casts the UNFLIPPED shape at the mirrored position (stored scale is positive by the D5 amendment). Visible only where mirrored copies cast shadows. Trigger: a shipped look where the silhouette mismatch reads; fix is the same marker conditional in the shadow-depth vertex stage.
-- **Fused-region reflect_array** — the freeze compiler cannot express 2× output capacity today (BufferGather-input fusion itself landed with BUG-x72p's close); shipped standalone-only with a region-exclusion proof. Tracked: BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity). Trigger: the capacity gap closes → add the fused numerical proof and retire the exclusion test.
+- **Fused-region reflect_array** — LANDED with BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity)'s close: reflect_array declares FusedOutputCapacity::MultipleOf and fuses with the widened count; the region-exclusion guard was retired into an admission test and the fused numerical proof shipped.
 - **Editing-seam follow-ups from P2** — the generic remove's splice-strip is per-kind-blind (P2 ships a renderer-side workaround in the remove-re-derived plan) and `EnableDecl::Gate` carries unpopulated amount/target fields for gate-by-param kinds. Tracked: BUG-6y91 (scene-modifier-kind3-editing-seam-followups).
 - **Mirrored shadow casting as a toggle** — trigger: a look where mirrored copies must NOT cast.

@@ -622,6 +622,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            output_capacity: None,
         };
         let generated_fused = generate_fused(&region).expect("morph mesh should fuse");
         assert!(naga::front::wgsl::parse_str(&generated_fused.wgsl).is_ok());

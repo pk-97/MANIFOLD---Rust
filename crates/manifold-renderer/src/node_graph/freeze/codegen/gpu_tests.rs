@@ -199,6 +199,7 @@ fn fused_prelude_carries_and_dedups_top_level_consts() {
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(), camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("a region whose body declares a const fuses");
     assert_eq!(
@@ -266,6 +267,7 @@ fn cross_resolution_external_sampled_at_uv() {
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
         sampled_externals: vec![1], camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("cross-res region fuses");
     assert!(
@@ -347,6 +349,7 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("coc_from_depth + Gain region fuses");
     assert!(
@@ -409,6 +412,7 @@ fn fused_buffer_region_threads_element_registers() {
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(), camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("buffer region fuses");
     assert!(
@@ -472,6 +476,7 @@ fn fused_buffer_region_two_array_externals_bounds_count_by_min() {
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(), camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("two-external buffer region fuses");
     assert!(
@@ -548,6 +553,7 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
             output: 1,
         }],
         sampled_externals: Vec::new(), camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("virtual-chain region fuses");
     assert!(
@@ -619,6 +625,7 @@ fn fused_gather_binds_sampler_and_passes_texture() {
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(), camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("gather region fuses");
     assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -698,6 +705,7 @@ fn fused_fanout_emits_two_dst_bindings() {
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(), camera_externals: 0,
+    output_capacity: None,
     };
     let g = generate_fused(&region).expect("fan-out region fuses");
     assert!(g.wgsl.contains("var dst_0:"), "first output binding");

@@ -26,10 +26,13 @@
 //! The `in` port is optional: unwired means one identity instance at the
 //! origin (the scene_array count convention). The body reads `buf_in` as a
 //! BufferGather input (slot `idx % cap` — a coincident pre-read would run
-//! off the end of the smaller input array), which makes the atom a fusion
-//! boundary today, exactly like `node.neighbor_smooth`: the fused buffer
-//! wrapper keys its dispatch on the input array length and cannot yet
-//! express a 2x-capacity output. Tracked compiler debt, not an exemption.
+//! off the end of the smaller input array). The atom fuses into buffer
+//! regions (BUG-orm4): it declares
+//! `FusedOutputCapacity::MultipleOf { input: "in", factor: 2 }`, so
+//! `build_region` composes the region's count as `2 × arrayLength(&src_in)`
+//! and the fused dispatch writes BOTH the passthrough range and the mirrored
+//! half; `node.wgsl_compute` sizes the fresh `dst` from the matching
+//! `// @fused_output_capacity:` marker.
 
 use std::borrow::Cow;
 
@@ -37,6 +40,7 @@ use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -107,7 +111,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Output capacity is fixed at 2x the input capacity (D4): the output buffer is sized at plan pre-allocation and axis/plane_offset/enabled writes apply in place — the BUG-757c rule. Liveness is read in-band: a source slot with pos_scale.w == 0 (scene_array's surplus mask) gets no mirrored copy and its original slot is zeroed (INV-MR5). enabled == 0 zeroes only the mirrored half — originals pass through byte-identical (INV-MR1, off is free). Marker contract (INV-MR3, P1-amended): rot_pad.w in {0,1,2,3} — 0 = original slot, k > 0 = mirrored across the plane perpendicular to component k-1; only this atom writes nonzero, and render_scene.wgsl's vertex stage is the sole consumer. Mirrored scale stays positive: the flip rides on the vertex in the shader (exactness R'(w M v) + t' = M R (w v) + t'), a negated uniform scale would be a central inversion, not a reflection. BufferGather body: the atom ADMITS into fused buffer regions (the gathered `in` wire stays external, bound `src_<slot>`), but a region containing it refuses at `build_region`'s identity probe — the fixed 2x output capacity is a non-identity function of the input, which the fresh-`dst` fused model can't size (tracked as the scene-mirror-blocked output-multiplier-capacity follow-on, not exempted). Until that lands, every reflect_array region renders unfused — always correct. Unwired in = one identity instance at the origin.",
+    composition_notes: "Output capacity is fixed at 2x the input capacity (D4): the output buffer is sized at plan pre-allocation and axis/plane_offset/enabled writes apply in place — the BUG-757c rule. Liveness is read in-band: a source slot with pos_scale.w == 0 (scene_array's surplus mask) gets no mirrored copy and its original slot is zeroed (INV-MR5). enabled == 0 zeroes only the mirrored half — originals pass through byte-identical (INV-MR1, off is free). Marker contract (INV-MR3, P1-amended): rot_pad.w in {0,1,2,3} — 0 = original slot, k > 0 = mirrored across the plane perpendicular to component k-1; only this atom writes nonzero, and render_scene.wgsl's vertex stage is the sole consumer. Mirrored scale stays positive: the flip rides on the vertex in the shader (exactness R'(w M v) + t' = M R (w v) + t'), a negated uniform scale would be a central inversion, not a reflection. FUSION (BUG-orm4): the gathered `in` wire stays external (bound `src_<slot>`) and the atom declares FusedOutputCapacity::MultipleOf { input: \"in\", factor: 2 } — a region it heads composes its count to 2 × the input slot's length, so the fused kernel dispatches the mirrored half too (the fresh dst is sized by the matching // @fused_output_capacity: marker). The fused-vs-unfused numerical proof lives in the gpu_tests module. Unwired in = one identity instance at the origin.",
     examples: [],
     picker: { label: "Reflect Array", category: Atom },
     summary: "Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset.",
@@ -117,6 +121,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/reflect_array_body.wgsl"),
     input_access: [BufferGather],
+    output_capacity: FusedOutputCapacity::MultipleOf { input: "in", factor: 2 },
     extra_fields: {
         identity_fallback: Option<manifold_gpu::GpuBuffer> = None,
         // INV-RTI4 stasis cache — see `ReflectStasisKey` and `run`.
@@ -492,48 +497,50 @@ mod tests {
         );
     }
 
-    /// The gather body is a per-element map (Pointwise) that indexes its
-    /// input array itself; the fused buffer wrapper keys dispatch on the
-    /// input array length and cannot express the 2x-capacity output, so
-    /// the region grower must keep this atom OUT of fused regions — a
-    /// fused reflect would dispatch input-capacity threads and leave the
-    /// mirrored half of the output buffer unwritten (garbage transforms on
-    /// screen). This is the standing debt's safety half; the fused
-    /// numerical proof becomes mandatory once the codegen can express the
-    /// capacity (tracked with the atom's composition notes).
+    /// BUG-orm4 admission: reflect_array DECLARES its 2x output capacity
+    /// (`FusedOutputCapacity::MultipleOf`), so the old identity probe's
+    /// refusal is gone — a region headed by the atom (here scene_array →
+    /// reflect_array → rotation_jitter) now forms, with the count composed
+    /// to `2 × the gathered external` so the fused dispatch writes the
+    /// mirrored half too. The fused-vs-unfused numerical proof is the
+    /// gpu_tests module's `fused_region_matches_unfused_chain`.
     #[test]
-    fn reflect_array_never_enters_a_fused_region() {
+    fn reflect_array_enters_a_fused_region_with_widened_count() {
+        use crate::node_graph::freeze::classify::CapacityExpr;
         use crate::node_graph::freeze::region::partition_regions;
         use crate::node_graph::persistence::PrimitiveRegistry;
         use manifold_core::effect_graph_def::EffectGraphDef;
 
-        // scene_array → reflect_array → rotation_jitter: the jitter is a
-        // coincident per-element atom that WOULD fuse with a fusable
-        // reflect. If reflect_array ever slips into a region, the mirrored
-        // half goes unwritten — fail loud here instead.
         let json = r#"{
             "version": 1, "name": "mirror", "nodes": [
                 { "id": 0, "typeId": "node.scene_array", "nodeId": "arr" },
                 { "id": 1, "typeId": "node.reflect_array", "nodeId": "refl" },
-                { "id": 2, "typeId": "node.rotation_jitter", "nodeId": "jitter" }
+                { "id": 2, "typeId": "node.rotation_jitter", "nodeId": "jitter" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
             ],
             "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
-                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "instances" }
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "instances" },
+                { "fromNode": 2, "fromPort": "instances", "toNode": 3, "toPort": "in" }
             ]
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let regions = partition_regions(&def, &PrimitiveRegistry::with_builtin());
-        for r in &regions {
-            for m in &r.members {
-                assert_ne!(
-                    m.doc_id, 1,
-                    "reflect_array must not fuse: a fused buffer region \
-                     dispatches input-capacity threads and would leave the \
-                     mirrored half of the 2x output buffer unwritten"
-                );
-            }
-        }
+        assert_eq!(regions.len(), 1, "reflect + jitter form one widened region");
+        let r = &regions[0];
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2],
+            "reflect_array fuses; scene_array stays external (gathered wire)"
+        );
+        assert_eq!(r.externals.len(), 1);
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(
+            r.output_capacity,
+            Some(CapacityExpr::Mul(2, Box::new(CapacityExpr::Slot(0)))),
+            "the region count composes to 2x the gathered external — the \
+             mirrored half is inside the dispatch"
+        );
     }
 
     #[test]
@@ -978,5 +985,123 @@ mod gpu_tests {
         assert_eq!(gpu_data[0].rot_pad, [0.0; 4], "original identity, marker 0");
         assert_eq!(gpu_data[1].pos_scale, [0.0, -6.0, 0.0, 1.0], "mirrored identity");
         assert_eq!(gpu_data[1].rot_pad, [0.0, 0.0, 0.0, 2.0], "plane comp + 1 marker");
+    }
+
+    /// BUG-orm4 mandatory fused-vs-unfused numerical proof: a fused region
+    /// containing reflect_array declares `MultipleOf { input: "in", factor: 2 }`,
+    /// so the fused count anchor composes to `2u * arrayLength(&src_0)` and one
+    /// dispatch writes BOTH the passthrough range and the mirrored half of the
+    /// fresh dst. Run on the GPU against the CPU oracle — before the capacity
+    /// expression existed, a fused reflect would have dispatched input-capacity
+    /// threads and left the mirrored half stale (garbage transforms on screen).
+    #[test]
+    fn fused_region_matches_unfused_chain() {
+        use crate::node_graph::effect_node::NodeInstanceId;
+        use crate::node_graph::freeze::classify::CapacityExpr;
+        use crate::node_graph::freeze::codegen::{
+            FusionRegion, InputSource, RegionNode, generate_fused,
+        };
+        use crate::node_graph::primitive::PrimitiveSpec;
+
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![RegionNode {
+                node_id: id(0),
+                fusion_kind: ReflectArray::FUSION_KIND,
+                body: ReflectArray::WGSL_BODY.unwrap(),
+                params: ReflectArray::PARAMS,
+                inputs: vec![InputSource::External(0)],
+                input_access: ReflectArray::INPUT_ACCESS.to_vec(),
+                node_inputs: ReflectArray::INPUTS,
+                node_outputs: ReflectArray::OUTPUTS,
+                node_includes: ReflectArray::WGSL_INCLUDES,
+                derived_uniforms: ReflectArray::DERIVED_UNIFORMS,
+                type_id: ReflectArray::TYPE_ID.to_string(),
+                derived_camera_ext: None,
+                output_storage: "rgba16float",
+                stencil_fetch: false,
+                quantize_f16: false,
+            }],
+            num_external_inputs: 1,
+            outputs: vec![(id(0), "out".to_string())],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+            output_capacity: Some(CapacityExpr::Mul(2, Box::new(CapacityExpr::Slot(0)))),
+        };
+        let g = generate_fused(&region).expect("widened reflect region fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused kernel parses through naga:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("2u * arrayLength(&src_0)"),
+            "the count anchor is the widened expression, not the legacy min:\n{}",
+            g.wgsl
+        );
+        assert!(
+            !g.wgsl.contains("let e_0 = src_0[idx];"),
+            "the gathered input is never coincident-pre-read (would overrun):\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("@fused_output_capacity"),
+            "the dst-sizing marker rides the kernel:\n{}",
+            g.wgsl
+        );
+
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(
+            &g.wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "reflect_fused_test",
+        );
+
+        let input = [
+            live_instance([1.0, 2.0, -3.0], 1.5, [0.4, -0.8, 1.7]),
+            live_instance([-4.0, 0.5, 2.5], 0.7, [-1.9, 0.3, 0.6]),
+            // A dead slot (scene_array surplus mask): no mirrored copy, and
+            // its original is zeroed (INV-MR5) — the fused path must keep it.
+            InstanceTransform { pos_scale: [9.0, 9.0, 9.0, 0.0], rot_pad: [7.0; 4] },
+            live_instance([0.0, -3.0, 1.0], 2.0, [2.4, 1.1, -0.5]),
+        ];
+        let in_buf = upload(&device, &input);
+        let out_cap = (input.len() * 2) as u32;
+        let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
+
+        // Fused Params layout: n0_axis: u32, n0_plane_offset: f32,
+        // n0_enabled: f32, one pad word (struct padded to 16).
+        let (axis, plane_offset, enabled) = (3u32, 3.0f32, 1.0f32);
+        let uniforms: [u32; 4] = [axis, plane_offset.to_bits(), enabled.to_bits(), 0];
+        let mut enc = device.create_encoder("reflect_fused_test");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+            ],
+            [out_cap.div_ceil(256), 1, 1],
+            "reflect_fused_test",
+        );
+        enc.commit_and_wait_completed();
+
+        let gpu_data = read_back(&out_buf, out_cap);
+        assert_matches_cpu(
+            &gpu_data,
+            &cpu_reflect(&input, axis, plane_offset, enabled),
+            "fused widened dispatch",
+        );
+        // The proof's teeth, spelled out: every mirrored slot past the input
+        // length was written by THIS dispatch (the dead slot's mirror stays
+        // zero by INV-MR5, the live ones carry the plane marker).
+        assert_eq!(gpu_data[4].rot_pad[3], 2.0, "mirrored slot 0 written, marker");
+        assert_eq!(gpu_data[5].rot_pad[3], 2.0, "mirrored slot 1 written, marker");
+        assert_eq!(gpu_data[6].pos_scale, [0.0; 4], "dead slot gets no mirror");
+        assert_eq!(gpu_data[7].rot_pad[3], 2.0, "mirrored slot 3 written, marker");
     }
 }
