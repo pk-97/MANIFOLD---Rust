@@ -157,7 +157,8 @@
     "rt-quality-panel-demo": "rtquality",
     "scene-modifier-preset": "mushroomscene",
     "render-mode-wireframe": "gltfscene",
-    "render-mode-solid": "gltfscene"
+    "render-mode-solid": "gltfscene",
+    "render-mode-points": "gltfscene"
   },
   "expected_fail": {
     "scene-panel-card-convergence-c-p1b-object-scrub": {

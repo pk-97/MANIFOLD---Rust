@@ -645,6 +645,12 @@ struct RenderSceneUniforms {
     /// jitter (±0.5 render px) of phantom motion every frame. All zeros
     /// when `temporal_upscale` is off — velocity byte-identical to before.
     velocity_jitter: [f32; 4],
+    /// SCENE_RENDER_MODE_DESIGN.md D8 (P3): render-mode params, scene-wide
+    /// (same values copied into every object's uniform). `x` = `point_size`
+    /// (px) — read by `vs_points` ONLY; every other vertex entry ignores
+    /// it, so Rendered/Solid/Wireframe renders are byte-identical whatever
+    /// value rides here. `y/z/w` reserved.
+    render_mode: [f32; 4],
 }
 
 // 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -663,7 +669,10 @@ struct RenderSceneUniforms {
 // 768 after the velocity jitter-exclusion quad (D-64's MetalFX audit).
 // 784 after RAYTRACING_DESIGN.md section 16 TL7: diffuse_transmission_params
 // (+16 bytes, one new vec4).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 800);
+// 816 after SCENE_RENDER_MODE_DESIGN.md D8: `render_mode` (+16) — the
+// Points mode point-size slot, appended at the tail so every existing
+// field keeps its offset (appending is the byte-identical contract).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 816);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -699,7 +708,13 @@ pub struct RenderScene {
     /// fourth dimension, `emit_denoise_feed` — the denoiser G-buffer MRT
     /// outputs are four additional fragment shader outputs that need their
     /// own pipeline variants. 4 materials × 2 × 2 × 2 × 2 = 64 entries max.
-    pipelines: AHashMap<(MaterialKind, bool, bool, bool, bool), manifold_gpu::GpuRenderPipeline>,
+    /// SCENE_RENDER_MODE_DESIGN.md D8: a sixth dimension, `points` — the
+    /// Points pipeline swaps the vertex entry for `vs_points` (which needs
+    /// the `[[point_size]]` rebind) and forces `fs_unlit` + no aux outputs,
+    /// so it is a distinct compiled pipeline. Points-mode draws always carry
+    /// the substituted Unlit material, so only the Unlit×points slot is ever
+    /// populated; +1 entry in practice.
+    pipelines: AHashMap<(MaterialKind, bool, bool, bool, bool, bool), manifold_gpu::GpuRenderPipeline>,
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: depth TEST on (`Less`, matching
     /// `depth_stencil` above) but WRITE off — the sorted transparent
@@ -708,9 +723,14 @@ pub struct RenderScene {
     blend_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// Memoryless 4x-MSAA color + depth targets for the scene pass, sized
     /// to the render target. Both resolve on-chip; only `msaa_color`
-    /// resolves out to the single-sample output.
+    /// resolves out to the single-sample output. `msaa_real` records which
+    /// storage flavor is allocated (`true` = private-storage pair for
+    /// Points-active frames — see `ensure_msaa_targets`'s D8 note); the
+    /// flavor flips with the mode so the memoryless pair comes back the
+    /// frame a scene leaves Points.
     msaa_color: Option<manifold_gpu::GpuTexture>,
     depth_texture: Option<manifold_gpu::GpuTexture>,
+    msaa_real: bool,
     /// Native MSAA depth resolves require a matching depth format. Reused
     /// only when depth is consumed, then copied to the graph's R32Float output.
     depth_resolve_scratch: Option<manifold_gpu::GpuTexture>,
@@ -1668,6 +1688,13 @@ struct ObjectDraw<'ctx> {
     /// colour batch entries only — depth/shadow passes force `Fill` in the
     /// encoder (INV-R3), so this field never reaches them.
     fill_mode: manifold_gpu::GpuTriangleFillMode,
+    /// SCENE_RENDER_MODE_DESIGN.md D8: draw this object with point topology
+    /// (Points mode). Same reach as `fill_mode` — colour batches only;
+    /// depth/shadow passes force triangles in the encoder (INV-R3). Selects
+    /// BOTH the points pipeline (a `points` dimension on `pipeline_for`'s
+    /// cache key) and `GpuEncoder::depth_msaa_draw_points` at the batch
+    /// site.
+    points: bool,
 }
 
 /// Whole-triangle vertex count of a MeshVertex buffer (the prepass draw
@@ -1736,6 +1763,15 @@ fn color_pass_fill_mode(
     } else {
         manifold_gpu::GpuTriangleFillMode::Fill
     }
+}
+
+/// D8: the color pass draws `Point` topology under Points mode, triangles
+/// otherwise. Mirrored shape to `color_pass_fill_mode` — one helper per
+/// per-draw encoder state the mode branch sets.
+fn color_pass_points(
+    render_mode: &crate::node_graph::render_mode::RenderMode,
+) -> bool {
+    render_mode.mode == crate::node_graph::render_mode::RENDER_MODE_POINTS
 }
 
 // ---- BUG-trh7 stage 2: the evaluate() pass frames. `FramePrelude` carries
@@ -1956,16 +1992,18 @@ impl RenderScene {
                 }
                 return None;
             };
-            // SCENE_RENDER_MODE_DESIGN.md D6/D7: ONE match on the mode
+            // SCENE_RENDER_MODE_DESIGN.md D6/D7/D8: ONE match on the mode
             // substitutes the object's material at the gather site —
-            // wireframe gets the unlit line surface, solid the clay Phong,
-            // Rendered (and Points, owned by P3) pass the object's own
-            // material through untouched. Upstream of `pipeline_for`, so
-            // the ordinary per-kind pipeline cache picks the substitute's
+            // wireframe and points get the unlit line surface (D2: the
+            // wire's line_color/line_brightness serve Points too), solid
+            // the clay Phong, Rendered passes the object's own material
+            // through untouched. Upstream of `pipeline_for`, so the
+            // ordinary per-kind pipeline cache picks the substitute's
             // shader and no shader changes.
             let material = match render_mode.mode {
                 crate::node_graph::render_mode::RENDER_MODE_WIREFRAME => wireframe_material(&render_mode),
                 crate::node_graph::render_mode::RENDER_MODE_SOLID => clay_material(&render_mode),
+                crate::node_graph::render_mode::RENDER_MODE_POINTS => wireframe_material(&render_mode),
                 _ => material,
             };
             if material.requires_envmap() && envmap_wired.is_none() {
@@ -2045,6 +2083,7 @@ impl RenderScene {
                 prev_model_n,
                 object.gain,
                 weights.is_some(),
+                render_mode.point_size,
             );
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
@@ -2156,9 +2195,10 @@ impl RenderScene {
                 None => 1,
             };
 
+            let points = color_pass_points(&render_mode);
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, *velocity_wired, *ao_mask_wired, *denoise_aux_ready, is_blend)
+                self.pipeline_for(gpu.device, material.kind, *velocity_wired, *ao_mask_wired, *denoise_aux_ready, is_blend, points)
                     .clone()
             };
 
@@ -2204,6 +2244,7 @@ impl RenderScene {
                 cast_shadows: object.cast_shadows,
                 kind: material.kind,
                 fill_mode: color_pass_fill_mode(&render_mode),
+                points,
             });
         }
 
@@ -2262,7 +2303,13 @@ impl RenderScene {
                     },
                 ));
             }
-            self.ensure_msaa_targets(gpu.device, width, height);
+            // SCENE_RENDER_MODE_DESIGN.md D8: a Points-active frame draws
+            // point primitives, which the memoryless-attachment pass budget
+            // can't carry — swap the MSAA pair for real storage (see
+            // `ensure_msaa_targets`). `points_active` is also the pass-level
+            // aux gate below.
+            let points_active = draws.iter().any(|d| d.points);
+            self.ensure_msaa_targets(gpu.device, width, height, points_active);
             if depth_wired || wants_shafts_now {
                 self.ensure_depth_resolve_scratch(gpu.device, width, height);
             }
@@ -4435,16 +4482,30 @@ impl RenderScene {
         let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
         let mut blend_entries: Vec<(f32, manifold_gpu::DepthMsaaDraw)> = Vec::new();
         for (draw, bindings) in draws.iter().zip(&binding_sets) {
-            // SCENE_RENDER_MODE_DESIGN.md D6: the color pass carries each
-            // draw's fill mode (Lines under wireframe). The depth/shadow
-            // batches never see this — they force Fill in the encoder.
-            let call = manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
-                &draw.pipeline,
-                bindings,
-                vertex_count(draw),
-                draw.instance_count,
-                draw.fill_mode,
-            );
+            // SCENE_RENDER_MODE_DESIGN.md D6/D8: the color pass carries each
+            // draw's fill mode (Lines under wireframe) and topology (Point
+            // under Points). The depth/shadow batches never see either —
+            // they force Fill + Triangle in the encoder.
+            let call = if draw.points {
+                // D8: points draw EVERY vertex in the buffer (one dot per
+                // vertex), not the triangle-multiple-of-3 count — the
+                // trailing-vertex truncation must not drop dots.
+                let vc = (draw.vertices.size / vertex_size) as u32;
+                manifold_gpu::GpuEncoder::depth_msaa_draw_points(
+                    &draw.pipeline,
+                    bindings,
+                    vc,
+                    draw.instance_count,
+                )
+            } else {
+                manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
+                    &draw.pipeline,
+                    bindings,
+                    vertex_count(draw),
+                    draw.instance_count,
+                    draw.fill_mode,
+                )
+            };
             if draw.alpha_mode == AlphaMode::Blend {
                 blend_entries.push((draw.sort_depth, call));
             } else {
@@ -4486,8 +4547,17 @@ impl RenderScene {
         // conditionally initialize, borrow" shape needed to hand the pass a
         // `&[(&GpuTexture, &GpuTexture)]` from either branch without an
         // allocation.
+        // SCENE_RENDER_MODE_DESIGN.md D8 (P3): under Points the pass has NO
+        // aux attachments, even when velocity/ao_mask/denoise are wired — the
+        // aux targets are memoryless (their own tiling budget) and the
+        // points pipeline emits no aux outputs anyway, so declaring them
+        // would both reimpose the memoryless point budget and mismatch the
+        // single-attachment points pipeline. The aux resolve targets keep
+        // their clear values for the frame (Points is a shading audit mode,
+        // not a temporal-upscale input — the documented v1 scope).
+        let points_active = draws.iter().any(|d| d.points);
         let velocity_pair = match (self.velocity_msaa.as_ref(), velocity_resolve_target) {
-            (Some(msaa), Some(resolve)) => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if !points_active => Some((msaa, resolve)),
             _ => None,
         };
         // RAYTRACING_DESIGN.md section 12 AM1: same both-or-nothing pairing
@@ -4496,7 +4566,7 @@ impl RenderScene {
         // aux order here (velocity, then ao_mask) MUST match the FsOut
         // @location order in `aux_variant`'s specializations.
         let ao_mask_pair = match (self.ao_mask_msaa.as_ref(), ao_mask_resolve_target) {
-            (Some(msaa), Some(resolve)) => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if !points_active => Some((msaa, resolve)),
             _ => None,
         };
         let velocity_att = velocity_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
@@ -4516,25 +4586,25 @@ impl RenderScene {
         // the MSAA self-fields were ensured under raw denoise_feed one
         // frame early (harmless, preserves ensure-before-use).
         let normals_pair = match (self.denoise_normals_msaa.as_ref(), normals_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
             _ => None,
         };
         let roughness_pair = match (self.denoise_roughness_msaa.as_ref(), roughness_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
             _ => None,
         };
         let diffuse_albedo_pair = match (self.denoise_diffuse_albedo_msaa.as_ref(), diffuse_albedo_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
             _ => None,
         };
         let specular_albedo_pair = match (self.denoise_specular_albedo_msaa.as_ref(), specular_albedo_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
             _ => None,
         };
         // DN-L (section 17.7): reactive mask — same all-or-none gate as the
         // other four feeds.
         let reactive_pair = match (self.denoise_reactive_msaa.as_ref(), reactive_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
             _ => None,
         };
         let n_att = normals_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
@@ -5403,9 +5473,12 @@ impl RenderScene {
         // RT + glass scene hit it too).
         if has_transmission && (velocity_wired || ao_mask_wired) {
             let gpu = ctx.gpu_encoder();
-            for draw in draws.iter_mut().filter(|d| d.alpha_mode == AlphaMode::Blend) {
+            for draw in draws
+                .iter_mut()
+                .filter(|d| d.alpha_mode == AlphaMode::Blend && !d.points)
+            {
                 draw.pipeline =
-                    self.pipeline_for(gpu.device, draw.kind, false, false, false, true).clone();
+                    self.pipeline_for(gpu.device, draw.kind, false, false, false, true, false).clone();
             }
         }
 
@@ -5964,6 +6037,7 @@ impl RenderScene {
             blend_depth_stencil: None,
             msaa_color: None,
             depth_texture: None,
+            msaa_real: false,
             depth_resolve_scratch: None,
             depth_width: 0,
             depth_height: 0,
@@ -6353,31 +6427,65 @@ impl RenderScene {
             (0..n_lights).map(|i| format!("light_{i}").into_boxed_str()).collect();
     }
 
-    /// Ensure the memoryless MSAA color + depth targets match the render
-    /// target size. Both are `MSAA_SAMPLES`x multisample, tile-resident
-    /// (never leave the GPU); the color resolves out at pass end.
-    fn ensure_msaa_targets(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    /// Ensure the MSAA color + depth targets match the render target size.
+    /// Both are `MSAA_SAMPLES`x multisample; the color resolves out at pass
+    /// end. Two storage flavors:
+    ///
+    /// - the default `memoryless` pair — tile-resident, never leaves the
+    ///   GPU (the hot path, unchanged since the Metal migration);
+    /// - a `real` (private-storage) pair, allocated when `points_active` —
+    ///   SCENE_RENDER_MODE_DESIGN.md D8. Apple's tiling parameter buffer
+    ///   caps the TOTAL point primitives in a memoryless-attachment pass at
+    ///   a few thousand (measured 2026-09-16 on Apple Silicon: 2048 points
+    ///   across two draws pass, 4096 fail with
+    ///   `kIOGPUCommandBufferCallbackErrorOutOfMemoryForParameterBuffer`,
+    ///   at any point size; ~32k-triangle draws are unaffected), so a dense
+    ///   scene drawn as points would fault the memoryless pass. Real
+    ///   attachments carry the same draw without the budget. Cost while
+    ///   Points is on: MSAA color+depth traffic transits real memory — the
+    ///   audit-mode tax, accepted; flipping back to any triangle mode
+    ///   recreates the memoryless pair on the next frame.
+    fn ensure_msaa_targets(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32, points_active: bool) {
         if self.depth_width == width
             && self.depth_height == height
             && self.depth_texture.is_some()
             && self.msaa_color.is_some()
+            && self.msaa_real == points_active
         {
             return;
         }
-        self.msaa_color = Some(device.create_texture_msaa_memoryless(
-            width,
-            height,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            MSAA_SAMPLES,
-            "node.render_scene msaa color",
-        ));
-        self.depth_texture = Some(device.create_texture_msaa_memoryless(
-            width,
-            height,
-            manifold_gpu::GpuTextureFormat::Depth32Float,
-            MSAA_SAMPLES,
-            "node.render_scene msaa depth",
-        ));
+        self.msaa_real = points_active;
+        if points_active {
+            self.msaa_color = Some(device.create_texture_msaa(
+                width,
+                height,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                MSAA_SAMPLES,
+                "node.render_scene msaa color (points)",
+            ));
+            self.depth_texture = Some(device.create_texture_msaa(
+                width,
+                height,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                MSAA_SAMPLES,
+                "node.render_scene msaa depth (points)",
+            ));
+        } else {
+            self.msaa_color = Some(device.create_texture_msaa_memoryless(
+                width,
+                height,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                MSAA_SAMPLES,
+                "node.render_scene msaa color",
+            ));
+            self.depth_texture = Some(device.create_texture_msaa_memoryless(
+                width,
+                height,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                MSAA_SAMPLES,
+                "node.render_scene msaa depth",
+            ));
+        }
         self.depth_width = width;
         self.depth_height = height;
     }
@@ -7836,6 +7944,15 @@ impl RenderScene {
     /// selects the denoiser G-buffer MRT pipeline variant — four additional
     /// fragment shader outputs (normals, roughness, diffuse albedo, specular
     /// albedo) at locations after the existing aux outputs.
+    ///
+    /// SCENE_RENDER_MODE_DESIGN.md D8: `points` selects the Points pipeline
+    /// — `vs_points` (the `[[point_size]]` vertex entry, its `@location(7)`
+    /// output rebound by `create_render_pipeline_depth_msaa_point_size`)
+    /// with `fs_unlit` and NO aux outputs: `VsOutPoints` carries no velocity
+    /// or ao_mask fields, and Points is a shading audit mode, not a
+    /// temporal-upscale input — under Points the aux targets keep their
+    /// clear values for the frame. The material substitution guarantees
+    /// Unlit, so the key's `kind` is informational for points draws.
     fn pipeline_for(
         &mut self,
         device: &manifold_gpu::GpuDevice,
@@ -7844,7 +7961,31 @@ impl RenderScene {
         emit_ao_mask: bool,
         emit_denoise_feed: bool,
         blend: bool,
+        points: bool,
     ) -> &manifold_gpu::GpuRenderPipeline {
+        if points {
+            // D8: the points pipeline is the plain variant — no aux, no
+            // blend (the substituted line material is opaque). Forcing the
+            // flags here (not at every call site) keeps the no-aux contract
+            // in one place.
+            return self
+                .pipelines
+                .entry((MaterialKind::Unlit, false, false, false, false, true))
+                .or_insert_with(|| {
+                    device.create_render_pipeline_depth_msaa_point_size(
+                        include_str!("shaders/render_scene.wgsl"),
+                        "vs_points",
+                        "fs_unlit",
+                        7,
+                        manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        manifold_gpu::GpuTextureFormat::Depth32Float,
+                        None,
+                        MSAA_SAMPLES,
+                        true,
+                        "node.render_scene points",
+                    )
+                });
+        }
         let fs_entry = match kind {
             MaterialKind::Unlit => "fs_unlit",
             MaterialKind::Phong => "fs_phong",
@@ -7852,7 +7993,7 @@ impl RenderScene {
             MaterialKind::Cel => "fs_cel",
         };
         self.pipelines
-            .entry((kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend))
+            .entry((kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend, false))
             .or_insert_with(|| {
                 let blend_state = if blend { Some(Self::blend_state()) } else { None };
                 if let Some((specs, aux_formats, label)) =
@@ -8017,6 +8158,24 @@ impl RenderScene {
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             Some(shaft_composite_blend),
             "node.render_scene shaft composite",
+        );
+
+        // SCENE_RENDER_MODE_DESIGN.md D8 (P3), same BUG-037 discipline: the
+        // Points pipeline (`pipeline_for`'s points slot — vs_points +
+        // fs_unlit, the `[[point_size]]` rebind) is asset-independent and
+        // lazily compiled on the first Points frame without this. Warm it so
+        // flipping a scene to Points mid-show is a cache hit, not a stall.
+        device.create_render_pipeline_depth_msaa_point_size(
+            include_str!("shaders/render_scene.wgsl"),
+            "vs_points",
+            "fs_unlit",
+            7,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            None,
+            MSAA_SAMPLES,
+            true,
+            "node.render_scene points",
         );
 
         // COMPILE_CONTRACT_DESIGN P2: IBL pipelines are fixed-source,
@@ -8243,6 +8402,7 @@ fn build_uniforms(
     prev_model: [[f32; 4]; 4],
     gain: f32,
     weights_wired: bool,
+    point_size: f32,
 ) -> RenderSceneUniforms {
     RenderSceneUniforms {
         view_proj,
@@ -8367,6 +8527,11 @@ fn build_uniforms(
         // Overwritten per-object right after the build — 0 = no jitter
         // correction (temporal_upscale off, or first frame).
         velocity_jitter: [0.0; 4],
+        // SCENE_RENDER_MODE_DESIGN.md D8: x = the wire's point_size. Inert
+        // unless the points pipeline's vs_points reads it — an unread
+        // uniform field changes no pixel, so Rendered parity holds whatever
+        // value rides here.
+        render_mode: [point_size, 0.0, 0.0, 0.0],
     }
 }
 

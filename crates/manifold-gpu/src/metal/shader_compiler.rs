@@ -70,14 +70,29 @@ pub(super) fn compile_wgsl_to_msl(
 /// fragment separately into individual MSL strings. The caller creates separate
 /// Metal libraries for each.
 ///
+/// `point_size_location`: `Some(N)` rebinds the `vs_entry` output struct's
+/// `@location(N)` member to `BuiltIn::PointSize` before SPIR-V emission
+/// (SCENE_RENDER_MODE_DESIGN.md D8 — WGSL has no `point_size` builtin; see
+/// `crate::shader_common::rebind_vertex_output_as_point_size`). `None` compiles
+/// the module exactly as written.
+///
 /// Returns (unified_slot_map, vs_msl, fs_msl).
 pub(super) fn compile_wgsl_to_msl_render(
     wgsl_source: &str,
     vs_entry: &str,
     fs_entry: &str,
+    point_size_location: Option<u32>,
     label: &str,
 ) -> (SlotMap, String, String) {
-    let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
+    let (module, info) = match point_size_location {
+        Some(location) => {
+            let parsed = parse_and_validate_wgsl(wgsl_source, label);
+            crate::shader_common::rebind_vertex_output_as_point_size(
+                parsed.0, vs_entry, location, label,
+            )
+        }
+        None => parse_and_validate_wgsl(wgsl_source, label),
+    };
 
     // Build a UNIFIED slot map from the union of both entry points' globals.
     // VS and FS share the same Metal argument table, so bindings visible in

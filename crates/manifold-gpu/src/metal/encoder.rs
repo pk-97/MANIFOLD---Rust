@@ -126,8 +126,9 @@ fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c
 
 /// One depth-tested mesh in a [`GpuEncoder::draw_instanced_depth_msaa_batch`]
 /// batch: its own material pipeline, its own bindings, its own vertex count.
-/// Construct via [`GpuEncoder::depth_msaa_draw`] (fill) or
-/// [`GpuEncoder::depth_msaa_draw_fill_mode`] (wireframe and friends).
+/// Construct via [`GpuEncoder::depth_msaa_draw`] (fill),
+/// [`GpuEncoder::depth_msaa_draw_fill_mode`] (wireframe), or
+/// [`GpuEncoder::depth_msaa_draw_points`] (point topology).
 #[derive(Clone, Copy)]
 pub struct DepthMsaaDraw<'a> {
     pipeline: &'a GpuRenderPipeline,
@@ -141,6 +142,12 @@ pub struct DepthMsaaDraw<'a> {
     /// `DepthMsaaDraw` carries (INV-R3: lines-only depth would break
     /// occlusion and shadows).
     fill_mode: crate::GpuTriangleFillMode,
+    /// Primitive topology for this draw (SCENE_RENDER_MODE_DESIGN.md D8:
+    /// `Point` = Points mode, the same vertex buffers drawn as points).
+    /// Only the COLOUR batch entries read this; the depth-only batches
+    /// force `Triangle` — same INV-R3 argument as `fill_mode` (point-only
+    /// depth would break occlusion and shadows).
+    primitive: crate::GpuPrimitiveType,
 }
 
 /// Committed shape (`docs/GBUFFER_DESIGN.md` section 2 D3) for
@@ -1021,6 +1028,7 @@ impl GpuEncoder {
             vertex_count,
             instance_count,
             fill_mode: crate::GpuTriangleFillMode::Fill,
+            primitive: crate::GpuPrimitiveType::Triangle,
         }
     }
 
@@ -1040,6 +1048,28 @@ impl GpuEncoder {
             vertex_count,
             instance_count,
             fill_mode,
+            primitive: crate::GpuPrimitiveType::Triangle,
+        }
+    }
+
+    /// [`Self::depth_msaa_draw`] with `Point` topology — the Points render
+    /// mode (SCENE_RENDER_MODE_DESIGN.md D8). Fill mode is meaningless for
+    /// points, so it stays `Fill`. The pipeline must be built via
+    /// `GpuDevice::create_render_pipeline_depth_msaa_point_size` so the
+    /// vertex shader's designated output carries `[[point_size]]`.
+    pub fn depth_msaa_draw_points<'a>(
+        pipeline: &'a GpuRenderPipeline,
+        bindings: &'a [GpuBinding<'a>],
+        vertex_count: u32,
+        instance_count: u32,
+    ) -> DepthMsaaDraw<'a> {
+        DepthMsaaDraw {
+            pipeline,
+            bindings,
+            vertex_count,
+            instance_count,
+            fill_mode: crate::GpuTriangleFillMode::Fill,
+            primitive: crate::GpuPrimitiveType::Point,
         }
     }
 
@@ -1195,8 +1225,10 @@ impl GpuEncoder {
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             unsafe {
+                // D8: per-draw topology (Points mode = point primitives) —
+                // colour batches only; depth-only batches force Triangle.
                 enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    MTLPrimitiveType::Triangle,
+                    format::to_mtl_primitive_type(draw.primitive),
                     0,
                     draw.vertex_count as usize,
                     draw.instance_count as usize,
@@ -1225,7 +1257,7 @@ impl GpuEncoder {
                 apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
                 unsafe {
                     enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                        MTLPrimitiveType::Triangle,
+                        format::to_mtl_primitive_type(draw.primitive),
                         0,
                         draw.vertex_count as usize,
                         draw.instance_count as usize,
@@ -1316,8 +1348,10 @@ impl GpuEncoder {
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             unsafe {
+                // D8: per-draw topology (Points mode = point primitives) —
+                // colour batches only; depth-only batches force Triangle.
                 enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    MTLPrimitiveType::Triangle,
+                    format::to_mtl_primitive_type(draw.primitive),
                     0,
                     draw.vertex_count as usize,
                     draw.instance_count as usize,
@@ -1553,10 +1587,11 @@ impl GpuEncoder {
             unsafe {
                 enc.setRenderPipelineState(&draw.pipeline.state);
                 // INV-R3 (SCENE_RENDER_MODE_DESIGN.md): shadow maps and depth
-                // prepasses ALWAYS fill — lines-only depth would break
-                // occlusion, shadows, and every downstream depth reader.
-                // Forced here, not at the call site, so a `DepthMsaaDraw`
-                // carrying `Lines` can never leak into a depth-only pass.
+                // prepasses ALWAYS fill AND always draw triangles — lines-only
+                // or point-only depth would break occlusion, shadows, and
+                // every downstream depth reader. Both forced here, not at the
+                // call site, so a `DepthMsaaDraw` carrying `Lines`/`Point`
+                // can never leak into a depth-only pass.
                 enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(
                     crate::GpuTriangleFillMode::Fill,
                 ));
@@ -2692,6 +2727,147 @@ mod tests {
         };
         assert_eq!(final_value, 30, "chunks must execute in order");
         assert_eq!(completed.load(Ordering::SeqCst), 3, "expected 3 completed handlers");
+    }
+
+    /// SCENE_RENDER_MODE_DESIGN.md D8: `depth_msaa_draw_points` draws the
+    /// SAME vertex buffer as `MTLPrimitiveType::Point`, with `[[point_size]]`
+    /// driven by a uniform (rebound from a WGSL `@location` output — WGSL has
+    /// no point_size builtin). One vertex is the clean oracle: as a triangle
+    /// it is an incomplete primitive (zero pixels); as a point it is a
+    /// visible dot whose footprint scales with the uniform.
+    #[test]
+    fn point_topology_draws_a_sized_dot_from_one_vertex() {
+        let device = GpuDevice::new();
+        let wgsl = r#"
+            struct Uniforms { point_size: f32, };
+            @group(0) @binding(0) var<uniform> u: Uniforms;
+            struct VsOut {
+                @builtin(position) pos: vec4<f32>,
+                @location(0) psize: f32,
+            };
+            @vertex
+            fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
+                var out: VsOut;
+                out.pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+                out.psize = u.point_size;
+                return out;
+            }
+            // The fragment entry must NOT share the vertex output struct —
+            // after the rebind it carries a PointSize builtin, which a
+            // fragment input may not (same reason render_scene.wgsl gives
+            // vs_points its own VsOutPoints).
+            struct FsIn {
+                @builtin(position) pos: vec4<f32>,
+            };
+            @fragment
+            fn fs_main(in: FsIn) -> @location(0) vec4<f32> {
+                return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+            }
+        "#;
+        let pipeline = device.create_render_pipeline_depth_msaa_point_size(
+            wgsl,
+            "vs_main",
+            "fs_main",
+            0, // rebind @location(0) -> BuiltIn::PointSize
+            crate::GpuTextureFormat::Rgba8Unorm,
+            crate::GpuTextureFormat::Depth32Float,
+            None,
+            1,
+            false,
+            "test points pipeline",
+        );
+        let depth_stencil = device.create_depth_stencil_state(&crate::GpuDepthStencilDesc {
+            compare: crate::GpuCompareFunction::LessEqual,
+            write_enabled: true,
+        });
+
+        let make_target = |label: &str| {
+            device.create_texture(&crate::GpuTextureDesc {
+                width: 64,
+                height: 64,
+                depth: 1,
+                format: crate::GpuTextureFormat::Rgba8Unorm,
+                dimension: crate::GpuTextureDimension::D2,
+                usage: crate::GpuTextureUsage::RENDER_TARGET | crate::GpuTextureUsage::SHADER_READ,
+                label,
+                mip_levels: 1,
+            })
+        };
+
+        let count_red = |device: &GpuDevice, target: &crate::GpuTexture| -> u32 {
+            let buf = device.create_buffer_shared(64 * 64 * 4);
+            let mut enc = device.create_encoder("test points readback");
+            enc.copy_texture_to_buffer(target, &buf, 64, 64, 64 * 4);
+            enc.commit_and_wait_completed();
+            let ptr = buf.mapped_ptr().expect("shared readback buffer must be CPU-mapped");
+            let px: &[u8] = unsafe { std::slice::from_raw_parts(ptr, 64 * 64 * 4) };
+            px.chunks_exact(4).filter(|c| c[0] > 0).count() as u32
+        };
+
+        let run = |device: &GpuDevice, points: bool, point_size: f32, vertex_count: u32| -> u32 {
+            let target = make_target("test points color");
+            let depth = device.create_texture(&crate::GpuTextureDesc {
+                width: 64,
+                height: 64,
+                depth: 1,
+                format: crate::GpuTextureFormat::Depth32Float,
+                dimension: crate::GpuTextureDimension::D2,
+                usage: crate::GpuTextureUsage::RENDER_TARGET | crate::GpuTextureUsage::SHADER_READ,
+                label: "test points depth",
+                mip_levels: 1,
+            });
+            let size_bytes = point_size.to_ne_bytes();
+            let bindings = [GpuBinding::Bytes {
+                binding: 0,
+                data: &size_bytes,
+            }];
+            let mut enc = device.create_encoder("test points draw");
+            let draw = if points {
+                GpuEncoder::depth_msaa_draw_points(&pipeline, &bindings, vertex_count, 1)
+            } else {
+                GpuEncoder::depth_msaa_draw(&pipeline, &bindings, vertex_count, 1)
+            };
+            enc.draw_instanced_depth_batch(
+                &target,
+                &depth,
+                &depth_stencil,
+                std::slice::from_ref(&draw),
+                crate::GpuLoadAction::Clear,
+                crate::GpuLoadAction::Clear,
+                "test points batch",
+            );
+            enc.commit_and_wait_completed();
+            count_red(device, &target)
+        };
+
+        // Negative control: the SAME one vertex as a triangle primitive is an
+        // incomplete triangle — Metal drops it, zero pixels.
+        assert_eq!(
+            run(&device, false, 8.0, 1),
+            0,
+            "one vertex drawn as Triangle must produce no pixels"
+        );
+        // Point topology: one vertex is a dot; the uniform sets its size.
+        let small = run(&device, true, 2.0, 1);
+        let large = run(&device, true, 16.0, 1);
+        assert!(
+            small > 0,
+            "one vertex drawn as Point must produce pixels (point_size from the uniform)"
+        );
+        assert!(
+            large > small * 4,
+            "a 16px point must cover markedly more pixels than a 2px point \
+             (small={small}, large={large})"
+        );
+        // Scale: 5000 points in one draw — far past the memoryless-pass
+        // point budget, but this pass has REAL attachments, which carry it
+        // fine (the renderer switches Points-active scenes to real
+        // attachments for exactly this reason).
+        let chunked = run(&device, true, 4.0, 5000);
+        assert!(
+            chunked > 0,
+            "a 5000-point draw on real attachments must render"
+        );
     }
 }
 

@@ -103,6 +103,7 @@ pub(crate) fn to_mtl_primitive_type(prim: GpuPrimitiveType) -> MTLPrimitiveType 
     match prim {
         GpuPrimitiveType::Triangle => MTLPrimitiveType::Triangle,
         GpuPrimitiveType::Line => MTLPrimitiveType::Line,
+        GpuPrimitiveType::Point => MTLPrimitiveType::Point,
     }
 }
 

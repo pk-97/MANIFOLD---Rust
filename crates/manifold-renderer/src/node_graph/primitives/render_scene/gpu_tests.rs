@@ -685,7 +685,7 @@
                     (false, true, true),
                     (true, true, true),
                 ] {
-                    scene.pipeline_for(&device, kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend);
+                    scene.pipeline_for(&device, kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend, false);
                     assert_eq!(
                         device.render_pipeline_cache_len(),
                         cache_before_use,
@@ -694,6 +694,15 @@
                 }
             }
         }
+
+        // D8 (P3): the points dimension is pipeline_for-reachable, so it is
+        // prewarm-reachable too — after prewarm it must be a cache hit.
+        scene.pipeline_for(&device, MaterialKind::Unlit, false, false, false, false, true);
+        assert_eq!(
+            device.render_pipeline_cache_len(),
+            cache_before_use,
+            "pipeline_for(points) after prewarm must be a cache hit, not compile a new pipeline"
+        );
     }
 
     // --- G-P3 anisotropic filtering (GLB_CONFORMANCE_DESIGN.md D7) -----
