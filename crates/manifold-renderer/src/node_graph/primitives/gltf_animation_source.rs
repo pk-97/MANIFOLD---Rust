@@ -654,6 +654,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
@@ -665,6 +666,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut render_mode_scratch,
             &mut object_scratch,
         );
         let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
@@ -1029,6 +1031,7 @@ mod tests {
             let mut material_scratch = Vec::new();
             let mut transform_scratch = Vec::new();
             let mut atmosphere_scratch = Vec::new();
+            let mut render_mode_scratch = Vec::new();
             let mut object_scratch = Vec::new();
             let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
             let outputs = NodeOutputs::new(
@@ -1040,6 +1043,7 @@ mod tests {
                 &mut material_scratch,
                 &mut transform_scratch,
                 &mut atmosphere_scratch,
+                &mut render_mode_scratch,
                 &mut object_scratch,
             );
             let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
@@ -1126,6 +1130,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
@@ -1137,6 +1142,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut render_mode_scratch,
             &mut object_scratch,
         );
         let mut prim = GltfAnimationSource::new();

@@ -694,6 +694,7 @@ fn port_kind_to_ui(k: &rg::PortKindSnapshot) -> gv::PortKindSnapshot {
         rg::PortKindSnapshot::Material => gv::PortKindSnapshot::Material,
         rg::PortKindSnapshot::Transform => gv::PortKindSnapshot::Transform,
         rg::PortKindSnapshot::Atmosphere => gv::PortKindSnapshot::Atmosphere,
+        rg::PortKindSnapshot::RenderMode => gv::PortKindSnapshot::RenderMode,
         rg::PortKindSnapshot::Object => gv::PortKindSnapshot::Object,
     }
 }

@@ -21,6 +21,7 @@ use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::atmosphere::Atmosphere;
+use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::transform::Transform;
 
@@ -176,6 +177,15 @@ impl<'a> NodeInputs<'a> {
         self.backend.atmosphere(self.slot(port)?)
     }
 
+    /// [`RenderMode`] bound to the named [`PortType::RenderMode`] input port.
+    /// `None` if unwired — `render_scene` treats `None` as
+    /// [`RenderMode::default`] (Rendered), so an unwired render_mode is
+    /// byte-identical to no render_mode. Same CPU-struct drain shape as
+    /// [`Self::atmosphere`].
+    pub fn render_mode(&self, port: &str) -> Option<RenderMode> {
+        self.backend.render_mode(self.slot(port)?)
+    }
+
     /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
     /// `None` if unwired. Same CPU-struct drain shape as `Atmosphere` —
     /// produced by `node.scene_object`, consumed by `render_scene`'s
@@ -302,6 +312,8 @@ pub struct NodeOutputs<'a> {
     pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
     /// Sibling scratch for `Atmosphere` writes — same shape as transforms.
     pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
+    /// Sibling scratch for `RenderMode` writes — same shape as atmospheres.
+    pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
     pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
 }
@@ -317,6 +329,7 @@ impl<'a> NodeOutputs<'a> {
         pending_material_writes: &'a mut Vec<(Slot, Material)>,
         pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
         pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
+        pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
         pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
     ) -> Self {
         Self {
@@ -328,6 +341,7 @@ impl<'a> NodeOutputs<'a> {
             pending_material_writes,
             pending_transform_writes,
             pending_atmosphere_writes,
+            pending_render_mode_writes,
             pending_object_writes,
         }
     }
@@ -425,6 +439,15 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
+    /// Queue a [`RenderMode`] write to the named output port. Drained by
+    /// the executor into the backend after `evaluate` returns; same
+    /// semantics as `set_atmosphere`.
+    pub fn set_render_mode(&mut self, port: &str, value: RenderMode) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_render_mode_writes.push((slot, value));
+        }
+    }
+
     /// Queue a [`SceneObject`] write to the named output port. Drained by
     /// the executor into the backend after `evaluate` returns; same
     /// semantics as `set_atmosphere`.
@@ -491,6 +514,7 @@ mod array_accessor_tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
         let outputs = NodeOutputs::new(
             bindings,
@@ -501,6 +525,7 @@ mod array_accessor_tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut render_mode_scratch,
             &mut object_scratch,
         );
 

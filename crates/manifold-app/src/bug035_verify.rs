@@ -115,6 +115,7 @@ fn bug035_clip_atlas_persist_drives_900_frames() {
             frame,
             false, // export_mode = false: the live path BUG-035 lives on
             ct.editing_service.data_version(),
+            None, // no audio-visual registry in this verify harness
         );
     }
 }

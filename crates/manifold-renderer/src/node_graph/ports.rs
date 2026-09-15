@@ -67,6 +67,15 @@ pub enum PortType {
     /// `Transform`; unwired = fog off = byte-identical to no atmosphere.
     Atmosphere,
     /// CPU-only struct wire carrying a
+    /// [`RenderMode`](crate::node_graph::render_mode::RenderMode) — the
+    /// scene-wide viewport shading mode (Rendered/Solid/Wireframe/Points,
+    /// SCENE_RENDER_MODE_DESIGN.md D2). Produced by `node.render_mode`,
+    /// consumed by `render_scene`'s optional `render_mode` input. Same
+    /// CPU-struct lifetime model as `Camera` / `Light` / `Material` /
+    /// `Transform` / `Atmosphere`; unwired = Rendered = byte-identical to
+    /// no render_mode.
+    RenderMode,
+    /// CPU-only struct wire carrying a
     /// [`SceneObject`](crate::node_graph::scene_object::SceneObject) — the
     /// bundle of transform + material + mesh/map/instance [`Slot`](crate::node_graph::bindings::Slot)s
     /// that together make up one scene object (SCENE_OBJECT_AND_PANEL_V2_DESIGN

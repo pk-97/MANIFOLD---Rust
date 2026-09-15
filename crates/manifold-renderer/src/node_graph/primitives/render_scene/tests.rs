@@ -514,15 +514,23 @@
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): camera + envmap +
-        // atmosphere + light_0 + object_0 + object_1 — ONE `Object` port
-        // per object now, replacing the 21 legacy per-object port families
-        // (mesh_n/material_n/17 maps/transform_n/instances_n).
-        assert_eq!(s.inputs().len(), 3 + 1 + 2);
+        // atmosphere + render_mode + light_0 + object_0 + object_1 — ONE
+        // `Object` port per object now, replacing the 21 legacy per-object
+        // port families (mesh_n/material_n/17 maps/transform_n/instances_n).
+        assert_eq!(s.inputs().len(), 4 + 1 + 2);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
             s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().ty,
             PortType::Atmosphere
+        );
+        // SCENE_RENDER_MODE_DESIGN.md D2: the optional render_mode input,
+        // same shape as atmosphere (unwired = Rendered = byte-identical).
+        assert!(s.inputs().iter().any(|p| p.name == "render_mode"));
+        assert!(!s.inputs().iter().find(|p| p.name == "render_mode").unwrap().required);
+        assert_eq!(
+            s.inputs().iter().find(|p| p.name == "render_mode").unwrap().ty,
+            PortType::RenderMode
         );
         let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
         assert!(!by_name("object_0").required);
@@ -978,3 +986,164 @@
             "position change must flip the geo key"
         );
     }
+
+// ---- SCENE_RENDER_MODE_DESIGN.md invariants (INV-R1 / INV-R3 / INV-R4) ----
+
+#[test]
+fn render_mode_default_is_rendered_and_fills() {
+    // INV-R1: unwired = RenderMode::default() = Rendered = byte-identical
+    // to no input. The default flows through the SAME branch a wired
+    // Rendered value takes (mode 0 → no material substitution, Fill), so
+    // unwired and wired-Rendered are the identical code path by
+    // construction; these assertions pin the helper behavior both rely on.
+    let default = crate::node_graph::render_mode::RenderMode::default();
+    assert_eq!(default.mode, crate::node_graph::render_mode::RENDER_MODE_RENDERED);
+    assert_eq!(
+        color_pass_fill_mode(&default),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "Rendered (and therefore unwired) must draw Fill"
+    );
+    let wired_rendered = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_RENDERED,
+        line_color: [1.0, 0.0, 0.0, 1.0],
+        line_brightness: 4.0,
+        ..default
+    };
+    assert_eq!(
+        color_pass_fill_mode(&wired_rendered),
+        manifold_gpu::GpuTriangleFillMode::Fill,
+        "a wired Rendered value must be indistinguishable from unwired"
+    );
+}
+
+#[test]
+fn render_mode_wireframe_draws_lines_and_substitutes_unlit_line_material() {
+    // D6: color pass gets Lines; shading is unlit line_color × brightness.
+    let mode = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_WIREFRAME,
+        line_color: [0.5, 1.0, 0.25, 1.0],
+        line_brightness: 2.0,
+        ..Default::default()
+    };
+    assert_eq!(
+        color_pass_fill_mode(&mode),
+        manifold_gpu::GpuTriangleFillMode::Lines
+    );
+    let material = wireframe_material(&mode);
+    assert_eq!(material.kind, crate::node_graph::material::MaterialKind::Unlit);
+    assert_eq!(
+        material.base_color,
+        [0.5 * 2.0, 1.0 * 2.0, 0.25 * 2.0, 1.0],
+        "unlit line color × line_brightness (D6)"
+    );
+}
+
+#[test]
+fn render_mode_rt_enabled_ignores_the_wire() {
+    // INV-R4: rt_enabled + wireframe produces the Rendered uniform set —
+    // the effective mode collapses to default, so fill mode is Fill and
+    // no wireframe material ever reaches the gi_materials table.
+    let wireframe = crate::node_graph::render_mode::RenderMode {
+        mode: crate::node_graph::render_mode::RENDER_MODE_WIREFRAME,
+        ..Default::default()
+    };
+    let effective = effective_render_mode(&wireframe, true);
+    assert_eq!(
+        effective,
+        crate::node_graph::render_mode::RenderMode::default(),
+        "rt_enabled must ignore the wire (D4)"
+    );
+    assert_eq!(
+        color_pass_fill_mode(&effective),
+        manifold_gpu::GpuTriangleFillMode::Fill
+    );
+    // And without RT the same wire applies — the gate is rt_enabled, not
+    // the wire's presence.
+    assert_eq!(
+        effective_render_mode(&wireframe, false).mode,
+        crate::node_graph::render_mode::RENDER_MODE_WIREFRAME
+    );
+}
+
+#[test]
+fn depth_and_shadow_passes_force_fill_regardless_of_carried_fill_mode() {
+    // INV-R3: the depth-only batch entry (shadow maps + opaque depth
+    // prepass) forces GpuTriangleFillMode::Fill per draw in the encoder —
+    // a DepthMsaaDraw carrying Lines can never leak into a depth pass.
+    // Structural source check, same pattern as the topology-order tests
+    // above: the forcing site must name Fill and must NOT read the
+    // per-draw field.
+    let source = include_str!("../render_scene.rs");
+    let _ = source;
+    let encoder = include_str!("../../../../../manifold-gpu/src/metal/encoder.rs");
+    let depth_only = encoder
+        .split_once("pub fn draw_instanced_depth_only_batch")
+        .expect("depth-only batch entry must exist")
+        .1
+        .split_once("\n    /// ")
+        .unwrap()
+        .0;
+    let force = depth_only
+        .split_once("setTriangleFillMode")
+        .expect("depth-only pass must force a fill mode per draw (INV-R3)")
+        .1;
+    assert!(
+        force.contains("GpuTriangleFillMode::Fill"),
+        "depth-only pass must force Fill, not read the draw's fill_mode"
+    );
+    assert!(
+        !force.split_once(')').unwrap().0.contains("draw.fill_mode"),
+        "depth-only pass must NOT read draw.fill_mode (INV-R3)"
+    );
+    // The color-pass entries must apply the per-draw field (D6) — proving
+    // the flag reaches color draws and ONLY color draws.
+    for entry in ["pub fn draw_instanced_depth_msaa_batch_desc", "pub fn draw_instanced_depth_batch"] {
+        let body = encoder
+            .split_once(entry)
+            .expect("colour batch entry must exist")
+            .1
+            .split_once("\n    /// ")
+            .unwrap()
+            .0;
+        assert!(
+            body.contains("setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode))"),
+            "{entry} must apply the per-draw fill mode"
+        );
+    }
+}
+
+#[test]
+fn render_mode_branch_touches_no_uniforms_outside_the_draw_flags() {
+    // INV-R1 (parity half): the mode branch may only (a) substitute the
+    // object's material and (b) set the draw's fill mode — nothing else in
+    // collect_object_draws may read render_mode, so a Rendered/default
+    // value leaves every uniform and pipeline decision untouched.
+    let source = include_str!("../render_scene.rs");
+    let gather = source
+        .split_once("fn collect_object_draws<'ctx, 'gpu>")
+        .unwrap()
+        .1
+        .split_once("\n    fn ")
+        .unwrap()
+        .0;
+    let mentions: Vec<&str> = gather
+        .lines()
+        .filter(|line| line.contains("render_mode"))
+        .collect();
+    for line in &mentions {
+        let allowed = line.contains("objects, cam, envmap_wired, atmosphere, render_mode,")
+            || line.contains("let render_mode = effective_render_mode(render_mode, *rt_enabled)")
+            || line.contains("let wireframe = render_mode.mode")
+            || line.contains("wireframe_material(&render_mode)")
+            || line.contains("fill_mode: color_pass_fill_mode(&render_mode)");
+        assert!(
+            allowed,
+            "collect_object_draws touched render_mode outside the mode branch: {line}"
+        );
+    }
+    assert!(
+        mentions.len() >= 5,
+        "the mode branch must exist: destructure, effective-mode gate, \
+         wireframe flag, material substitution, fill_mode field"
+    );
+}

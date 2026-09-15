@@ -126,13 +126,21 @@ fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c
 
 /// One depth-tested mesh in a [`GpuEncoder::draw_instanced_depth_msaa_batch`]
 /// batch: its own material pipeline, its own bindings, its own vertex count.
-/// Construct via [`GpuEncoder::depth_msaa_draw`].
+/// Construct via [`GpuEncoder::depth_msaa_draw`] (fill) or
+/// [`GpuEncoder::depth_msaa_draw_fill_mode`] (wireframe and friends).
 #[derive(Clone, Copy)]
 pub struct DepthMsaaDraw<'a> {
     pipeline: &'a GpuRenderPipeline,
     bindings: &'a [GpuBinding<'a>],
     vertex_count: u32,
     instance_count: u32,
+    /// Triangle fill mode for this draw (SCENE_RENDER_MODE_DESIGN.md D6).
+    /// `Lines` = wireframe. Only the COLOUR batch entries read this; the
+    /// depth-only entries (`draw_instanced_depth_only_batch` — shadow maps,
+    /// opaque-depth prepass) force `Fill` per draw regardless of what a
+    /// `DepthMsaaDraw` carries (INV-R3: lines-only depth would break
+    /// occlusion and shadows).
+    fill_mode: crate::GpuTriangleFillMode,
 }
 
 /// Committed shape (`docs/GBUFFER_DESIGN.md` section 2 D3) for
@@ -1012,6 +1020,26 @@ impl GpuEncoder {
             bindings,
             vertex_count,
             instance_count,
+            fill_mode: crate::GpuTriangleFillMode::Fill,
+        }
+    }
+
+    /// [`Self::depth_msaa_draw`] with an explicit triangle fill mode — the
+    /// wireframe path (SCENE_RENDER_MODE_DESIGN.md D6). Colour-pass batch
+    /// entries apply it per draw; depth-only batch entries ignore it.
+    pub fn depth_msaa_draw_fill_mode<'a>(
+        pipeline: &'a GpuRenderPipeline,
+        bindings: &'a [GpuBinding<'a>],
+        vertex_count: u32,
+        instance_count: u32,
+        fill_mode: crate::GpuTriangleFillMode,
+    ) -> DepthMsaaDraw<'a> {
+        DepthMsaaDraw {
+            pipeline,
+            bindings,
+            vertex_count,
+            instance_count,
+            fill_mode,
         }
     }
 
@@ -1161,6 +1189,9 @@ impl GpuEncoder {
             }
             unsafe {
                 enc.setRenderPipelineState(&draw.pipeline.state);
+                // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
+                // = Lines). Encoder state, not a pipeline variant.
+                enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             unsafe {
@@ -1189,6 +1220,7 @@ impl GpuEncoder {
                 }
                 unsafe {
                     enc.setRenderPipelineState(&draw.pipeline.state);
+                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
                 }
                 apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
                 unsafe {
@@ -1278,6 +1310,9 @@ impl GpuEncoder {
             }
             unsafe {
                 enc.setRenderPipelineState(&draw.pipeline.state);
+                // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
+                // = Lines), same as the MSAA colour batch.
+                enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             unsafe {
@@ -1517,6 +1552,14 @@ impl GpuEncoder {
             }
             unsafe {
                 enc.setRenderPipelineState(&draw.pipeline.state);
+                // INV-R3 (SCENE_RENDER_MODE_DESIGN.md): shadow maps and depth
+                // prepasses ALWAYS fill — lines-only depth would break
+                // occlusion, shadows, and every downstream depth reader.
+                // Forced here, not at the call site, so a `DepthMsaaDraw`
+                // carrying `Lines` can never leak into a depth-only pass.
+                enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(
+                    crate::GpuTriangleFillMode::Fill,
+                ));
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             unsafe {

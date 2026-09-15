@@ -155,7 +155,8 @@
     "scene-setup-ux-p2-demo": "gltfscene",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
-    "scene-modifier-preset": "mushroomscene"
+    "scene-modifier-preset": "mushroomscene",
+    "render-mode-wireframe": "gltfscene"
   },
   "expected_fail": {
     "scene-panel-card-convergence-c-p1b-object-scrub": {

@@ -262,6 +262,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
         let outputs = NodeOutputs::new(
@@ -273,6 +274,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut render_mode_scratch,
             &mut object_scratch,
         );
         let time = frame_time();
@@ -334,6 +336,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(inputs_bindings, &backend, &generations);
         let outputs = NodeOutputs::new(
@@ -345,6 +348,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut render_mode_scratch,
             &mut object_scratch,
         );
         let time = frame_time();

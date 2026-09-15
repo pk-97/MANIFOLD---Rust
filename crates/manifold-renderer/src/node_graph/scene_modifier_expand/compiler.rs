@@ -50,6 +50,7 @@ fn endpoint_port(endpoint: SceneEndpoint) -> &'static str {
     match endpoint {
         SceneEndpoint::Camera => "camera",
         SceneEndpoint::Atmosphere => "atmosphere",
+        SceneEndpoint::RenderMode => "render_mode",
         SceneEndpoint::Transform => "transform",
         SceneEndpoint::Instances => "instances",
         SceneEndpoint::Vertices => "vertices",
@@ -58,7 +59,9 @@ fn endpoint_port(endpoint: SceneEndpoint) -> &'static str {
 
 fn endpoint_scope(endpoint: SceneEndpoint) -> SceneStageScope {
     match endpoint {
-        SceneEndpoint::Camera | SceneEndpoint::Atmosphere => SceneStageScope::Scene,
+        SceneEndpoint::Camera | SceneEndpoint::Atmosphere | SceneEndpoint::RenderMode => {
+            SceneStageScope::Scene
+        }
         _ => SceneStageScope::EachObject,
     }
 }
@@ -1722,7 +1725,9 @@ impl Builder<'_> {
                     if !consumes_previous
                         && matches!(
                             output.endpoint,
-                            SceneEndpoint::Instances | SceneEndpoint::Atmosphere
+                            SceneEndpoint::Instances
+                                | SceneEndpoint::Atmosphere
+                                | SceneEndpoint::RenderMode
                         )
                         && self.current.get(&key).is_some_and(Option::is_some)
                     {

@@ -117,6 +117,7 @@ fn bug037_blossom_field_first_render_drives_120_frames() {
             frame,
             false, // export_mode = false: the live path BUG-037 lives on
             ct.editing_service.data_version(),
+            None, // no audio-visual registry in this verify harness
         );
     }
 }

@@ -1663,12 +1663,62 @@ struct ObjectDraw<'ctx> {
     /// paired with a velocity/ao_mask-emitting pipeline (attachment
     /// layout mismatch).
     kind: MaterialKind,
+    /// SCENE_RENDER_MODE_DESIGN.md D6: this object's color-pass fill mode
+    /// (`Lines` under wireframe, `Fill` otherwise). Applied per draw by the
+    /// colour batch entries only — depth/shadow passes force `Fill` in the
+    /// encoder (INV-R3), so this field never reaches them.
+    fill_mode: manifold_gpu::GpuTriangleFillMode,
 }
 
 /// Whole-triangle vertex count of a MeshVertex buffer (the prepass draw
 /// calls' shared count — was the `vcount` closure inside evaluate()).
 fn mesh_vertex_count(buf: &manifold_gpu::GpuBuffer) -> u32 {
     ((buf.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3) * 3
+}
+
+/// SCENE_RENDER_MODE_DESIGN.md D4 / INV-R4: modes act on the raster path
+/// only — an `rt_enabled` scene renders normally and the wire is ignored.
+/// Gating here (not at the RT trace) keeps the gi_materials table and every
+/// RT uniform on the Rendered path, and makes the wireframe override inert
+/// the moment RT owns the scene, exactly the D4 contract.
+fn effective_render_mode(render_mode: &crate::node_graph::render_mode::RenderMode, rt_enabled: bool) -> crate::node_graph::render_mode::RenderMode {
+    if rt_enabled {
+        crate::node_graph::render_mode::RenderMode::default()
+    } else {
+        *render_mode
+    }
+}
+
+/// D6: wireframe shading = unlit `line_color × line_brightness`. The
+/// synthesized Unlit material rides the existing `fs_unlit` pipeline (via
+/// `pipeline_for`) — no shader change, no new pipeline, and the
+/// substitution happens here at material-gather time, upstream of
+/// `pipeline_for`, so pipeline caching is untouched.
+fn wireframe_material(render_mode: &crate::node_graph::render_mode::RenderMode) -> Material {
+    let b = render_mode.line_brightness;
+    Material::unlit(
+        [
+            render_mode.line_color[0] * b,
+            render_mode.line_color[1] * b,
+            render_mode.line_color[2] * b,
+            1.0,
+        ],
+        [0.0; 3],
+        0.0,
+    )
+}
+
+/// D6: the color pass draws `Lines` under wireframe, `Fill` otherwise.
+/// The depth prepass and shadow passes never read this — they force
+/// `Fill` in the encoder (INV-R3).
+fn color_pass_fill_mode(
+    render_mode: &crate::node_graph::render_mode::RenderMode,
+) -> manifold_gpu::GpuTriangleFillMode {
+    if render_mode.mode == crate::node_graph::render_mode::RENDER_MODE_WIREFRAME {
+        manifold_gpu::GpuTriangleFillMode::Lines
+    } else {
+        manifold_gpu::GpuTriangleFillMode::Fill
+    }
 }
 
 // ---- BUG-trh7 stage 2: the evaluate() pass frames. `FramePrelude` carries
@@ -1682,6 +1732,7 @@ struct FramePrelude<'ctx> {
     cam: crate::node_graph::camera::Camera,
     envmap_wired: Option<&'ctx manifold_gpu::GpuTexture>,
     atmosphere: crate::node_graph::atmosphere::Atmosphere,
+    render_mode: crate::node_graph::render_mode::RenderMode,
     light_data: Vec<[f32; 4]>,
     light_count: u32,
     casters: Vec<crate::node_graph::light::Light>,
@@ -1768,10 +1819,17 @@ impl RenderScene {
         port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
     ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
         let FramePrelude {
-            objects, cam, envmap_wired, atmosphere, view_proj, prev_view_proj,
+            objects, cam, envmap_wired, atmosphere, render_mode, view_proj, prev_view_proj,
             jitter_ndc, prev_jitter_ndc, light_count, velocity_wired,
             ao_mask_wired, denoise_aux_ready, rt_enabled, ..
         } = pre;
+        // SCENE_RENDER_MODE_DESIGN.md D4/INV-R4: the effective mode for this
+        // frame's raster path. `rt_enabled` scenes ignore the wire entirely
+        // (Rendered uniform set) — and because the substitution happens
+        // here, the gi_materials table the RT pass builds from these draws
+        // never sees a wireframe override either.
+        let render_mode = effective_render_mode(render_mode, *rt_enabled);
+        let wireframe = render_mode.mode == crate::node_graph::render_mode::RENDER_MODE_WIREFRAME;
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(*objects);
@@ -1881,6 +1939,17 @@ impl RenderScene {
                     gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
                 }
                 return None;
+            };
+            // SCENE_RENDER_MODE_DESIGN.md D6: wireframe replaces the object's
+            // material with a synthesized unlit `line_color × brightness`
+            // surface at the gather site — the same mechanism D7 specifies
+            // for Solid's clay substitute. Upstream of `pipeline_for`, so
+            // the Unlit pipeline (fs_unlit) is picked by the ordinary cache
+            // and no shader changes.
+            let material = if wireframe {
+                wireframe_material(&render_mode)
+            } else {
+                material
             };
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.error(format!(
@@ -2117,6 +2186,7 @@ impl RenderScene {
                 is_transmissive,
                 cast_shadows: object.cast_shadows,
                 kind: material.kind,
+                fill_mode: color_pass_fill_mode(&render_mode),
             });
         }
 
@@ -4348,11 +4418,15 @@ impl RenderScene {
         let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
         let mut blend_entries: Vec<(f32, manifold_gpu::DepthMsaaDraw)> = Vec::new();
         for (draw, bindings) in draws.iter().zip(&binding_sets) {
-            let call = manifold_gpu::GpuEncoder::depth_msaa_draw(
+            // SCENE_RENDER_MODE_DESIGN.md D6: the color pass carries each
+            // draw's fill mode (Lines under wireframe). The depth/shadow
+            // batches never see this — they force Fill in the encoder.
+            let call = manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
                 &draw.pipeline,
                 bindings,
                 vertex_count(draw),
                 draw.instance_count,
+                draw.fill_mode,
             );
             if draw.alpha_mode == AlphaMode::Blend {
                 blend_entries.push((draw.sort_depth, call));
@@ -5352,6 +5426,10 @@ impl RenderScene {
         // density 0 = no fog (the shader's exp fog collapses to identity), so
         // an unwired atmosphere is byte-identical to no atmosphere.
         let atmosphere = ctx.inputs.atmosphere("atmosphere").unwrap_or_default();
+        // Scene-wide render mode (SCENE_RENDER_MODE_DESIGN.md D2). Unwired =
+        // RenderMode::default() = mode Rendered = the raster pass draws
+        // exactly as today, byte-identical to no render_mode input.
+        let render_mode = ctx.inputs.render_mode("render_mode").unwrap_or_default();
 
         // Build the shared lights buffer from whichever light_N ports are
         // actually wired (unwired slots simply don't contribute — 0 lights
@@ -5802,6 +5880,7 @@ impl RenderScene {
                 cam,
                 envmap_wired,
                 atmosphere,
+                render_mode,
                 light_data,
                 light_count,
                 casters,
@@ -6070,6 +6149,14 @@ impl RenderScene {
         inputs.push(NodePort {
             name: std::borrow::Cow::Borrowed("atmosphere"),
             ty: PortType::Atmosphere,
+            kind: PortKind::Input,
+            required: false,
+        });
+        // Optional scene-wide render mode (SCENE_RENDER_MODE_DESIGN.md D2).
+        // Unwired = Rendered, byte-identical to no render_mode.
+        inputs.push(NodePort {
+            name: std::borrow::Cow::Borrowed("render_mode"),
+            ty: PortType::RenderMode,
             kind: PortKind::Input,
             required: false,
         });
@@ -8445,7 +8532,7 @@ impl EffectNode for RenderScene {
         };
         let FramePrelude {
             probe_t0: _probe_t0, objects: _, cam: _, envmap_wired: _, atmosphere: _,
-            light_data: _, light_count: _, ref casters,
+            render_mode: _, light_data: _, light_count: _, ref casters,
             caster_table: _,
             native_width, native_height, width, height, aspect: _, temporal_upscale,
             view_proj: _, prev_view_proj: _, jitter_px: _, jitter_ndc: _, prev_jitter_ndc: _,

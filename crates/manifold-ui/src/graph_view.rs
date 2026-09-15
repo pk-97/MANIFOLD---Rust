@@ -222,6 +222,7 @@ pub enum PortKindSnapshot {
     Material,
     Transform,
     Atmosphere,
+    RenderMode,
     Object,
 }
 
