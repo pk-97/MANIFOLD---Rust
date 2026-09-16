@@ -256,6 +256,8 @@ Instance/vertex math runs through manifold-gpu and the existing native Metal bac
 
 **Rendering capability boundary:** dynamic mesh RT is currently unsupported because acceleration updates wait for settled vertex generations (BUG-e3p6.4). M1 conservatively treats any Vertices-writing modifier stage as requiring dynamic-vertex support for RT, even if currently bypassed. Surface the incompatibility through shared renderer admission; preserve the authored request and show the reason without silently switching settings. This endpoint rule is independent of preset names and live values; any future relaxation needs proof. Raster M1 can ship independently. Do not claim shadow/motion-vector/RT coherence without its specific check. Enable gestures neither reclassify capability nor compile pipelines.
 
+The successor contract is [automatic scene-modifier RT](SCENE_MODIFIER_RT_DESIGN.md), with [numerical acceptance definitions](SCENE_MODIFIER_RT_ACCEPTANCE.md), owned by `BUG-e3p6.4`. Its header and phase markers are authoritative; the current limitation above remains until implementation passes those gates.
+
 ## 8. Invariants & enforcement
 
 All named tests below are new deliverables, not currently passing tests. Shared commands and proof levels are in [Validation](SCENE_MODIFIER_VALIDATION_PLAN.md).
