@@ -15,6 +15,7 @@ use objc2_metal::{
     MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLDataType,
     MTLDevice, MTLFunctionConstantValues, MTLLanguageVersion, MTLLibrary, MTLSize,
 };
+use super::accel::ProbeBlas;
 
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 
@@ -144,22 +145,51 @@ pub trait ShadowRayTracer {
     /// Backend-specific resident acceleration structure handle.
     type Accel;
 
-    /// Build the resident two-level RT scene (one BLAS per object,
-    /// instanced into one TLAS — see the module doc). Call once at scene
-    /// load / topology change for an RT-enabled scene; never mid-frame.
-    /// RS-B: `gi_materials` is the per-object material table (SAME order
-    /// as `objects`) — consumed to build the emissive-triangle light table.
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel;
+    /// CPU-only sizing for one scene's acceleration state
+    /// (SCENE_MODIFIER_RT_DESIGN.md §4.1): descriptor-based sizes plus the
+    /// admission byte count ([`RtAccelPlan::additional_peak_bytes`]), which
+    /// the renderer hands to `admit_candidate_bytes` before
+    /// [`Self::prepare_accel`]. Never inspects vertex contents, allocates,
+    /// or encodes.
+    fn plan_accel(
+        &self,
+        device: &GpuDevice,
+        resident: Option<&Self::Accel>,
+        objects: &[RtObjectGeometry<'_>],
+    ) -> Result<RtAccelPlan, RtAccelError>;
 
-    /// Refit `accel`'s instance transforms in place from `objects` — cheap
-    /// (TLAS-only update), used when objects move but the object SET and
-    /// each object's topology are unchanged (mirrors `objects.len()` and
-    /// vertex/index buffer identity against what `accel` was built from —
-    /// caller's dirty-check, e.g. render_scene.rs's shadow-map cache-key
-    /// idiom). A topology change calls `build_accel` again instead.
-    /// RS-B: also refits the emissive light table's world-space positions
-    /// when the accel carries one.
-    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) -> Result<(), RtTopologyMismatch>;
+    /// Allocate/reuse capacity for a plan — never commits a GPU command.
+    /// A structural replacement is prepared atomically and swapped in; an
+    /// allocation failure leaves the old resident valid (§4.1).
+    fn prepare_accel(
+        &self,
+        device: &GpuDevice,
+        resident: &mut Option<Self::Accel>,
+        plan: RtAccelPlan,
+    ) -> Result<(), RtAccelError>;
+
+    /// Encode a current-frame update onto the caller's encoder (§4.2):
+    /// instance descriptors → changed BLAS builds → TLAS → emissive
+    /// preparation, ordered after the frame's geometry writes and before
+    /// the trace dispatch. No allocation, no commit, no CPU wait. Until
+    /// P6, `RtGeometryChange::Refit` executes the rebuild branch and
+    /// reports `blas_builds`.
+    /// Design amendment: `device` is threaded explicitly — §4.1's sketch
+    /// omits it, but the descriptor-build pipeline and the (pre-P4a)
+    /// emissive table are device-held and neither the encoder nor the
+    /// tracer owns one.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_accel_update(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        accel: &mut Self::Accel,
+        objects: &[RtObjectGeometry<'_>],
+        changes: &[RtGeometryChange],
+        materials: &[GiMaterial],
+        instance_data_changed: bool,
+        emissive_data_changed: bool,
+    ) -> Result<RtAccelUpdate, RtAccelError>;
 
     /// Dispatch the half-res shadow/AO-ray pass (RT-D3; RT-P2 widens this
     /// SAME dispatch to add the AO gather + demodulated-irradiance term —
@@ -535,6 +565,10 @@ pub struct MetalShadowRayTracer {
     /// kernel's doc comment. Always compiled (tiny kernel, negligible
     /// cost); never dispatched by the production `render_scene.rs` path.
     debug_ray_query_pipeline: GpuComputePipeline,
+    /// SCENE_MODIFIER_RT_DESIGN.md §4.1: cached TLAS-sizing probe — a
+    /// 1-triangle BLAS structure allocated lazily on first `plan_accel`,
+    /// never built (sizing needs handles, not contents; no GPU command).
+    tlas_probe: std::sync::OnceLock<ProbeBlas>,
     /// RT-T2-A: 1x1 fully-opaque texture bound into every one of
     /// `trace_shadow_rays`'s `alpha_textures` slots that this frame's
     /// `dispatch_shadow_rays` call doesn't supply a real texture for —
@@ -929,6 +963,7 @@ impl MetalShadowRayTracer {
             debug_ray_query_pipeline: p.debug_ray_query_pipeline.clone(),
             dummy_alpha_tex,
             rt_diagnostics,
+            tlas_probe: std::sync::OnceLock::new(),
         }
     }
 
@@ -1383,17 +1418,50 @@ impl MetalShadowRayTracer {
 impl ShadowRayTracer for MetalShadowRayTracer {
     type Accel = RtAccel;
 
-    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry], gi_materials: &[GiMaterial]) -> Self::Accel {
-        build_accel(device, objects, gi_materials)
+    fn plan_accel(
+        &self,
+        device: &GpuDevice,
+        resident: Option<&Self::Accel>,
+        objects: &[RtObjectGeometry<'_>],
+    ) -> Result<RtAccelPlan, RtAccelError> {
+        let probe = resident
+            .and_then(|acc| acc.blas.first())
+            .map(|b| b.structure.clone());
+        let probe_storage;
+        let probe = match probe {
+            Some(p) => p,
+            None => {
+                probe_storage = self.tlas_probe.get_or_init(|| tlas_probe_structure(device));
+                probe_storage.1.clone()
+            }
+        };
+        plan_accel(device, resident, objects, &probe)
     }
 
-    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) -> Result<(), RtTopologyMismatch> {
-        refit_accel(device, accel, objects)?;
-        // RS-B: refit the emissive light table's world-space positions.
-        if let Some(ref table) = accel.emissive_table {
-            refit_emissive_table(table, objects);
-        }
-        Ok(())
+    fn prepare_accel(
+        &self,
+        device: &GpuDevice,
+        resident: &mut Option<Self::Accel>,
+        plan: RtAccelPlan,
+    ) -> Result<(), RtAccelError> {
+        prepare_accel(device, resident, plan)
+    }
+
+    fn encode_accel_update(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        accel: &mut Self::Accel,
+        objects: &[RtObjectGeometry<'_>],
+        changes: &[RtGeometryChange],
+        materials: &[GiMaterial],
+        instance_data_changed: bool,
+        emissive_data_changed: bool,
+    ) -> Result<RtAccelUpdate, RtAccelError> {
+        encode_accel_update(
+            device, encoder, accel, objects, changes, materials,
+            instance_data_changed, emissive_data_changed,
+        )
     }
 
     fn dispatch_shadow_rays(

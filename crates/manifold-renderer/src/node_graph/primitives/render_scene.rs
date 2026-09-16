@@ -3019,12 +3019,34 @@ impl RenderScene {
                         eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
                     }
                 }
-                // The old accel is dropped here — safe: `RtAccel`'s
-                // `Drop` self-retires its Metal handles through
-                // `retire_on_queue` (raytrace.rs), so prior frames'
-                // Generators traces provably finish before anything
-                // frees. No caller-side handoff needed.
-                self.rt_accel = Some(tracer.build_accel(gpu.device, objects, &gi_materials_data));
+                // SCENE_MODIFIER_RT_DESIGN.md §4 (P3): caller-ordered
+                // plan → prepare → encode onto THIS frame's encoder — no
+                // private AS command buffer anymore. The BUG-308 defer above
+                // still decides WHEN this fires (P5 removes the defer); the
+                // encode orders after this frame's earlier writes on the
+                // shared command buffer.
+                //
+                // Admission/allocation failure keeps the old resident valid
+                // (prepare swaps only on success): the scene keeps tracing
+                // the previous accel rather than losing RT.
+                match tracer.plan_accel(gpu.device, self.rt_accel.as_ref(), objects)
+                    .and_then(|plan| tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan))
+                {
+                    Ok(()) => {
+                        let accel = self.rt_accel.as_mut().expect("prepare succeeded");
+                        let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+                        if let Err(e) = tracer.encode_accel_update(
+                            gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, true,
+                        ) {
+                            log::error!("node.render_scene: RT accel encode after prepare failed: {e:?}");
+                            *rt_ready = false;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("node.render_scene: RT accel plan/prepare failed: {e:?} — keeping previous resident scene");
+                        *rt_ready = false;
+                    }
+                }
                 self.rt_accel_topo_key = Some(topo_key);
                 // BUG-oqta: only a content-settle-triggered build records
                 // the content key (why: the trigger block above).
@@ -3056,23 +3078,31 @@ impl RenderScene {
                 // (`rt_accel_built` gate above) — one frame of accel
                 // latency on a moving mesh is invisible, the RT↔raster
                 // path swap it replaces was not.
-                if let Some(accel) = self.rt_accel.as_ref()
-                    && accel.ready.load(std::sync::atomic::Ordering::Acquire)
+                if self.rt_accel.as_ref().is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire))
                 {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    if let Err(mismatch) = tracer.refit_accel(gpu.device, accel, objects) {
-                        *rt_ready = false;
-                        let first_rejection = reject_topology(
-                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                            &mut self.rt_topology_rejected,
-                        );
-                        if first_rejection && !self.rt_topology_mismatch_logged {
-                            log::warn!("node.render_scene: RT topology mismatch before refit: object={} category={:?}", mismatch.object, mismatch.category);
-                            self.rt_topology_mismatch_logged = true;
+                    let accel = self.rt_accel.as_mut().expect("checked above");
+                    // Caller-ordered TLAS update (§4): no BLAS changes,
+                    // instance transforms/masks changed (accel_key moved
+                    // under an unchanged topo key).
+                    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Reuse; objects.len()];
+                    match tracer.encode_accel_update(
+                        gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, false,
+                    ) {
+                        Err(e) => {
+                            *rt_ready = false;
+                            let first_rejection = reject_topology(
+                                &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                                &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                                &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                                &mut self.rt_topology_rejected,
+                            );
+                            if first_rejection && !self.rt_topology_mismatch_logged {
+                                log::warn!("node.render_scene: RT accel update rejected before refit: {e:?}");
+                                self.rt_topology_mismatch_logged = true;
+                            }
                         }
-                    } else {
+                        Ok(_) => {
                         if rt_source_trace_enabled() {
                             log::info!(
                                 "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
@@ -3090,6 +3120,7 @@ impl RenderScene {
                         }
                         self.rt_accel_key = Some(accel_key);
                         self.rt_topology_mismatch_logged = false;
+                        }
                     }
                 }
             }
