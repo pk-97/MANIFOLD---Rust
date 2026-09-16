@@ -195,8 +195,9 @@ pub trait ShadowRayTracer {
     /// SAME dispatch to add the AO gather + demodulated-irradiance term —
     /// D16's seam note, not a parallel pass; RT-P3 widens it again with the
     /// emissive/sun-bounce GI gather, reading `gi_materials` — one entry
-    /// per object, SAME order as the `objects` slice `build_accel` was
-    /// called with, so `instance_id` at a GI ray hit indexes it directly):
+    /// per object, SAME order as the `objects` slice the accel was
+    /// planned/prepared from, so `instance_id` at a GI ray hit indexes it
+    /// directly) —
     /// ray origins + bias normal reconstructed in-kernel from `depth_tex`
     /// (the full-res opaque-depth prepass) + `params.inv_view_proj` — no
     /// world-pos/normal G-buffer target. Writes per-caster visibility to

@@ -96,7 +96,8 @@ pub struct RtAccel {
     /// encoder.rs's dispatch useResource coverage (BUG-jddy arm 5).
     pub(crate) blas: Vec<Blas>,
     /// CPU-writable instance-descriptor buffer (transform per object).
-    /// Retained here so `refit_accel` can rewrite transforms in place.
+    /// Retained here so `encode_accel_update` can rewrite transforms in
+    /// place on a transform/mask-only update.
     /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
     /// arm 5) declares both BLASes and this buffer.
     ///
@@ -138,10 +139,10 @@ pub struct RtAccel {
     /// are a topology change (refit contract) and rebuild the accel, so
     /// these never go stale across a refit.
     pub(crate) geometry_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    /// BUG-308/RT-D4: `build_accel`/`refit_accel` are async (a single
-    /// command buffer is `commit()`-ed, never `waitUntilCompleted()`-ed,
-    /// mid-frame) — set `true` by that buffer's completion handler once
-    /// the GPU has actually finished building/refitting. `render_scene.rs`
+    /// BUG-308/RT-D4: accel updates are async — encoded on the caller's
+    /// command buffer (`encode_accel_update`), never committed or waited
+    /// here — set `true` by that buffer's completion handler once the GPU
+    /// has actually finished building/refitting. `render_scene.rs`
     /// must not read this structure via `dispatch_shadow_rays` until this
     /// is `true` (falls back to the raster shadow-map path meanwhile);
     /// starts `false` the instant a fresh build is enqueued, including
@@ -216,8 +217,8 @@ impl Drop for RtAccel {
 unsafe impl Send for RtAccel {}
 unsafe impl Sync for RtAccel {}
 
-/// One object's geometry + world transform for [`build_accel`]/
-/// [`ShadowRayTracer::build_accel`]. `transform` is manifold's own
+/// One object's geometry + world transform for [`ShadowRayTracer::plan_accel`]/
+/// `prepare_accel`/`encode_accel_update`. `transform` is manifold's own
 /// column-major `[[f32; 4]; 4]` convention (matches `render_scene.rs`'s
 /// `model_matrix`) — the same layout `render_scene.wgsl`'s `Uniforms.model`
 /// already uses. `vertex_buffer`/`vertex_stride`/`vertex_offset` read
@@ -373,7 +374,8 @@ pub(crate) fn blas_geometry_opaque(alpha_mask: bool) -> bool {
 }
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
-/// structure encoder (BUG-308/RT-D4 — see `build_accel`'s doc comment for
+/// structure encoder (BUG-308/RT-D4 — see `encode_accel_update`'s doc
+/// comment for the no-stall history).
 /// why this is no longer its own command buffer). Returns the built
 /// `Blas` handle (valid to reference immediately — Metal resolves the
 /// GPU-side build asynchronously) plus the scratch buffer, which the
@@ -451,8 +453,8 @@ fn to_packed_4x3(m: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
 /// onto an already-open command buffer, ahead of the TLAS build/refit on
 /// the SAME buffer (sequential encoders execute in creation order — the
 /// GPU ordering the design requires; INV-RTI6: values move GPU→GPU only,
-/// no CPU readback). Shared by `build_accel` (before the TLAS build) and
-/// `refit_accel` (before the TLAS refit, one command buffer for both).
+/// no CPU readback). Called by `encode_accel_update` ahead of the TLAS
+/// build/refit on the same command buffer.
 ///
 /// BUG-jddy discipline: the kernel reads each wired `instances` buffer
 /// through a RAW GPU address (`instances_addr`) no binding declares, so
@@ -1253,8 +1255,8 @@ fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
 }
 
 /// (Re)allocate-if-needed + rewrite in place the [`RtNormalSource`]
-/// indirection table from the SAME `objects` slice `build_accel`/
-/// `refit_accel` use — same "grow, never shrink-then-reallocate every
+/// indirection table from the SAME `objects` slice `plan_accel`/
+/// `encode_accel_update` use — same "grow, never shrink-then-reallocate every
 /// frame" idiom as `render_scene.rs`'s `ensure_rt_gi_materials`; rewritten
 /// every RT-ready frame (cheap: N small POD structs, same cadence as that
 /// file's `gi_materials_data` rebuild). Never requires a GPU readback of
