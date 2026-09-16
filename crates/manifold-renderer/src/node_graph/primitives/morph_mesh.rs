@@ -109,6 +109,37 @@ impl Primitive for MorphMesh {
         }
     }
 
+    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): a
+    /// coincident two-input lerp — output record `idx` mixes input
+    /// records `idx` of both meshes (`shaders/morph_mesh_body.wgsl`) and
+    /// output capacity is `min(in, b)` (see `array_output_capacity`
+    /// above) — connectivity can change when EITHER input's topology
+    /// changes, so topology depends on both and positions are Written.
+    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        use crate::node_graph::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
+        if port == "out" {
+            return MeshOutputRule {
+                topology: MeshRevisionRule::Dependencies(&[
+                    MeshDependency {
+                        input: Cow::Borrowed("in"),
+                        aspect: MeshAspect::Topology,
+                    },
+                    MeshDependency {
+                        input: Cow::Borrowed("b"),
+                        aspect: MeshAspect::Topology,
+                    },
+                ]),
+                positions: MeshRevisionRule::Written,
+            };
+        }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let t = ctx.scalar_or_param("t", 0.5);
         let blend_frames = matches!(ctx.params.get("blend_frames"), Some(ParamValue::Bool(true)));

@@ -3765,20 +3765,36 @@ mod tests {
         /// `MeshVertex`-layout producer/consumer with scripted
         /// write/unchanged/pending declarations and an optional
         /// `mesh_output_rule` override (None = trait default, the
-        /// conservative `Written`/`Written`).
+        /// conservative `Written`/`Written`). The rule lives behind a
+        /// shared handle because the compiled rule is a plan-compile-time
+        /// snapshot — a test that flips the source's topology mid-run
+        /// recompiles the plan with the handle changed.
         struct MeshNode {
             type_id: EffectNodeType,
             inputs: Vec<NodeInput>,
             outputs: Vec<NodeOutput>,
             declare_unchanged: Arc<Mutex<bool>>,
             declare_pending: Arc<Mutex<bool>>,
-            rule: Option<MeshOutputRule<'static>>,
+            rule: Arc<Mutex<Option<MeshOutputRule<'static>>>>,
         }
 
+        fn shared_rule(rule: Option<MeshOutputRule<'static>>) -> Arc<Mutex<Option<MeshOutputRule<'static>>>> {
+            Arc::new(Mutex::new(rule))
+        }
+
+        /// Handles a producer hands back: unchanged/pending declaration
+        /// flags plus the shared rule handle (see [`MeshNode`]).
+        type ProducerHandles = (
+            Arc<Mutex<bool>>,
+            Arc<Mutex<bool>>,
+            Arc<Mutex<Option<MeshOutputRule<'static>>>>,
+        );
+
         impl MeshNode {
-            fn producer(rule: Option<MeshOutputRule<'static>>) -> (Self, Arc<Mutex<bool>>, Arc<Mutex<bool>>) {
+            fn producer(rule: Option<MeshOutputRule<'static>>) -> (Self, ProducerHandles) {
                 let declare_unchanged = Arc::new(Mutex::new(false));
                 let declare_pending = Arc::new(Mutex::new(false));
+                let rule = shared_rule(rule);
                 (
                     Self {
                         type_id: EffectNodeType::new("test.mesh_node"),
@@ -3786,10 +3802,9 @@ mod tests {
                         outputs: vec![output("out", mesh_ty())],
                         declare_unchanged: declare_unchanged.clone(),
                         declare_pending: declare_pending.clone(),
-                        rule,
+                        rule: rule.clone(),
                     },
-                    declare_unchanged,
-                    declare_pending,
+                    (declare_unchanged, declare_pending, rule),
                 )
             }
 
@@ -3803,7 +3818,7 @@ mod tests {
                         outputs: vec![output("out", mesh_ty())],
                         declare_unchanged: declare_unchanged.clone(),
                         declare_pending: declare_pending.clone(),
-                        rule,
+                        rule: shared_rule(rule),
                     },
                     declare_unchanged,
                     declare_pending,
@@ -3821,7 +3836,7 @@ mod tests {
                     outputs: vec![],
                     declare_unchanged: Arc::new(Mutex::new(false)),
                     declare_pending: Arc::new(Mutex::new(false)),
-                    rule: None,
+                    rule: shared_rule(None),
                 }
             }
         }
@@ -3843,7 +3858,7 @@ mod tests {
                 &[]
             }
             fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
-                self.rule.unwrap_or(MeshOutputRule {
+                self.rule.lock().unwrap().unwrap_or(MeshOutputRule {
                     topology: MeshRevisionRule::Written,
                     positions: MeshRevisionRule::Written,
                 })
@@ -3881,7 +3896,7 @@ mod tests {
         /// topology/positions/content tokens.
         #[test]
         fn mesh_change_default_is_conservative() {
-            let (node, _unchanged, _pending) = MeshNode::producer(None);
+            let (node, (_unchanged, _pending, _rule)) = MeshNode::producer(None);
             let mut g = Graph::new();
             let n = g.add_node(Box::new(node));
             let sink = g.add_node(Box::new(MeshNode::sink()));
@@ -3921,7 +3936,7 @@ mod tests {
         /// fresh tokens again.
         #[test]
         fn mesh_change_written_honors_unchanged_declaration() {
-            let (node, unchanged, _pending) = MeshNode::producer(None);
+            let (node, (unchanged, _pending, _rule)) = MeshNode::producer(None);
             let mut g = Graph::new();
             let n = g.add_node(Box::new(node));
             let sink = g.add_node(Box::new(MeshNode::sink()));
@@ -3959,7 +3974,7 @@ mod tests {
         /// advancing while the resource stays pending.
         #[test]
         fn mesh_change_pending_propagates_through_mesh_lineage() {
-            let (src, _src_unchanged, src_pending) = MeshNode::producer(None);
+            let (src, (_src_unchanged, src_pending, _rule)) = MeshNode::producer(None);
             let (consumer, _c_unchanged, _c_pending) = MeshNode::consumer(None);
             let mut g = Graph::new();
             let a = g.add_node(Box::new(src));
@@ -4003,7 +4018,7 @@ mod tests {
         /// revises on a write — still advances.
         #[test]
         fn mesh_change_fixed_rule_retains_revisions() {
-            let (node, _unchanged, _pending) = MeshNode::producer(Some(fixed_rule()));
+            let (node, (_unchanged, _pending, _rule)) = MeshNode::producer(Some(fixed_rule()));
             let mut g = Graph::new();
             let n = g.add_node(Box::new(node));
             let sink = g.add_node(Box::new(MeshNode::sink()));
@@ -4042,6 +4057,156 @@ mod tests {
                 "Fixed aspects must stay retained over repeated writes, got {r1:?} then {r3:?}"
             );
             assert!(r3.content > r2.content);
+        }
+
+        /// Wraps a real stock primitive so its DECLARED
+        /// `mesh_output_rule` is compiled into the plan and driven
+        /// through the executor on `MockBackend`. `evaluate` is a
+        /// deliberate no-op write: the mock binds no GPU encoder, so the
+        /// primitive's real `run()` (a compute dispatch) cannot execute
+        /// here — the contract under test is the executor's revision
+        /// commit, which the compiled rule drives, not the kernel.
+        struct DeclaredPrimitiveProbe {
+            inner: Box<dyn EffectNode>,
+        }
+
+        impl EffectNode for DeclaredPrimitiveProbe {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                self.inner.depth_rule()
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                self.inner.type_id()
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                self.inner.inputs()
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                self.inner.outputs()
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                self.inner.parameters()
+            }
+            fn mesh_output_rule(&self, port: &str) -> MeshOutputRule<'_> {
+                self.inner.mesh_output_rule(port)
+            }
+            fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {
+                // No-op actual write — see the struct doc.
+            }
+        }
+
+        /// P2c: the stock deformer declaration on `node.normal_wave_mesh`
+        /// (topology = `Dependencies([in.Topology])`, positions =
+        /// `Written`) makes the deformer's output topology revision
+        /// follow the INPUT's topology revision — held while the source
+        /// topology is stable, and revising again the moment the source
+        /// topology starts changing — while positions and content
+        /// advance on every write. The real `NormalWaveMesh` declaration
+        /// is exercised through [`DeclaredPrimitiveProbe`] because the
+        /// mock backend cannot run its compute dispatch (see the probe's
+        /// doc).
+        #[test]
+        fn mesh_change_declared_deformer_tracks_input_topology() {
+            use crate::node_graph::mesh_change::MeshAspect;
+            use crate::node_graph::primitives::NormalWaveMesh;
+
+            let (src, (_unchanged, _pending, src_rule)) = MeshNode::producer(Some(fixed_rule()));
+            let mut g = Graph::new();
+            let a = g.add_node(Box::new(src));
+            let probe = g.add_node(Box::new(DeclaredPrimitiveProbe {
+                inner: Box::new(NormalWaveMesh::new()),
+            }));
+            let sink = g.add_node(Box::new(MeshNode::sink()));
+            g.connect((a, "out"), (probe, "in")).unwrap();
+            g.connect((probe, "out"), (sink, "in")).unwrap();
+            let plan = compile(&g).unwrap();
+            let (res_src, res_out) = (out_res(&plan, a), out_res(&plan, probe));
+
+            // The plan must have compiled the REAL declaration off the
+            // stock primitive: topology depends on the wired input's
+            // Topology aspect, positions are Written.
+            let compiled = plan
+                .mesh_rule(res_out)
+                .expect("MeshVertex output must compile a mesh rule");
+            match &compiled.topology {
+                CompiledMeshRevisionRule::Dependencies(deps) => {
+                    assert_eq!(
+                        deps,
+                        &[(res_src, MeshAspect::Topology)],
+                        "declared deformer topology must watch the wired input's Topology"
+                    );
+                }
+                other => panic!(
+                    "declared deformer topology must be Dependencies([in.Topology]), got {other:?}"
+                ),
+            }
+            assert!(
+                matches!(compiled.positions, CompiledMeshRevisionRule::Written),
+                "declared deformer positions must be Written, got {:?}",
+                compiled.positions
+            );
+
+            let mut exec = Executor::with_mock();
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let src_rev = exec.mesh_revision_of_res(res_src);
+            let out_rev = exec.mesh_revision_of_res(res_out);
+            // The source topology rule is Fixed, so its topology revision
+            // retains 0 — content still advances on the write.
+            assert!(src_rev.content > 0, "source write must issue a content token");
+            assert!(out_rev.topology > 0, "deformer write must issue a topology token");
+
+            // Phase 1: the source writes every frame (content advances)
+            // with a Fixed topology rule — the declared deformer must
+            // hold its topology revision while positions/content advance.
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let src2 = exec.mesh_revision_of_res(res_src);
+            let out2 = exec.mesh_revision_of_res(res_out);
+            assert_eq!(src2.topology, src_rev.topology, "source topology is Fixed");
+            assert_eq!(
+                out2.topology, out_rev.topology,
+                "declared deformer topology must track the input: unchanged while input topology is unchanged"
+            );
+            assert!(
+                out2.positions > out_rev.positions && out2.content > out_rev.content,
+                "positions/content advance on every write, got {out_rev:?} then {out2:?}"
+            );
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let out3 = exec.mesh_revision_of_res(res_out);
+            assert_eq!(
+                out3.topology, out_rev.topology,
+                "declared deformer topology must keep tracking the still-stable input"
+            );
+            assert!(out3.positions > out2.positions && out3.content > out2.content);
+
+            // Phase 2: the source topology starts changing (rule flips to
+            // Written at plan recompile; revision state persists because
+            // the plan shape is unchanged). The dependency must follow.
+            *src_rule.lock().unwrap() = Some(MeshOutputRule {
+                topology: MeshRevisionRule::Written,
+                positions: MeshRevisionRule::Fixed,
+            });
+            let plan = compile(&g).unwrap();
+            let (res_src, res_out) = (out_res(&plan, a), out_res(&plan, probe));
+            let before = exec.mesh_revision_of_res(res_out);
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let after1 = exec.mesh_revision_of_res(res_out);
+            assert!(
+                exec.mesh_revision_of_res(res_src).topology > src_rev.topology,
+                "flipped source rule must revise its own topology"
+            );
+            assert!(
+                after1.topology > before.topology,
+                "input topology now changes every write — the declared dependency must follow, got {before:?} then {after1:?}"
+            );
+            assert!(after1.positions > before.positions);
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let after2 = exec.mesh_revision_of_res(res_out);
+            assert!(
+                after2.topology > after1.topology,
+                "tracking must persist frame over frame, got {after1:?} then {after2:?}"
+            );
         }
     }
 

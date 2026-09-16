@@ -94,6 +94,31 @@ impl Primitive for NormalWaveMesh {
             .map(|(_, n)| *n)
     }
 
+    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): a
+    /// pure per-record deformation — output record `idx` derives from
+    /// input record `idx` and its own triangle's corners
+    /// (`shaders/normal_wave_mesh_body.wgsl`), never re-indexes, and
+    /// output capacity follows `in` — so topology tracks input `in`
+    /// topology and positions are Written.
+    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        use crate::node_graph::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
+        if port == "out" {
+            return MeshOutputRule {
+                topology: MeshRevisionRule::Dependencies(&[MeshDependency {
+                    input: Cow::Borrowed("in"),
+                    aspect: MeshAspect::Topology,
+                }]),
+                positions: MeshRevisionRule::Written,
+            };
+        }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let amplitude = ctx.scalar_or_param("amplitude", 0.12);
         let frequency = ctx.scalar_or_param("frequency", 1.5);
