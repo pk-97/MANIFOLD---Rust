@@ -1531,6 +1531,25 @@ pub trait EffectNode: Send {
             .and_then(|v| v.as_u32_clamped(1))
     }
 
+    /// Mesh revision rule for the named output port, per design
+    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.1. The RT executor queries
+    /// this once at plan compilation to decide when acceleration
+    /// structures may refit versus must rebuild.
+    ///
+    /// Default is conservative `Written`/`Written`: revise on every
+    /// actual write. Only outputs with the `MeshVertex` channel layout
+    /// are queried — no general array is assumed to be a triangle mesh.
+    /// Primitives with a stronger guarantee (fixed connectivity, or
+    /// connectivity/positions inherited from a named input) override on
+    /// `Primitive`; `WgslCompute` accepts compiler-provided prepared
+    /// overrides at installation time.
+    fn mesh_output_rule(&self, _port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        crate::node_graph::mesh_change::MeshOutputRule {
+            topology: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+            positions: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+        }
+    }
+
     /// Dimensions for the named `Texture3D` output port, as
     /// `(width, height, depth)` in voxels. Mirror of
     /// [`array_output_capacity`] for the Texture3D port type — the JSON

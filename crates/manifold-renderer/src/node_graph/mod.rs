@@ -26,6 +26,7 @@ pub mod viewport_session;
 mod binding_migration;
 mod boundary_nodes;
 mod mesh_boundary;
+pub mod mesh_change;
 mod bound_graph;
 mod bundled_presets;
 pub mod catalog_gen;
@@ -124,6 +125,10 @@ pub use loaded_preset_view::{
     snapshot_for_view,
 };
 pub use metal_backend::MetalBackend;
+pub use mesh_change::{
+    MeshAspect, MeshDependency, MeshOutputRule, MeshRevision, MeshRevisionRule,
+    PreparedMeshOutputRule, PreparedMeshRevisionRule, PreparedMeshRules,
+};
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub(crate) use param_binding::Reshape;
 pub use param_binding::{
