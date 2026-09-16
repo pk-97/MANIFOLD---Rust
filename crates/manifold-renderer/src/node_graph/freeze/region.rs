@@ -2526,7 +2526,7 @@ fn is_array_wire(def: &EffectGraphDef, registry: &PrimitiveRegistry, w: &EffectG
 /// and dispatch 1D over an Array length. A region is homogeneous (texture and
 /// Array ports never wire to each other), so one flag drives every port/wire
 /// filter in [`build_region`] / [`topo_sort`].
-fn region_port_is_member(ty: &PortType, is_buffer: bool) -> bool {
+pub(crate) fn region_port_is_member(ty: &PortType, is_buffer: bool) -> bool {
     if is_buffer {
         matches!(ty, PortType::Array(_))
     } else {

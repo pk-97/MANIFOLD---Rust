@@ -63,9 +63,12 @@ use manifold_core::effect_graph_def::{
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
 use crate::node_graph::freeze::markers::Marker;
-use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
+use crate::node_graph::freeze::region::{Region, RegionInput, RegionMember, partition_regions, region_port_is_member};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
-use crate::node_graph::mesh_change::PreparedMeshRules;
+use crate::node_graph::mesh_change::{
+    MeshAspect, MeshDependency, MeshRevisionRule, PreparedMeshOutputRule,
+    PreparedMeshRevisionRule, PreparedMeshRules,
+};
 use crate::node_graph::ports::PortType;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::param_binding::ParamConvert;
@@ -196,10 +199,9 @@ fn fuse_view_parts(
 /// Mesh-rule schema revision for compiled fusion cache keys (design §3.3):
 /// cached fused views/defs/segments carry a `mesh_rules` sidecar, so the key
 /// must move when the sidecar's shape or population policy changes even
-/// though the sidecar is not serialized into the def the key hashes. P2a
-/// populates the sidecar with an empty map everywhere; P2b's rule
-/// composition bumps this.
-const MESH_RULE_SCHEMA: u32 = 1;
+/// though the sidecar is not serialized into the def the key hashes. 1 = P2a
+/// empty maps everywhere; 2 = fusion composes member declarations.
+const MESH_RULE_SCHEMA: u32 = 2;
 
 /// Structural content key for a def: topology + node configs + baked (non-
 /// exposed) param values. Deterministic because every map in `EffectGraphDef` is
@@ -1234,7 +1236,7 @@ pub(crate) fn fuse_generator_view_masked(
         def: Arc::new(out_def),
         retarget: fused.retarget,
         node_retarget: fused.node_retarget,
-        mesh_rules: PreparedMeshRules::default(),
+        mesh_rules: fused.mesh_rules,
     })
 }
 
@@ -1566,6 +1568,163 @@ fn resolve_dispatch_count_field(
 /// express a region's params, body, or wiring aborts the whole rewrite.
 // Live callers all pass a mask now; the unmasked form remains the proof/test
 // surface (every oracle drives fusion through it).
+/// §3.3 substitution: expand one member's declared revision rule into
+/// region-external terms for the fused node's sidecar. Internal dependencies
+/// recurse into the producing member's rule (`Written` dominates, `Fixed`
+/// contributes nothing); external leaves rename to the emitted `src_<slot>`
+/// port. Anything the substitution can't express — a dependency naming a port
+/// fusion doesn't thread, an unwired/virtual input, a multi-output producer
+/// reached without its port name — degrades the whole aspect to `Written`
+/// (D1's conservative rebuild, never a wrong refit). Recursion is acyclic:
+/// region and chain inputs only reference earlier members in topo order, the
+/// invariant the codegen's register threading already relies on.
+fn substitute_mesh_rule(
+    all_members: &[&RegionMember],
+    node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
+    is_buffer: bool,
+    idx: usize,
+    rule: &MeshRevisionRule<'_>,
+) -> PreparedMeshRevisionRule {
+    let MeshRevisionRule::Dependencies(deps) = rule else {
+        return match rule {
+            MeshRevisionRule::Written => PreparedMeshRevisionRule::Written,
+            MeshRevisionRule::Fixed => PreparedMeshRevisionRule::Fixed,
+            MeshRevisionRule::Dependencies(_) => unreachable!(),
+        };
+    };
+    // The member's region-threaded input ports, aligned with `member.inputs`
+    // by the same filter `build_region` used.
+    let ports: Vec<&str> = node_keepalive[idx]
+        .inputs()
+        .iter()
+        .filter(|p| region_port_is_member(&p.ty, is_buffer))
+        .map(|p| p.name.as_ref())
+        .collect();
+    let member = all_members[idx];
+    let mut leaves: Vec<MeshDependency> = Vec::new();
+    for dep in deps.iter() {
+        let Some(pos) = ports.iter().position(|n| *n == dep.input.as_ref()) else {
+            return PreparedMeshRevisionRule::Written;
+        };
+        match &member.inputs[pos] {
+            RegionInput::External(e) => leaves.push(MeshDependency {
+                input: std::borrow::Cow::Owned(format!("src_{e}")),
+                aspect: dep.aspect,
+            }),
+            RegionInput::Member(doc) | RegionInput::MemberPort(doc, _) => {
+                let Some(pidx) = all_members.iter().position(|m| m.doc_id == *doc) else {
+                    return PreparedMeshRevisionRule::Written;
+                };
+                let port_name: String = match &member.inputs[pos] {
+                    RegionInput::MemberPort(_, p) => p.clone(),
+                    _ => {
+                        let arr: Vec<&str> = node_keepalive[pidx]
+                            .outputs()
+                            .iter()
+                            .filter(|o| matches!(o.ty, PortType::Array(_)))
+                            .map(|o| o.name.as_ref())
+                            .collect();
+                        if arr.len() != 1 {
+                            return PreparedMeshRevisionRule::Written;
+                        }
+                        arr[0].to_string()
+                    }
+                };
+                match expand_member_aspect(all_members, node_keepalive, is_buffer, pidx, &port_name, dep.aspect) {
+                    PreparedMeshRevisionRule::Written => return PreparedMeshRevisionRule::Written,
+                    PreparedMeshRevisionRule::Fixed => {}
+                    PreparedMeshRevisionRule::Dependencies(inner) => leaves.extend(inner),
+                }
+            }
+            // Unwired can't occur in a buffer region (build_region drops it);
+            // Virtual chains are texture-only. Both degrade conservatively.
+            _ => return PreparedMeshRevisionRule::Written,
+        }
+    }
+    let aspect_ord = |a: MeshAspect| match a {
+        MeshAspect::Topology => 0u8,
+        MeshAspect::Positions => 1,
+        MeshAspect::Content => 2,
+    };
+    leaves.sort_by(|a, b| {
+        a.input
+            .cmp(&b.input)
+            .then_with(|| aspect_ord(a.aspect).cmp(&aspect_ord(b.aspect)))
+    });
+    leaves.dedup_by(|a, b| a.input == b.input && a.aspect == b.aspect);
+    // An empty list is Fixed (§3.1) — normalize so downstream never sees both.
+    if leaves.is_empty() {
+        PreparedMeshRevisionRule::Fixed
+    } else {
+        PreparedMeshRevisionRule::Dependencies(leaves)
+    }
+}
+
+/// One internal hop of §3.3 substitution: the producing member's rule for
+/// `aspect` of `port`, itself substituted into region-external terms. A
+/// content dependency on an internal value is `Written` — content revises on
+/// every actual write.
+fn expand_member_aspect(
+    all_members: &[&RegionMember],
+    node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
+    is_buffer: bool,
+    idx: usize,
+    port: &str,
+    aspect: MeshAspect,
+) -> PreparedMeshRevisionRule {
+    if matches!(aspect, MeshAspect::Content) {
+        return PreparedMeshRevisionRule::Written;
+    }
+    let declared = node_keepalive[idx].mesh_output_rule(port);
+    let rule = match aspect {
+        MeshAspect::Topology => declared.topology,
+        MeshAspect::Positions => declared.positions,
+        MeshAspect::Content => unreachable!(),
+    };
+    substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &rule)
+}
+
+/// Compose the fused node's mesh-revision sidecar for one region (design
+/// §3.3). Only `MeshVertex`-layout region outputs earn entries — no general
+/// array is assumed to be a triangle mesh. The output name matches the port
+/// the install pass emits: an in-place region's output rides its aliased
+/// `src_<k>` port, a fan-out region emits `dst_<k>`, otherwise `dst`.
+fn compose_region_mesh_rules(
+    region: &Region,
+    all_members: &[&RegionMember],
+    node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
+    in_place_alias: Option<usize>,
+) -> Vec<PreparedMeshOutputRule> {
+    let is_buffer = region.space.is_none();
+    let multi = region.outputs.len() > 1;
+    let mut rules = Vec::new();
+    for (k, (out_doc, out_port)) in region.outputs.iter().enumerate() {
+        let Some(idx) = all_members.iter().position(|m| m.doc_id == *out_doc) else {
+            continue;
+        };
+        let node = &node_keepalive[idx];
+        let Some(spec) = node.outputs().iter().find(|p| p.name == out_port.as_str()) else {
+            continue;
+        };
+        let PortType::Array(arr) = &spec.ty else { continue };
+        if arr.specs != <crate::generators::mesh_common::MeshVertex as crate::node_graph::ports::KnownItem>::SPECS {
+            continue;
+        }
+        let declared = node.mesh_output_rule(out_port);
+        let output = match in_place_alias {
+            Some(sk) => format!("src_{sk}"),
+            None if multi => format!("dst_{k}"),
+            None => "dst".to_string(),
+        };
+        rules.push(PreparedMeshOutputRule {
+            output,
+            topology: substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &declared.topology),
+            positions: substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &declared.positions),
+        });
+    }
+    rules
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
@@ -1646,6 +1805,7 @@ pub(crate) fn fuse_canonical_def_masked(
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
     let mut node_retarget: AHashMap<NodeId, NodeId> = AHashMap::default();
+    let mut mesh_rules: PreparedMeshRules = PreparedMeshRules::default();
     let mut fused_docs: Vec<u32> = Vec::with_capacity(regions.len());
     // Tier 6: per texture-region output, the element space the unfused member
     // resolved to — verified against the fused def by `fused_def_builds`.
@@ -1888,6 +2048,14 @@ pub(crate) fn fuse_canonical_def_masked(
         // region-topo-index convention. ──
         let fused_doc = max_id + 1 + i as u32;
         let fused_id = NodeId::new(format!("fused_region_{i}").as_str());
+        // §3.3: the fused node's mesh-revision sidecar, composed from member
+        // declarations into region-external terms. Only MeshVertex-layout
+        // region outputs earn entries.
+        let region_mesh_rules =
+            compose_region_mesh_rules(region, &all_members, &node_keepalive, in_place_alias);
+        if !region_mesh_rules.is_empty() {
+            mesh_rules.insert(fused_id.clone(), region_mesh_rules);
+        }
         let mut fused_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
         for (idx, member) in all_members.iter().enumerate() {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
@@ -2245,7 +2413,7 @@ pub(crate) fn fuse_canonical_def_masked(
         wires: new_wires,
     };
 
-    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces, mesh_rules: PreparedMeshRules::default() })
+    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces, mesh_rules })
 }
 
 /// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
