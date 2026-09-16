@@ -58,7 +58,7 @@
             .unwrap()
             .1;
         let build = maintenance
-            .split_once("self.rt_accel = Some(tracer.build_accel")
+            .split_once("RtGeometryChange::Rebuild; objects.len()]")
             .unwrap()
             .1
             .split_once("} else if rt_refit_eligible")

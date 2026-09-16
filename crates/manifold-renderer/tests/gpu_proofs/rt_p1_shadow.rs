@@ -141,7 +141,12 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
             instances_buffer: None,
             instance_slots: 1,
     }];
-    let accel = tracer.build_accel(device, &objects, &[]);
+    // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
+    // below (built before the trace dispatch on the same command buffer).
+    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
 
     // ─── Depth fixture: 2x1, both texels valid (depth=0.3, < 1.0 clear) ──
     let depth_px: [f32; 2] = [0.3, 0.3];
@@ -259,6 +264,10 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
+    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+    tracer
+        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &[], true, true)
+        .expect("encode accel update");
     let out_svt = device.create_texture(&GpuTextureDesc {
         width: 1,
         height: 1,
@@ -418,7 +427,12 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             instance_slots: 1,
         },
     ];
-    let accel = tracer.build_accel(device, &objects, &[]);
+    // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
+    // below (built before the trace dispatch on the same command buffer).
+    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
 
     // ─── Depth fixture: identical to the single-BLAS proof ──
     let depth_px: [f32; 2] = [0.3, 0.3];
@@ -534,6 +548,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
+    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+    tracer
+        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &[], true, true)
+        .expect("encode accel update");
     tracer.dispatch_shadow_rays(
         &mut encoder,
         device,

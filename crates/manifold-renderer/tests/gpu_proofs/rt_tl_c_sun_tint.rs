@@ -124,7 +124,12 @@ fn run_tlc_fixture(
     let device = &h.device;
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, objects, &[]);
+    // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
+    // below (built before the trace dispatch on the same command buffer).
+    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
 
     let gi_materials_buffer = write_shared_buffer(device, gi_materials);
 
@@ -244,6 +249,10 @@ fn run_tlc_fixture(
     let dummy_emissive = harness::dummy_emissive_buffer(device);
 
     let mut encoder = device.create_encoder("tlc-proof");
+    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+    tracer
+        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, &[], true, true)
+        .expect("encode accel update");
     tracer.dispatch_shadow_rays(
         &mut encoder,
         device,

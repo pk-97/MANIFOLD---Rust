@@ -145,7 +145,12 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects, &[]);
+    // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
+    // below (built before the trace dispatch on the same command buffer).
+    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
@@ -237,6 +242,10 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
 
     let mut encoder = device.create_encoder("rt-t2a-shadow-proof");
+    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+    tracer
+        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &[], true, true)
+        .expect("encode accel update");
     let out_sv2_dummy = device.create_texture(&GpuTextureDesc {
         width: 1, height: 1, depth: 1,
         format: GpuTextureFormat::Rgba16Float,

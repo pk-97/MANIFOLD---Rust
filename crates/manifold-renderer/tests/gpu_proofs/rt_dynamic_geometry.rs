@@ -232,7 +232,13 @@ mod rt_dynamic_baseline {
             instance_slots: 1,
         }];
         let mut as_builds = 0u32;
-        let accel = tracer.build_accel(device, &objects, &[]);
+        // P3 seam: plan/prepare allocate; the encode rides the first
+        // query's encoder below (built before the ray query on the same
+        // command buffer).
+        let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+        let mut accel_slot = None;
+        tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+        let mut accel = accel_slot.unwrap();
         as_builds += 1;
 
         let mut normal_sources_slot = None;
@@ -249,6 +255,10 @@ mod rt_dynamic_baseline {
         // production fetch helpers).
         let ray_a = centroid_ray(STATE_A_X);
         let mut enc = device.create_encoder("rt-dynamic-baseline-a");
+        let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+        tracer
+            .encode_accel_update(device, &mut enc, &mut accel, &objects, &changes, &[], true, true)
+            .expect("encode accel update");
         let hits_a_buf = tracer.debug_ray_query(
             device,
             &mut enc,

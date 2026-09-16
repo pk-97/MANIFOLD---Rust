@@ -122,11 +122,16 @@ fn run_tl_fixture(
     let device = &h.device;
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, objects, &[]);
+    // P3 seam: plan/prepare allocate; the encode rides the dispatch
+    // encoder below (no separate async build command buffer anymore).
+    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
 
     // Upload gi_materials — real entries, unlike the template's zeroed dummy.
-    // Positioned AFTER the accel build like the template to preserve Metal
-    // command-buffer ordering against the async accel-build commit.
+    // CPU-mapped shared-buffer write; ordering against the encode below is
+    // encode-time, not command-buffer, ordering.
     let gi_materials_buffer = write_shared_buffer(device, gi_materials);
 
     let mut normal_sources_slot = None;
@@ -239,6 +244,10 @@ fn run_tl_fixture(
     let dummy_emissive = harness::dummy_emissive_buffer(device);
 
     let mut encoder = device.create_encoder("rt-tlb-transmission-proof");
+    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+    tracer
+        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, &[], true, true)
+        .expect("encode accel update");
     let out_sv2_dummy = device.create_texture(&GpuTextureDesc {
         width: 1,
         height: 1,

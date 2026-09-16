@@ -221,7 +221,21 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         GiMaterial::new([0.0; 3], EMISSIVE, [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
         GiMaterial::new([0.8, 0.8, 0.8], [0.0; 3], [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
     ];
-    let accel = tracer.build_accel(device, &objects, &materials);
+    // P3 seam: plan/prepare allocate; the encode builds the emissive light
+    // table (CPU side, at encode time) and rides its own committed encoder
+    // so the AS is ready well before the dispatch below.
+    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
+    {
+        let mut enc_build = device.create_encoder("rt-emissive-instancing-build");
+        let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+        tracer
+            .encode_accel_update(device, &mut enc_build, &mut accel, &objects, &changes, &materials, true, true)
+            .expect("encode accel update");
+        enc_build.commit_and_wait_completed();
+    }
     let table = accel.emissive_table.as_ref().expect("emissive object must build a light table");
     assert!(table.entries_are_local, "wired instances => local-space emissive entries (D8)");
     assert_eq!(table.entry_count, 4, "2 triangles x 2 slots = 4 candidates (D8)");
