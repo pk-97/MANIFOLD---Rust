@@ -50,6 +50,12 @@ use crate::node_graph::effect_node::FrameTime;
 pub struct DerivedUniformContext<'a> {
     pub frame: &'a FrameTime,
     pub camera: Option<&'a Camera>,
+    /// Live element count of the named array input port (`array<f32>`
+    /// length in elements), when the member derives a uniform from a
+    /// wired buffer (the mesh deformers' `weights_len`). `None` for an
+    /// unwired/unknown port — the recompute decides the degrade (the
+    /// deformers treat unwired weights as length 0, matching `run()`).
+    pub array_len: &'a dyn Fn(&str) -> Option<u32>,
 }
 
 /// One primitive's derived-uniform recompute, submitted via `inventory::submit!`
@@ -113,7 +119,11 @@ mod tests {
             delta: Seconds(0.0),
             frame_count: 0,
         };
-        let ctx = DerivedUniformContext { frame: &frame, camera: None };
+        let ctx = DerivedUniformContext {
+            frame: &frame,
+            camera: None,
+            array_len: &|_| None,
+        };
         assert!(recompute("node.definitely_not_a_real_primitive", &ctx).is_none());
     }
 }

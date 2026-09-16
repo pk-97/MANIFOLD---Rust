@@ -1218,6 +1218,24 @@ fn element_to_array_type(
     //
     // align=4 not naga's vec3-padded alignment of 16 — matches the
     // Rust-side layout convention every other primitive uses.
+    //
+    // Bare scalar element (`array<f32>` — a per-vertex weights plane, the
+    // stock mesh deformers' `weights` port shape): a single-channel Array
+    // with f32's KnownItem signature, byte-identical to `ArrayType::
+    // of_known::<f32>()` so the introspected port wires against the typed
+    // producers/consumers. Only f32 is admitted — anything else falls to
+    // the unsupported-shape error below.
+    if let naga::TypeInner::Scalar(scalar) = &element.inner {
+        if scalar.kind == naga::ScalarKind::Float && scalar.width == 4 {
+            return Ok(ArrayType {
+                item_size: 4,
+                item_align: 4,
+                specs: <f32 as crate::node_graph::ports::KnownItem>::SPECS,
+                match_mode: crate::node_graph::ports::MatchMode::Exact,
+            });
+        }
+        return Err("storage array scalar element is not f32".into());
+    }
     let naga::TypeInner::Struct { span, members } = &element.inner else {
         return Err("storage array element is not a struct".into());
     };
@@ -2287,6 +2305,11 @@ impl EffectNode for WgslCompute {
                             crate::node_graph::freeze::derived_uniform_registry::DerivedUniformContext {
                                 frame: &ctx.time,
                                 camera: camera.as_ref(),
+                                array_len: &|port| {
+                                    ctx.inputs
+                                        .array(port)
+                                        .map(|b| (b.size / 4) as u32)
+                                },
                             };
                         let Some(values) =
                             crate::node_graph::freeze::derived_uniform_registry::recompute(

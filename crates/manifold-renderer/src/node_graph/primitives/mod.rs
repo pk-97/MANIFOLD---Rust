@@ -350,6 +350,7 @@ pub use mesh_cut_map::{CutMeshBands, CutMeshCells};
 pub(crate) use mesh_cut_map::scratch_bytes as cut_map_scratch_bytes;
 pub use remap_mesh_cut::RemapMeshCut;
 pub use remap_cut_weights::RemapCutWeights;
+pub use morph_mesh::MorphMesh;
 pub use normal_wave_mesh::NormalWaveMesh;
 pub use mesh_spatial_mask::MeshSpatialMask;
 pub use mesh_stagger_envelope::MeshStaggerEnvelope;

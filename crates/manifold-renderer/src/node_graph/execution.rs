@@ -1289,8 +1289,7 @@ impl Executor {
                     .outputs
                     .iter()
                     .all(|&(_, res)| self.backend.slot_for(res).is_some())
-            {
-                // The held output is unchanged but still valid — capture it for
+            {                // The held output is unchanged but still valid — capture it for
                 // the dump so a static subgraph keeps its zero-cost skip yet
                 // shows a current thumbnail. Slots are guaranteed bound here:
                 // the memo guard above required slot_for(res).is_some(). Safe
@@ -4207,6 +4206,434 @@ mod tests {
                 after2.topology > after1.topology,
                 "tracking must persist frame over frame, got {after1:?} then {after2:?}"
             );
+        }
+
+        /// P2 (BUG-e3p6.4, design §3.3) — fused/unfused parity. The chain is
+        /// P2 (BUG-e3p6.4, design §3.3) — fused/unfused parity on a REAL
+        /// fused mesh kernel. The chain is two coincident `ripple_mesh`
+        /// deformers — the mesh-deformer shape that fuses today (every
+        /// stock deformer declaring `Dependencies` rules, wave/morph
+        /// included, also declares a `weights_len` derived uniform with no
+        /// registered recompute, so the fail-closed gate in
+        /// `fuse_canonical_def_masked` keeps those regions unfused; see the
+        /// report and the composition unit proof in freeze/install.rs).
+        /// Ripple carries no mesh-rule declaration, so both sides compile
+        /// the conservative Written/Written class: the fused node's
+        /// installed sidecar must select exactly that class, and driving
+        /// both graphs through the executor must show the class's behavior
+        /// on both paths — every actual write revises all three aspects.
+        #[test]
+        fn mesh_change_fused_rules_match_unfused() {
+            use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+            use crate::node_graph::mesh_change::{PreparedMeshRevisionRule, PreparedMeshRules};
+            use crate::node_graph::persistence::EffectGraphDefExt;
+            use crate::node_graph::PrimitiveRegistry;
+            use manifold_core::NodeId;
+            use manifold_core::effect_graph_def::EffectGraphDef;
+
+            let json = r#"{
+                "version": 1, "name": "p2_fused_parity",
+                "nodes": [
+                    { "id": 0, "typeId": "system.mesh_input", "nodeId": "mesh_in" },
+                    { "id": 1, "typeId": "node.ripple_mesh", "nodeId": "r1" },
+                    { "id": 2, "typeId": "node.ripple_mesh", "nodeId": "r2" },
+                    { "id": 3, "typeId": "node.free_camera", "nodeId": "cam" },
+                    { "id": 4, "typeId": "node.unlit_material", "nodeId": "mat" },
+                    { "id": 5, "typeId": "node.render_mesh", "nodeId": "render" },
+                    { "id": 6, "typeId": "system.final_output", "nodeId": "final" }
+                ],
+                "wires": [
+                    { "fromNode": 0, "fromPort": "vertices", "toNode": 1, "toPort": "in" },
+                    { "fromNode": 0, "fromPort": "weights", "toNode": 1, "toPort": "weights" },
+                    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                    { "fromNode": 0, "fromPort": "weights", "toNode": 2, "toPort": "weights" },
+                    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "camera" },
+                    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "material" },
+                    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "vertices" },
+                    { "fromNode": 5, "fromPort": "color", "toNode": 6, "toPort": "in" }
+                ]
+            }"#;
+            let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+            let registry = PrimitiveRegistry::with_builtin();
+
+            // The scripted source replaces `system.mesh_input` (identical
+            // ports) because MockBackend cannot run the real producers; its
+            // no-op evaluate is an actual write every frame, matching the
+            // MeshNode fixture contract.
+            let swap_source =
+                |graph: &mut Graph, rule: &Arc<Mutex<Option<MeshOutputRule<'static>>>>| {
+                    let id = graph
+                        .instance_by_node_id(&NodeId::new("mesh_in"))
+                        .expect("mesh_input must instantiate");
+                    graph.get_node_mut(id).unwrap().node =
+                        Box::new(ScriptedMeshSource::new(Arc::clone(rule)));
+                    id
+                };
+
+            // ── Path A: canonical def, empty sidecar (the unfused chain) ──
+            let mut graph_a =
+                def.clone().into_graph(&registry, &PreparedMeshRules::default()).unwrap();
+            let _src_a = swap_source(&mut graph_a, &shared_rule(None));
+            let r1_a = graph_a.instance_by_node_id(&NodeId::new("r1")).unwrap();
+            let r2_a = graph_a.instance_by_node_id(&NodeId::new("r2")).unwrap();
+            for id in [r1_a, r2_a] {
+                let inner = std::mem::replace(
+                    &mut graph_a.get_node_mut(id).unwrap().node,
+                    Box::new(MeshNode::sink()),
+                );
+                graph_a.get_node_mut(id).unwrap().node = Box::new(DeclaredPrimitiveProbe { inner });
+            }
+            let plan_a = compile(&graph_a).unwrap();
+            let res_r2 = out_res(&plan_a, r2_a);
+            // No declaration on ripple: the conservative Written/Written class.
+            let unfused_rule = plan_a.mesh_rule(res_r2).expect("r2 output compiles a mesh rule");
+            assert!(
+                matches!(unfused_rule.topology, CompiledMeshRevisionRule::Written)
+                    && matches!(unfused_rule.positions, CompiledMeshRevisionRule::Written),
+                "unfused ripple must compile to the conservative class, got {unfused_rule:?}"
+            );
+
+            // ── Path B: fuse the same def and install the sidecar ──
+            let fused = fuse_canonical_def(&def, &registry)
+                .expect("the ripple+ripple region must fuse");
+            let fused_key = {
+                let doc = fused
+                    .def
+                    .nodes
+                    .iter()
+                    .find(|n| n.type_id == "node.wgsl_compute")
+                    .expect("the fused def carries the fused kernel node");
+                if doc.node_id.is_empty() {
+                    doc.handle.clone().expect("fused node carries an id or handle")
+                } else {
+                    doc.node_id.as_str().to_string()
+                }
+            };
+            // The composed sidecar: Written/Written, matching the unfused
+            // declarations — no silent class change from fusion.
+            {
+                let mut entries = fused.mesh_rules.values().flatten();
+                let rule = entries.next().expect("the fused node carries a mesh-rule sidecar");
+                assert!(
+                    entries.next().is_none(),
+                    "exactly one fused node carries mesh rules, got {:?}",
+                    fused.mesh_rules
+                );
+                assert_eq!(rule.output, "dst", "single-output region emits dst, got {:?}", rule);
+                assert!(
+                    matches!(rule.topology, PreparedMeshRevisionRule::Written)
+                        && matches!(rule.positions, PreparedMeshRevisionRule::Written),
+                    "fused sidecar must compose to Written/Written, got {rule:?}"
+                );
+            }
+            let FusedDef { def: fused_def, mesh_rules, .. } = fused;
+            let mut graph_b = fused_def.into_graph(&registry, &mesh_rules).unwrap();
+            let _src_b = swap_source(&mut graph_b, &shared_rule(None));
+            let fused_rt = graph_b
+                .instance_by_node_id(&NodeId::new(&fused_key))
+                .expect("fused node must instantiate");
+            {
+                let inner = std::mem::replace(
+                    &mut graph_b.get_node_mut(fused_rt).unwrap().node,
+                    Box::new(MeshNode::sink()),
+                );
+                graph_b.get_node_mut(fused_rt).unwrap().node =
+                    Box::new(DeclaredPrimitiveProbe { inner });
+            }
+            let plan_b = compile(&graph_b).unwrap();
+            let res_fused = out_res(&plan_b, fused_rt);
+            let fused_rule = plan_b
+                .mesh_rule(res_fused)
+                .expect("fused MeshVertex output compiles a mesh rule");
+            assert!(
+                matches!(fused_rule.topology, CompiledMeshRevisionRule::Written)
+                    && matches!(fused_rule.positions, CompiledMeshRevisionRule::Written),
+                "fused rule must match the unfused class, got {fused_rule:?}"
+            );
+
+            // ── Drive both graphs: same-class revision behavior every frame ──
+            // Revision tokens come from a per-executor global counter, so
+            // absolute values are not comparable across two executors (the
+            // unfused graph has more mesh writers). The parity invariant is
+            // behavioral: both sides advance ALL THREE aspects on EVERY
+            // write — the conservative class's signature.
+            fn run_frame_pair(
+                graph_a: &mut Graph,
+                plan_a: &ExecutionPlan,
+                exec_a: &mut Executor,
+                graph_b: &mut Graph,
+                plan_b: &ExecutionPlan,
+                exec_b: &mut Executor,
+                res_unfused: ResourceId,
+                res_fused: ResourceId,
+            ) -> (MeshRevision, MeshRevision) {
+                exec_a.execute_frame(graph_a, plan_a, frame_time());
+                exec_b.execute_frame(graph_b, plan_b, frame_time());
+                let a = exec_a.mesh_revision_of_res(res_unfused);
+                let b = exec_b.mesh_revision_of_res(res_fused);
+                (a, b)
+            }
+            let mut exec_a = Executor::with_mock();
+            let mut exec_b = Executor::with_mock();
+            let (first_a, first_b) = run_frame_pair(
+                &mut graph_a, &plan_a, &mut exec_a,
+                &mut graph_b, &plan_b, &mut exec_b,
+                res_r2, res_fused,
+            );
+            assert!(
+                first_a.topology > 0 && first_b.topology > 0,
+                "the first write must issue a topology token on both paths, got {first_a:?} / {first_b:?}"
+            );
+            let (mut prev_a, mut prev_b) = (first_a, first_b);
+            for _ in 1..4 {
+                let (next_a, next_b) = run_frame_pair(
+                    &mut graph_a, &plan_a, &mut exec_a,
+                    &mut graph_b, &plan_b, &mut exec_b,
+                    res_r2, res_fused,
+                );
+                for (side, next, prev) in [
+                    ("unfused", next_a, prev_a),
+                    ("fused", next_b, prev_b),
+                ] {
+                    assert!(
+                        next.topology > prev.topology
+                            && next.positions > prev.positions
+                            && next.content > prev.content,
+                        "{side}: the conservative class must revise all aspects on every \
+                         write, got {prev:?} then {next:?}"
+                    );
+                }
+                (prev_a, prev_b) = (next_a, next_b);
+            }
+        }
+        /// P2 acceptance (BUG-e3p6.4, design §7): the stock Surface Waves
+        /// modifiers must select the refit-eligible update class — topology
+        /// driven by Topology-only input dependencies, positions Written —
+        /// so a fused path (where it exists) can never degrade below the
+        /// unfused class. Two parts:
+        ///
+        /// 1. The unfused oracle: the bundled preset's own member atoms
+        ///    (`normal_wave_mesh`, `morph_mesh`) declare the class plan
+        ///    compilation reads straight off the node.
+        /// 2. The real preset graph, embedded VERBATIM (bundled group JSON)
+        ///    in a production-shaped host def (mesh inputs + scalar values +
+        ///    render tail — the shape a scene render view gives it). When
+        ///    that graph fuses, the composed §3.3 sidecar must keep the
+        ///    refit-eligible class.
+        ///
+        /// Reality today: the host does NOT fuse — `mesh_spatial_mask` has
+        /// an OPTIONAL `weights` array input the preset leaves unwired, and
+        /// buffer regions reject any unwired array input (the
+        /// `required/gather/buffer input unwired` gate in freeze/region.rs
+        /// `build_region`); the declared-rule deformers (wave/morph) are
+        /// separately kept unfused by the missing `weights_len` derived-
+        /// uniform recompute (the fail-closed gate in
+        /// `fuse_canonical_def_masked`). The declared-rule composition is
+        /// proven at the composition seam in freeze/install.rs
+        /// (`mesh_change_compose_region_rules_wave_morph`), the fused-path
+        /// executor parity on the fusing ripple chain in
+        /// `mesh_change_fused_rules_match_unfused`. When those gaps close,
+        /// the `Some` arm below becomes the active assertion.
+        #[test]
+        fn mesh_change_surface_waves_fused_sidecar_is_refit_eligible() {
+            use crate::node_graph::bundled_presets::bundled_preset_json;
+            use crate::node_graph::freeze::install::fuse_canonical_def;
+            use crate::node_graph::mesh_change::{
+                PreparedMeshOutputRule, PreparedMeshRevisionRule,
+            };
+            use crate::node_graph::persistence::EffectGraphDefExt;
+            use crate::node_graph::primitive::Primitive;
+            use crate::node_graph::PrimitiveRegistry;
+            use manifold_core::PresetTypeId;
+            use manifold_core::effect_graph_def::EffectGraphDef;
+
+            let json = bundled_preset_json(&PresetTypeId::new("SurfaceWaves"))
+                .expect("SurfaceWaves is a bundled scene-modifier preset");
+            let registry = PrimitiveRegistry::with_builtin();
+
+            // Part 1 — the unfused class, straight off the stock declarations
+            // the preset's graph compiles today.
+            let wave_node = crate::node_graph::primitives::NormalWaveMesh::new();
+            let wave = Primitive::mesh_output_rule(&wave_node, "out");
+            match wave.topology {
+                MeshRevisionRule::Dependencies(deps) => {
+                    assert_eq!(deps.len(), 1);
+                    assert_eq!(deps[0].aspect, MeshAspect::Topology);
+                }
+                other => panic!("wave topology must be Dependencies([in.Topology]), got {other:?}"),
+            }
+            assert!(matches!(wave.positions, MeshRevisionRule::Written));
+            let morph_node = crate::node_graph::primitives::MorphMesh::new();
+            let morph = Primitive::mesh_output_rule(&morph_node, "out");
+            match morph.topology {
+                MeshRevisionRule::Dependencies(deps) => {
+                    assert_eq!(deps.len(), 2);
+                    assert!(deps.iter().all(|d| d.aspect == MeshAspect::Topology));
+                }
+                other => panic!(
+                    "morph topology must be Dependencies([in.Topology, b.Topology]), got {other:?}"
+                ),
+            }
+            assert!(matches!(morph.positions, MeshRevisionRule::Written));
+
+            // Part 2 — the verbatim bundled group in a production-shaped
+            // host. (Standalone the bundled JSON cannot fuse at all: fusion
+            // liveness seeds from system.final_output, which only a render
+            // host provides.)
+            let preset: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let mut group = preset["nodes"][0].clone();
+            group["id"] = serde_json::json!(1);
+            let host = serde_json::json!({
+                "version": 1,
+                "name": "surface_waves_host",
+                "nodes": [
+                    { "id": 0, "typeId": "system.mesh_input", "nodeId": "mesh_in" },
+                    group,
+                    { "id": 2, "typeId": "system.mesh_input", "nodeId": "mesh_ref" },
+                    { "id": 3, "typeId": "node.value", "nodeId": "radius",
+                      "params": { "value": { "type": "Float", "value": 1.0 } } },
+                    { "id": 4, "typeId": "node.value", "nodeId": "off_x",
+                      "params": { "value": { "type": "Float", "value": 0.0 } } },
+                    { "id": 5, "typeId": "node.value", "nodeId": "off_y",
+                      "params": { "value": { "type": "Float", "value": 0.0 } } },
+                    { "id": 6, "typeId": "node.value", "nodeId": "off_z",
+                      "params": { "value": { "type": "Float", "value": 0.0 } } },
+                    { "id": 9, "typeId": "node.free_camera", "nodeId": "cam" },
+                    { "id": 10, "typeId": "node.unlit_material", "nodeId": "mat" },
+                    { "id": 11, "typeId": "node.render_mesh", "nodeId": "render" },
+                    { "id": 12, "typeId": "system.final_output", "nodeId": "final" }
+                ],
+                "wires": [
+                    { "fromNode": 0, "fromPort": "vertices", "toNode": 1, "toPort": "current" },
+                    { "fromNode": 2, "fromPort": "vertices", "toNode": 1, "toPort": "reference" },
+                    { "fromNode": 3, "fromPort": "out", "toNode": 1, "toPort": "sourceRadius" },
+                    { "fromNode": 4, "fromPort": "out", "toNode": 1, "toPort": "sourceOffsetX" },
+                    { "fromNode": 5, "fromPort": "out", "toNode": 1, "toPort": "sourceOffsetY" },
+                    { "fromNode": 6, "fromPort": "out", "toNode": 1, "toPort": "sourceOffsetZ" },
+                    { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "camera" },
+                    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "material" },
+                    { "fromNode": 1, "fromPort": "vertices", "toNode": 11, "toPort": "vertices" },
+                    { "fromNode": 11, "fromPort": "color", "toNode": 12, "toPort": "in" }
+                ]
+            });
+            let host_def: EffectGraphDef = serde_json::from_value(host).unwrap();
+
+            if let Some(fused) = fuse_canonical_def(&host_def, &registry) {
+                // The mask fusion gap closed — the composed sidecar must keep
+                // the refit-eligible class (Topology-only Dependencies,
+                // Written positions), same as the unfused declarations above.
+                let rules: Vec<&PreparedMeshOutputRule> =
+                    fused.mesh_rules.values().flatten().collect();
+                assert!(
+                    !rules.is_empty(),
+                    "fused Surface Waves must carry a mesh-rule sidecar for its mesh output"
+                );
+                for rule in &rules {
+                    match &rule.topology {
+                        PreparedMeshRevisionRule::Dependencies(deps) => {
+                            assert!(
+                                !deps.is_empty()
+                                    && deps.iter().all(|d| d.aspect == MeshAspect::Topology),
+                                "every composed leaf must be a Topology aspect, got {deps:?}"
+                            );
+                        }
+                        other => panic!(
+                            "the fused mesh output must stay refit-eligible (Dependencies), got {other:?}"
+                        ),
+                    }
+                    assert!(
+                        matches!(rule.positions, PreparedMeshRevisionRule::Written),
+                        "morph positions stay Written under fusion, got {:?}",
+                        rule.positions
+                    );
+                }
+                let graph = fused.def.into_graph(&registry, &fused.mesh_rules).unwrap();
+                let plan = compile(&graph).unwrap();
+                let compiled: Vec<&crate::node_graph::execution_plan::CompiledMeshOutputRule> = plan
+                    .steps()
+                    .iter()
+                    .flat_map(|s| s.outputs.iter())
+                    .filter_map(|&(_, res)| plan.mesh_rule(res))
+                    .collect();
+                assert!(
+                    compiled.iter().any(|r| matches!(
+                        r.topology,
+                        CompiledMeshRevisionRule::Dependencies(_)
+                    )),
+                    "the compiled fused plan must carry a Dependencies mesh rule, got {compiled:?}"
+                );
+            }
+        }
+
+        /// Scripted stand-in for `system.mesh_input` (same output ports, so
+        /// the loader's wiring stays valid) with the topology rule behind a
+        /// shared handle — see `mesh_change_fused_rules_match_unfused`.
+        struct ScriptedMeshSource {
+            type_id: EffectNodeType,
+            rule: Arc<Mutex<Option<MeshOutputRule<'static>>>>,
+        }
+
+        impl ScriptedMeshSource {
+            fn new(rule: Arc<Mutex<Option<MeshOutputRule<'static>>>>) -> Self {
+                Self {
+                    type_id: EffectNodeType::new("test.scripted_mesh_source"),
+                    rule,
+                }
+            }
+        }
+
+        impl EffectNode for ScriptedMeshSource {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                crate::node_graph::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &[]
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                static OUTPUTS: [NodeOutput; 2] = [
+                    NodePort {
+                        name: std::borrow::Cow::Borrowed("vertices"),
+                        ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
+                        kind: PortKind::Output,
+                        required: false,
+                    },
+                    NodePort {
+                        name: std::borrow::Cow::Borrowed("weights"),
+                        ty: PortType::Array(ArrayType::of_known::<f32>()),
+                        kind: PortKind::Output,
+                        required: false,
+                    },
+                ];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn array_output_capacity(
+                &self,
+                port: &str,
+                _: &crate::node_graph::ParamValues,
+                _: &[(&str, u32)],
+            ) -> Option<u32> {
+                // Mirror `MeshInput`'s standalone minima.
+                match port {
+                    "vertices" => Some(1536),
+                    "weights" => Some(1),
+                    _ => None,
+                }
+            }
+            fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
+                self.rule.lock().unwrap().unwrap_or(MeshOutputRule {
+                    topology: MeshRevisionRule::Written,
+                    positions: MeshRevisionRule::Written,
+                })
+            }
+            fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {
+                // No-op actual write — MockBackend cannot run GPU dispatches.
+            }
         }
     }
 
