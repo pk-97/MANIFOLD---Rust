@@ -978,8 +978,10 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
 
     // Time one def through the executor at (w, h): warmup, then avg real GPU
     // time over FRAMES. Returns None if the graph can't be built/compiled.
-    let time_def = |def: &EffectGraphDef, w: u32, h: u32, label: &str| -> Option<f64> {
-        let mut graph = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).ok()?;
+    // `mesh_rules` must be the def's own sidecar: the fused arm passes the
+    // fused view's composed rules, not an empty map.
+    let time_def = |def: &EffectGraphDef, mesh_rules: &manifold_renderer::node_graph::mesh_change::PreparedMeshRules, w: u32, h: u32, label: &str| -> Option<f64> {
+        let mut graph = def.clone().into_graph(registry, mesh_rules).ok()?;
         let plan = compile(&graph).ok()?;
         let source_id = graph
             .nodes()
@@ -1017,14 +1019,14 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     };
 
     for &(w, h) in RESOLUTIONS {
-        let unfused_ms = match time_def(&unfused_def, w, h, "auto-cg-unfused-timed") {
+        let unfused_ms = match time_def(&unfused_def, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default(), w, h, "auto-cg-unfused-timed") {
             Some(ms) => ms,
             None => {
                 eprintln!("skip auto-fused-colorgrade@{w}x{h}: unfused build");
                 continue;
             }
         };
-        let fused_ms = match time_def(&fused_view.canonical_def, w, h, "auto-cg-fused-timed") {
+        let fused_ms = match time_def(&fused_view.canonical_def, &fused_view.mesh_rules, w, h, "auto-cg-fused-timed") {
             Some(ms) => ms,
             None => {
                 eprintln!("skip auto-fused-colorgrade@{w}x{h}: fused build");
@@ -1228,12 +1230,12 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
             }
         };
 
-        attribute_def(registry, device, &sampler, &def, &format!("{name} — unfused"));
+        attribute_def(registry, device, &sampler, &def, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default(), &format!("{name} — unfused"));
 
         if is_gen {
             match install::fused_generator_view_for(&def) {
                 Some(view) => {
-                    attribute_def(registry, device, &sampler, &view.def, &format!("{name} — fused"));
+                    attribute_def(registry, device, &sampler, &view.def, &view.mesh_rules, &format!("{name} — fused"));
                 }
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),
             }
@@ -1247,6 +1249,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
                     device,
                     &sampler,
                     &view.canonical_def,
+                    &view.mesh_rules,
                     &format!("{name} — fused"),
                 ),
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),
@@ -1257,12 +1260,15 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
 
 /// Drive one def through the real executor with per-dispatch profiling and
 /// print the per-step table. Generators and effects both run through
-/// `execute_frame_with_state` with their boundary input pre-bound.
+/// `execute_frame_with_state` with their boundary input pre-bound. `mesh_rules`
+/// is the def's own sidecar — the fused arms pass the fused view's composed
+/// rules.
 fn attribute_def(
     registry: &PrimitiveRegistry,
     device: &std::sync::Arc<GpuDevice>,
     sampler: &manifold_gpu::GpuTimestampSampler,
     def: &EffectGraphDef,
+    mesh_rules: &manifold_renderer::node_graph::mesh_change::PreparedMeshRules,
     title: &str,
 ) {
     use manifold_renderer::node_graph::StateStore;
@@ -1272,7 +1278,7 @@ fn attribute_def(
     const ATTR_FRAMES: u32 = 30;
     let (w, h) = (1920u32, 1080u32);
 
-    let mut graph = match def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
+    let mut graph = match def.clone().into_graph(registry, mesh_rules) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("{title}: build failed: {e}");
