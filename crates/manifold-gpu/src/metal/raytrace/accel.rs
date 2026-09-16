@@ -55,6 +55,10 @@ use super::{
 pub(crate) struct Blas {
     pub(crate) structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
     pub(crate) descriptor: Retained<MTLPrimitiveAccelerationStructureDescriptor>,
+    /// Retained per the §4.2 contract (every Blas retains its triangle
+    /// descriptor); the primitive descriptor's geometry array already owns
+    /// it, so nothing reads this field directly today.
+    #[allow(dead_code, reason = "§4.2 retention contract; un-suppress when a rebuild/refit path reads the triangle descriptor directly")]
     pub(crate) tri: Retained<MTLAccelerationStructureTriangleGeometryDescriptor>,
     pub(crate) build_scratch: GpuBuffer,
     pub(crate) refit_scratch: GpuBuffer,
@@ -414,17 +418,6 @@ fn blas_descriptors(
     descriptor.setGeometryDescriptors(Some(&array));
     descriptor.setUsage(MTLAccelerationStructureUsage::Refit);
     (tri_desc, descriptor)
-}
-
-/// Repoint a retained triangle descriptor at the CURRENT object's buffers —
-/// a storage-compatible rebuild after a buffer-identity change (same
-/// counts/strides/offsets) reuses the structure and scratch, but the
-/// descriptor must reference the new buffers before re-encoding.
-fn retarget_blas_descriptor(blas: &Blas, obj: &RtObjectGeometry) {
-    blas.tri.setVertexBuffer(Some(obj.vertex_buffer.raw()));
-    if let Some(index_buffer) = obj.index_buffer {
-        blas.tri.setIndexBuffer(Some(index_buffer.raw()));
-    }
 }
 
 /// Metal's reported sizes for one BLAS descriptor set.
@@ -811,16 +804,14 @@ pub(crate) fn plan_accel(
         })
         .collect();
 
-    // Reuse accounting: a resident set with per-object storage-compatible
-    // topology and matching instance mode/capacity already covers its
-    // bytes — charge only growth. Anything else is a full replacement and
-    // charges the whole new set (the old set stays live until the swap,
-    // so the overlap IS additional peak).
+    // Reuse accounting: a resident set covers its bytes only when the plan
+    // is byte-identical in topology INCLUDING buffer identity — an identity
+    // move is a full replacement (the pin set and descriptors reference the
+    // old buffers; §4.3 pins are packaged at preparation/replacement only).
     let reusable = resident.is_some_and(|acc| {
         acc.instanced == instanced
             && acc.instance_slot_total == total_slots
-            && acc.topology.len() == topology.len()
-            && acc.topology.iter().zip(topology.iter()).all(|(r, c)| blas_storage_compatible(r, c))
+            && acc.topology == topology
     });
 
     let descriptor_bytes = u64::from(total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64;
@@ -867,14 +858,13 @@ pub(crate) fn prepare_accel(
     plan: RtAccelPlan,
 ) -> Result<(), RtAccelError> {
     if let Some(acc) = resident.as_ref() {
+        // Full topology equality INCLUDING buffer identity — anything less
+        // is a replacement (pins and descriptors reference the resident
+        // buffers; §4.3 packages pins at preparation/replacement only).
         let reusable = acc.instanced == plan.instanced
             && acc.instance_slot_total == plan.total_slots
-            && acc.topology.len() == plan.topology.len()
-            && acc.topology.iter().zip(plan.topology.iter()).all(|(r, c)| blas_storage_compatible(r, c));
+            && acc.topology == plan.topology;
         if reusable {
-            // Buffer identities may have moved under equal shape — retarget
-            // the descriptors so the next build reads the current buffers.
-            // (No GPU work; descriptors are CPU-side state.)
             return Ok(());
         }
     }
@@ -1023,6 +1013,15 @@ pub(crate) fn encode_accel_update(
         let action = if !accel.blas[i].built {
             Action::Build
         } else {
+            // Buffer-identity moved: the resident descriptors still reference
+            // the OLD buffers, and the resident pin set holds them. Any
+            // identity move needs prepare (full replacement retargets and
+            // repins) — never encode against stale handles.
+            let identity_moved = accel.topology[i].vertex != current_topology[i].vertex
+                || accel.topology[i].index != current_topology[i].index;
+            if identity_moved {
+                return Err(RtAccelError::NeedsPreparation);
+            }
             match change {
                 RtGeometryChange::Reuse | RtGeometryChange::Attributes => Action::None,
                 RtGeometryChange::Refit | RtGeometryChange::Rebuild => {
@@ -1102,7 +1101,6 @@ pub(crate) fn encode_accel_update(
                 continue;
             }
             let blas = &mut accel.blas[i];
-            retarget_blas_descriptor(blas, &objects[i]);
             unsafe {
                 let () = msg_send![&*enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read | MTLResourceUsage::Write];
             }
