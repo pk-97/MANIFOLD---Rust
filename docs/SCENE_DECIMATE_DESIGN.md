@@ -55,6 +55,8 @@ at execution per phase briefs.
 | Disk decode cache — `cached_load_gltf_mesh`, sha256+selector LRU | `decode_cache.rs:317,43` | Exists upstream of the atom; untouched. |
 | meshopt crate 0.6.2 — `simplify(indices, &VertexDataAdapter, target_count, target_error, SimplifyOptions, result_error) -> Vec<u32>` (indices into the ORIGINAL vertex buffer); `SimplifyOptions::{LockBorder, Sparse, ErrorAbsolute, Prune, Regularize, Permissive}`; `simplify_sloppy` family; `cc`-vendored C++ | docs.rs/meshopt | Verified 2026-09-16. New dependency — P1 carries it (pre-authorized by D2). |
 | Points render mode — `depth_msaa_draw_points`, `render_scene.rs:4494` | just landed | Decimate output composes: fewer verts = sparser point cloud, zero extra work. |
+| Vertices-stage splices demand equal capacity — content replacement only (`displace_copies` rejects unequal capacities, SCENE_MODIFIER_PROGRAMME.md section 2b (photoscan modifier slice)); wholesale different-sized replacement exists exactly once (Math View's `node.sample_triangle_grid`, per-target, calibrated by `mesh_frames`) | programme doc; `primitives/sample_triangle_grid.rs:28`; `scene_modifier_preset.rs:70-76` | Decimate keeps capacity = input capacity and carries the real count on a scalar wire (D9) — satisfies the splice constraint by construction. |
+| Draw count is buffer-size-derived everywhere — `mesh_vertex_count` (`render_scene.rs:1702`), raster `:4145`, RT `triangle_count` `:5296`; no active-count channel into render_scene. The codebase's established answer to over-capacity buffers is a port-shadowed `active_count` scalar | `primitives/edges_from_mesh.rs:69-86` | **The seam D9 closes.** |
 
 Classification: modifier machinery, targeting, endpoint, async precedent,
 RT invalidation, flat-shading look — **exist**. The atom, its readback path,
@@ -138,7 +140,23 @@ the recipe, the static-vertices RT declaration — **genuinely new, small**.
   → BLAS rebuild via the BUG-326 (rt-depth-snapshot-wrong-on-imported-glb-scenes) machinery. Undeclared vertices modifiers
   keep refusing RT.
 
-- **D9 — No voxel/point-sampling method param.** Quadric output serves
+- **D9 — The decimated vertex count travels on a scalar wire; buffers stay
+  input-capacity.** render_scene derives draw counts from buffer byte size
+  today (audit) and has no count channel, so the atom emits
+  `active_count: ScalarF32` (the `edges_from_mesh.rs:69-86` precedent) and
+  render_scene gains one optional `vertex_count` scalar input that, when
+  wired, overrides the size-derived count in the raster draw (`:4145`),
+  the RT `triangle_count` (`:5296`), and the topology/content key hashes
+  (`:2622`, `:2859`). Unwired = today's behavior, byte-identical. The
+  decimate output buffer keeps the input's capacity — the equal-capacity
+  splice constraint (audit) is satisfied by construction, and a ratio scrub
+  never triggers a graph re-plan. **Consequences, stated honestly:** the
+  GPU buffer stays full-size regardless of ratio — the frame-time win
+  (vertex processing, the measured geometry-bound bottleneck) is delivered;
+  the GPU memory win is not, and exact-sized buffers are Deferred
+  (section 7).
+
+- **D10 — No voxel/point-sampling method param.** Quadric output serves
   Points mode fine (removals distribute over the surface); a spatially-even
   point-thinning mode is Deferred with its trigger.
 
@@ -156,7 +174,10 @@ crate::primitive! {
         ratio: ScalarF32 optional,        // port-shadowed, drives cache key
         lock_border: ScalarF32 optional,  // port-shadowed
     },
-    outputs: { out: Array(MeshVertex) },
+    outputs: {
+        out: Array(MeshVertex),
+        active_count: ScalarF32,  // real vertex count; wires to render_scene's `vertex_count` (D9)
+    },
     params: [
         ratio: f32 in [0.01, 1.0], default 0.5,
         lock_border: Bool, default true,
@@ -169,11 +190,16 @@ crate::primitive! {
 miss with no job in flight: blit input → shared readback, spawn worker job
 (readback bytes → weld → simplify → flatten → `Vec<MeshVertex>`), output
 stays last-good. On job land: `cached_out` swap, staging blit, `published`
-gate, `content_version += 1`. Output capacity is the input capacity
-(decimate only shrinks the active prefix; the `active_count` port-shadow
-precedent at `edges_from_mesh.rs:69-86` is how the real count travels —
-⚠ VERIFY-AT-IMPL: how render_scene learns the active vertex count of a
-vertices-endpoint attachment today).
+gate, `content_version += 1`. Output capacity equals the input capacity
+(D9); the decimated mesh is written compacted in the prefix and
+`active_count` carries the real count. render_scene's new optional
+`vertex_count` input overrides the size-derived draw count where wired
+(raster `:4145`, RT `:5296`, key hashes `:2622`/`:2859`); unwired is
+byte-identical to today. ⚠ VERIFY-AT-IMPL: how the Vertices attachment
+wires the stage's scalar outputs alongside `vertices` — read the
+attachment path in `compiler.rs:595-740`; if a second endpoint is cleaner
+than a paired wire, escalate with the two shapes rather than choosing
+silently.
 
 ### 3.2 The recipe
 
@@ -182,7 +208,9 @@ id `Decimate`, `sceneModifier` with `enabledParam: "enabled"`, one stage,
 scope `EachObject`, targets `AllObjects` (the picker flips to `Explicit`
 for object-level), stage output `{port: vertices, endpoint: Vertices}`.
 Rows: `enabled`, `ratio`, `lock_border`. Gate wiring mirrors SceneFog
-(`enabled` × pass-through), so bypass = byte-identical passthrough.
+(`enabled` × pass-through), so bypass = byte-identical passthrough. The
+stage also wires the atom's `active_count` output to render_scene's
+`vertex_count` input alongside the `vertices` wire (D9).
 
 ### 3.3 The static-vertices declaration (P3)
 
@@ -229,12 +257,15 @@ readback, cache.
   machinery being mirrored); `taper_mesh.rs` whole (the atom family shape);
   ADDING_PRIMITIVES.md sections on CPU atoms.
 - **Deliverables:** `primitives/mesh_decimate.rs`; `meshopt = "0.6"` in
-  `manifold-renderer` (pre-authorized dependency, D2); atom tests for
-  INV-D2/D3/D5; a raw-executor headless test (mesh_snapshot.rs pattern)
+  `manifold-renderer` (pre-authorized dependency, D2); render_scene's
+  optional `vertex_count` input + the four override sites (D9); atom tests
+  for INV-D2/D3/D5; a raw-executor headless test (mesh_snapshot.rs pattern)
   rendering a decimated cube → PNG.
 - **Forbidden moves:** a synchronous simplify on the content thread ·
   changing the `MeshVertex` layout or adding an index buffer · a shared
-  cross-instance cache (`Arc<Mutex>`) · touching `render_scene.rs`.
+  cross-instance cache (`Arc<Mutex>`) · resizing the output buffer below
+  input capacity (D9 — capacity is compile-time, count is the wire) ·
+  deriving draw count from anything but the wire when it is wired.
 - **Gate:** `cargo nextest run -p manifold-renderer mesh_decimate` green;
   `MANIFOLD_RENDER_TRACE=1` ratio scrub on a 1M-tri mesh — no frame >20ms
   (the async claim, measured); INV gates green.
@@ -295,6 +326,8 @@ readback, cache.
 4. Ratio (not error) is the contract; `target_error = 1.0` (D3).
 5. Skinned/morph refused at validation (D7).
 6. RT via declared `staticVertices`, P3, undeclared modifiers stay locked (D8).
+7. Count on a wire, capacity unchanged; render_scene's `vertex_count` input
+   is the only count override (D9).
 
 ## 7. Deferred
 
@@ -310,6 +343,10 @@ readback, cache.
 - **Absolute scene-wide triangle budget** (N tris shared across objects
   with an allocation policy) — ratio-per-object covers the need. Trigger:
   a show that must hold a hard frame budget across mixed scenes.
+- **Exact-sized output buffers** (GPU memory scales with ratio, not just
+  frame time) — requires runtime capacity changes the executor's
+  compile-time plan doesn't have. Trigger: a project where decimated
+  full-size buffers pin enough GPU memory to matter.
 - **GPU-side progressive LOD** (meshlets, per-frame density) — a different
   subsystem (meshoptimizer meshlet path), priced only if live density
   becomes a headline effect.
