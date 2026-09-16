@@ -456,6 +456,44 @@ impl TracePass {
     }
 }
 
+/// SCENE_MODIFIER_RT_DESIGN.md P0/A0: one caller-supplied world-space ray
+/// for [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
+/// `DebugRayQueryRay` (packed_float3 pairs + two scalars).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DebugRayQueryRay {
+    pub origin: [f32; 3],
+    pub direction: [f32; 3],
+    pub min_distance: f32,
+    pub max_distance: f32,
+}
+const _: () = assert!(std::mem::size_of::<DebugRayQueryRay>() == 32);
+
+/// ID sentinel written for a miss (MSL `DEBUG_RAY_INVALID`).
+pub const DEBUG_RAY_INVALID: u32 = u32::MAX;
+
+/// SCENE_MODIFIER_RT_DESIGN.md P0/A0: one committed-hit record from
+/// [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
+/// `DebugRayQueryHit` exactly; `coverage` is 1.0 on an accepted hit until
+/// P4b gives fractional appearance coverage meaning.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DebugRayQueryHit {
+    pub hit: u32,
+    pub object_id: u32,
+    pub instance_id: u32,
+    pub primitive_id: u32,
+    pub distance: f32,
+    pub bary: [f32; 2],
+    pub coverage: f32,
+    pub pad0: f32,
+    pub normal: [f32; 3],
+    pub pad1: f32,
+    pub uv: [f32; 2],
+    pub pad2: [f32; 2],
+}
+const _: () = assert!(std::mem::size_of::<DebugRayQueryHit>() == 68);
+
 pub struct MetalShadowRayTracer {
     /// Fixed slots retain their first incident; callbacks hold the pool alive.
     rt_diagnostics: Arc<TraceDiagnosticPool>,
@@ -489,7 +527,14 @@ pub struct MetalShadowRayTracer {
     atrous_post_pipeline: GpuComputePipeline,
     /// RT-Stage-3 P3 value-test-only surface (`debug_atrous_post`'s only
     /// caller) — see the MSL `debug_atrous_post` kernel's doc comment.
+    /// Always compiled (tiny kernel, negligible cost); never dispatched by
+    /// the production `render_scene.rs` path.
     debug_atrous_post_pipeline: GpuComputePipeline,
+    /// SCENE_MODIFIER_RT_DESIGN.md P0 value-test-only surface
+    /// (`debug_ray_query`'s only caller) — see the MSL `debug_ray_query`
+    /// kernel's doc comment. Always compiled (tiny kernel, negligible
+    /// cost); never dispatched by the production `render_scene.rs` path.
+    debug_ray_query_pipeline: GpuComputePipeline,
     /// RT-T2-A: 1x1 fully-opaque texture bound into every one of
     /// `trace_shadow_rays`'s `alpha_textures` slots that this frame's
     /// `dispatch_shadow_rays` call doesn't supply a real texture for —
@@ -516,6 +561,11 @@ pub struct RtPipelines {
     pub debug_firefly_clamp_pipeline: GpuComputePipeline,
     pub atrous_post_pipeline: GpuComputePipeline,
     pub debug_atrous_post_pipeline: GpuComputePipeline,
+    /// SCENE_MODIFIER_RT_DESIGN.md P0 value-test-only surface
+    /// (`debug_ray_query`'s only caller) — traces caller-supplied rays
+    /// through the production AS and candidate-hit walk for gpu_proofs.
+    /// Never dispatched by the production `render_scene.rs` path.
+    pub debug_ray_query_pipeline: GpuComputePipeline,
     /// RT_INSTANCING_DESIGN.md D1/P0: the TLAS descriptor-build kernel —
     /// dispatched ahead of the TLAS build/refit on the same command buffer
     /// in instanced mode (never on the D7 fast path).
@@ -786,6 +836,22 @@ impl RtPipelines {
             ]),
         );
 
+        // SCENE_MODIFIER_RT_DESIGN.md P0: deterministic ray query — accel at
+        // buffer(0), rays buffer(1), hits buffer(2), normal sources
+        // buffer(3), params buffer(4), material-texture argument table at
+        // texture(0..MAX_RT_MATERIAL_TEXTURES). Signatures and slot maps
+        // change together.
+        let debug_ray_query_slots: Vec<(u32, SlotKind)> = (0..=4u32)
+            .map(|b| (b, SlotKind::Buffer))
+            .chain((0..MAX_RT_MATERIAL_TEXTURES as u32).map(|t| (t, SlotKind::Texture)))
+            .collect();
+        let debug_ray_query_pipeline = compile_pipeline(
+            device,
+            &library,
+            "debug_ray_query",
+            identity_slot_map(&debug_ray_query_slots),
+        );
+
         // RT_INSTANCING_DESIGN.md D1/P0: descriptor-build kernel —
         // descriptors out at [[buffer(0)]], per-object build params at
         // [[buffer(1)]]. Signatures and slot maps change together (the R1
@@ -811,6 +877,7 @@ impl RtPipelines {
             debug_firefly_clamp_pipeline,
             atrous_post_pipeline,
             debug_atrous_post_pipeline,
+            debug_ray_query_pipeline,
             descriptor_build_pipeline,
         }
     }
@@ -859,6 +926,7 @@ impl MetalShadowRayTracer {
             debug_firefly_clamp_pipeline: p.debug_firefly_clamp_pipeline.clone(),
             atrous_post_pipeline: p.atrous_post_pipeline.clone(),
             debug_atrous_post_pipeline: p.debug_atrous_post_pipeline.clone(),
+            debug_ray_query_pipeline: p.debug_ray_query_pipeline.clone(),
             dummy_alpha_tex,
             rt_diagnostics,
         }
@@ -938,6 +1006,86 @@ impl MetalShadowRayTracer {
             std::ptr::copy_nonoverlapping(out_ptr as *const f32, result.as_mut_ptr(), 3);
         }
         result
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md P0/A0 (BUG-e3p6.4) value-test-only entry
+    /// point — traces caller-supplied world-space rays through the SAME
+    /// acceleration structure, slot-row indexing and candidate-hit walk the
+    /// production kernels use, writing one [`DebugRayQueryHit`] per ray.
+    /// Encodes into the CALLER's encoder and returns the hit buffer: the
+    /// harness waits only after all geometry/update/query commands are
+    /// submitted, so a write → update → query sequence can ride one command
+    /// buffer (A2's same-frame discipline). No commit, no wait, no second
+    /// acceleration or material implementation. Callers supply valid finite
+    /// rays. `material_textures` follows `dispatch_shadow_rays`'s table
+    /// order; missing slots bind the 1x1 dummy (alpha-mask fixtures supply
+    /// their real texture at the same index `RtNormalSource` references).
+    pub fn debug_ray_query(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        accel: &RtAccel,
+        normal_sources: &GpuBuffer,
+        rays: &[DebugRayQueryRay],
+        material_textures: Option<&[&GpuTexture]>,
+        slot_row_base: u32,
+    ) -> GpuBuffer {
+        assert!(!rays.is_empty(), "debug_ray_query: at least one ray");
+        let rays_buffer =
+            device.create_buffer_shared(std::mem::size_of_val(rays) as u64);
+        let rays_ptr = rays_buffer
+            .mapped_ptr()
+            .expect("debug ray buffer must be CPU-mapped");
+        unsafe {
+            std::ptr::copy_nonoverlapping(rays.as_ptr(), rays_ptr as *mut DebugRayQueryRay, rays.len());
+        }
+        let hits_buffer =
+            device.create_buffer_shared((rays.len() * std::mem::size_of::<DebugRayQueryHit>()) as u64);
+        hits_buffer.zero_fill();
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct DebugRayQueryParams {
+            slot_row_base: u32,
+            ray_count: u32,
+            grid_x: u32,
+            pad: u32,
+        }
+        const _: () = assert!(std::mem::size_of::<DebugRayQueryParams>() == 16);
+        let wg = self.debug_ray_query_pipeline.workgroup_size;
+        let threads_per_group = (wg[0] * wg[1]) as usize;
+        let workgroups_x = rays.len().div_ceil(threads_per_group) as u32;
+        let params = DebugRayQueryParams {
+            slot_row_base,
+            ray_count: rays.len() as u32,
+            grid_x: workgroups_x * wg[0],
+            pad: 0,
+        };
+        let params_bytes: [u8; 16] = unsafe { std::mem::transmute(params) };
+
+        let mut bindings = vec![
+            GpuBinding::Buffer { binding: 1, buffer: &rays_buffer, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &hits_buffer, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: normal_sources, offset: 0 },
+        ];
+        let supplied: &[&GpuTexture] = material_textures.unwrap_or(&[]);
+        for (i, tex) in (0..MAX_RT_MATERIAL_TEXTURES)
+            .map(|i| supplied.get(i).copied().unwrap_or(&self.dummy_alpha_tex))
+            .enumerate()
+        {
+            bindings.push(GpuBinding::Texture { binding: i as u32, texture: tex });
+        }
+        encoder.dispatch_compute_with_accel(
+            &self.debug_ray_query_pipeline,
+            0,
+            accel,
+            &bindings,
+            [],
+            Some((4, &params_bytes)),
+            [workgroups_x, 1, 1],
+            "debug ray query",
+        );
+        hits_buffer
     }
 
     /// BUG-dx6w value-test-only entry point — dispatches the SAME

@@ -3105,6 +3105,105 @@ struct DebugFetchNormalParams {
     uint slot_row_base;
 };
 
+// SCENE_MODIFIER_RT_DESIGN.md P0/A0 (BUG-e3p6.4): deterministic ray-query
+// debug surface — traces CALLER-SUPPLIED world-space rays through the SAME
+// acceleration structure, slot-row indexing and candidate-hit walk
+// (`walk_with_alpha_test`, closest-hit mode) the production kernels use,
+// and records the committed hit plus the production interpolated normal/UV
+// helpers' outputs. Exists so gpu_proofs can assert same-frame geometry
+// state against an analytical CPU oracle instead of screen-space image
+// similarity. Callers supply valid finite rays (production's
+// `rt_sanitize_ray` guards screen-space reconstruction; test rays are
+// analytical by construction). Value-test-only: never called by
+// `render_scene.rs`.
+constant uint DEBUG_RAY_INVALID = 0xFFFFFFFFu;
+
+struct DebugRayQueryRay {
+    packed_float3 origin;
+    packed_float3 direction;
+    float min_distance;
+    float max_distance;
+};
+
+struct DebugRayQueryHit {
+    uint hit;            // 1 = committed triangle hit, 0 = miss
+    uint object_id;      // canonical object index (RtNormalSource.object_index); DEBUG_RAY_INVALID on miss
+    uint instance_id;    // committed slot id; DEBUG_RAY_INVALID on miss
+    uint primitive_id;   // committed triangle index; DEBUG_RAY_INVALID on miss
+    float distance;      // committed ray t; -1 on miss
+    packed_float2 bary;  // committed barycentrics; (0,0) on miss — Rust repr(C) packs to offset 20, so no MSL float2 8-byte alignment
+    float coverage;      // 1.0 on an accepted hit — fractional appearance coverage lands in P4b
+    float pad0;
+    packed_float3 normal; // production interpolated vertex normal; (0,0,0) on miss
+    float pad1;
+    packed_float2 uv;    // production interpolated UV; (0,0) on miss
+    packed_float2 pad2;  // Rust repr(C) keeps the struct at 68 bytes; a plain float2 here aligns to 8 and makes the MSL stride 72, desyncing hits[i]
+};
+
+struct DebugRayQueryParams {
+    // RT_INSTANCING_DESIGN.md D11: same slot-row base the production
+    // kernel's params carry — the query exercises production slot-row
+    // indexing, not the canonical rows.
+    uint slot_row_base;
+    uint ray_count;
+    // Linearization width of the 2D dispatch grid (workgroups_x * 8).
+    uint grid_x;
+    uint pad;
+};
+
+kernel void debug_ray_query(
+    instance_acceleration_structure accel [[buffer(0)]],
+    device const DebugRayQueryRay* rays [[buffer(1)]],
+    device DebugRayQueryHit* hits [[buffer(2)]],
+    device RtNormalSource* normal_sources [[buffer(3)]],
+    constant DebugRayQueryParams& p [[buffer(4)]],
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures [[texture(0)]],
+    uint2 tid2 [[thread_position_in_grid]])
+{
+    uint tid = tid2.y * p.grid_x + tid2.x;
+    if (tid >= p.ray_count) return;
+    device DebugRayQueryHit& out = hits[tid];
+    device const DebugRayQueryRay& in = rays[tid];
+    device RtNormalSource* slot_sources = normal_sources + p.slot_row_base;
+    ray pr;
+    pr.origin = float3(in.origin);
+    pr.direction = float3(in.direction);
+    pr.min_distance = in.min_distance;
+    pr.max_distance = in.max_distance;
+    intersection_query<triangle_data, instancing> q;
+    q.reset(pr, accel, RT_MASK_VISIBLE);
+    if (walk_with_alpha_test(q, slot_sources, material_textures, false)) {
+        uint iid = q.get_committed_instance_id();
+        uint pid = q.get_committed_primitive_id();
+        float2 bary = q.get_committed_triangle_barycentric_coord();
+        out.hit = 1u;
+        out.object_id = slot_sources[iid].object_index;
+        out.instance_id = iid;
+        out.primitive_id = pid;
+        out.distance = q.get_committed_distance();
+        out.bary = bary;
+        out.coverage = 1.0;
+        out.pad0 = 0.0;
+        out.normal = packed_float3(fetch_interpolated_normal(slot_sources, iid, pid, bary));
+        out.pad1 = 0.0;
+        out.uv = packed_float2(fetch_interpolated_uv(slot_sources, iid, pid, bary));
+        out.pad2 = float2(0.0);
+    } else {
+        out.hit = 0u;
+        out.object_id = DEBUG_RAY_INVALID;
+        out.instance_id = DEBUG_RAY_INVALID;
+        out.primitive_id = DEBUG_RAY_INVALID;
+        out.distance = -1.0;
+        out.bary = float2(0.0);
+        out.coverage = 0.0;
+        out.pad0 = 0.0;
+        out.normal = packed_float3(0.0);
+        out.pad1 = 0.0;
+        out.uv = packed_float2(0.0);
+        out.pad2 = float2(0.0);
+    }
+}
+
 kernel void debug_fetch_interpolated_normal(
     device RtNormalSource*         normal_sources [[buffer(0)]],
     constant DebugFetchNormalParams& p              [[buffer(1)]],
