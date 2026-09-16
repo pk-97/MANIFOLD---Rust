@@ -1,9 +1,9 @@
 # Scene Decimate — mesh density as a scene/object modifier card
 
-**Status:** PROPOSED — awaiting Peter · 2026-09-16 · k3 (lead)
-**Prerequisites:** none — the file-authored scene-modifier regime and the
-`Vertices` endpoint this design rides are on main (`SceneFog.json`,
-`RenderMode.json`, Math View).
+<!-- index: Proposed scene decimation, with post-RT architecture review: reduction maps, per-object active counts, async publication and export requirements. -->
+
+**Status:** PROPOSED — architecture revision required before implementation; see section 8 · 2026-09-16 · k3 proposal, Codex review
+**Prerequisites:** implement only after [Scene modifier RT](SCENE_MODIFIER_RT_DESIGN.md) lands and passes its required gates. The proposal below predates that contract; section 8 directs its next revision and supersedes conflicting implementation instructions, especially D8/P3. This is a reviewed proposal, not an approved implementation brief.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Decimate — quadric mesh simplification (meshoptimizer) — as a **modifier
@@ -350,3 +350,76 @@ readback, cache.
 - **GPU-side progressive LOD** (meshlets, per-frame density) — a different
   subsystem (meshoptimizer meshlet path), priced only if live density
   becomes a headline effect.
+
+## 8. Post-RT architecture review — 2026-09-16, Codex
+
+**Verdict: keep the feature, revise the architecture before coding.** This is feedback for the next K3 design pass, not permission to start before the RT work. Follow-up: `BUG-mztz`, blocked on `BUG-e3p6.4`. Static source audit at `ca80539d5`; no meshopt benchmark, GPU proof or visual qualification was run. The quoted 100–500 ms and the promised frame-time improvement are unmeasured estimates in this proposal.
+
+### 8.1 Audit corrections
+
+| Review request claim | Finding and evidence |
+|---|---|
+| 1. Object/scene targeting already exists | Correct. Retain `Explicit`/`AllObjects` and `EachObject`; no second targeting mechanism. `crates/manifold-core/src/scene_modifier_preset.rs` owns these types. |
+| 2. Vertices has only Math View as a user | Incorrect. Stock recipes including `SurfaceWaves.json:366`, `ElasticSculpture.json:433` and `OrderedRecon.json:624` already publish Vertices endpoints. The RT inventory lists the complete catalog. |
+| 2. Equal capacity is a universal Vertices-splice rule | The cited evidence does not establish this. `displace_copies.rs:59` enforces equality for its own two inputs. `remap_mesh_cut.rs:34–49` derives output capacity from its map, and fragment expansion already inserts topology/layout-changing remaps. Distinguish compile-time capacity planning from a universal requirement that input and output capacities match. Fixed maximum capacity remains a sensible live-edit choice; dynamic right-sizing would still require resource/planner work. |
+| 3. Graph arrays are private | Incorrect for the production graph loader: `graph_loader.rs:1541–1547` uses `create_buffer_shared` for planned arrays. `device.rs:361` describes the separate private-buffer factory, not its selection by this caller. CPU access still needs completed GPU writes and an immutable snapshot while future frames run; mapped memory alone does not make asynchronous reads safe. Retain a private-buffer snapshot path for generic inputs. |
+| 4. Raster/RT share the buffer, therefore no mismatch | First part true, conclusion false. `render_scene.rs:5292` uses the draw buffer, but `rt_deferred_build_decision` at `:1557` requires a repeated content key before rebuilding. The AS contains derived geometry and can be stale while the buffer is current. `MeshTopologyHistory` is temporal invalidation, not the BLAS scheduler. After RT lands, use its current-frame update contract; do not depend on this old settle policy or resurrect its lock. |
+| 5. Renderer uses capacity-derived counts | Correct for the current `render_scene` mesh draws (`mesh_vertex_count` at `:1702`, RT count at `:5296`). The proposed single renderer input is the wrong ownership: one renderer consumes multiple `SceneObject`s. Count belongs to each object's mesh, then its `ObjectDraw`. |
+| 6. Skin/morph refusal already follows from source atoms | Separate atoms exist; Decimate refusal does not yet exist. A direct-producer check misses group boundaries, skin/morph operations and intervening modifiers. Existing `frames.rs:59–81,237–257` refusal is scoped to recipes needing a qualified coordinate frame, not generic Decimate validation. Refusal can be a conservative V1 policy, but justify it as unqualified lineage/deformation behavior. Simplifying a mesh *after* skinning does not inherently require rewriting the original joint data; applying the reduced stream before skinning would. |
+
+Paths without a crate prefix above are under `crates/manifold-renderer/src/node_graph/`, with recipes under `crates/manifold-renderer/assets/scene-modifier-presets/`.
+
+### 8.2 Recommended cheaper shape: simplify a reference, publish a map
+
+Change the CPU atom from “return a flattened mesh” to **“return a source-corner reduction map.”** Keep the performer-facing Decimate card and the final flat `MeshVertex` output. `meshopt::simplify` returns indices into its input vertices; retain the weld-to-original representative mapping to recover original flat vertex indices. That permits a small selection result rather than another full CPU output mesh. [meshopt 0.6.2 API](https://docs.rs/meshopt/latest/meshopt/simplify/fn.simplify.html)
+
+Reuse the existing `node.remap_mesh_cut` and `node.remap_cut_weights` infrastructure. A selected source vertex `i` is exactly representable in today's map as triangle `i / 3` plus a one-hot corner barycentric coordinate for `i % 3`. `fragment_cuts.rs:375–460` already aligns and remaps current/reference streams; `:470–565` propagates lineage through morphs and weights. Extend that preparation seam to reduction maps; do not build a second lineage tracker or a recipe-ID special case in RT. Invalid tail entries retain the existing finite-padding convention and must stay outside the active draw prefix. Respect the existing map's exact-float source-index bound.
+
+The next design should specify these semantics explicitly: **simplification chooses topology from the aligned reference mesh; the resulting map gathers the current mesh on the GPU each frame.** This avoids freezing an animated upstream mesh at the last completed CPU snapshot. It also gives the RT contract the intended distinction: changed map → topology revision/build; same map plus moved vertices → position revision/refit. Reuse the RT design's cut-remap revision rules.
+
+This is a deliberate tradeoff: the reduction is optimized for the reference, not recomputed optimally for every animated pose. Reference or source-topology changes invalidate the map and its cached input; position-only changes in the current stream do not. Test strong deformations for quality rather than claiming pose-optimal simplification. Keep skin/morph support deferred until its lineage/seam behavior is proved; the map route makes that future qualification possible without reopening indexed rendering.
+
+Cache the immutable prepared reference/weld data separately from the applied reduction map. Ratio/border edits reuse that source snapshot; **they do not require another GPU readback or weld**. Key the prepared source by executor/source identity, reference revision, topology and active extent, not a producer-private `content_version` field. Jobs carry their source key and request ID. This is one source cache plus one applied map, not a multi-ratio LRU.
+
+Do not reimplement binary welding with a new hash table unless measurement justifies it. Evaluate meshopt's existing remap functions. Normalize the explicit padding fields in worker scratch before full-record comparison, or compare only meaningful streams: `MeshVertex` contains `_pad0`, `_pad1`, `_pad2` (`generators/mesh_common.rs:35–43`); Pod does not mean those fields have equal values. Preserve meaningful UV/normal/tangent discontinuities and any required lineage distinctions. [meshopt remap API](https://docs.rs/meshopt/latest/meshopt/remap/index.html)
+
+### 8.3 D9: fixed capacity is reasonable; count must follow the mesh
+
+Keep a prepared maximum-capacity buffer for V1. Reject the proposed global `render_scene.vertex_count`. The next revision must specify **paired mesh/count stage outputs**, with the count delivered to `node.scene_object` and carried as an optional validated count in `SceneObject`; resolve it once into `ObjectDraw`. `SceneObject` currently has no count (`scene_object.rs:51–59`), and `SceneStageOutput` has no count endpoint (`manifold-core/src/scene_modifier_preset.rs:255–269`), so both are real required changes. Unwired preserves legacy capacity-derived behavior. Extend the existing endpoint routing for this per-object count; do not invent `vertex_count_k` renderer ports. The choice is a paired value following the same mesh lineage, not an independent scene-wide count.
+
+The pair must survive group boundaries, stage composition, bypass, reference alignment, fusion and reload. Unary geometry operations preserve count; a topology-producing stage authors a new count. A second Decimate consumes the first active prefix, not the entire padded capacity. Existing cut stages must propagate or explicitly replace the count when their map layout changes. Unknown count propagation is a preparation error, never permission to draw an old count against new bytes.
+
+Publishing a map also publishes its count and topology revision **atomically for the consuming frame**. Validate finite/integral/nonnegative count, divisibility by three, representability of the scalar count and source indices, and count ≤ capacity. Define zero as a valid empty mesh. Bypass restores the incoming mesh/count pair; ratio 1 returns identity without simplifying. All passes use the resolved draw count: color, points/wireframe, depth, shadows, motion, RT geometry and emissive candidate enumeration. Source-pointer equality is insufficient when count changes.
+
+Count only at the terminal renderer reduces draw/BLAS work, but does not automatically reduce upstream modifier dispatches. To claim compute savings, thread the active extent into affected gather/deformer dispatch bounds too. Clear/guard inactive tails so later stages cannot revive them. Profile the actual result; neither CPU offload nor a smaller draw count guarantees a faster pixel-bound scene. Admit peak old/candidate RT resources when counts change; reuse the post-RT preparation/admission path rather than allocating inside the update encoder.
+
+### 8.4 D4/D5: async is right; the proposed state machine is incomplete
+
+Keep simplification, welding, bulk copies and large allocation/destruction off the content-thread hot path. Workers own immutable snapshots/scratch; only the content thread publishes results. This preserves the ownership model without a shared mutable scene or a new `Arc<Mutex<_>>`.
+
+Do **not** copy `gltf_mesh_source` field-for-field. It clears its old cache on request and rejects changed-key results (`gltf_mesh_source.rs:360–438`), which differs from the proposed last-good-output behavior. `gpu_readback.rs:1–8,126–167` is a texture/RGBA helper relying on a previous-frame fence, not a ready-made arbitrary-buffer completion protocol. The default safe capture can still be a GPU copy into an owned shared snapshot, even when its source is shared; avoiding that copy requires proof that the pinned source cannot be overwritten for the entire worker read. Use an explicit successful completion token for the submitted source snapshot, pin it until the worker finishes reading, and never start the worker merely because another `run()` occurred. GPU failures are errors, not readiness.
+
+Define four distinct states/identities: requested controls, snapshot/job key, completed result, and applied map/count. Retain one latest requested control value, not a job queue. For live scrubbing, a completed map for the same valid source lineage may publish as the **applied** ratio while a newer request is coalesced; this delivers progress at job throughput and avoids starvation during continuous MIDI input. Do not label it as satisfying newer controls. Results from replaced sources, old executor epochs, removed nodes or obsolete lineage must be discarded. First load has no last-good map and remains pending. Source replacement must not apply an old map to unrelated vertices.
+
+Bound total concurrent jobs/readbacks as well as jobs per node. Account for source snapshot, welded vertices, indices, library scratch, map/upload storage, old published state and pending replacement in admission. The quoted ~269 MB is only one 4.2M×64-byte array, not peak memory. Plan before dispatch; do not discover memory exhaustion after many per-object workers start.
+
+### 8.5 Remove D8/P3; add deterministic export and real algorithm gates
+
+**Delete `staticVertices`, its schema work, its recipe opt-in and INV-D6.** The prerequisite RT work intentionally provides automatic geometry-change handling. Decimate inherits it: publication changes topology; idle retains revisions; current deformation under an unchanged map follows refit eligibility. A “changes only on param edit” declaration is also not a safety boundary when params can be MIDI/LFO-driven or upstream geometry animates.
+
+Add an explicit export preparation/continuation contract. An offline frame cannot accept whichever map happened to finish by wall-clock time. It must resolve the requested ratio/source snapshot before that frame is encoded. Freeze the frame's simulation inputs, await the worker outside ordinary live evaluation, then continue pending graph work without another engine tick or replay of stateful nodes. The RT design's `FrameRenderStatus` must remain pending until the exact result is usable. This needs a decided graph/export seam in the next design; copying live last-good behavior into export is incorrect. If this is deferred, animated decimation export must refuse explicitly; it cannot claim end-to-end support.
+
+Ratio is a **requested reduction target**, not a guaranteed triangle fraction. Topology/seam constraints may stop simplification early. `target_error = 1.0` is not the documented unlimited setting; use `f32::MAX` if the contract really removes the error bound, and report requested count, actual count and measured error. Correct INV-D2's direction: reducing the requested ratio should not be described as count decreasing when ratio increases; do not assert a universal strict monotonic result without a library guarantee. [Upstream simplification contract](https://github.com/zeux/meshoptimizer#simplification)
+
+`LockBorder` pins topological border vertices; it is not a general promise that all attribute behavior is preserved. Copying surviving samples preserves stored attributes, not necessarily the best shading frame for the new triangles. Keep seam, textured-scan and faceted-mesh fixtures, including a case that cannot reach its requested ratio. Existing `facet_normals` remains the optional low-poly styling step. [SimplifyOptions 0.6.2](https://docs.rs/meshopt/latest/meshopt/simplify/struct.SimplifyOptions.html)
+
+### 8.6 K3 revision and acceptance order
+
+After RT lands, re-audit its actual seams, then revise this proposal in this order:
+
+1. Specify per-object count + reduction-map lineage and publication, including bypass, two Decimate cards and cuts in both orders. Close the scalar-wiring fork before atom implementation.
+2. Specify source-cache/worker lifecycle, completion/error handling, coalescing and aggregate admission. Numerical tests must cover delayed completion, first pending frame, source replacement, removal/undo during a job and unchanged-key zero work.
+3. Implement the reference-map atom + existing GPU gathers + recipe through that shared contract. Prove meaningful attribute/seam preservation, finite output, valid counts, ratio-1 identity and requested-versus-achieved reduction. Verify map changes with stable nonempty object membership build exactly the affected BLAS; unchanged maps under deformation use the post-RT refit path and same-frame ray oracle.
+4. Qualify deterministic export, save/reload, Explicit object targeting, scene targeting, Render Mode and a bounded real-scan performance/memory run. Include inactive-tail adversarial data and two objects with different counts. Compare final RT hits/emissive geometry with the active raster prefix, not merely a content-key bump or a nonblack image.
+
+GPU proofs use `scripts/gpu_proofs_gate.py`/cargo test, not nextest. Replace the proposed unqualified “no frame >20 ms” promise with measured baseline-relative content-thread/update costs plus the intended frame budget on a named fixture. Keep required landing checks and bounded attempt limits. This review changes no application code and does not qualify decimation at runtime.
