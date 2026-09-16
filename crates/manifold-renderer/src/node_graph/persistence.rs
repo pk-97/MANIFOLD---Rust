@@ -303,6 +303,13 @@ pub enum LoadError {
     /// A node group failed to flatten before instantiation. Carries the
     /// formatted [`manifold_core::flatten::FlattenError`] message.
     Flatten(String),
+    /// A prepared mesh-rule sidecar entry (design §3.3) could not be
+    /// installed on the live graph. Carries the stable node id and the
+    /// preparation failure reason.
+    MeshRules {
+        node_id: manifold_core::NodeId,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -379,6 +386,9 @@ impl std::fmt::Display for LoadError {
             ),
             Self::SceneModifier(error) => error.fmt(f),
             Self::Flatten(msg) => write!(f, "group flatten failed: {msg}"),
+            Self::MeshRules { node_id, reason } => {
+                write!(f, "mesh rules for node {}: {reason}", node_id.as_str())
+            }
         }
     }
 }
@@ -459,13 +469,19 @@ pub trait EffectGraphDefExt: Sized {
     fn from_graph(graph: &Graph) -> Self;
 
     /// Materialize a definition into a live [`Graph`] using `registry`
-    /// to look up node constructors by `type_id`.
+    /// to look up node constructors by `type_id`. `mesh_rules` is the
+    /// prepared mesh-revision sidecar (design §3.3) for fused/prepared
+    /// defs; canonical/raw callers pass an empty map.
     ///
     /// On failure, returns the first [`LoadError`] encountered.
     /// Partial graphs are never returned — the document is parsed in
     /// two passes (build nodes, then wire) so a wire error doesn't
     /// leak half-built state.
-    fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError>;
+    fn into_graph(
+        self,
+        registry: &PrimitiveRegistry,
+        mesh_rules: &super::mesh_change::PreparedMeshRules,
+    ) -> Result<Graph, LoadError>;
 }
 
 impl EffectGraphDefExt for EffectGraphDef {
@@ -566,7 +582,11 @@ impl EffectGraphDefExt for EffectGraphDef {
         }
     }
 
-    fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError> {
+    fn into_graph(
+        self,
+        registry: &PrimitiveRegistry,
+        mesh_rules: &super::mesh_change::PreparedMeshRules,
+    ) -> Result<Graph, LoadError> {
         // Per-node instantiation + wire translation runs through the
         // shared `graph_loader` pipeline (see node_graph/graph_loader.rs).
         // The same pipeline backs the effect-side splice path, so any
@@ -579,6 +599,7 @@ impl EffectGraphDefExt for EffectGraphDef {
             registry,
             crate::node_graph::graph_loader::HandleScope::Global,
             crate::node_graph::graph_loader::BoundaryHandling::Standalone,
+            mesh_rules,
         )
         .map_err(load_error_from_build)?;
 
@@ -751,6 +772,7 @@ fn load_error_from_build(e: crate::node_graph::graph_loader::GraphBuildError) ->
         },
         G::SceneModifier(error) => LoadError::SceneModifier(error),
         G::Flatten(e) => LoadError::Flatten(e.to_string()),
+        G::MeshRules { node_id, reason } => LoadError::MeshRules { node_id, reason },
     }
 }
 
@@ -904,7 +926,7 @@ mod tests {
 
         let doc: GraphDocument = serde_json::from_str(json).expect("grouped doc parses");
         let g = doc
-            .into_graph(&registry())
+            .into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("grouped document flattens and loads");
 
         // Boundary + group nodes folded away: only source, so1, so2, final.
@@ -957,7 +979,7 @@ mod tests {
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
 
-        let g2 = parsed.into_graph(&registry()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         assert_eq!(g2.node_count(), 3);
         assert_eq!(g2.wires().len(), 2);
         // Named handle survives.
@@ -1014,7 +1036,7 @@ mod tests {
         assert!(thresh_doc.exposed_params.contains("softness"));
 
         // Confirm the live graph mirror picks them back up.
-        let g2 = parsed.into_graph(&registry()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         let thresh2 = g2.node_id_by_handle("thresh").unwrap();
         assert!(g2.is_param_exposed(thresh2, "level"));
         assert!(g2.is_param_exposed(thresh2, "softness"));
@@ -1054,7 +1076,7 @@ mod tests {
             "JSON must carry the wgslSource field; got: {json}"
         );
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g2 = parsed.into_graph(&registry()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
 
         // Source survives the round trip.
         let kernel_id = g2.node_id_by_handle("kernel").expect("handle survived");
@@ -1107,7 +1129,7 @@ mod tests {
 
         // Load → install on the live instance's `title`.
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g = parsed.into_graph(&registry()).unwrap();
+        let g = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         let kernel_id = g.node_id_by_handle("simulate").expect("handle survived");
         let inst = g.get_node(kernel_id).unwrap();
         assert_eq!(
@@ -1168,7 +1190,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::UnknownOutputFormat { format, port, .. } => {
                 assert_eq!(format, "made_up_format");
@@ -1205,7 +1227,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::UnknownTypeId { node_id, type_id } => {
                 assert_eq!(node_id, 0);
@@ -1270,7 +1292,7 @@ mod tests {
                 to_port: "in".to_string(),
             }],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         assert!(matches!(err, LoadError::InvalidWire { .. }), "got {err:?}");
     }
 
@@ -1303,7 +1325,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::UnknownParam { param, .. } => assert_eq!(param, "totally_made_up"),
             other => panic!("expected UnknownParam, got {other:?}"),
@@ -1337,7 +1359,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::ParamTypeMismatch { expected, got, .. } => {
                 assert_eq!(expected, "Float");
@@ -1358,7 +1380,7 @@ mod tests {
             nodes: vec![],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         assert!(matches!(err, LoadError::UnsupportedVersion { .. }));
     }
 
@@ -1377,7 +1399,7 @@ mod tests {
             nodes: vec![],
             wires: vec![],
         };
-        let result = doc.into_graph(&registry());
+        let result = doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default());
         assert!(result.is_ok(), "v1 doc should load: {:?}", result.err());
     }
 
@@ -1392,7 +1414,7 @@ mod tests {
             nodes: vec![],
             wires: vec![],
         };
-        let result = doc.into_graph(&registry());
+        let result = doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default());
         assert!(result.is_ok(), "v2 doc should load: {:?}", result.err());
     }
 
@@ -1467,7 +1489,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry()));
+        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::BindingConvertTypeMismatch {
                 binding_id,
@@ -1506,7 +1528,7 @@ mod tests {
         let doc = GraphDocument::from_graph(&g);
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g2 = parsed.into_graph(&registry()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
 
         assert_eq!(g2.node_count(), 4);
         assert_eq!(g2.wires().len(), 4);

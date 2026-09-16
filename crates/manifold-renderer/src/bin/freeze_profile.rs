@@ -163,7 +163,7 @@ fn main() {
         };
 
         for &(w, h) in RESOLUTIONS {
-            let mut graph = match def.clone().into_graph(&registry) {
+            let mut graph = match def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
                 Ok(g) => g,
                 Err(e) => {
                     eprintln!("skip {name}@{w}x{h}: build {e}");
@@ -280,7 +280,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
     for &warm in &[5u32, 30, 120] {
       let mut row = [0.0f64; 2];
       for (col, prealloc) in [false, true].into_iter().enumerate() {
-        let mut graph = def.clone().into_graph(registry).unwrap();
+        let mut graph = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         let plan = compile(&graph).unwrap();
         let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         if prealloc {
@@ -351,7 +351,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
     // Time one truncated plan against a freshly built graph (fresh state), pre-
     // binding a black input to the generator-input boundary when it's live.
     let time_prefix = |def: &EffectGraphDef, k: usize| -> Option<f64> {
-        let mut graph = def.clone().into_graph(registry).ok()?;
+        let mut graph = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).ok()?;
         let full = compile(&graph).ok()?;
         let plan = full.truncated(k);
         let input_res = graph
@@ -409,7 +409,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
             continue;
         };
         // Step → node-type label from one canonical build.
-        let Ok(graph0) = def.clone().into_graph(registry) else {
+        let Ok(graph0) = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) else {
             eprintln!("skip {name}: build");
             continue;
         };
@@ -979,7 +979,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     // Time one def through the executor at (w, h): warmup, then avg real GPU
     // time over FRAMES. Returns None if the graph can't be built/compiled.
     let time_def = |def: &EffectGraphDef, w: u32, h: u32, label: &str| -> Option<f64> {
-        let mut graph = def.clone().into_graph(registry).ok()?;
+        let mut graph = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).ok()?;
         let plan = compile(&graph).ok()?;
         let source_id = graph
             .nodes()
@@ -1099,7 +1099,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
 
     for &(w, h) in RESOLUTIONS {
         // --- unfused: the shipped graph through the executor ---
-        let mut graph = match def.clone().into_graph(registry) {
+        let mut graph = match def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("skip fused-colorgrade@{w}x{h}: build {e}");
@@ -1272,7 +1272,7 @@ fn attribute_def(
     const ATTR_FRAMES: u32 = 30;
     let (w, h) = (1920u32, 1080u32);
 
-    let mut graph = match def.clone().into_graph(registry) {
+    let mut graph = match def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("{title}: build failed: {e}");

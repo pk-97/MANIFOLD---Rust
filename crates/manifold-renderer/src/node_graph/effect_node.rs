@@ -1550,6 +1550,28 @@ pub trait EffectNode: Send {
         }
     }
 
+    /// Install compiler-provided prepared mesh-output rules (design
+    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) — the fused-graph sidecar
+    /// for outputs whose authored declaration can't describe the fused
+    /// kernel's revision behaviour. The default rejects a nonempty
+    /// override: only node types that can validate the rules against
+    /// their declared port layout (and own a copy) accept them.
+    /// `WgslCompute` is the accepting implementation. An empty slice is
+    /// always `Ok(())`. Authored content (WGSL comments, JSON) can never
+    /// reach this — installation is compiler-side only.
+    fn install_mesh_output_rules(
+        &mut self,
+        rules: &[crate::node_graph::mesh_change::PreparedMeshOutputRule],
+    ) -> Result<(), String> {
+        if rules.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "{} does not accept prepared mesh-output rules",
+            self.type_id().as_str()
+        ))
+    }
+
     /// Dimensions for the named `Texture3D` output port, as
     /// `(width, height, depth)` in voxels. Mirror of
     /// [`array_output_capacity`] for the Texture3D port type — the JSON

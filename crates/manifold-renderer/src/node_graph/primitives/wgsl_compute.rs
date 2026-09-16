@@ -48,6 +48,9 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::freeze::classify::{CapacityExpr, FusionKind};
 use crate::node_graph::freeze::markers::Marker;
+use crate::node_graph::mesh_change::{
+    MeshOutputRule, PreparedMeshOutputRule, PreparedMeshRevisionRule,
+};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
     ArrayType, ChannelElementType, ChannelSpec, NodeInput, NodeOutput, NodePort, PortKind,
@@ -204,6 +207,16 @@ pub struct WgslCompute {
     /// deflection bake). Author-asserted, like the fusion markers — a kernel
     /// that reads `time` or aliases a persistent array must NOT carry it.
     source_pure: bool,
+
+    /// Compiler-installed prepared mesh-output rules (design
+    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) — the fused-graph sidecar
+    /// for MeshVertex outputs whose revision behaviour the fused kernel
+    /// owns but the authored declaration can't describe. Validated
+    /// against the parsed port layout at installation; cleared by
+    /// `reparse` (a new WGSL source re-derives the layout, so stale
+    /// overrides can't survive it). Authored WGSL can never populate
+    /// this — no marker parsing exists.
+    mesh_output_overrides: Vec<PreparedMeshOutputRule>,
 
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
@@ -373,6 +386,7 @@ impl WgslCompute {
             dispatch_count_param: None,
             fused_output_capacity: None,
             derived_uniform_members: Vec::new(),
+            mesh_output_overrides: Vec::new(),
             pipeline: None,
             sampler: None,
             compiled_hash: None,
@@ -399,6 +413,11 @@ impl WgslCompute {
     fn reparse(&mut self, source: String) {
         self.pipeline = None;
         self.compiled_hash = None;
+        // A new source re-derives the whole port layout, so installed
+        // mesh-output overrides (validated against the OLD layout) must
+        // not survive it — clear unconditionally, including the parse-
+        // failure early returns below.
+        self.mesh_output_overrides.clear();
 
         // FUSION FRAGMENT contract (design: wgsl_compute fusion contract). A
         // source carrying a `// @fusion:` marker + a `fn body(` is a fusable
@@ -2055,6 +2074,67 @@ impl EffectNode for WgslCompute {
             return None;
         }
         params.get("max_capacity").and_then(|v| v.as_u32_clamped(1))
+    }
+
+    fn mesh_output_rule(&self, port: &str) -> MeshOutputRule<'_> {
+        // An installed compiler-provided override for this port wins (design
+        // §3.3); every other output keeps the conservative trait default
+        // (Written/Written). The borrow is a faithful re-borrow of the owned
+        // prepared form — plan compilation builds its compiled rule from it.
+        if let Some(rule) = self
+            .mesh_output_overrides
+            .iter()
+            .find(|r| r.output == port)
+        {
+            return MeshOutputRule {
+                topology: rule.topology.as_borrowed(),
+                positions: rule.positions.as_borrowed(),
+            };
+        }
+        MeshOutputRule {
+            topology: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+            positions: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+        }
+    }
+
+    fn install_mesh_output_rules(
+        &mut self,
+        rules: &[PreparedMeshOutputRule],
+    ) -> Result<(), String> {
+        use crate::node_graph::ports::KnownItem;
+        let mesh_vertex_specs =
+            <crate::generators::mesh_common::MeshVertex as KnownItem>::SPECS;
+        for rule in rules {
+            let output = self.outputs.iter().find(|p| p.name == rule.output).ok_or_else(|| {
+                format!(
+                    "mesh rule targets undeclared output port '{}'",
+                    rule.output
+                )
+            })?;
+            match output.ty {
+                PortType::Array(ref array_ty) if array_ty.specs == mesh_vertex_specs => {}
+                _ => {
+                    return Err(format!(
+                        "mesh rule output port '{}' does not carry the MeshVertex channel layout",
+                        rule.output
+                    ));
+                }
+            }
+            for aspect in [&rule.topology, &rule.positions] {
+                if let PreparedMeshRevisionRule::Dependencies(deps) = aspect {
+                    for dep in deps {
+                        if !self.inputs.iter().any(|p| p.name == dep.input.as_ref()) {
+                            return Err(format!(
+                                "mesh rule for '{}' depends on undeclared input port '{}'",
+                                rule.output, dep.input
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        self.mesh_output_overrides = rules.to_vec();
+        Ok(())
     }
 
     fn requires(&self) -> NodeRequires {

@@ -266,7 +266,7 @@ mod tests {
             "wires": []
         }))
         .expect("runtime graph parses");
-        def.into_graph(&PrimitiveRegistry::with_builtin())
+        def.into_graph(&PrimitiveRegistry::with_builtin(), &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("runtime graph builds")
     }
 

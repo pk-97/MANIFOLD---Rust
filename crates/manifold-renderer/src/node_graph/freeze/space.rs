@@ -55,7 +55,7 @@ pub fn resolve_output_spaces(
         registry,
         HandleScope::Global,
         BoundaryHandling::Standalone,
-    )
+    &crate::node_graph::mesh_change::PreparedMeshRules::default())
     .ok()?;
     let plan = compile(&graph).ok()?;
 

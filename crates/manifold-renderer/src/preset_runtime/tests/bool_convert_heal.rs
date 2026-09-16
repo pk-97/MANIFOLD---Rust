@@ -35,7 +35,7 @@
     #[test]
     fn poisoned_binding_without_heal_is_refused_by_into_graph() {
         let def = poisoned_lissajous();
-        match def.into_graph(&PrimitiveRegistry::with_builtin()) {
+        match def.into_graph(&PrimitiveRegistry::with_builtin(), &crate::node_graph::mesh_change::PreparedMeshRules::default()) {
             Err(err @ LoadError::BindingConvertTypeMismatch { .. }) => {
                 let _ = err;
             }

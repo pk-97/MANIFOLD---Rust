@@ -3107,7 +3107,7 @@ mod tests {
         assert!(view.node_retarget.values().all(|id| {
             view.def.nodes.iter().any(|node| resolve_node_id(node) == *id)
         }));
-        let mut graph = (*fused).clone().into_graph(&registry()).unwrap();
+        let mut graph = (*fused).clone().into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         let runtime_id = graph.instance_by_node_id(target).unwrap();
         graph.set_param(runtime_id, field, ParamValue::Float(0.375)).unwrap();
         assert_eq!(graph.get_node(runtime_id).unwrap().params.get(field.as_str()), Some(&ParamValue::Float(0.375)));
@@ -3183,7 +3183,7 @@ mod tests {
         use crate::node_graph::persistence::EffectGraphDefExt;
         (**fused)
             .clone()
-            .into_graph(&reg)
+            .into_graph(&reg, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("fused def with retargeted enum binding must load");
     }
 

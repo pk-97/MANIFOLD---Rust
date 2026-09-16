@@ -95,6 +95,20 @@ pub enum PreparedMeshRevisionRule {
     Dependencies(Vec<MeshDependency>),
 }
 
+impl PreparedMeshRevisionRule {
+    /// Borrowing view for plan compilation: `Written`→`Written`,
+    /// `Fixed`→`Fixed`, `Dependencies(vec)`→`Dependencies(&vec[..])`.
+    /// The prepared form owns its dependency list; the compiled rule
+    /// borrows it, so this conversion must stay a faithful re-borrow.
+    pub fn as_borrowed(&self) -> MeshRevisionRule<'_> {
+        match self {
+            PreparedMeshRevisionRule::Written => MeshRevisionRule::Written,
+            PreparedMeshRevisionRule::Fixed => MeshRevisionRule::Fixed,
+            PreparedMeshRevisionRule::Dependencies(deps) => MeshRevisionRule::Dependencies(deps),
+        }
+    }
+}
+
 /// Owned per-output rule with the output port name, for prepared/fused
 /// graphs. See design §3.3.
 #[derive(Clone, Debug, PartialEq, Eq)]

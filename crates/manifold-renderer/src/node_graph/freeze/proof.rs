@@ -392,7 +392,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     ))
     .expect("read ColorGrade.json");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse ColorGrade.json");
-    let mut graph = def.into_graph(&registry).expect("build ColorGrade graph");
+    let mut graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("build ColorGrade graph");
     set_f(&mut graph, "node.exposure", "gain", params.gain);
     set_f(&mut graph, "node.saturation", "saturation", params.sat_s);
     set_f(&mut graph, "node.hue_saturation", "hue", params.hue_deg);
@@ -487,7 +487,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
     let (gain, contrast, saturation) = (1.35_f32, 1.25_f32, 0.6_f32);
 
     // ── Sequential per-card: today's chain semantics, seam round-trip included. ──
-    let mut graph_a = card_a.clone().into_graph(&registry).expect("card A graph");
+    let mut graph_a = card_a.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("card A graph");
     set_f(&mut graph_a, "node.exposure", "gain", gain);
     set_f(&mut graph_a, "node.contrast", "contrast", contrast);
     let plan_a = compile(&graph_a).expect("compile card A");
@@ -495,7 +495,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
     let a_out = resource_for_output(&plan_a, find_node(&graph_a, "node.contrast"), "out");
     let a_result = render_graph(&device.arc(), &mut graph_a, &plan_a, a_src, &input, a_out);
 
-    let mut graph_b = card_b.clone().into_graph(&registry).expect("card B graph");
+    let mut graph_b = card_b.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("card B graph");
     set_f(&mut graph_b, "node.saturation", "saturation", saturation);
     let plan_b = compile(&graph_b).expect("compile card B");
     let b_src = resource_for_output(&plan_b, find_node(&graph_b, "system.source"), "out");
@@ -507,7 +507,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
     let seg = concat_defs(&[&card_a, &card_b]).expect("segment concat builds");
     let FusedDef { def: fused_def, retarget, .. } =
         fuse_canonical_def(&seg, &registry).expect("two pointwise cards fuse across the seam");
-    let mut fused_graph = fused_def.into_graph(&registry).expect("fused segment graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused segment graph builds");
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     for (node_id, param, v) in [
         ("c0.gain", "gain", gain),
@@ -635,8 +635,8 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
     // Build both graphs once; per iteration we only refresh params + re-render.
     let FusedDef { def: fused_def, retarget, .. } =
         fuse_canonical_def(&def, &registry).expect("ColorGrade fuses");
-    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
-    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph");
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
 
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
@@ -759,7 +759,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     ];
 
     // ── Unfused: the shipped preset graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -780,7 +780,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     // ── Auto-fused: region-grow + def-rewrite, then run through the executor. ──
     let FusedDef { def: fused_def, retarget, .. } =
         fuse_canonical_def(&def, &registry).expect("ColorGrade is a whole-card fusable region");
-    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     for (node_id, param, v) in fixture {
         let (_, field) = retarget
@@ -866,7 +866,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let gain = 1.4f32;
 
     // ── Unfused: the canonical graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -909,7 +909,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
          derived-uniform recompute), not just fuse structurally"
     );
 
-    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     set_by_node_id(&mut fused_graph, "cam", "pos_x", cam_pos_x);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let (_, gain_field) = retarget
@@ -989,7 +989,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let f_stop = 2.8f32;
 
     // ── Unfused: the canonical graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -1042,7 +1042,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
         fused_wgsl
     );
 
-    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     set_by_node_id(&mut fused_graph, "lens", "focus_distance", focus_distance);
     set_by_node_id(&mut fused_graph, "lens", "f_stop", f_stop);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
@@ -1106,7 +1106,7 @@ fn every_fused_preset_executes_one_frame() {
         fused_count += 1;
 
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut graph = fused.def.into_graph(&registry).expect("fused def builds a graph");
+            let mut graph = fused.def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused def builds a graph");
             let plan = compile(&graph).expect("fused graph compiles");
             let r_src = try_resource_for_output(
                 &plan,
@@ -1177,7 +1177,7 @@ fn fused_source_region_matches_unfused() {
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
     // ── Unfused: the two-pass chain (checkerboard, then mix). ──
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
@@ -1186,7 +1186,7 @@ fn fused_source_region_matches_unfused() {
     // ── Fused: checkerboard + mix collapse into one kernel. ──
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the Source region fuses");
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1327,7 +1327,7 @@ fn infrared_preset_black_stays_black() {
     let mut graph = Graph::new();
     let src = graph.add_node(Box::new(Source::new()));
     let result =
-        splice_def_into_chain(&mut graph, (src, "out"), def, &registry, None).expect("splice");
+        splice_def_into_chain(&mut graph, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("splice");
     let names: Vec<&str> = result.handles.iter().map(|(n, _)| n.as_ref()).collect();
     eprintln!("handles: {names:?}");
     let find = |name: &str| -> Option<NodeInstanceId> {
@@ -1484,7 +1484,7 @@ fn fused_gather_region_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -1492,7 +1492,7 @@ fn fused_gather_region_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the gather region fuses");
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1542,7 +1542,7 @@ fn fused_warp_region_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.remap"), "out");
@@ -1550,7 +1550,7 @@ fn fused_warp_region_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the warp region fuses");
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1640,7 +1640,7 @@ fn stencil_checkpoint_diff(
     );
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
@@ -1656,7 +1656,7 @@ fn stencil_checkpoint_diff(
         !fdef.nodes.iter().any(|n| n.type_id == "node.gaussian_blur"),
         "the blur folds into the fused kernel"
     );
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1747,7 +1747,7 @@ fn fused_variable_width_blur_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -1769,7 +1769,7 @@ fn fused_variable_width_blur_matches_unfused() {
         !wgsl.contains("QUALITY_LEVEL") && !wgsl.contains("WEIGHTING_MODE"),
         "specialization tokens must be substituted, not free"
     );
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1836,7 +1836,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
     assert_eq!(regions[0].virtual_chains.len(), 1, "the warp is a virtual chain");
     assert_eq!(regions[0].virtual_chains[0].members[0].doc_id, 2);
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
@@ -1852,7 +1852,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
         fdef.nodes.iter().any(|n| n.type_id == "node.flow_field_noise"),
         "the half-res flow field survives as the chain's sampled external"
     );
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1888,7 +1888,7 @@ fn render_effect_frames_with_state(
 ) -> RenderTarget {
     use crate::node_graph::StateStore;
     let (w, h) = (input.width, input.height);
-    let mut graph = def.clone().into_graph(registry).expect("graph builds");
+    let mut graph = def.clone().into_graph(registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("graph builds");
     let plan = compile(&graph).expect("compiles");
     let src_res = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
     let final_id = find_node(&graph, "system.final_output");
@@ -2057,14 +2057,14 @@ fn linear_blur_pair_matches_legacy_blur_node() {
     }"#;
 
     let l_def: EffectGraphDef = serde_json::from_str(legacy).unwrap();
-    let mut l_graph = l_def.into_graph(&registry).expect("legacy graph");
+    let mut l_graph = l_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("legacy graph");
     let l_plan = compile(&l_graph).expect("compile legacy");
     let l_src = resource_for_output(&l_plan, find_node(&l_graph, "system.source"), "out");
     let l_out = resource_for_output(&l_plan, find_node(&l_graph, "node.blur"), "out");
     let l_img = render_graph(&device.arc(), &mut l_graph, &l_plan, l_src, &input, l_out);
 
     let p_def: EffectGraphDef = serde_json::from_str(pair).unwrap();
-    let mut p_graph = p_def.into_graph(&registry).expect("pair graph");
+    let mut p_graph = p_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("pair graph");
     let p_plan = compile(&p_graph).expect("compile pair");
     let p_src = resource_for_output(&p_plan, find_node(&p_graph, "system.source"), "out");
     let p_out = {
@@ -2501,7 +2501,7 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
 
     // ── Unfused: the shipped (grouped) preset graph, amount cranked on. ──
-    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_handle = |g: &mut Graph, handle: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(handle)
@@ -2520,7 +2520,7 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     // block_displace_field member), def-rewrite, run through the executor. ──
     let FusedDef { def: fused_def, retarget, .. } =
         fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
-    let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+    let mut fused_graph = fused_def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     // `amount_value` fans out to FOUR different consumers (both fields, the
     // invert gain, the final crossfade) that land in DIFFERENT regions once
     // fused — a node can only ever be one region's member, so it survives as
@@ -2610,7 +2610,7 @@ fn glitch_fused_kernel_animates_over_time() {
 
     let FusedDef { def: fused_def, retarget, .. } =
         super::install::fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
-    let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+    let mut fused_graph = fused_def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
 
     // Crank the master amount so the effect is visible.
     let (amount_node, amount_field) = match retarget.get(&("amount_value".to_string(), "value".to_string())) {
@@ -2733,7 +2733,7 @@ fn glitch_fused_kernel_speed_binding_scales_time() {
     };
 
     let make_graph = || {
-        let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+        let mut fused_graph = fused_def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
         let (amount_node, amount_field) = match retarget.get(&("amount_value".to_string(), "value".to_string())) {
             Some((target_node_id, field)) => (
                 fused_graph
@@ -2829,7 +2829,7 @@ fn watercolor_fused_kernel_animates_over_time() {
 
     let FusedDef { def: fused_def, .. } =
         super::install::fuse_canonical_def(&def, &registry).expect("Watercolor is fusable once flattened");
-    let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+    let mut fused_graph = fused_def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
 
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
@@ -4037,7 +4037,7 @@ fn render_def_capture_node_host(
         registry,
         HandleScope::Global,
         BoundaryHandling::Standalone,
-    )
+    &crate::node_graph::mesh_change::PreparedMeshRules::default())
     .ok()?;
     let plan = compile(&graph).ok()?;
     let target_inst = *inst.id_map.get(&pick(def))?;
@@ -4116,7 +4116,7 @@ fn render_def_capture_array(
         registry,
         HandleScope::Global,
         BoundaryHandling::Standalone,
-    )
+    &crate::node_graph::mesh_change::PreparedMeshRules::default())
     .ok()?;
     let plan = compile(&graph).ok()?;
     let target_inst = *inst.id_map.get(&pick(def))?;
@@ -4695,7 +4695,7 @@ fn fused_quarter_res_chain_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -4703,7 +4703,7 @@ fn fused_quarter_res_chain_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the quarter-res chain fuses");
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -4757,7 +4757,7 @@ fn fused_control_wired_param_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -4765,7 +4765,7 @@ fn fused_control_wired_param_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the control-wired region fuses");
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -4825,7 +4825,7 @@ fn fused_fanout_region_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
@@ -4833,7 +4833,7 @@ fn fused_fanout_region_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the fan-out region fuses");
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.mix"), "out");
@@ -4895,7 +4895,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
     // Unfused: all three atoms dispatch; the fragment runs its synthesized kernel.
-    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -4908,7 +4908,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
         !fdef.nodes.iter().any(|n| n.type_id == "node.exposure"),
         "gain must be absorbed into the fused kernel"
     );
-    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.wgsl_compute"), "dst");

@@ -623,6 +623,11 @@ impl PresetRuntime {
                             // every member folded into `view.def` has
                             // `relight == false`.
                             None,
+                            // The segment sidecar is keyed by generated
+                            // node id in the same `c{i}.`-prefixed
+                            // address space as `view.def`'s node ids
+                            // (design §3.3), so it forwards as-is.
+                            &view.mesh_rules,
                         )
                     else {
                         // Near-unreachable: compile_segment_view verified the def
@@ -876,12 +881,19 @@ impl PresetRuntime {
             } else {
                 (prev_node, prev_out_port)
             };
+            // Design §3.3: the spliced def and its mesh-rule sidecar travel
+            // together. A fused card's sidecar is keyed by the fused def's
+            // generated node ids; an unfused/edited def has none (empty map
+            // is correct only when fusion did not occur). The canonical
+            // fallback always carries the canonical (empty) sidecar.
+            let mesh_rules = &view.mesh_rules;
             let splice_result = match splice_def_into_chain(
                 &mut graph,
                 card_input,
                 splice_def,
                 primitives,
                 relight_params,
+                mesh_rules,
             ) {
                 Some(r) => r,
                 None => {
@@ -900,6 +912,7 @@ impl PresetRuntime {
                         &base_view.canonical_def,
                         primitives,
                         relight_params,
+                        &base_view.mesh_rules,
                     ) {
                         Some(r) => r,
                         None => {

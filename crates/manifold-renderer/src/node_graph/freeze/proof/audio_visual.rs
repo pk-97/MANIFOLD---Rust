@@ -17,7 +17,7 @@ struct AudioGraph {
 impl AudioGraph {
     fn new(device: &std::sync::Arc<GpuDevice>, def: EffectGraphDef, input: &GpuTexture) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
-        let graph = def.into_graph(&registry).expect("audio graph loads");
+        let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("audio graph loads");
         let plan = compile(&graph).expect("audio graph compiles");
         let source = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
         let final_node = find_node(&graph, "system.final_output");
