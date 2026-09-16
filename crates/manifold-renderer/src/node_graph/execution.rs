@@ -19,7 +19,8 @@ use crate::layer_skin::LayerSkinRegistry;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
-use crate::node_graph::execution_plan::{ExecutionPlan, ExecutionStep, ResourceId};
+use crate::node_graph::execution_plan::{CompiledMeshRevisionRule, ExecutionPlan, ExecutionStep, ResourceId};
+use crate::node_graph::mesh_change::{MeshAspect, MeshRevision};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
@@ -64,6 +65,11 @@ pub(crate) fn resolve_dims(
 /// stabilises after the first frame: slots allocated for frame 0's peak
 /// intermediates are reused for every subsequent frame at the same graph
 /// topology.
+/// SCENE_MODIFIER_RT_DESIGN.md §3.2 — one recorded dependency snapshot
+/// entry: `(input resource, watched aspect, value seen at the output's
+/// last commit)`.
+type MeshDepSnapshot = (ResourceId, crate::node_graph::mesh_change::MeshAspect, u64);
+
 pub struct Executor {
     backend: Box<dyn Backend>,
     /// Scratch buffer reused across steps to avoid per-step allocation.
@@ -257,6 +263,38 @@ pub struct Executor {
     /// stopping the declaration returns the slot to ready. Read side:
     /// [`crate::node_graph::bindings::NodeInputs::slot_content_ready`].
     slot_pending: Vec<bool>,
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-LOGICAL-resource mesh
+    /// revisions, indexed by `ResourceId`, sized to the plan's resource
+    /// count at the plan-shape reset below. This is the authority; the
+    /// per-slot `slot_mesh_revisions` is only its published snapshot, so
+    /// pool reuse can never hand one logical resource another's revision
+    /// (a recycled slot gets whatever its NEW resource publishes).
+    mesh_revisions: Vec<crate::node_graph::mesh_change::MeshRevision>,
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-resource mesh pending
+    /// flags, indexed by `ResourceId`: the producing step's declared
+    /// pending OR any wired input's pending, so a pending source remains
+    /// pending through deformers, fusion, and scene bundles and no AS
+    /// work may consume it.
+    mesh_pending: Vec<bool>,
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-resource dependency
+    /// snapshots for `Dependencies` rules, indexed by `ResourceId`:
+    /// the `(input resource, watched aspect, last-seen value)` triples
+    /// recorded at the output's last commit. A missing snapshot (first
+    /// commit) counts as changed — a fresh token is issued.
+    mesh_dep_snapshots: Vec<Option<Box<[MeshDepSnapshot]>>>,
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — the executor's single
+    /// monotonically increasing mesh revision counter. Tokens are unique
+    /// within this executor's `rebuild_epoch`; a new epoch (new
+    /// `Executor`) starts its own counter, and consumers already fold
+    /// the epoch into any cross-executor comparison (the
+    /// `slot_generations` precedent).
+    mesh_revision_counter: u64,
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-physical-slot published
+    /// mesh revision snapshot, indexed by `Slot.0`. Written at the same
+    /// choke point as `slot_generations` from the logical
+    /// `mesh_revisions`. Read side:
+    /// [`crate::node_graph::bindings::NodeInputs::mesh_revision`].
+    slot_mesh_revisions: Vec<crate::node_graph::mesh_change::MeshRevision>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — per-step
     /// "last frame's param-driven alias" state: `(aliased-from resource,
     /// destination slot, in-resource's write generation at alias time)`,
@@ -435,6 +473,11 @@ impl Executor {
             resource_epoch: ahash::AHashMap::default(),
             node_declared_unchanged: Vec::new(),
             slot_pending: Vec::new(),
+            mesh_revisions: Vec::new(),
+            mesh_pending: Vec::new(),
+            mesh_dep_snapshots: Vec::new(),
+            mesh_revision_counter: 0,
+            slot_mesh_revisions: Vec::new(),
             slot_generations: Vec::new(),
             alias_propagation_state: Vec::new(),
             rebuild_epoch: NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -663,6 +706,23 @@ impl Executor {
     pub(crate) fn resource_content_ready(&self, resource: ResourceId) -> bool {
         self.backend.slot_for(resource).is_some_and(|slot|
             !self.slot_pending.get(slot.0 as usize).copied().unwrap_or(false))
+    }
+
+    /// Test-only read of the logical per-resource mesh revision — the
+    /// §3.2 authority state the slot snapshot is published from.
+    #[cfg(test)]
+    pub(crate) fn mesh_revision_of_res(
+        &self,
+        res: ResourceId,
+    ) -> crate::node_graph::mesh_change::MeshRevision {
+        self.mesh_revisions.get(res.0 as usize).copied().unwrap_or_default()
+    }
+
+    /// Test-only read of the logical per-resource mesh pending flag —
+    /// the producer's declaration OR any wired input's pending.
+    #[cfg(test)]
+    pub(crate) fn mesh_pending_of(&self, res: ResourceId) -> bool {
+        self.mesh_pending.get(res.0 as usize).copied().unwrap_or(false)
     }
 
     pub fn backend(&self) -> &dyn Backend {
@@ -908,6 +968,149 @@ impl Executor {
     /// slot count grows to "max over all branches ever selected"
     /// rather than "max over currently-selected branches," which is
     /// the right tradeoff for live-perform mode switches.
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: commit mesh revisions for one
+    /// step's `MeshVertex`-layout outputs at the single output-commit
+    /// choke point (the `slot_generations` bump site). `wrote` is the
+    /// step's actual-write signal (`!node_declared_unchanged`): a memo/
+    /// hoist/unchanged skip retains tokens while still refreshing the
+    /// published slot snapshot below, so pool rebinds never leave the
+    /// slot reading another resource's revision. Token rules per output:
+    /// content revises on every actual write (a new positions token
+    /// therefore always implies content); topology/positions follow the
+    /// compiled rule — `Written` takes the fresh token, `Fixed` retains,
+    /// `Dependencies` compares the watched input aspects against the
+    /// snapshot recorded at the output's last commit (a missing snapshot
+    /// counts as changed). Pending is the producer's own declaration OR
+    /// any wired input's pending — a pending source stays pending
+    /// through the mesh lineage and no AS work may consume it.
+    ///
+    /// Alias safety: the texture-only alias paths above never carry
+    /// `Array(MeshVertex)` resources, and in-place array I/O needs no
+    /// captured-input special case because the LOGICAL per-resource
+    /// state is the authority — dependency reads hit `mesh_revisions`,
+    /// never the slot snapshot the output's publish overwrites.
+    fn commit_mesh_revisions(&mut self, plan: &ExecutionPlan, step: &ExecutionStep, wrote: bool) {
+        for &(_, res) in &step.outputs {
+            let idx = res.0 as usize;
+            let Some(rule) = plan.mesh_rule(res) else { continue };
+            if idx >= self.mesh_revisions.len() {
+                continue; // defensive: sized at the plan-shape reset
+            }
+
+            let declared = self
+                .backend
+                .slot_for(res)
+                .and_then(|s| self.slot_pending.get(s.0 as usize).copied())
+                .unwrap_or(false);
+            let input_pending = step.inputs.iter().any(|&(_, r)| {
+                self.mesh_pending.get(r.0 as usize).copied().unwrap_or(false)
+                    || self
+                        .backend
+                        .slot_for(r)
+                        .and_then(|s| self.slot_pending.get(s.0 as usize).copied())
+                        .unwrap_or(false)
+            });
+            self.mesh_pending[idx] = declared || input_pending;
+
+            if wrote {
+                self.mesh_revision_counter += 1;
+                let token = self.mesh_revision_counter;
+                let old = self.mesh_revisions[idx];
+                let topology = match &rule.topology {
+                    CompiledMeshRevisionRule::Written => token,
+                    CompiledMeshRevisionRule::Fixed => old.topology,
+                    CompiledMeshRevisionRule::Dependencies(deps) => {
+                        if self.mesh_deps_changed(idx, deps) { token } else { old.topology }
+                    }
+                };
+                let positions = match &rule.positions {
+                    CompiledMeshRevisionRule::Written => token,
+                    CompiledMeshRevisionRule::Fixed => old.positions,
+                    CompiledMeshRevisionRule::Dependencies(deps) => {
+                        if self.mesh_deps_changed(idx, deps) { token } else { old.positions }
+                    }
+                };
+                self.mesh_revisions[idx] =
+                    MeshRevision { topology, positions, content: token };
+                self.record_mesh_dep_snapshot(idx, rule);
+            }
+
+            // Publish the logical revision into the physical-slot
+            // snapshot (same growth pattern as `slot_generations`).
+            if let Some(slot) = self.backend.slot_for(res) {
+                let s = slot.0 as usize;
+                if self.slot_mesh_revisions.len() <= s {
+                    self.slot_mesh_revisions.resize(s + 1, MeshRevision::default());
+                }
+                self.slot_mesh_revisions[s] = self.mesh_revisions[idx];
+            }
+        }
+    }
+
+    /// §3.2 dependency comparison: true when any watched `(resource,
+    /// aspect)` value differs from the snapshot recorded at the output's
+    /// last commit. A missing snapshot (first commit) is changed.
+    fn mesh_deps_changed(
+        &self,
+        out_idx: usize,
+        deps: &[(ResourceId, MeshAspect)],
+    ) -> bool {
+        let Some(stored) = &self.mesh_dep_snapshots[out_idx] else { return true };
+        deps.iter().any(|&(r, a)| {
+            let current = self.mesh_revisions[r.0 as usize].aspect(a);
+            stored
+                .iter()
+                .find(|&&(sr, sa, _)| sr == r && sa == a)
+                .is_none_or(|&(_, _, sv)| sv != current)
+        })
+    }
+
+    /// §3.2: record the union of both rules' dependencies with their
+    /// current values. Reuses the existing allocation once it matches
+    /// the required length — the dependency set is plan-fixed, so only
+    /// the first commit allocates.
+    fn record_mesh_dep_snapshot(
+        &mut self,
+        out_idx: usize,
+        rule: &crate::node_graph::execution_plan::CompiledMeshOutputRule,
+    ) {
+        let top_deps: &[(ResourceId, MeshAspect)] = match &rule.topology {
+            CompiledMeshRevisionRule::Dependencies(d) => d,
+            _ => &[],
+        };
+        let pos_deps: &[(ResourceId, MeshAspect)] = match &rule.positions {
+            CompiledMeshRevisionRule::Dependencies(d) => d,
+            _ => &[],
+        };
+        let mut needed = top_deps.len();
+        for &(r, a) in pos_deps {
+            if !top_deps.contains(&(r, a)) {
+                needed += 1;
+            }
+        }
+        if needed == 0 {
+            self.mesh_dep_snapshots[out_idx] = None;
+            return;
+        }
+        // Disjoint field borrows: read current values from
+        // `mesh_revisions` while writing the snapshot box.
+        let revisions = &self.mesh_revisions;
+        let slot = &mut self.mesh_dep_snapshots[out_idx];
+        if slot.as_ref().is_none_or(|s| s.len() != needed) {
+            *slot = Some(vec![(ResourceId(0), MeshAspect::Content, 0); needed].into_boxed_slice());
+        }
+        let buf = slot.as_mut().expect("just ensured");
+        let mut n = 0;
+        for &(r, a) in top_deps.iter().chain(pos_deps.iter()) {
+            if buf[..n].iter().any(|&(sr, sa, _)| sr == r && sa == a) {
+                continue;
+            }
+            buf[n] = (r, a, revisions[r.0 as usize].aspect(a));
+            n += 1;
+        }
+        debug_assert_eq!(n, needed, "snapshot union size must match the pre-count");
+    }
+
     fn execute_frame_inner(
         &mut self,
         graph: &mut Graph,
@@ -931,6 +1134,14 @@ impl Executor {
             self.node_declared_unchanged.resize(plan.steps().len(), false);
             self.alias_propagation_state.clear();
             self.alias_propagation_state.resize_with(plan.steps().len(), || None);
+            // SCENE_MODIFIER_RT_DESIGN.md §3.2: (re)size mesh revision
+            // state to the plan's resources. Zeroed revisions are
+            // conservative: no stored comparison can match, so the first
+            // commit after a reshape always issues fresh tokens.
+            self.mesh_revisions
+                .resize(plan.resource_count(), crate::node_graph::mesh_change::MeshRevision::default());
+            self.mesh_pending.resize(plan.resource_count(), false);
+            self.mesh_dep_snapshots.resize_with(plan.resource_count(), || None);
         }
         // D5: reset every frame (not sticky like `step_memo`) — a node
         // must re-declare on every frame it wants to skip; the executor
@@ -1367,7 +1578,8 @@ impl Executor {
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
-                            .with_pending(&self.slot_pending);
+                            .with_pending(&self.slot_pending)
+                            .with_mesh_revisions(&self.slot_mesh_revisions);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -1550,6 +1762,14 @@ impl Executor {
                     }
                 }
             }
+
+            // SCENE_MODIFIER_RT_DESIGN.md §3.2: commit mesh revisions at
+            // the same choke point. Token issuance honors the same skip
+            // condition (`node_declared_unchanged` retains revisions);
+            // the slot snapshot publish runs either way so pool rebinds
+            // never leave a slot reading another resource's revision.
+            let mesh_wrote = !self.node_declared_unchanged[idx];
+            self.commit_mesh_revisions(plan, step, mesh_wrote);
 
             // Memoized-dataflow bookkeeping: this step executed, so every
             // output resource is new content — bump its epoch so consumers'
@@ -1770,7 +1990,8 @@ impl Executor {
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
-                    .with_pending(&self.slot_pending);
+                    .with_pending(&self.slot_pending)
+                    .with_mesh_revisions(&self.slot_mesh_revisions);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,
@@ -3524,6 +3745,304 @@ mod tests {
 
         let log = log.lock().unwrap();
         assert_eq!(log.as_slice(), &[false, false, true]);
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — executor mesh revision and
+    /// pending semantics over `Array(MeshVertex)` resources, proven
+    /// without a GPU. The fixture drives per-frame declarations through
+    /// shared flags, the same shape the production gated sources
+    /// (gltf_mesh_source and friends) use.
+    mod mesh_revision_tests {
+        use super::*;
+        use crate::generators::mesh_common::MeshVertex;
+        use crate::node_graph::mesh_change::{MeshOutputRule, MeshRevisionRule};
+        use crate::node_graph::ports::ArrayType;
+
+        fn mesh_ty() -> PortType {
+            PortType::Array(ArrayType::of_known::<MeshVertex>())
+        }
+
+        /// `MeshVertex`-layout producer/consumer with scripted
+        /// write/unchanged/pending declarations and an optional
+        /// `mesh_output_rule` override (None = trait default, the
+        /// conservative `Written`/`Written`).
+        struct MeshNode {
+            type_id: EffectNodeType,
+            inputs: Vec<NodeInput>,
+            outputs: Vec<NodeOutput>,
+            declare_unchanged: Arc<Mutex<bool>>,
+            declare_pending: Arc<Mutex<bool>>,
+            rule: Option<MeshOutputRule<'static>>,
+        }
+
+        impl MeshNode {
+            fn producer(rule: Option<MeshOutputRule<'static>>) -> (Self, Arc<Mutex<bool>>, Arc<Mutex<bool>>) {
+                let declare_unchanged = Arc::new(Mutex::new(false));
+                let declare_pending = Arc::new(Mutex::new(false));
+                (
+                    Self {
+                        type_id: EffectNodeType::new("test.mesh_node"),
+                        inputs: vec![],
+                        outputs: vec![output("out", mesh_ty())],
+                        declare_unchanged: declare_unchanged.clone(),
+                        declare_pending: declare_pending.clone(),
+                        rule,
+                    },
+                    declare_unchanged,
+                    declare_pending,
+                )
+            }
+
+            fn consumer(rule: Option<MeshOutputRule<'static>>) -> (Self, Arc<Mutex<bool>>, Arc<Mutex<bool>>) {
+                let declare_unchanged = Arc::new(Mutex::new(false));
+                let declare_pending = Arc::new(Mutex::new(false));
+                (
+                    Self {
+                        type_id: EffectNodeType::new("test.mesh_consumer"),
+                        inputs: vec![input("in", mesh_ty(), true)],
+                        outputs: vec![output("out", mesh_ty())],
+                        declare_unchanged: declare_unchanged.clone(),
+                        declare_pending: declare_pending.clone(),
+                        rule,
+                    },
+                    declare_unchanged,
+                    declare_pending,
+                )
+            }
+
+            /// Terminal mesh consumer: an input and no outputs. Plan
+            /// compile prunes UNCONSUMED outputs from a step, so every
+            /// producer under test needs its mesh output wired somewhere
+            /// to keep its resource in the plan.
+            fn sink() -> Self {
+                Self {
+                    type_id: EffectNodeType::new("test.mesh_sink"),
+                    inputs: vec![input("in", mesh_ty(), true)],
+                    outputs: vec![],
+                    declare_unchanged: Arc::new(Mutex::new(false)),
+                    declare_pending: Arc::new(Mutex::new(false)),
+                    rule: None,
+                }
+            }
+        }
+
+        impl EffectNode for MeshNode {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                crate::node_graph::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &self.inputs
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &self.outputs
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
+                self.rule.unwrap_or(MeshOutputRule {
+                    topology: MeshRevisionRule::Written,
+                    positions: MeshRevisionRule::Written,
+                })
+            }
+            fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+                if *self.declare_unchanged.lock().unwrap() {
+                    ctx.mark_outputs_unchanged();
+                }
+                if *self.declare_pending.lock().unwrap() {
+                    ctx.mark_outputs_pending();
+                }
+            }
+        }
+
+        /// The single output resource of `node`, the way production
+        /// callers address plan resources.
+        fn out_res(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
+            plan.steps()
+                .iter()
+                .find(|s| s.node == node)
+                .and_then(|s| s.outputs.first())
+                .map(|&(_, res)| res)
+                .expect("node must have one output resource")
+        }
+
+        fn fixed_rule() -> MeshOutputRule<'static> {
+            MeshOutputRule {
+                topology: MeshRevisionRule::Fixed,
+                positions: MeshRevisionRule::Fixed,
+            }
+        }
+
+        /// A1: an undeclared mesh writer compiles to the conservative
+        /// `Written`/`Written` rule and every actual write issues fresh
+        /// topology/positions/content tokens.
+        #[test]
+        fn mesh_change_default_is_conservative() {
+            let (node, _unchanged, _pending) = MeshNode::producer(None);
+            let mut g = Graph::new();
+            let n = g.add_node(Box::new(node));
+            let sink = g.add_node(Box::new(MeshNode::sink()));
+            g.connect((n, "out"), (sink, "in")).unwrap();
+            let plan = compile(&g).unwrap();
+            let res = out_res(&plan, n);
+
+            let compiled = plan.mesh_rule(res).expect("MeshVertex output must compile a mesh rule");
+            assert!(
+                matches!(compiled.topology, CompiledMeshRevisionRule::Written)
+                    && matches!(compiled.positions, CompiledMeshRevisionRule::Written),
+                "undeclared writer must compile to Written/Written, got {compiled:?}"
+            );
+
+            let mut exec = Executor::with_mock();
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let r1 = exec.mesh_revision_of_res(res);
+            assert!(r1.topology > 0 && r1.positions > 0 && r1.content > 0);
+            assert_eq!(
+                (r1.topology, r1.positions, r1.content),
+                (r1.content, r1.content, r1.content),
+                "a default-rule write issues one shared token for all three aspects"
+            );
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let r2 = exec.mesh_revision_of_res(res);
+            assert!(
+                r2.topology > r1.topology
+                    && r2.positions > r1.positions
+                    && r2.content > r1.content,
+                "every actual write must revise all three aspects, got {r1:?} then {r2:?}"
+            );
+        }
+
+        /// A1: a truthful `mark_outputs_unchanged` retains all three
+        /// revisions on skipped frames; the next actual write issues
+        /// fresh tokens again.
+        #[test]
+        fn mesh_change_written_honors_unchanged_declaration() {
+            let (node, unchanged, _pending) = MeshNode::producer(None);
+            let mut g = Graph::new();
+            let n = g.add_node(Box::new(node));
+            let sink = g.add_node(Box::new(MeshNode::sink()));
+            g.connect((n, "out"), (sink, "in")).unwrap();
+            let plan = compile(&g).unwrap();
+            let res = out_res(&plan, n);
+
+            let mut exec = Executor::with_mock();
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let written = exec.mesh_revision_of_res(res);
+            assert!(written.topology > 0, "first write must issue a token");
+
+            *unchanged.lock().unwrap() = true;
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let skipped = exec.mesh_revision_of_res(res);
+            assert_eq!(
+                skipped, written,
+                "truthful unchanged declaration must retain all three revisions"
+            );
+
+            *unchanged.lock().unwrap() = false;
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let rewritten = exec.mesh_revision_of_res(res);
+            assert!(
+                rewritten.topology > written.topology
+                    && rewritten.positions > written.positions
+                    && rewritten.content > written.content,
+                "the write after a skip must issue fresh tokens, got {written:?} then {rewritten:?}"
+            );
+        }
+
+        /// A1: a producer's pending declaration reaches every downstream
+        /// mesh consumer's logical resource and persists while declared;
+        /// pending is independent of revision tokens — revisions keep
+        /// advancing while the resource stays pending.
+        #[test]
+        fn mesh_change_pending_propagates_through_mesh_lineage() {
+            let (src, _src_unchanged, src_pending) = MeshNode::producer(None);
+            let (consumer, _c_unchanged, _c_pending) = MeshNode::consumer(None);
+            let mut g = Graph::new();
+            let a = g.add_node(Box::new(src));
+            let b = g.add_node(Box::new(consumer));
+            let sink = g.add_node(Box::new(MeshNode::sink()));
+            g.connect((a, "out"), (b, "in")).unwrap();
+            g.connect((b, "out"), (sink, "in")).unwrap();
+            let plan = compile(&g).unwrap();
+            let (res_a, res_b) = (out_res(&plan, a), out_res(&plan, b));
+
+            let mut exec = Executor::with_mock();
+            *src_pending.lock().unwrap() = true;
+            exec.execute_frame(&mut g, &plan, frame_time());
+            assert!(exec.mesh_pending_of(res_a), "producer's own declaration must set its pending");
+            assert!(
+                exec.mesh_pending_of(res_b),
+                "pending must propagate to the downstream mesh consumer"
+            );
+            let rev_frame1 = exec.mesh_revision_of_res(res_a);
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            assert!(
+                exec.mesh_pending_of(res_a) && exec.mesh_pending_of(res_b),
+                "pending must persist across frames while the producer keeps declaring"
+            );
+            assert!(
+                exec.mesh_revision_of_res(res_a).topology > rev_frame1.topology,
+                "pending is independent of revision tokens: actual writes still advance revisions"
+            );
+
+            *src_pending.lock().unwrap() = false;
+            exec.execute_frame(&mut g, &plan, frame_time());
+            assert!(
+                !exec.mesh_pending_of(res_a) && !exec.mesh_pending_of(res_b),
+                "stopping the declaration must return the whole lineage to ready"
+            );
+        }
+
+        /// A1: a `Fixed`/`Fixed` rule keeps topology and position
+        /// revisions across actual writes while content — which always
+        /// revises on a write — still advances.
+        #[test]
+        fn mesh_change_fixed_rule_retains_revisions() {
+            let (node, _unchanged, _pending) = MeshNode::producer(Some(fixed_rule()));
+            let mut g = Graph::new();
+            let n = g.add_node(Box::new(node));
+            let sink = g.add_node(Box::new(MeshNode::sink()));
+            g.connect((n, "out"), (sink, "in")).unwrap();
+            let plan = compile(&g).unwrap();
+            let res = out_res(&plan, n);
+
+            let compiled = plan.mesh_rule(res).expect("MeshVertex output must compile a mesh rule");
+            assert!(
+                matches!(compiled.topology, CompiledMeshRevisionRule::Fixed)
+                    && matches!(compiled.positions, CompiledMeshRevisionRule::Fixed),
+                "override must compile to Fixed/Fixed, got {compiled:?}"
+            );
+
+            let mut exec = Executor::with_mock();
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let r1 = exec.mesh_revision_of_res(res);
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let r2 = exec.mesh_revision_of_res(res);
+            assert_eq!(
+                (r2.topology, r2.positions),
+                (r1.topology, r1.positions),
+                "Fixed aspects must retain their revisions across writes, got {r1:?} then {r2:?}"
+            );
+            assert!(
+                r2.content > r1.content,
+                "content always revises on an actual write, got {r1:?} then {r2:?}"
+            );
+
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let r3 = exec.mesh_revision_of_res(res);
+            assert_eq!(
+                (r3.topology, r3.positions),
+                (r1.topology, r1.positions),
+                "Fixed aspects must stay retained over repeated writes, got {r1:?} then {r3:?}"
+            );
+            assert!(r3.content > r2.content);
+        }
     }
 
 }

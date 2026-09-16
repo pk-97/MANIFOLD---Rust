@@ -70,6 +70,18 @@ pub struct MeshRevision {
     pub content: u64,
 }
 
+impl MeshRevision {
+    /// The counter for one aspect — the executor's dependency snapshots
+    /// index by aspect rather than duplicating the match everywhere.
+    pub fn aspect(&self, aspect: MeshAspect) -> u64 {
+        match aspect {
+            MeshAspect::Topology => self.topology,
+            MeshAspect::Positions => self.positions,
+            MeshAspect::Content => self.content,
+        }
+    }
+}
+
 /// Owned form of [`MeshRevisionRule`] for prepared/fused graphs. See
 /// design §3.3 — fusion composes rules at preparation time, so fused
 /// declarations own their dependency lists (`Cow::Owned` names).
