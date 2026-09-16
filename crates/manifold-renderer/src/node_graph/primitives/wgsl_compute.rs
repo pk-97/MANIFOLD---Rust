@@ -318,6 +318,13 @@ struct DerivedUniformMember {
     /// `camera_ext_N` port name to read for this member's recompute, if its
     /// derived uniforms are sourced from a wired Camera external.
     camera_port: Option<String>,
+    /// Member array port → the name it carries inside this fused kernel
+    /// (`src_<e>` for a wired external, the `count` sentinel for a
+    /// region-internal register), from the marker's trailing
+    /// `<member_port>=<fused_port>` pairs. Ports absent from this map
+    /// (unwired optionals) degrade to length 0 in the recompute, matching
+    /// the unfused `run()`.
+    array_ports: Vec<(String, String)>,
 }
 
 impl UniformMemberType {
@@ -1062,6 +1069,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                 words: m.words,
                 type_id: m.type_id.clone(),
                 camera_port: m.camera_port.clone(),
+                array_ports: m.array_ports.clone(),
             });
         }
         if !excluded.is_empty() {
@@ -1638,6 +1646,7 @@ struct RawDerivedUniformMarker {
     words: u32,
     type_id: String,
     camera_port: Option<String>,
+    array_ports: Vec<(String, String)>,
 }
 
 /// Scan for `// @derived_uniform_member:` markers (emitted by
@@ -1649,10 +1658,16 @@ fn extract_derived_uniform_markers(source: &str) -> Vec<RawDerivedUniformMarker>
     let stripped = strip_block_comments(source);
     let mut markers = Vec::new();
     for line in stripped.lines() {
-        if let Some(Marker::DerivedUniformMember { first_field, words, type_id, camera_port }) =
+        if let Some(Marker::DerivedUniformMember { first_field, words, type_id, camera_port, array_ports }) =
             Marker::parse(line)
         {
-            markers.push(RawDerivedUniformMarker { first_field, words, type_id, camera_port });
+            markers.push(RawDerivedUniformMarker {
+                first_field,
+                words,
+                type_id,
+                camera_port,
+                array_ports,
+            });
         }
     }
     markers
@@ -2305,10 +2320,29 @@ impl EffectNode for WgslCompute {
                             crate::node_graph::freeze::derived_uniform_registry::DerivedUniformContext {
                                 frame: &ctx.time,
                                 camera: camera.as_ref(),
+                                // Fused kernels rename inputs to `src_<k>`, so
+                                // resolve the member port through the marker's
+                                // map first. The `count` sentinel (a
+                                // region-internal register source) is the
+                                // kernel's own element count — the register
+                                // exists for exactly the dispatched range.
+                                // Ports with no mapping (unwired optionals)
+                                // fall through to the raw name, which misses
+                                // → 0, the unfused `run()` degrade.
                                 array_len: &|port| {
-                                    ctx.inputs
-                                        .array(port)
-                                        .map(|b| (b.size / 4) as u32)
+                                    let mapped = d
+                                        .array_ports
+                                        .iter()
+                                        .find(|(member, _)| member == port)
+                                        .map(|(_, fused)| fused.as_str());
+                                    match mapped {
+                                        Some("count") => self.buffer_element_count(ctx),
+                                        Some(fused) => ctx
+                                            .inputs
+                                            .array(fused)
+                                            .map(|b| (b.size / 4) as u32),
+                                        None => ctx.inputs.array(port).map(|b| (b.size / 4) as u32),
+                                    }
                                 },
                             };
                         let Some(values) =
@@ -2502,53 +2536,62 @@ impl WgslCompute {
             return Some((tex.width.div_ceil(wx), tex.height.div_ceil(wy.max(1)), 1));
         }
         // Then array output (atomic accum or particle in/out).
-        if let Some(buf) = ctx.outputs.array(port) {
-            // Look up the declared item_size for this port from our
-            // introspected outputs list — the WGSL storage struct's
-            // byte span. count = buf_bytes / item_size = number of
-            // items the shader needs to process. The shader's
-            // `arrayLength(&items)` returns the same value, so the
-            // early-return at `i >= arrayLength(...)` lines up with
-            // the dispatch geometry: no wasted workgroups, no missed
-            // items. Falls back to the 4-byte-stride default if the
-            // port type isn't an Array(...) somehow — defensive only.
-            //
-            // The earlier `buf.size() / 4` formula treated every
-            // 4-byte slot as one work item, which dispatched 16×
-            // more workgroups than needed for a 64-byte Particle
-            // buffer (8M particles → 500K workgroups). That
-            // exceeded Apple Silicon's per-dim threadgroup grid
-            // limit (~64K-128K depending on family) and silently
-            // dropped the dispatch — the FluidSim2D seed_pattern
-            // bug manifested as "uniform updates fine, edges fire
-            // fine, but the seed buffer never receives the
-            // shader's writes."
-            let item_size = self
-                .outputs
-                .iter()
-                .find(|p| p.name == port)
-                .and_then(|p| match p.ty {
-                    PortType::Array(at) => Some(at.item_size),
-                    _ => None,
-                })
-                .unwrap_or(4)
-                .max(1);
-            let mut count = (buf.size() as u32) / item_size;
-            // `// @dispatch_count_param`: cap the grid at the live element
-            // count (the fused particle integrators' `active_count`) — the
-            // kernel guards the same bound, so threads past it are pure waste.
-            // Missing/unwired param falls back to the capacity dispatch.
-            if let Some(p) = &self.dispatch_count_param {
-                let live = ctx.scalar_or_param(p, f32::MAX);
-                if live.is_finite() {
-                    // Floor of one group: a zero live count still dispatches one
-                    // (immediately-guarded) group rather than a zero-dim grid.
-                    count = count.min(live.max(0.0).round() as u32).max(1);
-                }
+        let count = self.buffer_element_count(ctx)?;
+        Some((count.div_ceil(wx), wy.max(1), wz.max(1)))
+    }
+
+    /// Live element count of the buffer (storage-array) dispatch port — the
+    /// output array's byte size over its introspected item stride, capped by
+    /// `// @dispatch_count_param`'s live count. Shared by `compute_dispatch`
+    /// and the derived-uniform recompute's `count` sentinel (a region-internal
+    /// register source's length IS the kernel's element count).
+    fn buffer_element_count(&self, ctx: &EffectNodeContext<'_, '_>) -> Option<u32> {
+        let port = self.dispatch_port.as_deref()?;
+        let buf = ctx.outputs.array(port)?;
+        // Look up the declared item_size for this port from our
+        // introspected outputs list — the WGSL storage struct's
+        // byte span. count = buf_bytes / item_size = number of
+        // items the shader needs to process. The shader's
+        // `arrayLength(&items)` returns the same value, so the
+        // early-return at `i >= arrayLength(...)` lines up with
+        // the dispatch geometry: no wasted workgroups, no missed
+        // items. Falls back to the 4-byte-stride default if the
+        // port type isn't an Array(...) somehow — defensive only.
+        //
+        // The earlier `buf.size() / 4` formula treated every
+        // 4-byte slot as one work item, which dispatched 16×
+        // more workgroups than needed for a 64-byte Particle
+        // buffer (8M particles → 500K workgroups). That
+        // exceeded Apple Silicon's per-dim threadgroup grid
+        // limit (~64K-128K depending on family) and silently
+        // dropped the dispatch — the FluidSim2D seed_pattern
+        // bug manifested as "uniform updates fine, edges fire
+        // fine, but the seed buffer never receives the
+        // shader's writes."
+        let item_size = self
+            .outputs
+            .iter()
+            .find(|p| p.name == port)
+            .and_then(|p| match p.ty {
+                PortType::Array(at) => Some(at.item_size),
+                _ => None,
+            })
+            .unwrap_or(4)
+            .max(1);
+        let mut count = (buf.size() as u32) / item_size;
+        // `// @dispatch_count_param`: cap the grid at the live element
+        // count (the fused particle integrators' `active_count`) — the
+        // kernel guards the same bound, so threads past it are pure waste.
+        // Missing/unwired param falls back to the capacity dispatch.
+        if let Some(p) = &self.dispatch_count_param {
+            let live = ctx.scalar_or_param(p, f32::MAX);
+            if live.is_finite() {
+                // Floor of one group: a zero live count still dispatches one
+                // (immediately-guarded) group rather than a zero-dim grid.
+                count = count.min(live.max(0.0).round() as u32).max(1);
             }
-            return Some((count.div_ceil(wx), wy.max(1), wz.max(1)));
         }
-        None
+        Some(count)
     }
 }
 

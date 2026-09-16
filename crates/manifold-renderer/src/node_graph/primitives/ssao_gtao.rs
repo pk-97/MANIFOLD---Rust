@@ -221,6 +221,7 @@ fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ssao_gtao",
+        array_ports: &[],
         recompute: |ctx| ctx.camera.map(derive_view_scalars).map(|v| v.to_vec()),
     }
 }

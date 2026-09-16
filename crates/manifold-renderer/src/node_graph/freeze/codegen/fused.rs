@@ -379,7 +379,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     out.push_str("struct Params {\n");
     out.push_str(&struct_body);
     out.push_str("}\n\n");
-    emit_derived_uniform_markers(&mut out, region);
+    emit_derived_uniform_markers(&mut out, region, false);
 
     // --- which region-node indices are VIRTUAL (chain members recomputed inside
     // a stencil fetch). cs_main never evaluates them and never pre-reads their

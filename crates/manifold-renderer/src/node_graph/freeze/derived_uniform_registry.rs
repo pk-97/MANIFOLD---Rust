@@ -69,6 +69,13 @@ pub struct DerivedUniformContext<'a> {
 /// never panics.
 pub struct DerivedUniformRecompute {
     pub type_id: &'static str,
+    /// Array input ports the recompute consults via `DerivedUniformContext::
+    /// array_len` (the mesh deformers' `weights`). The fused-uniform marker
+    /// emits a member-port → fused-port mapping for exactly these ports —
+    /// fused kernels rename inputs to `src_<k>`, so a name-based lookup
+    /// misses without the mapping. `&[]` for purely time/camera-derived
+    /// members (no marker mapping emitted, byte-identical WGSL).
+    pub array_ports: &'static [&'static str],
     pub recompute: RecomputeFn,
 }
 inventory::collect!(DerivedUniformRecompute);
@@ -77,11 +84,12 @@ inventory::collect!(DerivedUniformRecompute);
 /// clippy's `type_complexity` — see [`DerivedUniformRecompute::recompute`]).
 pub type RecomputeFn = fn(&DerivedUniformContext<'_>) -> Option<Vec<f32>>;
 
-fn registry() -> &'static AHashMap<&'static str, RecomputeFn> {
-    static REGISTRY: OnceLock<AHashMap<&'static str, RecomputeFn>> = OnceLock::new();
+fn registry() -> &'static AHashMap<&'static str, (&'static [&'static str], RecomputeFn)> {
+    static REGISTRY: OnceLock<AHashMap<&'static str, (&'static [&'static str], RecomputeFn)>> =
+        OnceLock::new();
     REGISTRY.get_or_init(|| {
         inventory::iter::<DerivedUniformRecompute>()
-            .map(|e| (e.type_id, e.recompute))
+            .map(|e| (e.type_id, (e.array_ports, e.recompute)))
             .collect()
     })
 }
@@ -95,13 +103,21 @@ pub fn has_recompute(type_id: &str) -> bool {
     registry().contains_key(type_id)
 }
 
+/// The array ports this type's recompute consults (`&[]` when unregistered or
+/// purely time/camera-derived). The fused codegen reads this to emit the
+/// member-port → fused-port mapping on the `// @derived_uniform_member:`
+/// marker (fused kernels rename inputs to `src_<k>`).
+pub fn array_ports(type_id: &str) -> &'static [&'static str] {
+    registry().get(type_id).map(|e| e.0).unwrap_or(&[])
+}
+
 /// Recompute `type_id`'s derived-uniform values for this frame. `None` if
 /// unregistered (should not happen for a member that passed the install-time
 /// [`has_recompute`] gate — the fused kernel would not carry this member's
 /// `@derived_uniform_member` marker otherwise) or if the registered fn itself
 /// declines (e.g. no camera wired).
 pub fn recompute(type_id: &str, ctx: &DerivedUniformContext<'_>) -> Option<Vec<f32>> {
-    registry().get(type_id).and_then(|f| f(ctx))
+    registry().get(type_id).and_then(|(_, f)| f(ctx))
 }
 
 #[cfg(test)]

@@ -76,6 +76,19 @@ crate::primitive! {
     derived_uniforms: ["weights_len:u32"],
 }
 
+// Per-frame recompute for a FUSED region's derived block: `weights_len` is
+// the live element count of the wired `weights` buffer (0 when unwired — the
+// body's `idx < weights_len` gate degrades every weight to 1.0, exactly what
+// `run()` does). The marker carries the member→fused-port mapping for the
+// `weights` port (fused kernels rename inputs to `src_<k>`).
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.voxelize_mesh",
+        array_ports: &["weights"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
+    }
+}
+
 impl Primitive for VoxelizeMesh {
     /// Output `out` is sized to match input `in` — voxelization is a
     /// per-vertex transform, no expansion.

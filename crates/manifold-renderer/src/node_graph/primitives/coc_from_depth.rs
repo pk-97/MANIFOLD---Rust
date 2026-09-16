@@ -160,6 +160,7 @@ fn derive_lens_scalars(cam: &Camera) -> [f32; 5] {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.coc_from_depth",
+        array_ports: &[],
         recompute: |ctx| ctx.camera.map(derive_lens_scalars).map(|v| v.to_vec()),
     }
 }

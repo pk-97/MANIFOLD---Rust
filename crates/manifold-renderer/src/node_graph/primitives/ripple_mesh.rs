@@ -120,6 +120,9 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ripple_mesh",
+        // The recompute consults the `weights` array input's live length —
+        // the marker carries the member→fused-port mapping for this port.
+        array_ports: &["weights"],
         recompute: |ctx| {
             let weights_len = (ctx.array_len)("weights").unwrap_or(0);
             Some(vec![weights_len as f32, ctx.frame.seconds.0 as f32])

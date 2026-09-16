@@ -99,6 +99,7 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.flatten_to_camera_plane",
+        array_ports: &[],
         recompute: |ctx| ctx.camera.map(|c| vec![c.fwd[0], c.fwd[1], c.fwd[2]]),
     }
 }

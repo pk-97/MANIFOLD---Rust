@@ -79,6 +79,19 @@ crate::primitive! {
     wgsl_includes: [NOISE_COMMON],
 }
 
+// Per-frame recompute for a FUSED region's derived block: `weights_len` is
+// the live element count of the wired `weights` buffer (0 when unwired — the
+// body's `idx < weights_len` gate degrades every weight to 1.0, exactly what
+// `run()` does). The marker carries the member→fused-port mapping for the
+// `weights` port (fused kernels rename inputs to `src_<k>`).
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.shatter_mesh",
+        array_ports: &["weights"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
+    }
+}
+
 impl Primitive for ShatterMesh {
     /// Output `out` is sized to match input `in` — shatter is a per-vertex-slot
     /// transform, no expansion.

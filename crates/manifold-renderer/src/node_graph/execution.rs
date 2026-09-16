@@ -4417,23 +4417,15 @@ mod tests {
         ///    compilation reads straight off the node.
         /// 2. The real preset graph, embedded VERBATIM (bundled group JSON)
         ///    in a production-shaped host def (mesh inputs + scalar values +
-        ///    render tail — the shape a scene render view gives it). When
-        ///    that graph fuses, the composed §3.3 sidecar must keep the
-        ///    refit-eligible class.
+        ///    render tail — the shape a scene render view gives it). The
+        ///    host MUST fuse now: every weights-carrying deformer has a
+        ///    registered `weights_len` recompute whose marker carries the
+        ///    member→fused-port mapping, and buffer regions admit the mask's
+        ///    unwired optional coincident `weights` (BUG-7wwy + BUG-jwyh).
+        ///    The composed §3.3 sidecar must keep the refit-eligible class.
         ///
-        /// Reality today: the host does NOT fuse — `mesh_spatial_mask` has
-        /// an OPTIONAL `weights` array input the preset leaves unwired, and
-        /// buffer regions reject any unwired array input (the
-        /// `required/gather/buffer input unwired` gate in freeze/region.rs
-        /// `build_region`); the declared-rule deformers (wave/morph) are
-        /// separately kept unfused by the missing `weights_len` derived-
-        /// uniform recompute (the fail-closed gate in
-        /// `fuse_canonical_def_masked`). The declared-rule composition is
-        /// proven at the composition seam in freeze/install.rs
-        /// (`mesh_change_compose_region_rules_wave_morph`), the fused-path
-        /// executor parity on the fusing ripple chain in
-        /// `mesh_change_fused_rules_match_unfused`. When those gaps close,
-        /// the `Some` arm below becomes the active assertion.
+        /// The fused-path executor parity on the fusing chain is proven on
+        /// GPU in `tests/gpu_proofs/rt_dynamic_fusion.rs`.
         #[test]
         fn mesh_change_surface_waves_fused_sidecar_is_refit_eligible() {
             use crate::node_graph::bundled_presets::bundled_preset_json;
@@ -4518,10 +4510,17 @@ mod tests {
             });
             let host_def: EffectGraphDef = serde_json::from_value(host).unwrap();
 
-            if let Some(fused) = fuse_canonical_def(&host_def, &registry) {
-                // The mask fusion gap closed — the composed sidecar must keep
-                // the refit-eligible class (Topology-only Dependencies,
-                // Written positions), same as the unfused declarations above.
+            // The mask fusion gap is closed (BUG-7wwy + BUG-jwyh): the host
+            // must fuse, and the composed sidecar must keep the
+            // refit-eligible class (Topology-only Dependencies, Written
+            // positions), same as the unfused declarations above.
+            let fused = fuse_canonical_def(&host_def, &registry).expect(
+                "the production-shaped Surface Waves host must fuse: every \
+                 weights-carrying deformer has a registered weights_len \
+                 recompute and buffer regions admit the mask's unwired \
+                 optional coincident weights (BUG-7wwy, BUG-jwyh)",
+            );
+            {
                 let rules: Vec<&PreparedMeshOutputRule> =
                     fused.mesh_rules.values().flatten().collect();
                 assert!(
