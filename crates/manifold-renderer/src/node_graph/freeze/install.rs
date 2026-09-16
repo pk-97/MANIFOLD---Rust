@@ -65,6 +65,7 @@ use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, Region
 use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
+use crate::node_graph::mesh_change::PreparedMeshRules;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::param_binding::ParamConvert;
@@ -103,7 +104,7 @@ pub fn freeze_enabled() -> bool {
 ///
 /// Note there is no `has_override` veto: an edited/created graph is no longer
 /// special-cased to unfused. Its *content* is fused on demand via
-/// [`fused_view_for`] / [`fused_generator_def_for`], keyed by the def itself —
+/// [`fused_view_for`] / [`fused_generator_view_for`], keyed by the def itself —
 /// so it fuses on editor-close exactly like a shipped shape. While the editor is
 /// open it's the watched target, which `is_watched` already keeps unfused.
 pub fn should_render_fused(is_watched: bool) -> bool {
@@ -158,6 +159,7 @@ fn fuse_view_parts(
     let FusedDef {
         def: fused_def,
         retarget,
+        mesh_rules,
         ..
     } = fused;
     Some(LoadedPresetView {
@@ -169,6 +171,7 @@ fn fuse_view_parts(
         // fuse) onto the fused node — the same retarget the static bindings
         // above already went through.
         fused_retarget: retarget,
+        mesh_rules,
     })
 }
 
@@ -190,6 +193,14 @@ fn fuse_view_parts(
 // future shared-cache upgrade rides along with the background-worker step.
 // ===========================================================================
 
+/// Mesh-rule schema revision for compiled fusion cache keys (design §3.3):
+/// cached fused views/defs/segments carry a `mesh_rules` sidecar, so the key
+/// must move when the sidecar's shape or population policy changes even
+/// though the sidecar is not serialized into the def the key hashes. P2a
+/// populates the sidecar with an empty map everywhere; P2b's rule
+/// composition bumps this.
+const MESH_RULE_SCHEMA: u32 = 1;
+
 /// Structural content key for a def: topology + node configs + baked (non-
 /// exposed) param values. Deterministic because every map in `EffectGraphDef` is
 /// a `BTreeMap` and every list a `Vec`, so `serde_json` is a stable total
@@ -203,6 +214,7 @@ fn fuse_view_parts(
 pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
+    MESH_RULE_SCHEMA.hash(&mut h);
     // Normalize away the purely-cosmetic fields (editor canvas position, node
     // title) before hashing: neither affects the compiled kernel, so a node
     // drag or rename must not perturb the key and force a spurious re-fuse.
@@ -247,6 +259,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
 pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
+    MESH_RULE_SCHEMA.hash(&mut h);
     let mut normalized = def.clone();
     clear_cosmetic_fields(&mut normalized.nodes);
     // Normalize binding metadata for effects only
@@ -413,10 +426,7 @@ fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
 /// generator bindings would lose this metadata at runtime. Effects don't read
 /// bindings from the cached def — they flow through `ResolvedBinding::from_static`
 /// at slot-build time — so effects use `effect_def_content_key`.
-pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDef>> {
-    fused_generator_view_for(def).map(|view| Arc::clone(&view.def))
-}
-
+///
 /// The render definition and authored-leaf uniform routes are one cached
 /// result. Runtime value edits need these routes after members fuse away.
 pub struct FusedGeneratorView {
@@ -425,6 +435,10 @@ pub struct FusedGeneratorView {
     /// Every fused-away authored node, including parameterless atoms, mapped
     /// to the generated fused region node that evaluates it.
     pub node_retarget: AHashMap<NodeId, NodeId>,
+    /// Composed mesh-revision rules for the fused graph, keyed by generated
+    /// node id (design §3.3). P2a populates an empty map; rule composition
+    /// lands in P2b. Not serialized — owned by this prepared view only.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 pub fn fused_generator_view_for(def: &EffectGraphDef) -> Option<Arc<FusedGeneratorView>> {
@@ -654,6 +668,10 @@ pub struct SegmentView {
     /// user-binding repoint map. Chain build prefixes a user binding's target
     /// with its card's namespace before the lookup.
     pub retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// Composed mesh-revision rules for the fused segment, keyed by generated
+    /// node id with the cards' existing `c{i}.` prefixes (design §3.3). P2a
+    /// populates an empty map; rule composition lands in P2b. Not serialized.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 /// Lookup outcome for a segment this frame.
@@ -688,6 +706,7 @@ pub fn chain_fusion_enabled() -> bool {
 pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
+    MESH_RULE_SCHEMA.hash(&mut h);
     cards.len().hash(&mut h);
     for (def, _) in cards {
         effect_def_content_key(def).hash(&mut h);
@@ -1123,11 +1142,12 @@ pub(crate) fn compile_segment_view(
         card_bindings.push(retarget_bindings(&prefixed, &fused.retarget, &surviving)?);
     }
 
-    let FusedDef { def, retarget, .. } = fused;
+    let FusedDef { def, retarget, mesh_rules, .. } = fused;
     Some(Arc::new(SegmentView {
         def,
         card_bindings,
         retarget,
+        mesh_rules,
     }))
 }
 
@@ -1160,40 +1180,32 @@ pub(crate) fn seed_segment_cache_for_test(
 // modulating after its atom folds into a kernel.
 // ===========================================================================
 
-/// Fused generator def for a generator *type* — the canonical (shipped) shape.
-/// Thin wrapper over the content-keyed [`fused_generator_def_for`]: parse the
+/// Fused generator view for a generator *type* — the canonical (shipped) shape.
+/// Thin wrapper over the content-keyed [`fused_generator_view_for`]: parse the
 /// bundled preset and route it through the same cache edited generator defs use.
 /// `None` for any generator whose canonical graph has no fusable region, or whose
 /// modulation bindings can't be retargeted (stranded) — either way it renders
 /// unfused, always correct. Mirrors [`fused_view_by_id`].
-pub fn fused_generator_def_by_id(id: &PresetTypeId) -> Option<Arc<EffectGraphDef>> {
+pub fn fused_generator_view_by_id(id: &PresetTypeId) -> Option<Arc<FusedGeneratorView>> {
     let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
     let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
-    fused_generator_def_for(&def)
+    fused_generator_view_for(&def)
 }
 
 /// Fuse a generator's canonical def + retarget its `preset_metadata.bindings`
 /// onto the fused nodes. `None` if nothing fuses or a binding strands. The result
 /// loads through the same `from_def` path as the unfused preset — only the def
 /// changed.
-pub fn fuse_generator_def(
+pub fn fuse_generator_view(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-) -> Option<EffectGraphDef> {
-    fuse_generator_def_masked(def, registry, None)
+) -> Option<FusedGeneratorView> {
+    fuse_generator_view_masked(def, registry, None)
 }
 
-/// [`fuse_generator_def`] with the perf gate's region mask — see
+/// [`fuse_generator_view`] with the perf gate's region mask — see
 /// [`fuse_canonical_def_masked`].
-pub(crate) fn fuse_generator_def_masked(
-    def: &EffectGraphDef,
-    registry: &PrimitiveRegistry,
-    region_mask: Option<&[bool]>,
-) -> Option<EffectGraphDef> {
-    fuse_generator_view_masked(def, registry, region_mask).map(|view| Arc::unwrap_or_clone(view.def))
-}
-
-fn fuse_generator_view_masked(
+pub(crate) fn fuse_generator_view_masked(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
@@ -1222,6 +1234,7 @@ fn fuse_generator_view_masked(
         def: Arc::new(out_def),
         retarget: fused.retarget,
         node_retarget: fused.node_retarget,
+        mesh_rules: PreparedMeshRules::default(),
     })
 }
 
@@ -1336,6 +1349,11 @@ pub(crate) struct FusedDef {
     /// of these ports to the SAME space; any drift rejects the fusion (renders
     /// unfused), so element-space preservation is an installed invariant.
     pub expected_spaces: Vec<(u32, String, ElementSpace)>,
+    /// Composed mesh-revision rules for the fused graph, keyed by generated
+    /// node id (design §3.3). P2a populates an empty map; rule composition
+    /// lands in P2b. Not serialized — owned by the prepared views built from
+    /// this def.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 /// `node.array_feedback`'s stable type id — the head of a buffer in-place
@@ -2227,7 +2245,7 @@ pub(crate) fn fuse_canonical_def_masked(
         wires: new_wires,
     };
 
-    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces })
+    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces, mesh_rules: PreparedMeshRules::default() })
 }
 
 /// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
@@ -2235,7 +2253,7 @@ pub(crate) fn fuse_canonical_def_masked(
 /// but a fused node can still be a well-formed shader the GRAPH compiler rejects
 /// — e.g. a buffer region whose `var<storage, read_write>` output introspects as
 /// a required-but-unwired aliased input port. The real entry points
-/// ([`fuse_view_parts`] / [`fuse_generator_def`]) run this on their final def and fall
+/// ([`fuse_view_parts`] / [`fuse_generator_view`]) run this on their final def and fall
 /// back to unfused on any failure, so a def that can't build never installs.
 /// (Not called from [`fuse_canonical_def`] itself — the install unit tests drive
 /// it with synthetic fixtures that intentionally don't fully compile.) Runs once
@@ -3079,8 +3097,7 @@ mod tests {
         let view = fused_generator_view_for(&def).expect("the generator fuses");
         let cached = fused_generator_view_for(&def).expect("cached view");
         assert!(Arc::ptr_eq(&view, &cached));
-        let fused = fused_generator_def_for(&def).expect("legacy def accessor");
-        assert!(Arc::ptr_eq(&fused, &view.def));
+        let fused = view.def.clone();
         let (target, field) = view.retarget.get(&("gain".into(), "gain".into()))
             .expect("value edit route survives caching");
         let fused_id = NodeId::new("fused_region_0");
@@ -3142,8 +3159,9 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let reg = registry();
-        let fused = fuse_generator_def(&def, &reg)
+        let fused_view = fuse_generator_view(&def, &reg)
             .expect("an enum-binding-targeted member must fuse, not classify gate");
+        let fused = &fused_view.def;
         let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
         assert_eq!(meta.bindings.len(), 1);
         match &meta.bindings[0].target {
@@ -3163,7 +3181,7 @@ mod tests {
         // the check that originally rejected EnumRound against the fused Int
         // field. A load error here means the rewrite regressed.
         use crate::node_graph::persistence::EffectGraphDefExt;
-        fused
+        (**fused)
             .clone()
             .into_graph(&reg)
             .expect("fused def with retargeted enum binding must load");

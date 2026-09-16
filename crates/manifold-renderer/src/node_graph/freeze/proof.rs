@@ -2191,7 +2191,7 @@ fn fusion_coverage_baseline() {
 /// points. Guards the flatten-before-fuse fix against regression.
 #[test]
 fn grouped_presets_fuse_through_entry_points() {
-    use super::install::{fused_generator_def_by_id, fused_view_by_id};
+    use super::install::{fused_generator_view_by_id, fused_view_by_id};
     use manifold_core::PresetTypeId;
 
     assert!(
@@ -2200,7 +2200,7 @@ fn grouped_presets_fuse_through_entry_points() {
          fuse_canonical_def must flatten before partitioning"
     );
     assert!(
-        fused_generator_def_by_id(&PresetTypeId::new("FluidSim2D")).is_some(),
+        fused_generator_view_by_id(&PresetTypeId::new("FluidSim2D")).is_some(),
         "FluidSim2D is a grouped generator with a fusable region once flattened — \
          the generator fuse path must flatten too"
     );
@@ -2215,7 +2215,7 @@ fn grouped_presets_fuse_through_entry_points() {
 /// "does the live fused generator even run" class across the whole library.
 #[test]
 fn every_fused_generator_executes_one_frame() {
-    use super::install::fused_generator_def_by_id;
+    use super::install::fused_generator_view_by_id;
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
     use std::panic::AssertUnwindSafe;
@@ -2242,13 +2242,13 @@ fn every_fused_generator_executes_one_frame() {
     let mut fused_count = 0usize;
 
     for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
-        let Some(fused_def) = fused_generator_def_by_id(&type_id) else {
+        let Some(fused_view) = fused_generator_view_by_id(&type_id) else {
             continue;
         };
         fused_count += 1;
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let mut g = PresetRuntime::from_def_with_device(
-                (*fused_def).clone(),
+                (*fused_view.def).clone(),
                 &registry,
                 device.arc(),
                 w,
@@ -2293,7 +2293,7 @@ fn every_fused_generator_executes_one_frame() {
 /// generator render + binding-application path the live registry uses.
 #[test]
 fn fused_generator_renders_like_unfused() {
-    use super::install::fuse_generator_def;
+    use super::install::fuse_generator_view;
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
@@ -2323,7 +2323,7 @@ fn fused_generator_renders_like_unfused() {
         ]
     }"#;
     let canonical: EffectGraphDef = serde_json::from_str(json).unwrap();
-    let fused_def = fuse_generator_def(&canonical, &registry).expect("the generator fuses");
+    let fused_view = fuse_generator_view(&canonical, &registry).expect("the generator fuses");
 
     let ctx = PresetContext {
         time: 0.0,
@@ -2355,7 +2355,7 @@ fn fused_generator_renders_like_unfused() {
     };
 
     let unfused = render(canonical);
-    let fused = render(fused_def);
+    let fused = render((*fused_view.def).clone());
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
@@ -2384,7 +2384,7 @@ fn fused_generator_renders_like_unfused() {
 /// `out`) through the register.
 #[test]
 fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
-    use super::install::fuse_generator_def;
+    use super::install::fuse_generator_view;
     use super::region::{NodeClass, classify_node, partition_regions};
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
@@ -2426,7 +2426,7 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
         "voronoi (head) + hash_field_by_seed, in topo order"
     );
 
-    let fused_def = fuse_generator_def(&canonical, &registry).expect("the pair fuses");
+    let fused_view = fuse_generator_view(&canonical, &registry).expect("the pair fuses");
 
     let ctx = PresetContext {
         time: 0.0,
@@ -2458,7 +2458,7 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
     };
 
     let unfused = render(canonical);
-    let fused = render(fused_def);
+    let fused = render((*fused_view.def).clone());
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
@@ -2893,7 +2893,7 @@ fn watercolor_fused_kernel_animates_over_time() {
 /// add a downstream pointwise node to meet MIN_REGION_LEN.
 #[test]
 fn flow_field_noise_fused_region_animates_over_time() {
-    use super::install::fuse_generator_def;
+    use super::install::fuse_generator_view;
     use crate::node_graph::primitives::{FlowFieldNoise, Gain};
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
@@ -2983,10 +2983,10 @@ fn flow_field_noise_fused_region_animates_over_time() {
         ],
     };
 
-    let fused_def = fuse_generator_def(&def, &registry).expect("flow_field_noise + gain fuses");
+    let fused_view = fuse_generator_view(&def, &registry).expect("flow_field_noise + gain fuses");
 
     let render = |t: f64| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(fused_def.clone(), &registry, device.arc(), w, h, FMT, None)
+        let mut g = PresetRuntime::from_def_with_device((*fused_view.def).clone(), &registry, device.arc(), w, h, FMT, None)
             .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "flow-time-out");
         let ctx = PresetContext {
@@ -3040,7 +3040,7 @@ fn flow_field_noise_fused_region_animates_over_time() {
 /// the residual — fused renders identically to unfused (0/160000 instance diffs).
 #[test]
 fn digitalplants_buffer_fusion_renders_like_unfused() {
-    use super::install::fuse_generator_def;
+    use super::install::fuse_generator_view;
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
@@ -3054,8 +3054,8 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     // The whole point: DigitalPlants' GPU per-instance chain must fuse into a
     // buffer kernel that BUILDS (the aliased-output model). If this is None the
     // buffer-fusion activation regressed.
-    let fused_def =
-        fuse_generator_def(&canonical, &registry).expect("DigitalPlants buffer region fuses + builds");
+    let fused_view =
+        fuse_generator_view(&canonical, &registry).expect("DigitalPlants buffer region fuses + builds");
 
     let ctx = |t: f64| PresetContext {
         time: t,
@@ -3089,7 +3089,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     };
 
     let unfused = render(canonical);
-    let fused = render(fused_def);
+    let fused = render((*fused_view.def).clone());
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
@@ -3143,7 +3143,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
 /// — zero cost on stage.)
 #[test]
 fn fluidsim_buffer_fusion_renders_like_unfused() {
-    use super::install::fuse_generator_def;
+    use super::install::fuse_generator_view;
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
@@ -3156,7 +3156,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     )
     .expect("FluidSim2D preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    let fused_def = fuse_generator_def(&canonical, &registry)
+    let fused_view = fuse_generator_view(&canonical, &registry)
         .expect("FluidSim2D fuses + builds (derived-uniform buffer region)");
 
     // The build's whole point: a derived-uniform particle atom must actually have
@@ -3168,7 +3168,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // derived-uniform member (euler_step's `dt_scaled`, the diffuse/anti-clump
     // forces' `frame_count`). If no fused kernel carries the marker, the
     // derived-uniform region stayed unfused and this test would pass vacuously.
-    let has_derived_uniform_member = fused_def.nodes.iter().any(|n| {
+    let has_derived_uniform_member = fused_view.def.nodes.iter().any(|n| {
         n.type_id == "node.wgsl_compute"
             && n.wgsl_source.as_deref().is_some_and(|s| {
                 s.lines()
@@ -3188,7 +3188,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // standalone atoms' 1.37 at show scale). The render diff below then proves
     // the capped kernel leaves the pool tail bit-identical to unfused.
     assert!(
-        fused_def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| {
+        fused_view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| {
             s.lines().any(|l| matches!(
                 Marker::parse(l),
                 Some(Marker::DispatchCountParam { field }) if field == "n0_active_count"
@@ -3206,7 +3206,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // consumer's bandwidth AND broke the gaussian blur's bilinear tap-pair
     // trick (fp32 textures aren't filterable on Apple GPUs). No rgba32float
     // dst may appear; the q16 wrapper must.
-    let fused_texture_kernels: Vec<&str> = fused_def
+    let fused_texture_kernels: Vec<&str> = fused_view.def
         .nodes
         .iter()
         .filter(|n| n.type_id == "node.wgsl_compute")
@@ -3236,7 +3236,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // textures only. Assert the gradient produced NO fused repeat-sampler
     // kernel — if one appears, the boundary rule regressed.
     assert!(
-        !fused_def.nodes.iter().any(|n| {
+        !fused_view.def.nodes.iter().any(|n| {
             n.type_id == "node.wgsl_compute"
                 && n.wgsl_source
                     .as_deref()
@@ -3277,7 +3277,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     };
 
     let unfused = render(canonical);
-    let fused = render(fused_def);
+    let fused = render((*fused_view.def).clone());
 
     let differ = TextureDiff::new(&device);
     // Buffer fusion is bit-exact on the particle math (f32 registers, no f16
@@ -3311,7 +3311,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
 /// chaotic sim only stays locked if the fused sample is the same sample).
 #[test]
 fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
-    use super::install::fuse_generator_def;
+    use super::install::fuse_generator_view;
     use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
@@ -3324,17 +3324,17 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     )
     .expect("FluidSim3D preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    let fused_def = fuse_generator_def(&canonical, &registry)
+    let fused_view = fuse_generator_view(&canonical, &registry)
         .expect("FluidSim3D fuses + builds (3D-sampler buffer region)");
 
     assert!(
-        !fused_def.nodes.iter().any(|n| n.type_id == "node.sample_volume_at_particles"),
+        !fused_view.def.nodes.iter().any(|n| n.type_id == "node.sample_volume_at_particles"),
         "the 3D force sampler must be absorbed into a fused region — a surviving \
          standalone node means the Texture3D gate regressed and the integrator \
          is fragmented again"
     );
     assert!(
-        fused_def.nodes.iter().any(|n| {
+        fused_view.def.nodes.iter().any(|n| {
             n.type_id == "node.wgsl_compute"
                 && n.wgsl_source.as_deref().is_some_and(|s| s.contains("texture_3d<f32>"))
         }),
@@ -3373,7 +3373,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     };
 
     let unfused = render(canonical);
-    let fused = render(fused_def);
+    let fused = render((*fused_view.def).clone());
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-3, 1.0e-2);
@@ -3680,13 +3680,14 @@ fn oilyfluid_inloop_f16_fusion_matches_unfused() {
     // OilyFluid is GROUPED; the raw harness instantiates directly, so flatten
     // first (the live loader and the fuse entry both do).
     let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     // The tier actually engaged: the fused def must carry a q16-quantized
     // kernel (an in-loop f16 member fused) — else this oracle is vacuous.
     assert!(
-        fused
+        fused_view
+            .def
             .nodes
             .iter()
             .any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("fn q16"))),
@@ -3712,7 +3713,7 @@ fn oilyfluid_inloop_f16_fusion_matches_unfused() {
         )
         .expect("unfused renders");
         let (f, fd) = render_def_capture_node_host(
-            &fused, &registry, &device.arc(), w, h, frames, &pick_tail, true,
+            &fused_view.def, &registry, &device.arc(), w, h, frames, &pick_tail, true,
         )
         .expect("fused renders");
         assert_eq!(ud, fd, "composite dims match (frames={frames})");
@@ -3753,18 +3754,19 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
     let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
     shrink_particle_pool(&mut def, 100_000); // no pools today; suite-parallelism hygiene
     let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     // Non-vacuous: pack_channels must be fused AWAY (it only fuses through the
     // unwired-optional path), and some fused kernel must carry the literal
     // unwired argument the new codegen emits.
     assert!(
-        !fused.nodes.iter().any(|n| n.type_id == "node.pack_rgba"),
+        !fused_view.def.nodes.iter().any(|n| n.type_id == "node.pack_rgba"),
         "pack_channels must fold into the sobel-tail region"
     );
     assert!(
-        fused
+        fused_view
+            .def
             .nodes
             .iter()
             .any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("vec4<f32>(0.0)"))),
@@ -3793,7 +3795,7 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
         )
         .expect("unfused renders");
         let (f, fd) = render_def_capture_node_host(
-            &fused, &registry, &device.arc(), w, h, frames, &pick_fused, true,
+            &fused_view.def, &registry, &device.arc(), w, h, frames, &pick_fused, true,
         )
         .expect("fused renders");
         assert_eq!(ud, fd, "region output dims match (frames={frames})");
@@ -3847,7 +3849,7 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
     // in parallel with the other FluidSim renders.
     shrink_particle_pool(&mut def, 100_000);
 
-    let Some(fused) = crate::node_graph::freeze::install::fuse_generator_def(&def, &registry)
+    let Some(fused_view) = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
     else {
         // The install verify refused the fusion (space drift it can't stamp
         // away). Refusal renders unfused — correct, just no speedup. Fail
@@ -3858,7 +3860,7 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
     // Sanity: the flow-field pointwise pair actually folded away.
     for node_id in ["grad_scaled", "grad_rotate"] {
         assert!(
-            !fused.nodes.iter().any(|n| n.node_id.as_str() == node_id),
+            !fused_view.def.nodes.iter().any(|n| n.node_id.as_str() == node_id),
             "`{node_id}` should be fused away"
         );
     }
@@ -3888,7 +3890,7 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
         let (u, ud) =
             render_def_capture_node(&def, &registry, &device.arc(), w, h, frames, &by_unfused)
                 .expect("unfused captures");
-        let (f, fd) = render_def_capture_node(&fused, &registry, &device.arc(), w, h, frames, &by_fused)
+        let (f, fd) = render_def_capture_node(&fused_view.def, &registry, &device.arc(), w, h, frames, &by_fused)
             .expect("fused captures");
         assert_eq!(ud, fd, "fused region must resolve to the member's grid (frames={frames})");
         let differ = TextureDiff::new(&device);
@@ -3958,10 +3960,10 @@ fn particletext_fp32_flow_field_diag() {
         }
     }
 
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
-    let fused_spaces = resolve_output_spaces(&fused, &registry).expect("fused resolves");
-    for n in &fused.nodes {
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
+    let fused_spaces = resolve_output_spaces(&fused_view.def, &registry).expect("fused resolves");
+    for n in &fused_view.def.nodes {
         if n.type_id == "node.wgsl_compute" && n.handle.as_deref().is_some_and(|h| h.starts_with("fused_region")) {
             for port in ["dst", "dst_0", "dst_1"] {
                 if let Some(s) = fused_spaces.get(&(n.id, port.to_string())) {
@@ -4181,8 +4183,8 @@ fn particletext_production_region_diag() {
         meta.bindings.clear();
     }
     println!("bindings stripped: {strip_arg}");
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     let ctx = |t: f64| PresetContext {
         time: t,
@@ -4222,7 +4224,7 @@ fn particletext_production_region_diag() {
         (g, target)
     };
     let (u_rt, _ut) = run(def);
-    let (f_rt, _ft) = run(fused);
+    let (f_rt, _ft) = run((*fused_view.def).clone());
 
     let collect = |rt: &PresetRuntime| -> BTreeMap<(String, String), (u32, u32)> {
         rt.dump_textures_all()
@@ -4287,8 +4289,8 @@ fn particletext_raw_composite_diag() {
     )
     .expect("ParticleText bundled");
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     // The surviving node feeding final_output exists identically on both
     // sides — preview it as the composite.
@@ -4312,7 +4314,7 @@ fn particletext_raw_composite_diag() {
                 &def, &registry, &device.arc(), w, h, frames, &pick_tail, host_params,
             );
             let f = render_def_capture_node_host(
-                &fused, &registry, &device.arc(), w, h, frames, &pick_tail, host_params,
+                &fused_view.def, &registry, &device.arc(), w, h, frames, &pick_tail, host_params,
             );
             match (u, f) {
                 (Some((u, ud)), Some((f, fd))) if ud == fd => {
@@ -4346,8 +4348,8 @@ fn particletext_buffer_region_diag() {
     )
     .expect("ParticleText bundled");
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     // Unfused: the chain tail (apply_inject) writes the loop buffer. Fused:
     // the in-place region writes the SAME loop buffer — its consumers read
@@ -4362,7 +4364,7 @@ fn particletext_buffer_region_diag() {
     };
     for frames in [1u32, 2, 8] {
         let u = render_def_capture_array(&def, &registry, &device.arc(), w, h, frames, &pick_loop);
-        let f = render_def_capture_array(&fused, &registry, &device.arc(), w, h, frames, &pick_loop);
+        let f = render_def_capture_array(&fused_view.def, &registry, &device.arc(), w, h, frames, &pick_loop);
         match (u, f) {
             (Some(u), Some(f)) => {
                 if u.len() != f.len() {
@@ -4413,12 +4415,12 @@ fn particletext_canonical_fused_diag() {
     )
     .expect("ParticleText bundled");
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     // Composite, canonical def: fused vs unfused.
     let u = render_generator_8_frames(def.clone(), &registry, &device.arc(), w, h);
-    let f = render_generator_8_frames(fused.clone(), &registry, &device.arc(), w, h);
+    let f = render_generator_8_frames((*fused_view.def).clone(), &registry, &device.arc(), w, h);
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-3, 1.0e-2);
     println!(
@@ -4440,7 +4442,7 @@ fn particletext_canonical_fused_diag() {
         d
     };
     let u2 = render_generator_8_frames(strip(def.clone()), &registry, &device.arc(), w, h);
-    let f2 = render_generator_8_frames(strip(fused.clone()), &registry, &device.arc(), w, h);
+    let f2 = render_generator_8_frames(strip((*fused_view.def).clone()), &registry, &device.arc(), w, h);
     let r2 = differ.compare(&device, &u2.texture, &f2.texture, 1.0e-3, 1.0e-2);
     println!(
         "canonical composite, bindings stripped: max_abs={} over={}/{} ({:.4})",
@@ -4477,7 +4479,7 @@ fn particletext_canonical_fused_diag() {
             continue;
         };
         let Some((ft, fd)) =
-            render_def_capture_node(&fused, &registry, &device.arc(), w, h, frames, &pick_fused)
+            render_def_capture_node(&fused_view.def, &registry, &device.arc(), w, h, frames, &pick_fused)
         else {
             println!("frames={frames}: fused text capture failed");
             continue;
@@ -4516,8 +4518,8 @@ fn particletext_fp32_region_output_diag() {
             .unwrap();
         node.output_formats.insert("out".to_string(), "rgba32float".to_string());
     }
-    let fused =
-        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_view =
+        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("fuses");
 
     let by_handle = |h: &'static str| {
         move |d: &EffectGraphDef| {
@@ -4548,7 +4550,7 @@ fn particletext_fp32_region_output_diag() {
                 .expect("fused flow-field region")
         };
         let (f, fd) =
-            render_def_capture_node(&fused, &registry, &device.arc(), w, h, frames, &pick_fused)
+            render_def_capture_node(&fused_view.def, &registry, &device.arc(), w, h, frames, &pick_fused)
                 .expect("fused captures");
         println!("frames={frames}: unfused dims={ud:?} fused dims={fd:?}");
         if ud != fd {

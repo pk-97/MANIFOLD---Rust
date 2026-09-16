@@ -1231,9 +1231,9 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
         attribute_def(registry, device, &sampler, &def, &format!("{name} — unfused"));
 
         if is_gen {
-            match install::fused_generator_def_for(&def) {
-                Some(fused) => {
-                    attribute_def(registry, device, &sampler, &fused, &format!("{name} — fused"));
+            match install::fused_generator_view_for(&def) {
+                Some(view) => {
+                    attribute_def(registry, device, &sampler, &view.def, &format!("{name} — fused"));
                 }
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),
             }

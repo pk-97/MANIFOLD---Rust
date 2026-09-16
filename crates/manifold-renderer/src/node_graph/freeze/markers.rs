@@ -378,7 +378,7 @@ mod tests {
     /// the text level, not "compiles" or "renders the same".
     fn capture_all_fused_wgsl() -> String {
         use crate::node_graph::PrimitiveRegistry;
-        use crate::node_graph::freeze::install::{fuse_canonical_def, fuse_generator_def};
+        use crate::node_graph::freeze::install::{fuse_canonical_def, fuse_generator_view};
         use manifold_core::effect_graph_def::EffectGraphDef;
         use manifold_core::preset_def::PresetKind;
 
@@ -418,9 +418,9 @@ mod tests {
                 continue;
             };
             let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else { continue };
-            let Some(fused_def) = fuse_generator_def(&def, &registry) else { continue };
+            let Some(fused_view) = fuse_generator_view(&def, &registry) else { continue };
             let mut nodes: Vec<_> =
-                fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").collect();
+                fused_view.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").collect();
             nodes.sort_by_key(|n| n.id);
             for node in nodes {
                 if let Some(wgsl) = &node.wgsl_source {

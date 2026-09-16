@@ -134,17 +134,18 @@ fn audio_visual_magnitude_db_matches_math_and_fusion() {
         ],
     );
     let registry = PrimitiveRegistry::with_builtin();
-    let fused =
-        super::super::install::fuse_generator_def(&def, &registry).expect("numeric chain fuses");
+    let fused_view =
+        super::super::install::fuse_generator_view(&def, &registry).expect("numeric chain fuses");
     assert!(
-        fused
+        fused_view
+            .def
             .nodes
             .iter()
             .any(|node| node.type_id == "node.wgsl_compute")
     );
     let empty = AudioVisualRegistry::new();
     let mut raw = AudioGraph::new(&device.arc(), def, &input);
-    let mut optimized = AudioGraph::new(&device.arc(), fused, &input);
+    let mut optimized = AudioGraph::new(&device.arc(), (*fused_view.def).clone(), &input);
     let a = raw.render(&device, &empty, 0);
     let b = optimized.render(&device, &empty, 0);
     let expected: Vec<f32> = [0.0, -0.2, -0.4, -0.6]
@@ -233,7 +234,7 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
                 .any(|node| node.type_id == "system.generator_input")
         );
         assert!(!def.nodes.iter().any(|node| node.type_id == "system.source"));
-        let fused = super::super::install::fuse_generator_def(&def, &primitives);
+        let fused_view = super::super::install::fuse_generator_view(&def, &primitives);
         let build = |def| {
             PresetRuntime::from_def_with_device(
                 def,
@@ -247,7 +248,7 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
             .expect("production generator builds")
         };
         let mut raw = build(def);
-        let mut optimized = fused.map(build);
+        let mut optimized = fused_view.map(|view| build((*view.def).clone()));
         let pixels = render_generator(&mut raw, &device, &target.texture, &audio, 0);
         if let Some(optimized) = optimized.as_mut() {
             let optimized_pixels = render_generator(optimized, &device, &target.texture, &audio, 0);

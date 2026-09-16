@@ -4053,7 +4053,7 @@ fn imported_azalea_renders_faithfully_to_png() {
 /// `imported_azalea_renders_faithfully_to_png` (which drives
 /// `PresetRuntime::from_def_with_device` directly) in one load-bearing way:
 /// `is_watched = false` routes through the **on-demand fusion** attempt
-/// (`fused_generator_def_for`) that the raw-def path skips. So this closes
+/// (`fused_generator_view_for`) that the raw-def path skips. So this closes
 /// the last gap — proving the imported graph survives the fuser and renders
 /// through the same code an installed timeline layer hits.
 ///
