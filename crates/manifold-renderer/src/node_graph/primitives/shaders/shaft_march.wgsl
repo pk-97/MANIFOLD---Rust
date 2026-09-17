@@ -17,8 +17,7 @@
 // implementations MUST stay bit-for-bit the same formula (synthesis-drift
 // is the bug class this convention risks — GBUFFER_DESIGN.md section 2 D4).
 fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
-    let range = far / (near - far);
-    return (range * near) / (raw + range);
+    return (near * far) / (near + raw * (far - near));
 }
 
 // Shadow lookup (`shadow_vis`) is forked from render_scene.wgsl's

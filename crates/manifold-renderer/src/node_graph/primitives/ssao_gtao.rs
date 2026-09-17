@@ -675,7 +675,7 @@ mod analytic_sanity {
     /// physically reasonable).
     #[test]
     fn gtao_flat_plane_full_visibility_at_import_fov() {
-        assert_flat_plane_visible(0.9, 0.05, 200.0, 0.5, 0.9802, 2, 0.05);
+        assert_flat_plane_visible(0.9, 0.05, 200.0, 0.5, 0.0198, 2, 0.05);
     }
 
     /// BUG-y5w7: a 90-degree FOV (the worst case measured pre-fix, ~0.6
@@ -685,7 +685,7 @@ mod analytic_sanity {
     /// units of depth for this near/far pair).
     #[test]
     fn gtao_flat_plane_full_visibility_at_90_degree_fov() {
-        assert_flat_plane_visible(std::f32::consts::FRAC_PI_2, 0.1, 1000.0, 0.5, 0.9601, 2, 0.05);
+        assert_flat_plane_visible(std::f32::consts::FRAC_PI_2, 0.1, 1000.0, 0.5, 0.0399, 2, 0.05);
     }
 
     /// BUG-y5w7 regression guard: the ORIGINAL reported regime (radius 5x
@@ -722,7 +722,7 @@ mod corner_sanity {
         // inside the `radius=0.5` world-space range check together with
         // the small lateral offset near the crease) to register as a real
         // occluder rather than get rejected by the range check.
-        let (raw_near, raw_far) = (0.978f32, 0.9802f32);
+        let (raw_near, raw_far) = (0.022f32, 0.0198f32);
         let mut raw = vec![raw_far; (w * h) as usize];
         for y in 0..h {
             for x in step_x..w {
@@ -832,7 +832,7 @@ mod gpu_tests {
             for x in 0..w {
                 let fx = x as f32 / (w.saturating_sub(1).max(1)) as f32;
                 let fy = y as f32 / (h.saturating_sub(1).max(1)) as f32;
-                raw[(y * w + x) as usize] = 0.2 + 0.6 * (0.5 * fx + 0.5 * fy);
+                raw[(y * w + x) as usize] = 0.8 - 0.6 * (0.5 * fx + 0.5 * fy);
             }
         }
         raw

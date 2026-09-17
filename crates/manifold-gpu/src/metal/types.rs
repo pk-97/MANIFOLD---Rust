@@ -396,6 +396,10 @@ unsafe impl Sync for GpuRenderPipeline {}
 /// Created once, set on the render encoder for depth-tested draws.
 pub struct GpuDepthStencilState {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
+    /// Default depth attachment clear for this compare convention. Camera
+    /// reversed-Z states compare Greater and clear to 0; forward shadow
+    /// states compare Less and clear to 1.
+    pub(crate) clear_depth: f64,
 }
 
 unsafe impl Send for GpuDepthStencilState {}

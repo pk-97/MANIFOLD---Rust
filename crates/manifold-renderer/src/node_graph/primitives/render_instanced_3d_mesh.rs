@@ -381,7 +381,7 @@ impl Primitive for RenderInstanced3DMesh {
             self.depth_stencil = Some(
                 gpu.device
                     .create_depth_stencil_state(&manifold_gpu::GpuDepthStencilDesc {
-                        compare: manifold_gpu::GpuCompareFunction::Less,
+                        compare: manifold_gpu::GpuCompareFunction::Greater,
                         write_enabled: true,
                     }),
             );

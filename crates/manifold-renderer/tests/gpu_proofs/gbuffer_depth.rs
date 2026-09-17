@@ -1,5 +1,6 @@
-//! `docs/GBUFFER_DESIGN.md` I2 — `node.render_scene`'s stored `depth`
-//! output equals the CPU oracle (`Camera::project_to_pixel().depth`).
+//! `docs/GBUFFER_DESIGN.md` I2 — `node.render_scene`'s stored reversed-Z
+//! `depth` output equals the CPU oracle (`Camera::project_to_pixel().depth`;
+//! near = 1, far = 0).
 //!
 //! Five known meshes at five depths: a flat quad, rotated 90° about Z
 //! (`node.transform_3d`'s `rot_z`) so its normal points along `+X` instead
@@ -68,6 +69,12 @@ const TILT: f32 = 0.0;
 const FOV_Y: f32 = 0.9;
 const NEAR: f32 = 0.05;
 const FAR: f32 = 200.0;
+/// A production-profile frustum that exposes the precision problem this
+/// proof guards: the hero surfaces are around 23 units from the camera while
+/// the near plane is three orders of magnitude closer.
+const PRECISION_DISTANCE: f32 = 23.0;
+const PRECISION_NEAR: f32 = 0.001;
+const PRECISION_FAR: f32 = 200.0;
 /// `PI/2` radians — rotates the quad's normal from grid_mesh's native `+Y`
 /// to `+X`, directly facing the `orbit=0, tilt=0` camera (which sits on
 /// `+X` looking toward `-X`). See module doc.
@@ -227,6 +234,133 @@ fn sample_r32float(bytes: &[u8], width: u32, x: u32, y: u32) -> f32 {
     f32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]])
 }
 
+fn sample_rgba16f(bytes: &[u8], width: u32, x: u32, y: u32) -> [f32; 4] {
+    let idx = ((y * width + x) * 8) as usize;
+    [
+        f16::from_le_bytes([bytes[idx], bytes[idx + 1]]).to_f32(),
+        f16::from_le_bytes([bytes[idx + 2], bytes[idx + 3]]).to_f32(),
+        f16::from_le_bytes([bytes[idx + 4], bytes[idx + 5]]).to_f32(),
+        f16::from_le_bytes([bytes[idx + 6], bytes[idx + 7]]).to_f32(),
+    ]
+}
+
+/// Two coplanar surfaces at almost the same camera depth. The object slots
+/// are deliberately parameterized so the exact same scene can be rendered in
+/// either draw order; depth testing, rather than port order, must choose the
+/// red surface nearer the camera.
+fn overlapping_depth_scene_json(reverse_draw_order: bool) -> String {
+    let (first_color, second_color, first_pos, second_pos) = if reverse_draw_order {
+        ("green", "red", -0.0005, 0.0005)
+    } else {
+        ("red", "green", 0.0005, -0.0005)
+    };
+    let color = |name: &str| match name {
+        "red" => (1.0, 0.0, 0.0),
+        "green" => (0.0, 1.0, 0.0),
+        _ => unreachable!("only red and green are valid proof materials"),
+    };
+    let (first_r, first_g, first_b) = color(first_color);
+    let (second_r, second_g, second_b) = color(second_color);
+    format!(
+        r#"{{"version":2,"name":"ReversedZDepthPrecision","nodes":[
+        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.grid_mesh","nodeId":"grid","params":{{
+            "max_capacity":{{"type":"Int","value":16}},
+            "resolution_x":{{"type":"Int","value":2}},
+            "resolution_y":{{"type":"Int","value":2}},
+            "size_x":{{"type":"Float","value":10.0}},
+            "size_y":{{"type":"Float","value":10.0}}}}}},
+        {{"id":2,"typeId":"node.make_triangles","nodeId":"tris","params":{{
+            "src_cols":{{"type":"Int","value":2}},
+            "src_rows":{{"type":"Int","value":2}}}}}},
+        {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":0.0}},
+            "tilt":{{"type":"Float","value":0.0}},
+            "distance":{{"type":"Float","value":{PRECISION_DISTANCE}}},
+            "fov_y":{{"type":"Float","value":0.9}},
+            "look_y":{{"type":"Float","value":0.0}},
+            "roll":{{"type":"Float","value":0.0}},
+            "near":{{"type":"Float","value":{PRECISION_NEAR}}},
+            "far":{{"type":"Float","value":{PRECISION_FAR}}}}}}},
+        {{"id":4,"typeId":"node.unlit_material","nodeId":"mat_first","params":{{
+            "color_r":{{"type":"Float","value":{first_r}}},
+            "color_g":{{"type":"Float","value":{first_g}}},
+            "color_b":{{"type":"Float","value":{first_b}}},
+            "color_a":{{"type":"Float","value":1.0}}}}}},
+        {{"id":5,"typeId":"node.unlit_material","nodeId":"mat_second","params":{{
+            "color_r":{{"type":"Float","value":{second_r}}},
+            "color_g":{{"type":"Float","value":{second_g}}},
+            "color_b":{{"type":"Float","value":{second_b}}},
+            "color_a":{{"type":"Float","value":1.0}}}}}},
+        {{"id":6,"typeId":"node.transform_3d","nodeId":"xf_first","params":{{
+            "pos_x":{{"type":"Float","value":{first_pos}}},
+            "rot_z":{{"type":"Float","value":{ROT_Z}}}}}}},
+        {{"id":7,"typeId":"node.transform_3d","nodeId":"xf_second","params":{{
+            "pos_x":{{"type":"Float","value":{second_pos}}},
+            "rot_z":{{"type":"Float","value":{ROT_Z}}}}}}},
+        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":2}},
+            "lights":{{"type":"Int","value":0}}}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
+        ],"wires":[
+        {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
+        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
+        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_1"}},
+        {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
+        {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
+        {{"fromNode":5,"fromPort":"out","toNode":20,"toPort":"material_1"}},
+        {{"fromNode":6,"fromPort":"transform","toNode":20,"toPort":"transform_0"}},
+        {{"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"}},
+        {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
+        ]}}"#
+    )
+}
+
+fn render_color_readback(json: &str) -> Vec<u8> {
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        json,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .unwrap_or_else(|e| panic!("reversed-Z precision graph must build: {e}\n{json}"));
+    let target = harness::shared().make_target("reversed-z-depth-precision");
+    for frame in 0..2 {
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("reversed-z-depth-precision-enc");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
+        }
+        enc.commit_and_wait_completed();
+    }
+    h.readback(&target.texture)
+}
+
 #[test]
 fn gbuffer_depth_conformance() {
     for &distance in &DISTANCES {
@@ -276,6 +410,53 @@ fn gbuffer_depth_conformance() {
             "distance {distance}: linearize_depth({sampled}, {}, {}) = {lin}, expected ~{distance}",
             cam.near,
             cam.far,
+        );
+    }
+}
+
+#[test]
+fn reversed_z_precision_keeps_near_surface_independent_of_draw_order() {
+    let h = harness::shared();
+    let cam = Camera::orbit_perspective(
+        0.0,
+        0.0,
+        PRECISION_DISTANCE,
+        FOV_Y,
+        0.0,
+        0.0,
+        PRECISION_NEAR,
+        PRECISION_FAR,
+    );
+    // Camera orbit=0 looks from +X toward the origin, so +X moves a surface
+    // toward the camera. The reversed-Z contract must preserve that ordering
+    // in the raw depth value: nearer means larger depth.
+    let near = cam
+        .project_to_pixel([0.0005, 0.0, 0.0], h.width, h.height)
+        .expect("near surface must project")
+        .depth;
+    let far = cam
+        .project_to_pixel([-0.0005, 0.0, 0.0], h.width, h.height)
+        .expect("far surface must project")
+        .depth;
+    assert!(
+        near > far,
+        "reversed-Z raw depth must increase toward the camera: near={near}, far={far}"
+    );
+
+    for reverse_draw_order in [false, true] {
+        let bytes = render_color_readback(&overlapping_depth_scene_json(reverse_draw_order));
+        if let Some(dir) = std::env::var_os("MANIFOLD_DEPTH_PROOF_DIR") {
+            let pixels: Vec<u8> = bytes.chunks_exact(2).map(|c| {
+                (f16::from_le_bytes([c[0], c[1]]).to_f32().clamp(0.0, 1.0) * 255.0).round() as u8
+            }).collect();
+            let path = std::path::PathBuf::from(dir).join(format!("reversed-z-order-{reverse_draw_order}.png"));
+            image::save_buffer(path, &pixels, h.width, h.height, image::ExtendedColorType::Rgba8)
+                .expect("write reversed-Z verification image");
+        }
+        let center = sample_rgba16f(&bytes, h.width, h.width / 2, h.height / 2);
+        assert!(
+            center[0] > 0.8 && center[1] < 0.2 && center[2] < 0.2,
+            "near red surface must win depth test in either draw order (reverse={reverse_draw_order}, center={center:?})"
         );
     }
 }

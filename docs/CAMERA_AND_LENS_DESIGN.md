@@ -35,6 +35,10 @@ them"*) — acceptance is the numeric gates; Peter looks in-app when he
 chooses. This overrides DESIGN_DOC_STANDARD section 5's L2-demo minimum for this
 cluster, by his explicit call.
 
+Camera depth now uses reversed-Z (near=1, far=0); authored clipping and lens
+parameters keep their physical meanings. The current depth and project-load
+compatibility contract is in [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md), D2.
+
 ## 1. Audit — what exists (verified 2026-07-12, tip `9e537b16`)
 
 | Piece | Where | State |

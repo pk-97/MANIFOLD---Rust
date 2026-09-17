@@ -57,6 +57,24 @@ render_mesh"*). An unwired scene must not pay one byte of new bandwidth
 full-res write on every scene that never wired a consumer, and a toggle is
 config where wiring is already the graph's native intent signal.
 
+**Camera depth convention (reversed-Z, project 1.16).** Camera projections
+map near to 1 and far/background to 0, using `Greater` comparisons and a zero
+clear. Coefficients are constructed directly in reversed form; converting an
+already rounded forward depth would lose the benefit. Perspective and
+orthographic cameras use the same direction. Light shadow maps retain their
+forward projection, `Less` comparison, and one clear. Shared Metal encoders
+choose their clear from the depth state's comparison convention.
+
+Authored near/far, transforms, materials and lens values are preserved. Built-in
+depth consumers update together, including fused shaders and Math View. Raw
+camera depth in custom graphs changes meaning: the 1.16 project load audit
+reports unrecognized downstream consumers without rewriting their shader code.
+ML-estimated depth is independent and unchanged. Runtime fused kernels are
+rebuilt; Metal's source-based cache keys invalidate changed shader sources.
+The new project version prevents older binaries from opening newly saved files.
+Standalone custom presets reading raw camera depth require the same manual
+convention update; their authored shader source cannot be inferred safely.
+
 **D2 — Depth output = raw device depth, `R32Float`, resolve filter
 `Sample0`.** Metal requires the resolve destination to match the depth
 attachment: resolve to a reusable single-sample `Depth32Float` texture
@@ -117,7 +135,7 @@ this desc-struct shape exists to avoid.
 **D4 — One WGSL linearize helper; near/far arrive via the Camera wire.**
 `shared/depth.wgsl` (new, alongside the existing shared-header pattern):
 `fn linearize_depth(raw: f32, near: f32, far: f32) -> f32` implementing the
-exact inverse of `perspective_rh`'s depth mapping
+exact inverse of `Camera::proj`'s reversed perspective depth mapping
 (`mesh_pipeline.rs:171-180`: `range = far/(near−far)`, so
 `view_z = (range·near)/(raw + range)` — the doc commits this formula; the
 unit gate checks it against `Camera::project_to_pixel().view_z` at 5 depths).

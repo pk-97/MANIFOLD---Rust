@@ -30,8 +30,7 @@ use crate::node_graph::primitive::Primitive;
 /// below) — `gltf_import.rs` reads this to scale the clip plane for
 /// small-scale imported objects (BUG-165/BUG-169) instead of duplicating
 /// the magic number. Stays 0.05: Peter's P4 directive asked for 0, but
-/// `perspective_rh` computes `clip.w = range * z_near * z`, so z_near = 0
-/// zeroes clip.w for every vertex — NaN NDC across the whole frame — and
+/// a zero near plane makes perspective depth singular, and
 /// the dissent path's 0.01 breaks two RT byte-identity gpu gates
 /// (rt_multi_caster_shadow / rt_object_cast_shadows, cure-tested
 /// 2026-08-26: a zero-intensity sun direction leak the nearer plane

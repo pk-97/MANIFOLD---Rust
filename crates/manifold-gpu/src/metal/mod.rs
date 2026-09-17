@@ -31,6 +31,9 @@ mod texture_pool;
 pub mod defer_drop;
 mod types;
 
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod pipeline_cache_tests;
+
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, GpuEncoder};

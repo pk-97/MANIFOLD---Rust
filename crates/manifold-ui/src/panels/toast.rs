@@ -37,6 +37,10 @@ const TOTAL_MS: f32 = ENTER_MS + HOLD_MS + FADE_MS;
 
 const TOAST_W: f32 = 300.0;
 const TOAST_H: f32 = 34.0;
+const MAX_WIDTH: f32 = 600.0;
+const H_PADDING: f32 = 16.0;
+const V_PADDING: f32 = 7.0;
+const LINE_HEIGHT: f32 = 20.0;
 const BOTTOM_MARGIN: f32 = 28.0;
 const FONT: u16 = color::FONT_BODY;
 const RADIUS: f32 = color::POPUP_RADIUS;
@@ -48,7 +52,7 @@ pub struct ToastPanel {
     /// toward at full opacity. `None` = the neutral undo/redo text color.
     accent: Option<Color32>,
     bg_id: Option<NodeId>,
-    text_id: Option<NodeId>,
+    text_ids: Vec<NodeId>,
     /// Wall-clock timestamp `update()` last ticked from — the same
     /// self-contained-dt pattern `InspectorCompositePanel`'s
     /// `motion_last_tick` uses, so the `UIRoot::update()` call site needs no
@@ -69,7 +73,7 @@ impl ToastPanel {
             transient: Transient::default(),
             accent: None,
             bg_id: None,
-            text_id: None,
+            text_ids: Vec::new(),
             last_tick: None,
         }
     }
@@ -87,10 +91,10 @@ impl ToastPanel {
         // rebuild already tore the tree down (e.g. undo → toast fires from
         // push_state, after the rebuild ran with the toast still closed), so
         // these ids may already be stale. `build_at` re-mints fresh ones; until
-        // then `update()`'s `Some/Some` guard below correctly treats the toast
+        // then `update()`'s node guard below correctly treats the toast
         // as not-yet-built rather than reading a dead id.
         self.bg_id = None;
-        self.text_id = None;
+        self.text_ids.clear();
     }
 
     /// D17 "export-complete green sweep": same one-slot toast, tinted toward
@@ -103,7 +107,7 @@ impl ToastPanel {
         self.last_tick = None;
         // See `show()` — same stale-id reset.
         self.bg_id = None;
-        self.text_id = None;
+        self.text_ids.clear();
     }
 
     /// Eased 0..1 alpha for the transient's current progress: ramps 0→1 over
@@ -144,20 +148,21 @@ impl ToastPanel {
         self.last_tick = Some(now);
         self.tick(dt_ms);
 
-        let (Some(bg), Some(text)) = (self.bg_id, self.text_id) else {
+        let Some(bg) = self.bg_id else {
             return;
         };
-        let (Some(mut bg_style), Some(mut text_style)) = (
-            tree.get_node(bg).map(|n| n.style),
-            tree.get_node(text).map(|n| n.style),
-        ) else {
+        let Some(mut bg_style) = tree.get_node(bg).map(|n| n.style) else {
             return;
         };
         let a = self.alpha();
         bg_style.bg_color = with_alpha(color::BG_2, 235.0 * a);
         tree.set_style(bg, bg_style);
-        text_style.text_color = with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a);
-        tree.set_style(text, text_style);
+        for &text in &self.text_ids {
+            if let Some(mut style) = tree.get_node(text).map(|n| n.style) {
+                style.text_color = with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a);
+                tree.set_style(text, style);
+            }
+        }
     }
 
     /// Advance the underlying transient by `dt_ms`. Split out from `update` so
@@ -188,6 +193,36 @@ fn with_alpha(c: Color32, a: f32) -> Color32 {
     }
 }
 
+/// Labels render one line each. Measure at build time, including splitting
+/// long paths/identifiers that have no whitespace, rather than clipping them.
+fn message_lines<'a>(tree: &UITree, message: &'a str, max_width: f32) -> Vec<&'a str> {
+    let mut lines = Vec::new();
+    for paragraph in message.split('\n') {
+        let mut rest = paragraph.trim();
+        while tree.measure_text(rest, FONT, FontWeight::Regular).x > max_width {
+            let mut end = 0;
+            for (offset, ch) in rest.char_indices() {
+                let next = offset + ch.len_utf8();
+                if tree.measure_text(&rest[..next], FONT, FontWeight::Regular).x > max_width {
+                    break;
+                }
+                end = next;
+            }
+            // Always advance, even if a very narrow viewport cannot fit a glyph.
+            if end == 0 {
+                end = rest.chars().next().expect("nonempty overflowing line").len_utf8();
+            }
+            if let Some(space) = rest[..end].rfind(char::is_whitespace).filter(|&i| i > 0) {
+                end = space;
+            }
+            lines.push(rest[..end].trim_end());
+            rest = rest[end..].trim_start();
+        }
+        lines.push(rest);
+    }
+    lines
+}
+
 impl Overlay for ToastPanel {
     fn is_open(&self) -> bool {
         self.transient.progress().is_some()
@@ -214,35 +249,46 @@ impl Overlay for ToastPanel {
     }
 
     fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
-        let x = ((placement.screen.x - TOAST_W) * 0.5).max(0.0);
-        let y = (placement.screen.y - TOAST_H - BOTTOM_MARGIN).max(0.0);
+        let max_width = (placement.screen.x - 2.0 * BOTTOM_MARGIN).clamp(1.0, MAX_WIDTH);
+        let lines = message_lines(tree, &self.message, (max_width - 2.0 * H_PADDING).max(1.0));
+        let text_width = lines
+            .iter()
+            .map(|line| tree.measure_text(line, FONT, FontWeight::Regular).x)
+            .fold(0.0, f32::max);
+        let width = (text_width + 2.0 * H_PADDING).max(TOAST_W).min(max_width);
+        let height = (lines.len() as f32 * LINE_HEIGHT + 2.0 * V_PADDING).max(TOAST_H);
+        let x = ((placement.screen.x - width) * 0.5).max(0.0);
+        let y = (placement.screen.y - height - BOTTOM_MARGIN).max(0.0);
         let a = self.alpha();
         self.bg_id = Some(tree.add_panel(
             None,
             x,
             y,
-            TOAST_W,
-            TOAST_H,
+            width,
+            height,
             UIStyle {
                 bg_color: with_alpha(color::BG_2, 235.0 * a),
                 corner_radius: RADIUS,
                 ..UIStyle::default()
             },
         ));
-        self.text_id = Some(tree.add_label(
-            self.bg_id,
-            x,
-            y,
-            TOAST_W,
-            TOAST_H,
-            &self.message,
-            UIStyle {
-                text_color: with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a),
-                font_size: FONT,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-        ));
+        self.text_ids.clear();
+        for (index, line) in lines.iter().enumerate() {
+            self.text_ids.push(tree.add_label(
+                self.bg_id,
+                x + H_PADDING,
+                y + V_PADDING + index as f32 * LINE_HEIGHT,
+                (width - 2.0 * H_PADDING).max(1.0),
+                LINE_HEIGHT,
+                line,
+                UIStyle {
+                    text_color: with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a),
+                    font_size: FONT,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            ));
+        }
     }
 
     fn on_event(&mut self, _event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
