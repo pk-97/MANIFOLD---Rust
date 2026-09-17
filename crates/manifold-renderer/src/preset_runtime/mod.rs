@@ -13,8 +13,8 @@
 //! [`Graph`]. Per-frame param changes refresh in place via
 //! [`apply_bindings`]; topology changes (effect added /
 //! removed / reordered / type-swapped, group enabled / disabled
-//! toggle, group crossing the 1.0 wet/dry boundary, render-resolution
-//! change) rebuild from scratch.
+//! toggle, group crossing the 1.0 wet/dry boundary) rebuild from scratch.
+//! Resolution changes replace resources transactionally and reset simulation state.
 //!
 //! ## Build-time wiring
 //!
@@ -96,7 +96,9 @@ mod math_view_events;
 mod lifecycle;
 
 mod core;
-pub use core::{ChainBuildInputs, FrameContextInputs, PreparedRuntimeResize, PresetRuntime};
+pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
+mod resize;
+pub use resize::PreparedRuntimeResize;
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
 use core::{EffectSlot, PresetIo};

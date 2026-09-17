@@ -35,7 +35,7 @@ fn group_mask_reads_dry_input_and_updates_without_rebuild() {
         for (mask_amount, wet_dry, expected) in [(1.0, 1.0, 0.68), (0.0, 1.0, 0.32), (1.0, 0.5, 0.44), (1.0, 0.0, 0.2)] {
             effects[usize::from(mask_last)].set_base_param("amount", mask_amount);
             groups[0].wet_dry = wet_dry;
-            assert_eq!(compute_topology_hash(&effects, &groups, 16, 16, None), topology);
+            assert_eq!(compute_topology_hash(&effects, &groups, 0, 0, None), topology);
             let mut encoder = device.create_encoder("group-mask-proof");
             {
                 let mut gpu = GpuEncoder::new(&mut encoder, &device);
