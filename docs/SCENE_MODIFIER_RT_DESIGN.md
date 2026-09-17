@@ -2,7 +2,7 @@
 
 <!-- index: Implementation contract for automatic ray tracing of scene-modified meshes: geometry revisions, fusion, ordered BLAS updates, emissive sampling, export, and K3 phase briefs. -->
 
-**Status:** IN PROGRESS · 2026-09-17 · P0–P4a landed and gate-green (P4a: GPU emissive preparation — enumerate/sort/gather/alias/stats; trace and firefly kernels read the GPU stats buffer). Next: P4b — appearance and indexed hit attributes (section 5.2). Owed: P2–P4a demo artifacts to Peter by P5.
+**Status:** IN PROGRESS · 2026-09-17 · P0–P4b landed and gate-green (P4b: appearance weights/gain reach RT — checked weight/index sources, shared index resolution, deterministic fractional coverage, brightness/coverage×brightness radiance multipliers). Next: P5 — the shared dynamic scene path (section 5.3). Owed: P2–P4b demo artifacts to Peter by P5.
 **Prerequisites:** existing scene-modifier foundation and native Metal RT on main. Work item: `BUG-e3p6.4`.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md), sections 5–6 and 8; repository `AGENTS.md` takes precedence over older workflow guidance.
 
@@ -426,11 +426,13 @@ Read-back: section 5.1 and existing emissive tests. Deliver GPU candidate/sort/g
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_shading`, required existing emission/alpha/normal tests; focused gpu/renderer clippy. Negative: `EmissiveTriangleCpu`, `local_triangles`, and production `refit_emissive_table` absent. Demo: current-emitter vertex/area/UV/coverage report and PNG, L1 plus Peter artifact. Gesture: deform an emitter, then return emission from zero to positive. All sample data must refer to the current frame.
 
-### P4b — Appearance and indexed hit attributes (NOT STARTED; after P4a)
+### P4b — Appearance and indexed hit attributes (LANDED)
 
 Read-back: section 5.2, current candidate walkers and raster appearance formula. Deliver checked weight/index source fields, shared index resolution, deterministic fractional appearance coverage and current emitter appearance; preserve existing material limitations explicitly. Remove the weights/gain rejection only with the passing proof. No new material model.
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_shading` plus changed alpha/normal tests selected by the gate; focused GPU/renderer clippy. Negative: no duplicated appearance logic across ray walkers and no per-frame mapped source-table writes. Demo: coverage distribution and indexed UV/normal report, L1 plus diagnostic PNG. Gesture: vary gain through zero, fractional and HDR values. Readback values must match the current mesh.
+
+Landed: `rt_dynamic_coverage_and_attributes` (9 sections) green plus full gpu_proofs gate 206/206; the one root-cause fix was restoring the any_hit terminal committed-hit check after the walker rewrite.
 
 ### P5 — Enable the shared dynamic scene path (NOT STARTED; after P2, P4b)
 
