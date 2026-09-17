@@ -14,6 +14,7 @@ pub const CONTROLS: &[(&str, &str, f32, f32, f32)] = &[
     ("fragments", "Fragments", 1.0, 0.0, 1.0),
     ("ghosts", "Ghosts", 1.0, 0.0, 1.0),
     ("vectors", "Vectors", 1.0, 0.0, 1.0),
+    ("axes", "Axes", 1.0, 0.0, 1.0),
     ("trails", "Motion trails", 1.0, 0.0, 1.0),
     ("grid_brightness", "Grid Brightness", 1.0, 0.0, 2.0),
     (
@@ -74,6 +75,7 @@ fn is_toggle(suffix: &str) -> bool {
             | "fragments"
             | "ghosts"
             | "vectors"
+            | "axes"
             | "trails"
             | "pulse_trigger"
             | "scan_trigger"
@@ -306,6 +308,7 @@ mod tests {
             ("scan_beats", 4.0, 0.0625, 32.0),
             ("scan_trigger", 0.0, 0.0, 1.0),
             ("connect_mesh", 0.0, 0.0, 1.0),
+            ("axes", 1.0, 0.0, 1.0),
         ];
         for (suffix, default, min, max) in expected {
             let id = format!("{CONTROL_PREFIX}{suffix}");
@@ -317,7 +320,10 @@ mod tests {
             assert_eq!(spec.section.as_deref(), Some("Math View"));
             assert_eq!(
                 spec.is_toggle,
-                matches!(suffix, "pulse_trigger" | "scan_trigger" | "connect_mesh")
+                matches!(
+                    suffix,
+                    "pulse_trigger" | "scan_trigger" | "connect_mesh" | "axes"
+                )
             );
             assert_eq!(
                 spec.is_trigger_gate,
@@ -418,6 +424,71 @@ mod tests {
                 .params
                 .get("value"),
             Some(&SerializedParamValue::Float { value: 1.0 })
+        );
+    }
+
+    #[test]
+    fn axes_off_override_survives_serialization() {
+        let mut graph = fixture();
+        enrich_math_view_controls(&mut graph).unwrap();
+        let id = format!("{CONTROL_PREFIX}axes");
+        graph
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|param| param.id == id)
+            .unwrap()
+            .default_value = 0.0;
+        graph
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.id == id)
+            .unwrap()
+            .default_value = 0.0;
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == control_node_id("axes"))
+            .unwrap()
+            .params
+            .insert("value".into(), SerializedParamValue::Float { value: 0.0 });
+
+        let mut decoded: EffectGraphDef =
+            serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        assert!(!enrich_math_view_controls(&mut decoded).unwrap());
+        let metadata = decoded.preset_metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata
+                .params
+                .iter()
+                .find(|param| param.id == id)
+                .unwrap()
+                .default_value,
+            0.0
+        );
+        assert_eq!(
+            metadata
+                .bindings
+                .iter()
+                .find(|binding| binding.id == id)
+                .unwrap()
+                .default_value,
+            0.0
+        );
+        assert_eq!(
+            decoded
+                .nodes
+                .iter()
+                .find(|node| node.node_id == control_node_id("axes"))
+                .unwrap()
+                .params
+                .get("value"),
+            Some(&SerializedParamValue::Float { value: 0.0 })
         );
     }
 

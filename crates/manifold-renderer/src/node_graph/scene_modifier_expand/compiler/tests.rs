@@ -989,7 +989,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
                 candidate.node_id
             );
         }
-        for port in ["mode", "occlusion"] {
+        for port in ["mode", "occlusion", "axes"] {
             assert!(
                 prepared
                     .def

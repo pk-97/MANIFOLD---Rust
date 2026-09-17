@@ -1001,6 +1001,7 @@ impl Builder<'_> {
                     | "fragments"
                     | "ghosts"
                     | "vectors"
+                    | "axes"
                     | "trails"
                     | "density"
                     | "line_width"

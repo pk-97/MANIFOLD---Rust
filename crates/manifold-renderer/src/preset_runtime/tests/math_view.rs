@@ -506,6 +506,16 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         crate::headless_readback::mean_abs_half_diff(&moved_restored, &fused_image) < 0.002,
         "fused and standalone authored evaluations diverged"
     );
+    for runtime in [&mut runtime, &mut fused] {
+        set(&owner, &mut params, "math_view_axes", 0.0);
+        let no_axes = render(runtime, &params, 4);
+        assert!(!black(&no_axes), "Axes Off must retain the other diagram marks");
+        assert_ne!(no_axes, moved_restored, "Axes control must reach the renderer");
+        set(&owner, &mut params, "math_view_axes", 1.0);
+        assert!(crate::headless_readback::mean_abs_half_diff(
+            &moved_restored, &render(runtime, &params, 4)) < 0.002,
+            "Axes On must restore the original marks");
+    }
 
     // Isolate temporal history from the other diagram marks. Captured motion
     // must disappear after the same clear used for transport discontinuities.
@@ -518,8 +528,21 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         render(&mut runtime, &params, frame);
     }
     let with_history = render(&mut runtime, &params, 13);
+    assert!(!black(&with_history), "fixture must have visible motion history");
+    set(&owner, &mut params, "math_view_trails", 0.0);
+    render(&mut runtime, &params, 14);
+    set(&owner, &mut params, "phase", 0.9);
+    render(&mut runtime, &params, 15);
+    set(&owner, &mut params, "math_view_trails", 1.0);
+    assert!(black(&render(&mut runtime, &params, 16)),
+        "first Trails On frame must not replay pre-toggle history");
+    set(&owner, &mut params, "phase", 1.1);
+    render(&mut runtime, &params, 17);
+    set(&owner, &mut params, "phase", 1.3);
+    assert!(!black(&render(&mut runtime, &params, 18)),
+        "fresh motion history must resume after re-enabling trails");
     runtime.clear_state();
-    let cleared = render(&mut runtime, &params, 14);
+    let cleared = render(&mut runtime, &params, 19);
     assert_ne!(
         with_history, cleared,
         "clear_state must remove GPU motion history"

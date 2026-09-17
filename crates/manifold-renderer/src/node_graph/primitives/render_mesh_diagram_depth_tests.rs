@@ -87,7 +87,7 @@ fn uniforms(
         history_len: 0,
         history_capacity: HISTORY_SAMPLES,
         history_stride: MAX_VERTICES,
-        _pad: 0,
+        axes: 0,
         depth_pass,
         occlusion,
         mode: 0,
@@ -451,4 +451,90 @@ fn surface_depth_is_minimum_and_zero_appearance_does_not_occlude() {
         hidden > 0.99,
         "zero appearance gain wrote occluding depth: {hidden}"
     );
+}
+
+#[test]
+fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines() {
+    let guard = crate::test_device();
+    let device = guard.arc();
+    let camera = Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 1.0, 0.05, 100.0);
+    let target = crate::render_target::RenderTarget::new(
+        &device, W, H, GpuTextureFormat::Rgba16Float, "math-axes-proof",
+    );
+    let msaa = device.create_texture_msaa_memoryless(
+        W, H, GpuTextureFormat::Rgba16Float, MSAA_SAMPLE_COUNT, "math-axes-proof",
+    );
+    let far = texture_f32(&device, 1.0, "math-axes-far-depth");
+    let sampler = device.create_sampler(&GpuSamplerDesc::default());
+    let mut preview = vec![0u8; (W * 2 * H * 2 * 4) as usize];
+    // Two objects have their first face at the same world position. The
+    // representative faces have distinct anchors after each object transform.
+    for (object, offset) in [-0.8, 0.8].into_iter().enumerate() {
+        let mut vertices = Vec::new();
+        for face in 0..9 {
+            let (x, y) = if face == 0 {
+                (-offset, 1.8)
+            } else {
+                ((face % 3) as f32 * 0.5 - 0.5, (face / 3) as f32 * 0.8 - 0.8)
+            };
+            for delta in [[-0.1, -0.05, -0.03], [0.1, -0.05, -0.03], [0.0, 0.1, 0.06]] {
+                vertices.push(vertex([x + delta[0], y + delta[1], delta[2]]));
+            }
+        }
+        let buffer = vertices_buffer(&device, &vertices);
+        for occlusion in [0, 1] {
+            let pipeline = device.create_render_pipeline_msaa(
+                SHADER, "vs_main", if occlusion == 0 { "fs_main" } else { "fs_depth_color" },
+                GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND), MSAA_SAMPLE_COUNT,
+                "math-axes-proof",
+            );
+            for axes in [1, 0] {
+                let mut u = uniforms(&camera, 9, 27, 0, occlusion, 1.0);
+                u.axes = axes;
+                u.radius = 2.0;
+                u.line_width = 1.0;
+                u.geometry_hue = 0.5;
+                u.model = super::super::render_scene::model_matrix([offset, 0.0, 0.0], [0.0; 3], [1.0; 3]);
+                let b = bindings(&u, &buffer, &far, &far, &sampler);
+                let mut encoder = device.create_encoder("math-axes-proof");
+                encoder.draw_instanced_msaa(
+                    &pipeline, &msaa, &target.texture,
+                    if occlusion == 0 { &b[..7] } else { &b },
+                    18, 1 + 9 * 4 + 3 + 3 * 3, GpuLoadAction::Clear, "math-axes-proof",
+                );
+                encoder.commit_and_wait_completed();
+                let pixels = readback_srgb_rgba8(&device, &target.texture, W, H);
+                let red_near = |position| {
+                    let p = camera.project_to_pixel(position, W, H).unwrap();
+                    let (x, y) = (p.px.round() as i32, p.py.round() as i32);
+                    ((y - 2)..=(y + 2)).any(|py| ((x - 2)..=(x + 2)).any(|px| {
+                        if px < 0 || py < 0 || px >= W as i32 || py >= H as i32 { return false; }
+                        let i = ((py as u32 * W + px as u32) * 4) as usize;
+                        let c = &pixels[i..i + 3];
+                        c[0] > 100 && u16::from(c[0]) > u16::from(c[1]) * 3 / 2
+                            && u16::from(c[0]) > u16::from(c[2]) * 3 / 2
+                    }))
+                };
+                for y in [-0.8, 0.0, 0.8] {
+                    assert_eq!(red_near([offset + 0.15, y, 0.0]), axes != 0,
+                        "representative frame missing or Axes Off ignored: object={object}, y={y}, depth={occlusion}");
+                }
+                assert!(!red_near([0.15, 1.8, 0.0]), "axes still attached to the shared first face");
+                assert!(pixels.chunks_exact(4).filter(|c| c[1] > 100 && c[2] > 100 && c[0] < 50).count() > 10,
+                    "Axes toggle must retain cyan fragment outlines");
+                if occlusion == 1 {
+                    for y in 0..H as usize {
+                        let destination = ((object * H as usize + y) * (W * 2) as usize
+                            + (1 - axes) as usize * W as usize) * 4;
+                        let source = y * W as usize * 4;
+                        preview[destination..destination + W as usize * 4]
+                            .copy_from_slice(&pixels[source..source + W as usize * 4]);
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(path) = std::env::var("MANIFOLD_MATH_AXES_PREVIEW") {
+        std::fs::write(path, encode_rgba8_png(&preview, W * 2, H * 2)).unwrap();
+    }
 }
