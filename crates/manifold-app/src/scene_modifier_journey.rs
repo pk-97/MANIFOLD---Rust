@@ -780,33 +780,36 @@ fn legacy_math_view_migration_journey() {
     )))
     .expect("Vortex recipe parses");
     let mut next_node_id = 100u32;
-    let mut suffixes: Vec<String> = manifold_core::scene_modifier_math_view::CONTROLS
-        .iter()
-        .map(|(suffix, ..)| (*suffix).to_string())
-        .collect();
-    suffixes.push("scope".into());
-    {
-        let metadata = carrier["presetMetadata"].as_object_mut().unwrap();
-        let params = metadata["params"].as_array_mut().unwrap();
-        let bindings = metadata["bindings"].as_array_mut().unwrap();
-        let nodes = carrier["nodes"].as_array_mut().unwrap();
-        for suffix in &suffixes {
-            let local = format!("math_view_{suffix}");
-            params.push(serde_json::json!({
-                "id": local, "name": suffix, "min": 0.0, "max": 1.0,
-                "defaultValue": 0.0, "section": "Math View", "cardVisible": true,
+    let mut controls: Vec<(String, f64, f64, f64)> =
+        manifold_core::scene_modifier_math_view::CONTROLS
+            .iter()
+            .map(|(suffix, _, default, min, max)| {
+                ((*suffix).to_string(), *default as f64, *min as f64, *max as f64)
+            })
+            .collect();
+    controls.push(("scope".into(), 1.0, 0.0, 1.0));
+    for (suffix, default, min, max) in &controls {
+        let local = format!("math_view_{suffix}");
+        carrier["presetMetadata"]["params"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": local, "name": suffix, "min": min, "max": max,
+                "defaultValue": default, "section": "Math View", "cardVisible": true,
             }));
-            bindings.push(serde_json::json!({
-                "id": local, "label": suffix, "defaultValue": 0.0,
+        carrier["presetMetadata"]["bindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": local, "label": suffix, "defaultValue": default,
                 "target": {"kind": "node", "nodeId": format!("__math_view_{suffix}"), "param": "value"},
             }));
-            nodes.push(serde_json::json!({
-                "id": next_node_id, "nodeId": format!("__math_view_{suffix}"),
-                "typeId": "node.value", "handle": local,
-                "params": {"value": {"type": "Float", "value": 0.0}},
-            }));
-            next_node_id += 1;
-        }
+        carrier["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": next_node_id, "nodeId": format!("__math_view_{suffix}"),
+            "typeId": "node.value", "handle": local,
+            "params": {"value": {"type": "Float", "value": default}},
+        }));
+        next_node_id += 1;
     }
     let carrier_graph: EffectGraphDef =
         serde_json::from_value(carrier).expect("legacy carrier graph parses");
@@ -963,6 +966,9 @@ fn legacy_math_view_migration_journey() {
     ct.timer.set_frame_clocked(true);
     warm_project(&mut ct, &state_tx);
     ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
+    // Two ticks: the first Math-mode frame can precede the derived runtime's
+    // borrowed resources going ready (the grid journey shows the same shape).
+    ct.tick_frame(&state_tx);
     ct.tick_frame(&state_tx);
     let (_, migrated_nonzero) =
         capture_output_allow_uniform(&ct, &output_dir.join("migrated-math-mode.png"));

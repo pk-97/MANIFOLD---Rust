@@ -190,7 +190,10 @@ fn scene_modifier_periodic_app_control_journey() {
         .iter()
         .find(|binding| binding.id == phase_binding)
         .expect("periodic phase binding");
-    assert_eq!(original_modifier_ids, vec![modifier_id.clone()]);
+    assert_eq!(
+        original_modifier_ids,
+        vec![modifier_id.clone(), NodeId::new("math_view")]
+    );
     assert_eq!(original_driver.id.as_str(), phase_binding.as_str());
 
     let mut ct = headless_content_thread(Project::default(), WIDTH, HEIGHT);

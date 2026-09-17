@@ -232,29 +232,48 @@ fn migrate_legacy_math_views(
         let view_id = match (existing, &recipe) {
             (Some(id), _) => Some(id),
             (None, Some(recipe)) => {
-                let targets = graph
+                let donor = graph
                     .scene_modifiers
                     .iter()
-                    .find(|m| m.id == scene_carriers[0])
-                    .map(|m| m.targets.clone())
-                    .unwrap_or(manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects);
-                match manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-                    graph,
-                    &recipe,
-                    manifold_core::NodeId::new(manifold_core::short_id()),
-                    scene.clone(),
-                    targets,
-                ) {
-                    Ok(instance) => {
-                        let id = instance.id.clone();
-                        graph.scene_modifiers.push(instance);
-                        Some(id)
-                    }
-                    Err(reason) => {
-                        notices.push(format!(
-                            "Math View migration skipped for this scene: {reason}"
-                        ));
-                        None
+                    .find(|m| m.id == scene_carriers[0]);
+                let (targets, frames) = donor
+                    .map(|m| (m.targets.clone(), m.mesh_frames.clone()))
+                    .unwrap_or((
+                        manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
+                        Vec::new(),
+                    ));
+                if frames.is_empty() {
+                    notices.push(
+                        "Math View migration skipped: the legacy modifier had no mesh frames".into(),
+                    );
+                    None
+                } else {
+                    // The donor's calibrated frames carry the exact sample
+                    // correspondence the project's visuals were authored with;
+                    // a fresh capture would also reject non-glTF sources.
+                    let created = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
+                        graph,
+                        &recipe,
+                    )
+                    .map(|view_graph| manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
+                        id: manifold_core::NodeId::new(manifold_core::short_id()),
+                        scene: scene.clone(),
+                        targets,
+                        mesh_frames: frames,
+                        graph: Box::new(view_graph),
+                    });
+                    match created {
+                        Ok(instance) => {
+                            let id = instance.id.clone();
+                            graph.scene_modifiers.push(instance);
+                            Some(id)
+                        }
+                        Err(reason) => {
+                            notices.push(format!(
+                                "Math View migration skipped for this scene: {reason}"
+                            ));
+                            None
+                        }
                     }
                 }
             }
