@@ -68,6 +68,7 @@ mod rt_gesture_response;
 mod rt_instancing;
 mod rt_dynamic_geometry;
 mod rt_dynamic_fusion;
+mod rt_dynamic_shading;
 mod rt_normal_tangent_mirror;
 mod rt_multi_caster_shadow;
 mod rt_6caster_shadow;

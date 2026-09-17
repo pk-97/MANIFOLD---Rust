@@ -164,9 +164,12 @@ struct EmissiveObjParams {
 };
 
 // P4a: one enumerated (object, slot, triangle) candidate. `key` is the
-// radix-sort key: as_type<uint>(power) for accepted candidates (positive
-// floats sort monotonically by bit pattern), 0 for rejected — rejected
-// candidates sort to the front and the gather reads the valid tail.
+// radix-sort key: accepted candidates sort by DESCENDING power as
+// (u32::MAX - as_type<uint>(power)) — positive floats sort monotonically by
+// bit pattern, so the strongest candidate gets the smallest key; rejected
+// candidates get u32::MAX and sort to the tail. The gather reads the front:
+// top-4096 with identity ties resolved in favor of the LOWER identity
+// (stable sort over identity-ascending input, §5.1's tie rule).
 struct EmissiveCandidate {
     uint key;
     uint obj_index;    // row in the EmissiveObjParams table
@@ -495,9 +498,11 @@ kernel void emissive_enumerate(
     // power = local area × material luma (the current ranking policy in
     // both modes, §5.1) — 0.5|cross| × luma.
     float power = 0.5f * length(c) * op.luma;
-    uint key = 0u;
+    uint key = 0xFFFFFFFFu; // rejected → sorts to the tail
     if (rt_finite(power) && power > 0.0f) {
-        key = as_type<uint>(power); // positive float: bits sort monotonically, ≥ 1
+        // Descending power: strongest gets the smallest key (see the
+        // EmissiveCandidate comment for the tie-order contract).
+        key = 0xFFFFFFFFu - as_type<uint>(power);
         atomic_fetch_add_explicit(&header->valid_count, 1u, memory_order_relaxed);
     }
     candidates[tid] = { key, oi, op.slot_base + slot, tri };
@@ -585,7 +590,8 @@ kernel void emissive_gather(
 {
     uint entry_count = min(header->valid_count, MAX_RT_EMISSIVE_TRIANGLES);
     if (tid >= entry_count) return;
-    EmissiveCandidate c = sorted[header->active_count - 1u - tid];
+    // Front of the descending sort: the top-4096 with §5.1's tie order.
+    EmissiveCandidate c = sorted[tid];
     device const EmissiveObjParams& op = objs[c.obj_index];
     uint i0 = em_index_at(op, c.tri_index * 3u);
     uint i1 = em_index_at(op, c.tri_index * 3u + 1u);
