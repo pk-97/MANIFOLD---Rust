@@ -783,8 +783,26 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
             .iter()
             .filter(|node| node.type_id == "node.render_mesh_diagram")
             .count(),
-        2
+        4,
+        "each captured object has a colour diagram and a depth surface"
     );
+    let modifier = &owner.scene_modifiers[0];
+    for role in ["diagram", "surface"] {
+        let expected: std::collections::HashSet<_> = modifier
+            .mesh_frames
+            .iter()
+            .map(|frame| super::math_events::resource_node_id(&modifier.id, &frame.target, role))
+            .collect();
+        let actual: std::collections::HashSet<_> = prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.render_mesh_diagram")
+            .filter(|node| expected.contains(&node.node_id))
+            .map(|node| node.node_id.clone())
+            .collect();
+        assert_eq!(actual, expected, "Math View {role} identities are stable");
+    }
     let final_id = prepared
         .def
         .nodes
@@ -844,11 +862,20 @@ fn scene_modifier_math_view_routes_one_shared_grid_control() {
             scope,
         )
         .unwrap();
+        let owner = math_view_fixture();
+        let modifier = &owner.scene_modifiers[0];
+        let diagram_ids: std::collections::HashSet<_> = modifier
+            .mesh_frames
+            .iter()
+            .map(|frame| {
+                super::math_events::resource_node_id(&modifier.id, &frame.target, "diagram")
+            })
+            .collect();
         let diagrams: Vec<_> = prepared
             .def
             .nodes
             .iter()
-            .filter(|node| node.type_id == "node.render_mesh_diagram")
+            .filter(|node| diagram_ids.contains(&node.node_id))
             .collect();
         assert_eq!(diagrams.len(), 2);
 
@@ -867,6 +894,159 @@ fn scene_modifier_math_view_routes_one_shared_grid_control() {
             .collect();
         assert_eq!(grid_wires.len(), 1);
     }
+}
+
+#[test]
+fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
+    let owner = math_view_fixture();
+    let modifier = &owner.scene_modifiers[0];
+    let parent = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
+    let scene_id = parent
+        .def
+        .nodes
+        .iter()
+        .find(|candidate| candidate.node_id == modifier.scene.node)
+        .expect("parent render scene")
+        .id;
+    let parent_depth_sources: BTreeSet<_> = modifier
+        .mesh_frames
+        .iter()
+        .map(|frame| {
+            let export_id =
+                super::math_events::resource_node_id(&modifier.id, &frame.target, "export");
+            let export = parent
+                .def
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == export_id)
+                .expect("generated parent mesh export")
+                .id;
+            parent
+                .def
+                .wires
+                .iter()
+                .find(|wire| wire.to_node == export && wire.to_port == "depth")
+                .map(|wire| (wire.from_node, wire.from_port.clone()))
+                .expect("parent scene depth reaches every mesh export")
+        })
+        .collect();
+    assert_eq!(
+        parent_depth_sources,
+        BTreeSet::from([(scene_id, "depth".to_string())]),
+        "all mesh exports borrow one parent scene depth"
+    );
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &PrimitiveRegistry::with_builtin(),
+        &NodeId::new("vortex_math_view"),
+        MathViewScope::ThisModifier,
+    )
+    .unwrap();
+
+    let frames: Vec<_> = modifier.mesh_frames.iter().collect();
+    let surfaces: Vec<_> = frames
+        .iter()
+        .map(|frame| {
+            let id = super::math_events::resource_node_id(&modifier.id, &frame.target, "surface");
+            prepared
+                .def
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == id)
+                .expect("generated Math View surface")
+        })
+        .collect();
+    let diagrams: Vec<_> = frames
+        .iter()
+        .map(|frame| {
+            let id = super::math_events::resource_node_id(&modifier.id, &frame.target, "diagram");
+            prepared
+                .def
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == id)
+                .expect("generated Math View diagram")
+        })
+        .collect();
+
+    for candidate in surfaces.iter().chain(diagrams.iter()) {
+        for port in [
+            "current",
+            "reference",
+            "incoming",
+            "camera",
+            "transform",
+            "mesh_weights",
+            "scan_weights",
+        ] {
+            assert!(
+                prepared
+                    .def
+                    .wires
+                    .iter()
+                    .any(|wire| wire.to_node == candidate.id && wire.to_port == port),
+                "{} is missing shared {port} input",
+                candidate.node_id
+            );
+        }
+        for port in ["mode", "occlusion"] {
+            assert!(
+                prepared
+                    .def
+                    .wires
+                    .iter()
+                    .any(|wire| wire.to_node == candidate.id && wire.to_port == port),
+                "{} is missing {port} control",
+                candidate.node_id
+            );
+        }
+    }
+    for (surface, diagram) in surfaces.iter().zip(&diagrams) {
+        for port in ["current", "reference", "incoming", "camera", "transform", "mesh_weights", "scan_weights"] {
+            let source = |node| prepared.def.wires.iter()
+                .find(|wire| wire.to_node == node && wire.to_port == port)
+                .map(|wire| (wire.from_node, wire.from_port.as_str()));
+            assert_eq!(source(surface.id), source(diagram.id), "surface and colour disagree on {port}");
+        }
+    }
+    assert!(prepared.def.wires.iter().all(|wire| {
+        !surfaces
+            .iter()
+            .any(|surface| surface.id == wire.to_node && wire.to_port == "grid")
+    }));
+    for candidate in surfaces.iter().chain(diagrams.iter()) {
+        assert!(
+            prepared
+                .def
+                .wires
+                .iter()
+                .any(|wire| wire.to_node == candidate.id && wire.to_port == "scene_depth"),
+            "{} is missing borrowed scene depth",
+            candidate.node_id
+        );
+    }
+    for window in surfaces.windows(2) {
+        assert!(prepared.def.wires.iter().any(|wire| {
+            wire.from_node == window[0].id
+                && wire.from_port == "depth"
+                && wire.to_node == window[1].id
+                && wire.to_port == "surface_depth"
+        }));
+    }
+    let final_surface = surfaces.last().expect("surface depth accumulator");
+    for diagram in &diagrams {
+        assert!(prepared.def.wires.iter().any(|wire| {
+            wire.from_node == final_surface.id
+                && wire.from_port == "depth"
+                && wire.to_node == diagram.id
+                && wire.to_port == "surface_depth"
+        }));
+    }
+    assert!(prepared.def.wires.iter().all(|wire| {
+        !surfaces
+            .iter()
+            .any(|surface| surface.id == wire.from_node && wire.from_port == "color")
+    }));
 }
 
 #[test]
