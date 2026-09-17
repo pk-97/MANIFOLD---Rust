@@ -561,7 +561,7 @@ mod tests {
             assert!(strip_legacy_math_view_controls(&mut graph));
             graph
         };
-        owner.scene_modifiers[0].graph = Box::new(carrier_graph.clone());
+        *owner.scene_modifiers[0].graph = carrier_graph.clone();
         owner.scene_modifiers[0].mesh_frames = vec![frame("object")];
 
         // No view yet.

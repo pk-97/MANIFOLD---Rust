@@ -253,7 +253,7 @@ fn migrate_legacy_math_views(
                     // a fresh capture would also reject non-glTF sources.
                     let created = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
                         graph,
-                        &recipe,
+                        recipe,
                     )
                     .map(|view_graph| manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
                         id: manifold_core::NodeId::new(manifold_core::short_id()),
@@ -295,10 +295,10 @@ fn migrate_legacy_math_views(
             {
                 mv::strip_legacy_math_view_controls(&mut instance.graph);
             }
-            if index == 0 {
-                if let Some(view_id) = &view_id {
-                    mv::retarget_math_view_bindings(graph, carrier_id, view_id);
-                }
+            if index == 0
+                && let Some(view_id) = &view_id
+            {
+                mv::retarget_math_view_bindings(graph, carrier_id, view_id);
             }
             let dropped = mv::drop_math_view_bindings(graph, carrier_id);
             if !dropped.is_empty() {
