@@ -94,29 +94,11 @@ pub fn scene_modifier_parameter_lock_reason(
         return Some("Source settings are locked by a calibrated modifier; remove it before changing the source.");
     }
 
-    if param == "rt_enabled"
-        && owner.scene_modifiers.iter().any(|modifier| {
-            modifier.scene.node == *node
-                && modifier
-                    .graph
-                    .preset_metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.scene_modifier.as_ref())
-                    .is_some_and(|recipe| {
-                        recipe.stages.iter().any(|stage| {
-                            stage.outputs.iter().any(|output| output.endpoint == SceneEndpoint::Vertices)
-                        })
-                    })
-        })
-    {
-        return Some("rt_enabled is locked by a vertex modifier; remove it before enabling ray tracing.");
-    }
-
     None
 }
 
-/// A host control is locked if any binding addresses captured source data or
-/// the required render mode. Modifier controls use a distinct namespace.
+/// A host control is locked if any binding addresses captured source data.
+/// Modifier controls use a distinct namespace.
 pub fn scene_modifier_macro_lock_reason(owner: &EffectGraphDef, param: &str) -> Option<&'static str> {
     owner.preset_metadata.as_ref()?.bindings.iter().filter(|binding| binding.id == param)
         .find_map(|binding| match &binding.target {
@@ -1613,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn vertices_recipe_locks_only_its_host_scene_rt_enabled() {
+    fn vertices_recipe_allows_its_host_scene_rt_enabled() {
         let mut owner: EffectGraphDef = serde_json::from_value(json!({
             "version": 3,
             "nodes": [{
@@ -1645,7 +1627,7 @@ mod tests {
             &NodeId::new("scene"),
             "rt_enabled",
         )
-        .is_some());
+        .is_none());
         assert!(scene_modifier_parameter_lock_reason(
             &owner,
             &NodeId::new("other-scene"),

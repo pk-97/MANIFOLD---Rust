@@ -184,7 +184,7 @@ fn scene_modifier_parameter_guard_maps_string_binding_and_suspends_invalid_frame
 }
 
 #[test]
-fn scene_modifier_parameter_guard_blocks_source_selector_and_rt_but_keeps_geometry_live() {
+fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geometry_live() {
     let owner = calibrated_fixture();
     let mut runtime = runtime(owner, false);
     let source = source_id(&runtime);
@@ -216,16 +216,22 @@ fn scene_modifier_parameter_guard_blocks_source_selector_and_rt_but_keeps_geomet
         .graph
         .instance_by_node_id(&NodeId::new("scan_render"))
         .expect("render scene");
-    assert!(
-        runtime
-            .graph
-            .set_param(
-                scene,
-                "rt_enabled",
-                crate::node_graph::ParamValue::Bool(true)
-            )
-            .is_err()
-    );
+    assert!(runtime
+        .graph
+        .set_param(
+            scene,
+            "rt_enabled",
+            crate::node_graph::ParamValue::Bool(true)
+        )
+        .is_ok());
+    assert!(runtime
+        .graph
+        .set_param(
+            scene,
+            "rt_enabled",
+            crate::node_graph::ParamValue::Bool(false)
+        )
+        .is_ok());
 
     let local = manifold_core::scene_modifier_preset::SceneNodeRef {
         scope: vec![NodeId::new("elastic_stage")],

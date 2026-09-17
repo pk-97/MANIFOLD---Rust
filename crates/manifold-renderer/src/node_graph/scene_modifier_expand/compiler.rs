@@ -66,8 +66,8 @@ fn endpoint_scope(endpoint: SceneEndpoint) -> SceneStageScope {
     }
 }
 
-/// Recheck effective render settings after initial manifest values are applied.
-/// Serialized defaults alone cannot decide whether the live owner requests RT.
+/// Recheck prepared scene targets after initial manifest values are applied.
+/// Serialized defaults alone cannot decide whether the live owner is valid.
 pub fn validate_modifier_runtime(
     owner: &EffectGraphDef,
     graph: &crate::node_graph::Graph,
@@ -89,19 +89,10 @@ pub fn validate_modifier_runtime(
         if !writes_vertices {
             continue;
         }
-        let scene = graph
+        graph
             .instance_by_node_id(&instance.scene.node)
             .and_then(|id| graph.get_node(id))
             .ok_or_else(|| invalid(instance.id.to_string(), "prepared scene target is absent"))?;
-        if matches!(
-            scene.params.get("rt_enabled"),
-            Some(crate::node_graph::parameters::ParamValue::Bool(true))
-        ) {
-            return Err(SceneModifierExpandError::UnsupportedRenderMode {
-                path: instance.id.to_string(),
-                detail: "effective ray tracing is incompatible with a vertices modifier, including while bypassed".into(),
-            });
-        }
     }
     Ok(())
 }
@@ -1404,39 +1395,6 @@ impl Builder<'_> {
         self.constant_node(key, "node.value", params, "out")
     }
 
-    fn reject_dynamic_rt(
-        &self,
-        owner: &EffectGraphDef,
-        instance: &SceneModifierInstanceDef,
-    ) -> Result<(), SceneModifierExpandError> {
-        let scene = self.index.node(&instance.scene)?;
-        let mut enabled = matches!(
-            scene.params.get("rt_enabled"),
-            Some(SerializedParamValue::Bool { value: true })
-        );
-        if let Some(metadata) = &owner.preset_metadata {
-            for binding in &metadata.bindings {
-                if !binding.default_mirrors_node_param
-                    && matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if *node_id == scene.node_id && param == "rt_enabled")
-                {
-                    enabled = matches!(
-                        crate::node_graph::param_binding::convert_param_value(
-                            binding.convert,
-                            binding.default_value * binding.scale + binding.offset
-                        ),
-                        crate::node_graph::parameters::ParamValue::Bool(true)
-                    );
-                }
-            }
-        }
-        if enabled {
-            return Err(SceneModifierExpandError::UnsupportedRenderMode {
-                path: instance.id.to_string(), detail: "vertex modifiers are not qualified for dynamic ray tracing; choose raster rendering or remove the modifier (BUG-e3p6.4)".into(),
-            });
-        }
-        Ok(())
-    }
-
     fn attachment_key(
         &mut self,
         instance: &SceneModifierInstanceDef,
@@ -1829,9 +1787,6 @@ impl Builder<'_> {
                                 key.1
                             ),
                         });
-                    }
-                    if output.endpoint == SceneEndpoint::Vertices {
-                        self.reject_dynamic_rt(owner, instance)?;
                     }
                     self.current
                         .insert(key.clone(), Some((copy, output.port.clone())));

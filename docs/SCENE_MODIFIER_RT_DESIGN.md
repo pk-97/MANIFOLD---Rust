@@ -327,6 +327,15 @@ Refactor `validate_topology_and_author_flags` into collection/validation and a l
 
 Remove `rt_deferred_build_decision`, `rt_refit_eligible`, content-pending keys and the topology-only trace gate. Replace them with one successful-current-update result plus pending/error handling. Pending sources propagate through existing warmup; an incomplete RT scene does not quietly trace a subset as complete. A currently published scene stays visible while a replacement warms through existing candidate publication. If a previously active source becomes unavailable, surface the existing structured render error; never silently use stale geometry.
 
+Enable the same path through authoring and loading: vertex modifiers must not
+lock `rt_enabled` in `scene_modifier_parameter_lock_reason`, reject authored or
+live RT in the modifier compiler, or install a raster-only prepared-parameter
+guard. This includes legacy fragment graphs. Keep calibrated source-selector
+locks and source-frame validation. The regression
+`rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches` loads
+the stock Vortex Fragments → Ordered Recon stack and exercises RT on/off/on;
+this establishes dispatch and frame validity, not full-project export acceptance.
+
 Fold geometry/attribute/material/appearance invalidation into the single reset decision used by RT accumulation, moments, SVT, denoiser and temporal upscaler. `MeshTopologyHistory` consumes the general topology revisions plus the existing explicit hint rather than maintaining an independent cut-only authority. Deformation resets temporal consumers but does not pretend to supply true deformation velocity. On unchanged frames, no forced reset. World transforms retain existing reprojection behavior.
 
 ### 5.4 Frame validity and export

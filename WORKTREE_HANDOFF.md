@@ -8,6 +8,24 @@ without user approval. The lease is released, cache scrubbed, and source checkou
 retained safely in slot-0 pending approved remote archival and retirement.
 User requested a 30-minute implementation window and tests at the end.
 
+## Preview follow-up: vertex-modifier RT toggle
+
+The first preview still showed the old vertex-modifier RT-lock toast. Removed
+the core editor lock, compiler authored/live RT rejections and prepared RT
+parameter protection; calibrated source locks and scene target validation remain.
+This applies to modern recipes and legacy fragment graphs. Added an EditingService
+undo/redo regression and a production stock Vortex Fragments → Ordered Recon
+on/off/on GPU proof using a deterministic two-cube fixture with an environment.
+The initial GPU attempt caught a missing environment in that test fixture; after
+wiring the existing procedural environment node, its single verification passed.
+This does not verify the user's full project or export, and P5 remains unfinished.
+
+Follow-up checks: focused core/editing tests 53 + 21 passed; modifier compiler and
+guard tests 70 passed; stock-combo GPU proof 1 passed. Focused core/editing/renderer
+clippy with gpu-proofs passed after asserting undo/redo return values. The later
+environment-only fixture correction was compiled and run by the GPU gate.
+The worktree is active again for Peter's release preview; preserve it while used.
+
 Parent feature branch: `feat/rt-p5-dynamic-scene-path` at
 `b3bd00066059ff9c605a0a0e3e7598d317687d25`, based on main `90756f831`.
 Earlier commits retained in ancestry: `698667f12` (f8 journey readiness),

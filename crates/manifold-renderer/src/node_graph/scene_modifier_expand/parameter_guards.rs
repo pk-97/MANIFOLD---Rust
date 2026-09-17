@@ -1,8 +1,8 @@
-//! Prepared source selectors and renderer modes cannot change underneath
-//! saved calibration or allocated buffers. Ordinary geometry controls stay live.
+//! Prepared source selectors cannot change underneath saved calibration or
+//! allocated buffers. Scene targets remain valid while ordinary controls stay live.
 
 use super::SceneModifierExpandError;
-use crate::node_graph::{Graph, ParamValue};
+use crate::node_graph::Graph;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_modifier_preset::SceneEndpoint;
 use manifold_core::NodeId;
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct PreparedModifierParameterGuards {
     sources: Vec<(NodeId, BTreeMap<String, SerializedParamValue>)>,
-    raster_scenes: Vec<NodeId>,
+    scenes: Vec<NodeId>,
 }
 
 fn invalid(path: impl Into<String>, detail: impl Into<String>) -> SceneModifierExpandError {
@@ -55,7 +55,7 @@ impl PreparedModifierParameterGuards {
             }
             sources.push((source.node_id.clone(), params));
         }
-        let mut raster_scenes: Vec<NodeId> = owner
+        let mut scenes: Vec<NodeId> = owner
             .scene_modifiers
             .iter()
             .filter(|modifier| {
@@ -77,8 +77,8 @@ impl PreparedModifierParameterGuards {
             .collect();
         // Legacy v2 graphs have no scene-modifier metadata. Their fragment
         // stages survive inside flattened groups, so discover every render
-        // scene reachable downstream from those stages and apply the same
-        // canonical raster guard used by modern stacks.
+        // scene reachable downstream from those stages and retain target
+        // existence validation for the prepared runtime.
         let fragment_ids: BTreeSet<u32> = index
             .flat
             .nodes
@@ -108,8 +108,8 @@ impl PreparedModifierParameterGuards {
                     continue;
                 };
                 if target.type_id == "node.render_scene" {
-                    if !target.node_id.is_empty() && !raster_scenes.contains(&target.node_id) {
-                        raster_scenes.push(target.node_id.clone());
+                    if !target.node_id.is_empty() && !scenes.contains(&target.node_id) {
+                        scenes.push(target.node_id.clone());
                     }
                 } else {
                     pending.push(target.id);
@@ -118,7 +118,7 @@ impl PreparedModifierParameterGuards {
         }
         Ok(Self {
             sources,
-            raster_scenes,
+            scenes,
         })
     }
 
@@ -154,17 +154,11 @@ impl PreparedModifierParameterGuards {
                 }
             }
         }
-        for scene in &self.raster_scenes {
-            let node = graph
+        for scene in &self.scenes {
+            graph
                 .instance_by_node_id(scene)
                 .and_then(|id| graph.get_node(id))
                 .ok_or_else(|| invalid(scene.to_string(), "runtime scene is absent"))?;
-            if node.params.get("rt_enabled") != Some(&ParamValue::Bool(false)) {
-                return Err(SceneModifierExpandError::UnsupportedRenderMode {
-                    path: scene.to_string(),
-                    detail: "vertices modifiers require raster rendering".into(),
-                });
-            }
         }
         for (source, _) in self.sources {
             let id = graph
@@ -184,14 +178,6 @@ impl PreparedModifierParameterGuards {
                     .map_err(|error| invalid(source.to_string(), error.to_string()))?;
             }
         }
-        for scene in self.raster_scenes {
-            let id = graph
-                .instance_by_node_id(&scene)
-                .expect("scene validated above");
-            graph
-                .protect_prepared_param(id, "rt_enabled")
-                .map_err(|error| invalid(scene.to_string(), error.to_string()))?;
-        }
         Ok(())
     }
 }
@@ -199,6 +185,7 @@ impl PreparedModifierParameterGuards {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::persistence::EffectGraphDefExt;
 
     const LEGACY_SURFACE_PEEL: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -206,16 +193,40 @@ mod tests {
     ));
 
     #[test]
-    fn legacy_fragment_reaches_only_its_render_scene_guard() {
+    fn legacy_fragment_accepts_rt_toggles_and_validates_target() {
         let owner: EffectGraphDef =
             serde_json::from_str(LEGACY_SURFACE_PEEL).expect("legacy fixture parses");
         let guards = PreparedModifierParameterGuards::prepare(&owner)
             .expect("legacy fragment graph should prepare");
         assert_eq!(
-            guards.raster_scenes,
+            guards.scenes,
             vec![NodeId::new("scan_render")],
-            "only the downstream render scene receives the raster guard"
+            "the legacy downstream render scene remains a valid target"
         );
         assert!(guards.sources.is_empty());
+
+        let mut graph = owner
+            .into_graph(
+                &crate::node_graph::persistence::PrimitiveRegistry::with_builtin(),
+                &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+            )
+            .expect("legacy fixture graph builds");
+        let scene = graph
+            .instance_by_node_id(&NodeId::new("scan_render"))
+            .expect("legacy render scene");
+        graph.set_param_unchecked(
+            scene,
+            "rt_enabled",
+            crate::node_graph::ParamValue::Bool(true),
+        );
+        guards
+            .install(&mut graph)
+            .expect("RT-enabled legacy scene remains admissible");
+        assert!(graph
+            .set_param(scene, "rt_enabled", crate::node_graph::ParamValue::Bool(false))
+            .is_ok());
+        assert!(graph
+            .set_param(scene, "rt_enabled", crate::node_graph::ParamValue::Bool(true))
+            .is_ok());
     }
 }
