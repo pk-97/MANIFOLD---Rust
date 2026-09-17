@@ -9,6 +9,7 @@ use crate::NodeId;
 pub const CONTROL_PREFIX: &str = "math_view_";
 pub const CONTROLS: &[(&str, &str, f32, f32, f32)] = &[
     ("mode", "Mode", 0.0, 0.0, 2.0),
+    ("occlusion", "Occlusion", 0.0, 0.0, 1.0),
     ("grid", "Grid", 1.0, 0.0, 1.0),
     ("fragments", "Fragments", 1.0, 0.0, 1.0),
     ("ghosts", "Ghosts", 1.0, 0.0, 1.0),
@@ -56,6 +57,7 @@ fn whole_numbers(suffix: &str) -> bool {
     matches!(
         suffix,
         "mode"
+            | "occlusion"
             | "scope"
             | "density"
             | "pulse_target"
@@ -86,6 +88,7 @@ fn is_trigger_gate(suffix: &str) -> bool {
 fn value_labels(suffix: &str) -> Vec<String> {
     match suffix {
         "mode" => vec!["Scene".into(), "Math".into(), "Overlay".into()],
+        "occlusion" => vec!["X-ray".into(), "Depth".into()],
         "scope" => vec!["This modifier".into(), "Within chain".into()],
         "pulse_target" | "scan_target" => {
             ["All", "Grid", "Fragments", "Ghosts", "Vectors", "Trails"]
@@ -283,6 +286,7 @@ mod tests {
         enrich_math_view_controls(&mut graph).unwrap();
         let metadata = graph.preset_metadata.as_ref().unwrap();
         let expected = [
+            ("occlusion", 0.0, 0.0, 1.0),
             ("grid_brightness", 1.0, 0.0, 2.0),
             ("fragments_brightness", 1.0, 0.0, 2.0),
             ("ghosts_brightness", 1.0, 0.0, 2.0),
@@ -341,6 +345,80 @@ mod tests {
             .find(|param| param.id == "math_view_scan_mode")
             .unwrap();
         assert_eq!(mode.value_labels, ["Highlight", "Reveal"]);
+    }
+
+    #[test]
+    fn occlusion_depth_override_survives_serialization() {
+        let mut graph = fixture();
+        enrich_math_view_controls(&mut graph).unwrap();
+        let id = format!("{CONTROL_PREFIX}occlusion");
+        let spec = graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .find(|param| param.id == id)
+            .unwrap();
+        assert!(spec.whole_numbers);
+        assert_eq!(spec.value_labels, ["X-ray", "Depth"]);
+        graph
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|param| param.id == id)
+            .unwrap()
+            .default_value = 1.0;
+        graph
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.id == id)
+            .unwrap()
+            .default_value = 1.0;
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == control_node_id("occlusion"))
+            .unwrap()
+            .params
+            .insert("value".into(), SerializedParamValue::Float { value: 1.0 });
+
+        let decoded: EffectGraphDef =
+            serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        let metadata = decoded.preset_metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata
+                .params
+                .iter()
+                .find(|param| param.id == id)
+                .unwrap()
+                .default_value,
+            1.0
+        );
+        assert_eq!(
+            metadata
+                .bindings
+                .iter()
+                .find(|binding| binding.id == id)
+                .unwrap()
+                .default_value,
+            1.0
+        );
+        assert_eq!(
+            decoded
+                .nodes
+                .iter()
+                .find(|node| node.node_id == control_node_id("occlusion"))
+                .unwrap()
+                .params
+                .get("value"),
+            Some(&SerializedParamValue::Float { value: 1.0 })
+        );
     }
 
     #[test]

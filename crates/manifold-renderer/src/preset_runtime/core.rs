@@ -2182,6 +2182,7 @@ impl PresetRuntime {
             inst.node.clear_state();
         }
         self.state_store.cleanup_all();
+        self.pin_math_view_depth(device, width, height);
         for view in &mut self.math_views {
             view.resize(self.executor.backend(), device, width, height, format);
         }
