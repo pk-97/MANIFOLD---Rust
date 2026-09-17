@@ -309,11 +309,10 @@ mod tests {
 /// f_mm = 24 / (2*1) = 12mm — a clean number to hand-check against).
 /// near = 0.1, far = 100.0 world units (meters).
 ///
-/// `linearize_depth(raw, near, far)`: range = far/(near-far) =
-/// 100/(0.1-100) = 100/-99.9 = -1.0010010... ; view_z =
-/// (range*near)/(raw+range) = (-0.10010010...)/(raw - 1.0010010...).
-/// Each case below plugs in `raw` and carries the division by hand in
-/// the comment, then applies D1's CoC formula verbatim.
+/// `linearize_depth(raw, near, far)` uses reversed-Z:
+/// `view_z = near*far / (near + raw*(far-near))`. Each case below plugs in
+/// `raw` and carries the division by hand in the comment, then applies D1's
+/// CoC formula verbatim.
 #[cfg(test)]
 mod hand_computed_coc {
     use crate::node_graph::camera::linearize_depth;
@@ -387,13 +386,11 @@ mod hand_computed_coc {
 
     /// Case 1: focus exactly AT the sample (D_mm == S_mm) — CoC must be
     /// exactly 0 regardless of aperture (the |D-S| term is 0). raw chosen so
-    /// linearize_depth(raw) == 5.0 exactly: range*near/(raw+range) = 5 =>
-    /// raw = range*near/5 - range = range*(near/5 - 1) = -1.001001*(0.02-1)
-    /// = -1.001001 * -0.98 = 0.98098098...
+    /// `linearize_depth(raw) == 5.0` exactly:
+    /// `raw = near*(far-5) / (5*(far-near)) = 0.019019019...`.
     #[test]
     fn case_1_focus_at_sample_gives_zero_coc() {
-        let range = FAR / (NEAR - FAR);
-        let raw = range * (NEAR / 5.0 - 1.0);
+        let raw = NEAR * (FAR - 5.0) / (5.0 * (FAR - NEAR));
         let view_z = linearize_depth(raw, NEAR, FAR);
         assert!((view_z - 5.0).abs() < 1e-4, "fixture raw must linearize to 5.0m, got {view_z}");
         let got = coc_output(raw, 5.0, 2.8, 24.0, WORLD_TO_MM);
@@ -413,9 +410,7 @@ mod hand_computed_coc {
 
     /// Case 3: hand-worked non-trivial point. raw = 0.5, focus_distance =
     /// 2.0, f_stop = 2.0, max_radius = 24.0.
-    ///   range = 100/(0.1-100) = -1.001001...
-    ///   view_z = (range*0.1)/(0.5+range) = (-0.1001001)/(0.5-1.001001)
-    ///          = (-0.1001001)/(-0.501001) = 0.1997999... m
+    ///   view_z = 0.1*100 / (0.1 + 0.5*99.9) = 0.1997999... m
     ///   D_mm = 199.7999 mm ; S_mm = 2000 mm
     ///   f_mm = 24/(2*tan(45deg)) = 24/2 = 12 mm ; A_mm = 12/2.0 = 6 mm
     ///   coc_mm = 6 * 12 * |199.7999 - 2000| / (199.7999 * max(2000-12,1))
@@ -432,11 +427,10 @@ mod hand_computed_coc {
     }
 
     /// Case 4: depth far beyond focus, wide aperture — clamp to max_radius
-    /// must engage. raw = 0.95 (near the far plane), focus_distance = 0.5m
+    /// must engage. raw = 0.05 (near the far plane in reversed-Z), focus_distance = 0.5m
     /// (very close focus), f_stop = 0.5 (huge aperture) — the CoC blows past
     /// max_radius = 24 and must clamp.
-    ///   range = -1.001001 ; view_z = (-0.1001001)/(0.95-1.001001)
-    ///         = (-0.1001001)/(-0.051001) = 1.96271... m ; D_mm = 1962.71 mm
+    ///   view_z = 0.1*100 / (0.1 + 0.05*99.9) = 1.96271... m ; D_mm = 1962.71 mm
     ///   S_mm = 500 mm ; f_mm = 12 mm ; A_mm = 12/0.5 = 24 mm
     ///   coc_mm = 24*12*|1962.71-500| / (1962.71*max(500-12,1))
     ///          = 288*1462.71 / (1962.71*488) = 421260.5 / 957842.5
@@ -447,16 +441,15 @@ mod hand_computed_coc {
     ///   clamp-engaged case). Verified with a Python f32 cross-check.
     #[test]
     fn case_4_close_focus_wide_aperture_far_depth() {
-        let got = coc_output(0.95, 0.5, 0.5, 24.0, WORLD_TO_MM);
+        let got = coc_output(0.05, 0.5, 0.5, 24.0, WORLD_TO_MM);
         assert!((got[0] - 19.7919 / 24.0).abs() < 5e-4, "hand-worked case_4 magnitude: expected ~{}, got {}", 19.7919 / 24.0, got[0]);
-        assert_eq!(got[1], 0.0, "raw 0.95 is far from focus=0.5, sign flag == 0");
+        assert_eq!(got[1], 0.0, "raw 0.05 is far from focus=0.5, sign flag == 0");
     }
 
-    /// Case 5: clamp-engaged. raw = 0.99 (very near far plane), focus_distance
+    /// Case 5: clamp-engaged. raw = 0.01 (very near the far plane in reversed-Z), focus_distance
     /// = 0.2m, f_stop = 0.5 (huge aperture) — CoC must exceed max_radius and
     /// clamp exactly to it.
-    ///   range = -1.001001 ; view_z = (-0.1001001)/(0.99-1.001001)
-    ///         = (-0.1001001)/(-0.011001) = 9.09889... m ; D_mm = 9098.89 mm
+    ///   view_z = 0.1*100 / (0.1 + 0.01*99.9) = 9.09889... m ; D_mm = 9098.89 mm
     ///   S_mm = 200 mm ; f_mm = 12 mm ; A_mm = 24 mm
     ///   coc_mm = 24*12*|9098.89-200| / (9098.89*max(200-12,1))
     ///          = 288*8898.89 / (9098.89*188) = 2562880 / 1710591
@@ -466,9 +459,9 @@ mod hand_computed_coc {
     ///   exactly.
     #[test]
     fn case_5_clamp_engages_at_max_radius() {
-        let got = coc_output(0.99, 0.2, 0.5, 24.0, WORLD_TO_MM);
+        let got = coc_output(0.01, 0.2, 0.5, 24.0, WORLD_TO_MM);
         assert!((got[0] - 1.0).abs() < 1e-6, "clamp must give magnitude == max_radius/max_radius = 1.0, got {}", got[0]);
-        assert_eq!(got[1], 0.0, "raw 0.99 is far from focus=0.2, sign flag == 0");
+        assert_eq!(got[1], 0.0, "raw 0.01 is far from focus=0.2, sign flag == 0");
     }
 
     /// **Scene-scale invariance (BUG-bdwd)**: the CoC formula is homogeneous
@@ -573,7 +566,7 @@ mod gpu_tests {
         for y in 0..h {
             for x in 0..w {
                 let i = ((y * w + x) * 4) as usize;
-                let raw = 0.1 + 0.8 * (x as f32 / (w.saturating_sub(1).max(1)) as f32);
+                let raw = 0.9 - 0.8 * (x as f32 / (w.saturating_sub(1).max(1)) as f32);
                 px[i] = f16::from_f32(raw);
                 px[i + 1] = f16::from_f32(raw);
                 px[i + 2] = f16::from_f32(raw);

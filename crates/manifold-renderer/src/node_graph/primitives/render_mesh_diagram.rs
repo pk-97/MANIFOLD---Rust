@@ -202,10 +202,10 @@ impl RenderMeshDiagram {
             Some(GpuBlendState {
                 src_factor: GpuBlendFactor::One,
                 dst_factor: GpuBlendFactor::One,
-                operation: GpuBlendOp::Min,
+                operation: GpuBlendOp::Max,
                 src_alpha_factor: GpuBlendFactor::One,
                 dst_alpha_factor: GpuBlendFactor::One,
-                alpha_operation: GpuBlendOp::Min,
+                alpha_operation: GpuBlendOp::Max,
             }),
             Self::TYPE_ID,
         );
@@ -239,10 +239,10 @@ impl RenderMeshDiagram {
                 format: GpuTextureFormat::R32Float,
                 dimension: GpuTextureDimension::D2,
                 usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
-                label: "node.render_mesh_diagram far depth",
+                label: "node.render_mesh_diagram background depth",
                 mip_levels: 1,
             });
-            device.upload_texture(&texture, bytemuck::bytes_of(&1.0f32));
+            device.upload_texture(&texture, bytemuck::bytes_of(&0.0f32));
             self.dummy_depth = Some(texture);
         }
     }
@@ -486,8 +486,8 @@ impl Primitive for RenderMeshDiagram {
                     SHADER, "vs_main", "fs_depth", GpuTextureFormat::R32Float,
                     Some(GpuBlendState {
                         src_factor: GpuBlendFactor::One, dst_factor: GpuBlendFactor::One,
-                        operation: GpuBlendOp::Min, src_alpha_factor: GpuBlendFactor::One,
-                        dst_alpha_factor: GpuBlendFactor::One, alpha_operation: GpuBlendOp::Min,
+                        operation: GpuBlendOp::Max, src_alpha_factor: GpuBlendFactor::One,
+                        dst_alpha_factor: GpuBlendFactor::One, alpha_operation: GpuBlendOp::Max,
                     }), Self::TYPE_ID,
                 ));
             }
@@ -500,7 +500,7 @@ impl Primitive for RenderMeshDiagram {
                 }
                 gpu.copy_texture_to_texture(previous, depth_out, depth_out.width, depth_out.height);
             } else {
-                gpu.native_enc.clear_texture(depth_out, 1.0, 1.0, 1.0, 1.0);
+                gpu.native_enc.clear_texture(depth_out, 0.0, 0.0, 0.0, 0.0);
             }
             let mut depth_uniforms = uniforms;
             depth_uniforms.depth_pass = 1;

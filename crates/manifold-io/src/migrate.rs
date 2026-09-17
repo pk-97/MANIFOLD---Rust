@@ -142,6 +142,14 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.15.0".to_string());
     }
 
+    // Camera device depth now runs near=1, far=0. Physical camera and
+    // material parameters are unchanged. Gate older binaries on save and
+    // report custom raw-depth consumers instead of guessing shader edits.
+    if is_version_less_than(&version, "1.16.0") {
+        crate::migrations::reversed_depth_v1160::audit(&root);
+        root["projectVersion"] = Value::String("1.16.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

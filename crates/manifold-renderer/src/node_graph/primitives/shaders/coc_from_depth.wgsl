@@ -24,8 +24,7 @@ const SENSOR_H_MM: f32 = 24.0;
 @group(0) @binding(2) var output_tex: texture_storage_2d<rgba16float, write>;
 
 fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
-    let range = far / (near - far);
-    return (range * near) / (raw + range);
+    return (near * far) / (near + raw * (far - near));
 }
 
 @compute @workgroup_size(16, 16)

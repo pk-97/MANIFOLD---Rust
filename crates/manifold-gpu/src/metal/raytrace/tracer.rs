@@ -1304,8 +1304,8 @@ impl MetalShadowRayTracer {
     /// SAME `firefly_clamp_center` MSL helper the production `firefly_clamp`
     /// kernel calls, against a caller-supplied 3x3 `color` neighborhood
     /// (row-major, `color[0]` = top-left) and a matching 3x3 `depth`
-    /// neighborhood (`depth[i] >= 1.0 - 1e-6` = void, read from the center's
-    /// (1,1) texel). Depth uploads as R32Float (Depth32Float has no
+    /// neighborhood (`depth[i] <= 0.0` = reversed-Z void, read from the
+    /// center's (1,1) texel). Depth uploads as R32Float (Depth32Float has no
     /// CPU-upload path) and the debug kernel reads it via the
     /// `read_firefly_depth` `texture2d<float>` overload — the same scalar
     /// depth value the production `depth2d<float>` path sees. No ray

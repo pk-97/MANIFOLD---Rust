@@ -5,7 +5,7 @@
 //! supplied 3x3 neighborhood — no ray tracing, no full-res pass involved).
 //!
 //! The filter: per-texel bilateral spatial blur on the accumulated irradiance.
-//! Void texels (depth >= 1-1e-6) pass through bit-exact. Non-void texels:
+//! Void texels (depth <= 0) pass through bit-exact. Non-void texels:
 //! temporal output variance (from moments .r/.g/.w) + spatial luma spread
 //! guide the luma sigma; 8-tap dilated 3x3 with depth/normal/luma edge-stop
 //! weights; output = mix(src, filtered, strength); .a passes through unchanged
@@ -43,8 +43,8 @@ const POST_LUMA_SIGMA_FLOOR: f32 = 0.02;
 const POST_SPATIAL_GAIN: f32 = 2.0;
 const POST_EARLY_OUT: f32 = 0.004;
 
-/// Depth value marking a void texel (depth >= 1-1e-6 in the kernel).
-const VOID: f32 = 1.0;
+/// Depth value marking a void texel (depth <= 0 in the kernel).
+const VOID: f32 = 0.0;
 const NON_VOID: f32 = 0.5;
 
 /// Row-major 3x3 index: (row, col) -> flat index. Center = (1,1) = index 4.
@@ -65,7 +65,7 @@ fn atrous_post_center_cpu(
 ) -> [f32; 4] {
     let src = src_irr[idx(1, 1)];
     let center_depth = depth[idx(1, 1)];
-    if center_depth >= 1.0 - 1e-6 {
+    if center_depth <= 0.0 {
         return src; // void passthrough
     }
     let mo = moments[idx(1, 1)];
@@ -110,7 +110,7 @@ fn atrous_post_center_cpu(
         let c = (1i32 + dc * step as i32).clamp(0, 2) as usize;
         let qi = idx(r, c);
         let qd = depth[qi];
-        if qd >= 1.0 - 1e-6 {
+        if qd <= 0.0 {
             continue; // void neighbor: skip
         }
         let qn = [normal[qi][0], normal[qi][1], normal[qi][2]];

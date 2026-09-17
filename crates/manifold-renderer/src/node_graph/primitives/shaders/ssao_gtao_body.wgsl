@@ -116,6 +116,8 @@ fn gtao_view_pos(
     far: f32,
 ) -> vec3<f32> {
     let cc = clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+    // Reversed-Z uses raw=0 for the far/background sentinel; the stable
+    // inverse maps it to `far`, so background remains outside nearby samples.
     let raw = textureLoad(depth, cc, 0).r;
     let view_z = linearize_depth(raw, near, far);
     let uv = (vec2<f32>(cc) + vec2<f32>(0.5, 0.5)) / vec2<f32>(dims_i);
