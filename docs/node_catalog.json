@@ -18918,12 +18918,36 @@
           "name": "scan_mode",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "surface_depth",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "scene_depth",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "occlusion",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mode",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Mesh Diagram",
       "outputs": [
         {
           "name": "color",
+          "type": "Texture2D"
+        },
+        {
+          "name": "depth",
           "type": "Texture2D"
         }
       ],
@@ -19013,6 +19037,26 @@
           "type": "float"
         },
         {
+          "default": "0",
+          "label": "Occlusion",
+          "name": "occlusion",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Mode",
+          "name": "mode",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
+        {
           "default": "true",
           "label": "Grid",
           "name": "grid",
@@ -19093,7 +19137,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Render sparse evaluated MeshVertex samples through the authored Camera for Math View. This presentation node contains no modifier math.",
+      "purpose": "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; this presentation node contains no modifier math.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Draws sparse evaluated mesh samples as a transparent native diagram.",
@@ -27490,6 +27534,10 @@
       "label": null,
       "outputs": [
         {
+          "name": "depth",
+          "type": "Texture2D"
+        },
+        {
           "name": "vertices",
           "type": "Array"
         },
@@ -27511,6 +27559,11 @@
       "examples": [],
       "fusion": "boundary:non_gpu",
       "inputs": [
+        {
+          "name": "depth",
+          "required": false,
+          "type": "Texture2D"
+        },
         {
           "name": "vertices",
           "required": true,

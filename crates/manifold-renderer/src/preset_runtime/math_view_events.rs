@@ -42,6 +42,11 @@ impl MathEvents {
                 })
                 .collect()
         };
+        let presentations = |runtime: &PresetRuntime| -> Result<_, JsonGeneratorLoadError> {
+            let mut nodes = resolve(runtime, "diagram")?;
+            nodes.extend(resolve(runtime, "surface")?);
+            Ok(nodes)
+        };
         Ok(Self {
             controls,
             masks: resolve(parent, "weights")?,
@@ -50,8 +55,8 @@ impl MathEvents {
                 resolve(&variants[1], "weights")?,
             ],
             diagrams: [
-                resolve(&variants[0], "diagram")?,
-                resolve(&variants[1], "diagram")?,
+                presentations(&variants[0])?,
+                presentations(&variants[1])?,
             ],
             pulse: Default::default(),
             scan: Default::default(),
