@@ -56,6 +56,8 @@ The existing `node.render_mesh_diagram` supplies an optional `depth` output and 
 
 ## 3. Seams
 
+_Sections 1–7 describe the embedded per-modifier design. Superseded by section 8 (standalone Math View): `enrich_math_view_controls`, `has_math_view_controls` and `MathViewScope` no longer exist, and the Scope control is retired. The paragraphs below remain as the record of the original slice._
+
 Core exports `enrich_math_view_controls(&mut EffectGraphDef) -> Result<bool, String>` and `has_math_view_controls(&EffectGraphDef) -> bool`, plus the shared control vocabulary. Controls include Mode (Scene/Math/Overlay), Occlusion (X-ray/Depth), five element toggles and brightness levels, plus an Axes toggle, Pulse and Scan controls described in D6, Connect to Mesh, Density (2–8), Line Width, Geometry Hue, Path Hue, and Scope (This modifier/Within chain). The bundled recipe carries the same metadata; saved recipes receive additive enrichment on load.
 
 The compiler exports `MathViewScope { ThisModifier, WithinChain }` and `prepare_scene_modifier_math_view(owner: &EffectGraphDef, registry: &PrimitiveRegistry, modifier_id: &NodeId, scope: MathViewScope) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError>`. It shares normal preparation and preserves its route/binding-source contracts. Canonical data is never modified by rendering.
