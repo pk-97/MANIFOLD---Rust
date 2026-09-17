@@ -128,12 +128,13 @@ pub struct RtAccel {
     /// consumed by the descriptor-build kernel on the GPU. `None` in the
     /// D7 fast path.
     pub(crate) instance_obj_params: Option<GpuBuffer>,
-    /// Retained handles to every object's vertex (and index) buffers as
-    /// built. The trace kernels read these through RAW GPU ADDRESSES
-    /// (`RtNormalSource.vertex_base_addr`) — an indirect reach no binding
-    /// declares, exactly the BUG-jddy reclamation class: under memory
-    /// pressure the driver may reclaim a resource no submitted command
-    /// declares usage on (BUG-84fv audit). Retaining them here pins
+    /// Retained handles to every object's vertex, index and appearance-
+    /// weights buffers as built. The trace kernels read these through RAW
+    /// GPU ADDRESSES (`RtNormalSource.vertex_base_addr` /
+    /// `appearance_weights_addr` / `index_base_addr`) — an indirect reach no
+    /// binding declares, exactly the BUG-jddy reclamation class: under
+    /// memory pressure the driver may reclaim a resource no submitted
+    /// command declares usage on (BUG-84fv audit). Retaining them here pins
     /// lifetime to the accel's; encoder.rs's accel dispatch declares
     /// useResource on each per trace dispatch. Buffer-identity changes
     /// are a topology change (refit contract) and rebuild the accel, so
@@ -166,9 +167,9 @@ pub struct RtAccel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RtGeometryTopology { vertex: usize, vertex_offset: u32, vertex_stride: u32, triangle_count: u32, index: Option<usize>, normal_offset: u32, uv_offset: u32, instance_slots: u32, wired: bool, alpha_mask: bool }
-impl RtGeometryTopology { fn from_geometry(o: &RtObjectGeometry<'_>) -> Self { Self { vertex: o.vertex_buffer.identity_key(), vertex_offset: o.vertex_offset, vertex_stride: o.vertex_stride, triangle_count: o.triangle_count, index: o.index_buffer.map(|b| b.identity_key()), normal_offset: o.normal_offset, uv_offset: o.uv_offset, instance_slots: effective_instance_slots(o), wired: o.instances_addr != 0, alpha_mask: o.alpha_mask } } }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RtTopologyMismatchCategory { ObjectCount, DescriptorMode, Vertex, Index, NormalUv, InstanceSlots, AlphaMask, SlotOverflow }
+pub(crate) struct RtGeometryTopology { vertex: usize, vertex_offset: u32, vertex_stride: u32, triangle_count: u32, index: Option<usize>, normal_offset: u32, uv_offset: u32, instance_slots: u32, wired: bool, nonopaque: bool, appearance_weights: Option<usize> }
+impl RtGeometryTopology { fn from_geometry(o: &RtObjectGeometry<'_>) -> Self { Self { vertex: o.vertex_buffer.identity_key(), vertex_offset: o.vertex_offset, vertex_stride: o.vertex_stride, triangle_count: o.triangle_count, index: o.index_buffer.map(|b| b.identity_key()), normal_offset: o.normal_offset, uv_offset: o.uv_offset, instance_slots: effective_instance_slots(o), wired: o.instances_addr != 0, nonopaque: blas_geometry_nonopaque(o), appearance_weights: o.appearance_weights.map(|b| b.identity_key()) } } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RtTopologyMismatchCategory { ObjectCount, DescriptorMode, Vertex, Index, NormalUv, InstanceSlots, NonOpaque, AppearanceWeights, SlotOverflow }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct RtTopologyMismatch { pub object: usize, pub category: RtTopologyMismatchCategory }
 fn check_topology_records<I: ExactSizeIterator<Item = RtGeometryTopology>>(resident: &[RtGeometryTopology], resident_instanced: bool, resident_slots: u32, current: I) -> Result<(), RtTopologyMismatch> {
     if resident.len() != current.len() { return Err(RtTopologyMismatch { object: resident.len().min(current.len()), category: RtTopologyMismatchCategory::ObjectCount }); }
@@ -179,7 +180,17 @@ fn check_topology_records<I: ExactSizeIterator<Item = RtGeometryTopology>>(resid
         if a.index != b.index { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::Index }); }
         if a.normal_offset != b.normal_offset || a.uv_offset != b.uv_offset { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::NormalUv }); }
         if a.instance_slots != b.instance_slots || a.wired != b.wired { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::InstanceSlots }); }
-        if a.alpha_mask != b.alpha_mask { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::AlphaMask }); }
+        // §5.2 (P4b): the descriptor nonopaque property (alpha mask,
+        // translucency, wired weights, nonunit gain) is baked into the BLAS
+        // at build — a flip rebuilds the affected BLAS. A fractional-to-
+        // fractional gain change leaves this bool untouched and rides the
+        // per-frame normal-source table rewrite only.
+        if a.nonopaque != b.nonopaque { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::NonOpaque }); }
+        // P4b: weights buffer identity — the resident pin set and
+        // useResource declarations reference the planned buffers
+        // (§4.3), so a rewired weights buffer is a replacement, same
+        // discipline as the vertex/index identity keys.
+        if a.appearance_weights != b.appearance_weights { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::AppearanceWeights }); }
     }
     if instanced != resident_instanced { return Err(RtTopologyMismatch { object: 0, category: RtTopologyMismatchCategory::DescriptorMode }); }
     if slots != resident_slots { return Err(RtTopologyMismatch { object: resident.len(), category: RtTopologyMismatchCategory::InstanceSlots }); }
@@ -362,6 +373,23 @@ pub struct RtObjectGeometry<'a> {
     /// identity (the D7 fast path). The raster's live count is in-band
     /// (`pos_scale.w == 0` = dead slot), so capacity is all the CPU needs.
     pub instance_slots: u32,
+    /// SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): per-vertex appearance-weight
+    /// buffer (`f32` per vertex, vertex-index addressed — indexed meshes
+    /// included), `None` = unwired (weight 1). The checked weight count is
+    /// the mesh vertex count: a wired buffer with fewer floats than
+    /// `(vertex_buffer.size - vertex_offset) / vertex_stride` is a
+    /// structured `RtAccelError::InvalidGeometry` at plan/encode. Read
+    /// bindless by the trace/emissive kernels through
+    /// `RtNormalSource::appearance_weights_addr`; pinned in the accel's
+    /// geometry set exactly like `vertex_buffer`. Buffer identity is
+    /// topology (same discipline as `index_buffer`).
+    pub appearance_weights: Option<&'a GpuBuffer>,
+    /// P4b: per-object appearance gain — the raster's `u.appearance.x`.
+    /// `!= 1.0` (with or without weights) puts the object in the
+    /// descriptor-nonopaque class so the candidate walkers can apply the
+    /// coverage test; a fractional-to-fractional gain change rewrites only
+    /// the normal-source table row (rebuilt every RT-ready frame).
+    pub appearance_gain: f32,
 }
 
 pub(crate) fn validate_instance_source_address(instances_addr: u64, source_address: Option<u64>) -> Result<(), &'static str> {
@@ -386,12 +414,14 @@ pub(crate) fn validate_instance_source_address(instances_addr: u64, source_addre
 pub const RT_MASK_VISIBLE: u32 = 0x01;
 pub const RT_MASK_SHADOW_CASTER: u32 = 0x02;
 
-/// RT-T2-A / RT-TL-B (I-TL6): the BLAS hardware-opacity decision, one place.
-/// Opaque (hardware early-out) only when the object is neither alpha-masked
-/// nor translucent — both flags mean the kernel's candidate walks must see
-/// this object's triangles to reject/attenuate them manually.
-pub(crate) fn blas_geometry_opaque(alpha_mask: bool) -> bool {
-    !alpha_mask
+/// RT-T2-A / RT-TL-B (I-TL6) + §5.2 (P4b): the BLAS hardware-opacity
+/// decision, one place. Nonopaque (candidate walks must see this object's
+/// triangles to reject/attenuate them manually) when the object is
+/// alpha-masked OR translucent OR carries wired appearance weights OR a
+/// nonunit appearance gain — the design's descriptor-nonopaque property.
+/// Anything else keeps the hardware early-termination fast path.
+pub(crate) fn blas_geometry_nonopaque(obj: &RtObjectGeometry) -> bool {
+    obj.alpha_mask || obj.translucent || obj.appearance_weights.is_some() || obj.appearance_gain != 1.0
 }
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
@@ -430,11 +460,13 @@ fn blas_descriptors(
     // objects must NOT be geometry-opaque — the hardware traversal would
     // auto-accept every candidate without giving the kernel's
     // `walk_with_alpha_test` a chance to reject a below-cutoff texel.
-    // Non-alpha-masked objects stay `setOpaque(true)`, preserving the exact
-    // fast-path cost they had before this feature.
-    // RT-TL-B (section 16 TL6): translucent objects leave the fast path too —
-    // `walk_with_transmission` needs them delivered as candidates.
-    tri_desc.setOpaque(blas_geometry_opaque(obj.alpha_mask));
+    // §5.2 (P4b): the property widened to `alpha_mask || translucent ||
+    // weights wired || gain != 1.0` (`blas_geometry_nonopaque`) — the
+    // walkers' appearance coverage test needs candidates delivered for
+    // appearance-active objects on EVERY query class. Non-nonopaque objects
+    // stay `setOpaque(true)`, preserving the exact fast-path cost they had
+    // before these features.
+    tri_desc.setOpaque(!blas_geometry_nonopaque(obj));
     let geom: Retained<MTLAccelerationStructureGeometryDescriptor> = tri_desc.clone().into_super();
     let array = NSArray::from_retained_slice(&[geom]);
     let descriptor = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
@@ -678,20 +710,38 @@ fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), Rt
             }
         }
     }
+    // §5.2 (P4b): a wired appearance-weights buffer must hold one f32 per
+    // mesh vertex — a nonzero weights address with insufficient count is a
+    // structured geometry error, never an unchecked bindless read.
+    if let Some(weights) = o.appearance_weights {
+        let vertex_count = mesh_vertex_count(o);
+        let weight_count = weights.size() / 4;
+        if weight_count < u64::from(vertex_count) {
+            return Err(RtAccelError::InvalidGeometry { object: index, reason: format!("appearance weights hold {weight_count} floats, mesh has {vertex_count} vertices") });
+        }
+    }
     Ok(())
 }
 
+/// §5.2 (P4b): the mesh vertex count from the base address onward — the
+/// count `RtNormalSource::vertex_count` carries and the appearance-weights
+/// check validates against.
+pub(crate) fn mesh_vertex_count(o: &RtObjectGeometry) -> u32 {
+    (o.vertex_buffer.size().saturating_sub(u64::from(o.vertex_offset)) / u64::from(o.vertex_stride)) as u32
+}
+
 /// The worst-case emissive table charge (§4.1): the 4096-entry cap over
-/// the existing 80-byte triangle + 8-byte alias records, plus the CPU
-/// local-space vertex mirror (3 × float3 per entry). P4a's GPU candidate/
-/// sort workspaces refine this from actual triangle counts; P3 charges the
-/// cap unconditionally so admission never under-counts a scene that gains
-/// emission without a topology edit (§5.1's zero→positive requirement).
+/// the triangle (96 B — P4b added the per-corner appearance weights) and
+/// 8-byte alias records, entry scratch and alias stacks. P4a's GPU
+/// candidate/sort workspaces refine this from actual triangle counts; P3
+/// charges the cap unconditionally so admission never under-counts a scene
+/// that gains emission without a topology edit (§5.1's zero→positive
+/// requirement).
 fn emissive_peak_bytes(candidate_capacity: u32) -> u64 {
     // P4a: fixed table (triangles + aliases + stats + entry scratch + alias
     // stacks) plus the candidate/sort workspace sized over ALL objects.
     let cap = u64::from(super::emissive::MAX_RT_EMISSIVE_TRIANGLES);
-    let table = cap * (80 + 8 + 8 + 2 * 4) + 16;
+    let table = cap * (96 + 8 + 8 + 2 * 4) + 16;
     table + super::emissive::EmissiveScratch::bytes_for(candidate_capacity)
 }
 
@@ -709,7 +759,8 @@ fn blas_storage_compatible(resident: &RtGeometryTopology, current: &RtGeometryTo
         && resident.uv_offset == current.uv_offset
         && resident.instance_slots == current.instance_slots
         && resident.wired == current.wired
-        && resident.alpha_mask == current.alpha_mask
+        && resident.nonopaque == current.nonopaque
+        && resident.appearance_weights.is_some() == current.appearance_weights.is_some()
 }
 
 /// The tracer's cached TLAS-sizing probe: a 1-triangle BLAS STRUCTURE
@@ -756,6 +807,8 @@ pub(crate) fn tlas_probe_structure(
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 0,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     };
     let (_tri, descriptor) = blas_descriptors(&obj);
     let sizes = blas_sizes(device, &descriptor);
@@ -826,6 +879,13 @@ pub(crate) fn plan_accel(
             let mut v = vec![o.vertex_buffer.raw.clone()];
             if let Some(ib) = o.index_buffer {
                 v.push(ib.raw.clone());
+            }
+            // P4b (§5.2): the weights buffer is the same indirect-reach
+            // class (raw address in the normal-source row) — pin it with
+            // the geometry set so trace/emissive dispatches declare it and
+            // the accel's lifetime holds it.
+            if let Some(w) = o.appearance_weights {
+                v.push(w.raw.clone());
             }
             v
         })
@@ -1470,6 +1530,16 @@ pub fn ensure_normal_sources<'a>(
             // Canonical row: unwired by definition — object-indexed readers
             // must never see an instance fold.
             instance_addr: 0,
+            // P4b (§5.2): appearance + indexed-attribute wiring. The weights
+            // address is validated against the mesh vertex count at
+            // plan/encode (`validate_object_geometry`); the index address is
+            // 0 for flat triangle lists.
+            appearance_weights_addr: obj.appearance_weights.map_or(0, |b| b.gpu_address()),
+            appearance_weight_count: obj.appearance_weights.map_or(0, |b| (b.size() / 4) as u32),
+            appearance_gain: obj.appearance_gain,
+            index_base_addr: obj.index_buffer.map_or(0, |b| b.gpu_address()),
+            vertex_count: mesh_vertex_count(obj),
+            _pad_p4b: 0,
         };
         // D11: canonical row at [0, N).
         unsafe {
@@ -1497,7 +1567,7 @@ mod tests {
     use super::*;
 
     fn topo(id: usize, slots: u32, wired: bool) -> RtGeometryTopology {
-        RtGeometryTopology { vertex: id, vertex_offset: 4, vertex_stride: 32, triangle_count: 3, index: Some(id + 100), normal_offset: 12, uv_offset: 24, instance_slots: slots, wired, alpha_mask: false }
+        RtGeometryTopology { vertex: id, vertex_offset: 4, vertex_stride: 32, triangle_count: 3, index: Some(id + 100), normal_offset: 12, uv_offset: 24, instance_slots: slots, wired, nonopaque: false, appearance_weights: None }
     }
 
     #[test]
@@ -1506,7 +1576,7 @@ mod tests {
         assert!(check_topology_records(&resident, false, 4, resident.into_iter()).is_ok());
         assert!(check_topology_records(&resident, false, 4, [topo(2, 3, false), topo(1, 1, false)].into_iter()).is_err());
         assert!(check_topology_records(&resident, false, 4, [topo(1, 2, false), topo(2, 2, false)].into_iter()).is_err());
-        assert!(check_topology_records(&resident, false, 4, [RtGeometryTopology { alpha_mask: true, ..resident[0] }, resident[1]].into_iter()).is_err());
+        assert!(check_topology_records(&resident, false, 4, [RtGeometryTopology { nonopaque: true, ..resident[0] }, resident[1]].into_iter()).is_err());
         let mixed = [topo(1, 2, true), topo(2, 1, false)];
         assert!(check_topology_records(&mixed, true, 3, mixed.into_iter()).is_ok());
         assert!(check_topology_records(&mixed, false, 3, mixed.into_iter()).is_err());
