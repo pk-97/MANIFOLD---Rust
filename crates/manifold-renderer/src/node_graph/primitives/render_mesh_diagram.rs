@@ -202,10 +202,10 @@ impl RenderMeshDiagram {
             Some(GpuBlendState {
                 src_factor: GpuBlendFactor::One,
                 dst_factor: GpuBlendFactor::One,
-                operation: GpuBlendOp::Min,
+                operation: GpuBlendOp::Max,
                 src_alpha_factor: GpuBlendFactor::One,
                 dst_alpha_factor: GpuBlendFactor::One,
-                alpha_operation: GpuBlendOp::Min,
+                alpha_operation: GpuBlendOp::Max,
             }),
             Self::TYPE_ID,
         );

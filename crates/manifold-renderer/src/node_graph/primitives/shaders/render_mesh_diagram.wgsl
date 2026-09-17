@@ -75,11 +75,13 @@ fn clip_line(ca_in: vec4<f32>, cb_in: vec4<f32>, color: vec4<f32>, vi: u32) -> O
     // Depth-tested lines clip the segment against the camera near plane and
     // retain each endpoint's homogeneous depth for interpolation.
     if u.occlusion != 0u {
-        // Metal's near clip plane is z=0, for perspective and orthographic
-        // cameras alike. Clip the centre line before expanding its stroke.
-        if ca.z < 0.0 && cb.z < 0.0 { return hidden(); }
-        if ca.z < 0.0 { ca = mix(ca, cb, -ca.z / (cb.z - ca.z)); }
-        if cb.z < 0.0 { cb = mix(cb, ca, -cb.z / (ca.z - cb.z)); }
+        // Reversed-Z's near plane is z=w for both camera modes. Clip the
+        // centre line before expanding its stroke.
+        let da = ca.w - ca.z;
+        let db = cb.w - cb.z;
+        if da < 0.0 && db < 0.0 { return hidden(); }
+        if da < 0.0 { ca = mix(ca, cb, da / (da - db)); }
+        if db < 0.0 { cb = mix(cb, ca, db / (db - da)); }
     }
     if (ca.w <= 0.001 || cb.w <= 0.001) { return hidden(); }
     let aa = ca.xy / ca.w; let bb = cb.xy / cb.w;
