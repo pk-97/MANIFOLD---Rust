@@ -66,6 +66,11 @@ fn float(value: f32) -> SerializedParamValue {
 /// Add small real-face sources in the scene and borrowed inputs in each view.
 /// A scene mask is shared with every connected view. Off-mode masks remain
 /// presentation-only and are evaluated over the bounded reference samples.
+///
+/// Connect to Mesh is supported only when exactly one preceding modifier in
+/// the view's scene chain carries a reference patch transform for every
+/// selected object; anything else leaves the mask presentation-only so the
+/// scene is never partially affected.
 pub(super) fn prepare(
     owner: &EffectGraphDef,
     def: &mut EffectGraphDef,
@@ -75,12 +80,20 @@ pub(super) fn prepare(
 ) -> Result<(), SceneModifierExpandError> {
     let mut exports = Vec::new();
     for modifier in &owner.scene_modifiers {
-        if !manifold_core::scene_modifier_math_view::has_math_view_controls(&modifier.graph) {
+        if !manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph) {
             continue;
         }
         if request.is_some_and(|r| *r.modifier_id != modifier.id) {
             continue;
         }
+        // Preceding modifiers of the same scene, in chain order.
+        let preceding: Vec<NodeId> = owner
+            .scene_modifiers
+            .iter()
+            .take_while(|item| item.id != modifier.id)
+            .filter(|item| item.scene == modifier.scene)
+            .map(|item| item.id.clone())
+            .collect();
         let control = |name: &str| -> Result<u32, SceneModifierExpandError> {
             let local = NodeId::new(format!("__math_view_{name}"));
             let copy = routes
@@ -97,25 +110,27 @@ pub(super) fn prepare(
         let density = control("density")?;
         // The event count/baseline producers are installed by the normal
         // compiler context seam, including while all diagrams are inactive.
-        for frame in &modifier.mesh_frames {
-            let patches: Vec<_> = routes
-                .iter()
-                .filter(|r| r.modifier_id == modifier.id)
-                .flat_map(|r| &r.copies)
-                .filter(|c| c.object.as_ref() == Some(&frame.target))
-                .filter_map(|c| {
-                    def.nodes.iter().find(|n| {
-                        n.node_id == c.node_id && n.type_id == "node.transform_mesh_patches"
+        // Connect support is all-or-nothing across the view's objects.
+        let patches: Vec<Option<EffectGraphNode>> = modifier
+            .mesh_frames
+            .iter()
+            .map(|frame| {
+                let found: Vec<_> = routes
+                    .iter()
+                    .filter(|r| preceding.contains(&r.modifier_id))
+                    .flat_map(|r| &r.copies)
+                    .filter(|c| c.object.as_ref() == Some(&frame.target))
+                    .filter_map(|c| {
+                        def.nodes.iter().find(|n| {
+                            n.node_id == c.node_id && n.type_id == "node.transform_mesh_patches"
+                        })
                     })
-                })
-                .collect();
-            if patches.len() != 1 {
-                return Err(invalid(
-                    modifier.id.to_string(),
-                    "connected Math View requires one reference patch transform per object",
-                ));
-            }
-            let patch = (*patches[0]).clone();
+                    .collect();
+                (found.len() == 1).then(|| (*found[0]).clone())
+            })
+            .collect();
+        let connect_supported = !patches.is_empty() && patches.iter().all(Option::is_some);
+        for (frame, patch) in modifier.mesh_frames.iter().zip(patches) {
             let mask = add(
                 def,
                 resource_node_id(&modifier.id, &frame.target, "weights"),
@@ -139,18 +154,18 @@ pub(super) fn prepare(
                 ("source_offset_y", 0.0),
                 ("source_offset_z", 0.0),
             ] {
-                if let Some(w) = def
-                    .wires
-                    .iter()
-                    .find(|w| w.to_node == patch.id && w.to_port == port)
-                    .cloned()
-                {
+                let borrowed = patch.as_ref().and_then(|patch| {
+                    def.wires
+                        .iter()
+                        .find(|w| w.to_node == patch.id && w.to_port == port)
+                        .cloned()
+                });
+                if let Some(w) = borrowed {
                     wire(def, (w.from_node, w.from_port), mask, port);
                 } else {
                     let value = patch
-                        .params
-                        .get(port)
-                        .cloned()
+                        .as_ref()
+                        .and_then(|patch| patch.params.get(port).cloned())
                         .unwrap_or_else(|| float(default));
                     def.nodes
                         .iter_mut()
@@ -217,29 +232,33 @@ pub(super) fn prepare(
                     .ok_or_else(|| {
                         invalid("mathView", "saved source no longer feeds the object")
                     })?;
-                if !def.wires.iter().any(|wire| {
-                    wire.to_node == patch.id
-                        && wire.to_port == "reference"
-                        && wire.from_node == source
-                        && wire.from_port == source_port
-                }) {
-                    return Err(invalid(
-                        "mathView",
-                        "patch reference must use the saved original mesh for connected face correspondence",
-                    ));
-                }
                 wire(def, (source, source_port.clone()), mask, "in");
-                if let Some(prior) = def
-                    .wires
-                    .iter()
-                    .find(|w| w.to_node == object && w.to_port == "weights")
-                    .cloned()
-                {
-                    wire(def, (prior.from_node, prior.from_port), mask, "weights");
-                    def.wires
-                        .retain(|w| !(w.to_node == object && w.to_port == "weights"));
+                if connect_supported {
+                    // connect_supported implies one patch per frame.
+                    let patch = patch.expect("supported connect has a patch");
+                    if !def.wires.iter().any(|wire| {
+                        wire.to_node == patch.id
+                            && wire.to_port == "reference"
+                            && wire.from_node == source
+                            && wire.from_port == source_port
+                    }) {
+                        return Err(invalid(
+                            "mathView",
+                            "patch reference must use the saved original mesh for connected face correspondence",
+                        ));
+                    }
+                    if let Some(prior) = def
+                        .wires
+                        .iter()
+                        .find(|w| w.to_node == object && w.to_port == "weights")
+                        .cloned()
+                    {
+                        wire(def, (prior.from_node, prior.from_port), mask, "weights");
+                        def.wires
+                            .retain(|w| !(w.to_node == object && w.to_port == "weights"));
+                    }
+                    wire(def, (mask, "weights".into()), object, "weights");
                 }
-                wire(def, (mask, "weights".into()), object, "weights");
                 let sample = add(
                     def,
                     resource_node_id(&modifier.id, &frame.target, "samples"),
@@ -275,7 +294,13 @@ pub(super) fn prepare(
                         .id;
                     wire(def, (node, "out".into()), output, port);
                 }
-                exports.push((object, output));
+                if connect_supported {
+                    exports.push((object, output));
+                } else {
+                    // Without a qualified patch carrier the mask never reaches
+                    // the scene object; the view still reads its own event mask.
+                    wire(def, (mask, "weights".into()), output, "weights");
+                }
             }
         }
     }

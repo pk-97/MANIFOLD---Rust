@@ -57,6 +57,11 @@ pub(super) fn selected_objects(
 }
 
 pub(super) fn needs_mesh_frame(instance: &SceneModifierInstanceDef) -> bool {
+    // The stage-less Math View modifier samples real faces, so it captures the
+    // same frames a deformation recipe would.
+    if manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
+        return true;
+    }
     instance
         .graph
         .preset_metadata

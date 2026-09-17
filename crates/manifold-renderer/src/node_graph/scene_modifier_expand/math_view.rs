@@ -1,19 +1,11 @@
 use manifold_core::NodeId;
 
-/// Which portion of an owner's modifier chain a Math View evaluates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MathViewScope {
-    /// Evaluate the requested modifier against the sparse reference mesh.
-    ThisModifier,
-    /// Evaluate the chain up to and including the requested modifier.
-    WithinChain,
-}
-
-/// Internal request passed through the canonical scene-modifier builder.
+/// Internal request passed through the canonical scene-modifier builder. The
+/// requested modifier is the standalone Math View instance; the derived graph
+/// evaluates every preceding modifier of the same scene on sampled real faces.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct MathViewRequest<'a> {
     pub(super) modifier_id: &'a NodeId,
-    pub(super) scope: MathViewScope,
 }
 
 /// Deterministic saved-frame fixture: no asynchronous asset loading is needed
@@ -51,6 +43,11 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
     let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/scene-modifier-presets/VortexFragments.json"
+    )))
+    .unwrap();
+    let view_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/MathView.json"
     )))
     .unwrap();
     let mut frames = Vec::new();
@@ -96,18 +93,34 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
         });
     }
     owner.scene_modifiers.push(SceneModifierInstanceDef {
-        id: NodeId::new("vortex_math_view"),
+        id: NodeId::new("vortex_a"),
+        scene: SceneNodeRef {
+            scope: vec![],
+            node: NodeId::new("scan_render"),
+        },
+        targets: SceneTargetSelection::AllObjects,
+        mesh_frames: frames.clone(),
+        graph: Box::new(recipe),
+    });
+    owner.scene_modifiers.push(SceneModifierInstanceDef {
+        id: NodeId::new("math_view"),
         scene: SceneNodeRef {
             scope: vec![],
             node: NodeId::new("scan_render"),
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: frames,
-        graph: Box::new(recipe),
+        graph: Box::new(view_recipe),
     });
+    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner,
+        &NodeId::new("vortex_a"),
+    )
+    .unwrap()
+    .graph;
     manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
         &owner,
-        &NodeId::new("vortex_math_view"),
+        &NodeId::new("math_view"),
     )
     .unwrap()
     .graph
