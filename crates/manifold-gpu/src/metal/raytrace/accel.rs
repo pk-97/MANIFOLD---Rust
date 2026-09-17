@@ -27,8 +27,8 @@ use super::super::device::GpuDevice;
 use super::super::types::{GpuBuffer, GpuTexture};
 use super::{
     EmissiveLightTable, GiMaterial, MAX_RT_MATERIAL_TEXTURES, RT_MATERIAL_TEX_INDEX_NONE, RtInstanceBuildObj,
-    RT_INSTANCE_TRANSFORM_BYTES, RtNormalSource, SHADOW_WORKGROUP, build_emissive_table,
-    effective_instance_slots, refit_emissive_table, write_instance_obj_params,
+    RT_INSTANCE_TRANSFORM_BYTES, RtNormalSource, SHADOW_WORKGROUP, EmissiveScratch,
+    effective_instance_slots, write_instance_obj_params,
 };
 
 // ─── Acceleration structure: per-object BLAS + one instance TLAS ───────
@@ -152,10 +152,15 @@ pub struct RtAccel {
     /// ones instead of racing the read against the in-flight refit).
     pub ready: Arc<AtomicBool>,
     /// RS-B: emissive-triangle light table built alongside the accel from the
-    /// same `objects` slice — `None` when the scene has no emissive geometry.
-    /// GPU buffers for the kernel's alias-draw + point-sample step (RS-C);
-    /// CPU-side local-space vertices for refit alongside the TLAS.
+    /// same `objects` slice. P4a (§5.1): allocated at preparation and
+    /// GPU-written by `encode_emissive_table` — a scene that never emits
+    /// holds a zero-stats table rather than `None` (the Option only covers
+    /// "preparation predates P4a" test fixtures).
     pub emissive_table: Option<EmissiveLightTable>,
+    /// P4a (§5.1): candidate/sort workspace for `encode_emissive_table`,
+    /// sized at preparation over ALL objects' (slot × triangle) tuples —
+    /// an emission zero→positive transition needs no new allocation.
+    pub(crate) emissive_scratch: Option<EmissiveScratch>,
     /// Queue clone for `Drop`'s self-retire (see the Drop impl below).
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
 }
@@ -204,7 +209,23 @@ impl Drop for RtAccel {
             self.instance_buffer.raw.clone(),
             self.instance_obj_params.as_ref().map(|p| p.raw.clone()),
             self.geometry_buffers.clone(),
-            self.emissive_table.as_ref().map(|t| (t.triangles.raw.clone(), t.aliases.raw.clone())),
+            self.emissive_table.as_ref().map(|t| {
+                (
+                    t.triangles.raw.clone(),
+                    t.aliases.raw.clone(),
+                    t.stats.raw.clone(),
+                    t.entry_power.raw.clone(),
+                    t.alias_stacks.raw.clone(),
+                )
+            }),
+            self.emissive_scratch.as_ref().map(|s| {
+                (
+                    s.candidates[0].raw.clone(),
+                    s.candidates[1].raw.clone(),
+                    s.hist.raw.clone(),
+                    s.obj_params.raw.clone(),
+                )
+            }),
         );
         super::super::device::retire_on_queue(&self.queue, pins, "RT accel retire");
     }
@@ -609,6 +630,9 @@ pub struct RtAccelPlan {
     instanced: bool,
     total_slots: u32,
     geometry_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    /// P4a (§5.1): Σ (slots × triangles) over ALL objects — the emissive
+    /// candidate workspace capacity prepare allocates.
+    emissive_candidate_capacity: u32,
     additional_peak: u64,
 }
 
@@ -663,11 +687,12 @@ fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), Rt
 /// sort workspaces refine this from actual triangle counts; P3 charges the
 /// cap unconditionally so admission never under-counts a scene that gains
 /// emission without a topology edit (§5.1's zero→positive requirement).
-fn emissive_peak_bytes() -> u64 {
-    const TRI: u64 = 80;
-    const ALIAS: u64 = 8;
-    const CPU_VERTS: u64 = 3 * 12;
-    u64::from(super::emissive::MAX_RT_EMISSIVE_TRIANGLES) * (TRI + ALIAS + CPU_VERTS)
+fn emissive_peak_bytes(candidate_capacity: u32) -> u64 {
+    // P4a: fixed table (triangles + aliases + stats + entry scratch + alias
+    // stacks) plus the candidate/sort workspace sized over ALL objects.
+    let cap = u64::from(super::emissive::MAX_RT_EMISSIVE_TRIANGLES);
+    let table = cap * (80 + 8 + 8 + 2 * 4) + 16;
+    table + super::emissive::EmissiveScratch::bytes_for(candidate_capacity)
 }
 
 /// Storage-compatibility for a stable-shape rebuild (§4.2): structure and
@@ -822,6 +847,13 @@ pub(crate) fn plan_accel(
     } else {
         0
     };
+    // P4a (§5.1): the candidate workspace is sized over ALL objects'
+    // (slot × triangle) tuples — emission can appear without a topology
+    // edit, and the capacity must already cover it.
+    let emissive_candidate_capacity: u32 = topology
+        .iter()
+        .map(|t| t.instance_slots.saturating_mul(t.triangle_count))
+        .fold(0u32, u32::saturating_add);
     let additional_peak = if reusable {
         0
     } else {
@@ -831,7 +863,7 @@ pub(crate) fn plan_accel(
             + (tlas_sizes.refitScratchBufferSize.max(16)) as u64
             + descriptor_bytes
             + obj_params_bytes
-            + emissive_peak_bytes()
+            + emissive_peak_bytes(emissive_candidate_capacity)
     };
 
     Ok(RtAccelPlan {
@@ -844,6 +876,7 @@ pub(crate) fn plan_accel(
         instanced,
         total_slots,
         geometry_buffers,
+        emissive_candidate_capacity,
         additional_peak,
     })
 }
@@ -938,7 +971,15 @@ pub(crate) fn prepare_accel(
         instance_obj_params,
         geometry_buffers: plan.geometry_buffers,
         ready: Arc::new(AtomicBool::new(false)),
-        emissive_table: None,
+        // P4a (§5.1): the table and candidate workspace are resident from
+        // preparation — a scene that never emits holds a zero-stats table,
+        // and an emission zero→positive transition needs no allocation.
+        emissive_table: Some(EmissiveLightTable::new(device)),
+        emissive_scratch: Some(EmissiveScratch::new(
+            device,
+            plan.emissive_candidate_capacity,
+            0,
+        )),
         queue: device.clone_queue(),
     });
     Ok(())
@@ -983,7 +1024,9 @@ pub(crate) fn encode_accel_update(
     accel: &mut RtAccel,
     objects: &[RtObjectGeometry],
     changes: &[RtGeometryChange],
-    materials: &[GiMaterial],
+    // P4a: materials no longer enter encode — the GPU emissive path reads
+    // them in the tracer method (`encode_emissive_table`), not here.
+    _materials: &[GiMaterial],
     instance_data_changed: bool,
     emissive_data_changed: bool,
 ) -> Result<RtAccelUpdate, RtAccelError> {
@@ -1169,17 +1212,11 @@ pub(crate) fn encode_accel_update(
         CompletionPins(Arc::clone(&accel.pins)),
     );
 
-    // Emissive preparation stays on the existing CPU-table paths until P4a
-    // swaps in `encode_emissive_table`: a BLAS build or a material/emission
-    // change rebuilds the table; a transform/instance-only update refits
-    // its world-space positions (the old refit_accel behavior).
-    if blas_builds > 0 || emissive_data_changed {
-        accel.emissive_table = build_emissive_table(device, objects, materials);
-        update.emissive_refreshes = 1;
-    } else if let Some(ref table) = accel.emissive_table {
-        refit_emissive_table(table, objects);
-        update.emissive_refreshes = 1;
-    }
+    // P4a (§5.1): emissive preparation moved OUT of this function — the
+    // tracer's `encode_accel_update` method calls `encode_emissive_table`
+    // on the same command buffer right after this returns (GPU candidate
+    // enumerate → sort → gather → alias → stats; the CPU table build/refit
+    // is deleted). `RtAccelUpdate::emissive_refreshes` is set there.
 
     accel.topology = current_topology;
     Ok(update)

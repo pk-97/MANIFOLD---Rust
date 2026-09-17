@@ -220,6 +220,11 @@ pub trait ShadowRayTracer {
         encoder: &mut GpuEncoder,
         device: &GpuDevice,
         accel: &Self::Accel,
+        // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the GPU-written 16-byte
+        // emissive stats buffer — the table's when one exists, the tracer's
+        // zero-stats buffer otherwise. Immediately after `accel`, per the
+        // design's signature amendment.
+        emissive_stats: &GpuBuffer,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
@@ -329,6 +334,10 @@ pub trait ShadowRayTracer {
     fn firefly_clamp(
         &self,
         encoder: &mut GpuEncoder,
+        // P4a (§5.1): the GPU emissive stats buffer — the kernel computes
+        // max(floor, stats.mean_power) itself, so the floor stays the fixed
+        // minimum and the mean power is never CPU-stale.
+        emissive_stats: &GpuBuffer,
         params: &FireflyClampParams,
         params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
@@ -577,6 +586,12 @@ pub struct MetalShadowRayTracer {
     /// a compiled kernel references, even one `sample_candidate_alpha`
     /// (MSL) never actually indexes at runtime.
     dummy_alpha_tex: GpuTexture,
+    /// P4a (§5.1): the emissive-preparation pipeline set (device-global
+    /// code — see [`EmissivePipelines`]).
+    emissive: EmissivePipelines,
+    /// P4a (§5.1): the always-zero 16-byte stats buffer callers bind when
+    /// the scene has no emissive table — see [`Self::zero_emissive_stats`].
+    zero_emissive_stats: GpuBuffer,
 }
 
 /// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
@@ -605,6 +620,26 @@ pub struct RtPipelines {
     /// dispatched ahead of the TLAS build/refit on the same command buffer
     /// in instanced mode (never on the D7 fast path).
     pub descriptor_build_pipeline: GpuComputePipeline,
+    /// P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the GPU emissive-preparation
+    /// kernel set — enumerate → radix hist/scan/scatter → gather → stats →
+    /// alias, dispatched by `encode_emissive_table` on the shared AS update
+    /// path only.
+    pub emissive: EmissivePipelines,
+}
+
+/// P4a (§5.1): the emissive-preparation pipeline set — device-global code
+/// like every other RT pipeline (RtPipelines discipline), cloned into each
+/// tracer. All seven kernels are 1D dispatches over candidate counts or
+/// single threads; see `shadow_rays.msl`'s P4a block.
+#[derive(Clone)]
+pub struct EmissivePipelines {
+    pub enumerate: GpuComputePipeline,
+    pub hist: GpuComputePipeline,
+    pub scan: GpuComputePipeline,
+    pub scatter: GpuComputePipeline,
+    pub gather: GpuComputePipeline,
+    pub stats: GpuComputePipeline,
+    pub alias: GpuComputePipeline,
 }
 
 impl RtPipelines {
@@ -643,6 +678,7 @@ impl RtPipelines {
             (5, SlotKind::Buffer), // RS-C: emissive_aliases, MSL [[buffer(5)]]
             (6, SlotKind::Buffer), // D8: instance descriptors, MSL [[buffer(6)]]
             (7, SlotKind::Buffer), // diagnostics record, MSL [[buffer(7)]]
+            (9, SlotKind::Buffer), // P4a: emissive stats, MSL [[buffer(9)]]
             (0, SlotKind::Texture),
             (1, SlotKind::Texture),
             (2, SlotKind::Texture),
@@ -812,15 +848,16 @@ impl RtPipelines {
             ]),
         );
 
-        // RT-Stage-3 P1 (BUG-mkgh): firefly clamp — params buffer(1), depth
-        // texture(0), src texture(1), dst texture(2). Signatures and slot
-        // maps change together.
+        // RT-Stage-3 P1 (BUG-mkgh): firefly clamp — params buffer(1), P4a
+        // emissive stats buffer(2), depth texture(0), src texture(1), dst
+        // texture(2). Signatures and slot maps change together.
         let firefly_clamp_pipeline = compile_pipeline(
             device,
             &library,
             "firefly_clamp",
             identity_slot_map(&[
                 (1, SlotKind::Buffer),
+                (2, SlotKind::Buffer),
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
@@ -833,6 +870,7 @@ impl RtPipelines {
             "debug_firefly_clamp",
             identity_slot_map(&[
                 (0, SlotKind::Buffer),
+                (2, SlotKind::Buffer), // P4a: hand-written stats row
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (1, SlotKind::Buffer),
@@ -901,6 +939,26 @@ impl RtPipelines {
             ]),
         );
 
+        // P4a (§5.1): emissive-preparation kernels — all 1D buffer-only
+        // dispatches (shift constants ride GpuBinding::Bytes, declared as
+        // Buffer slots, the atrous_post discipline).
+        let emissive = EmissivePipelines {
+            enumerate: compile_pipeline(device, &library, "emissive_enumerate",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)])),
+            hist: compile_pipeline(device, &library, "emissive_hist",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)])),
+            scan: compile_pipeline(device, &library, "emissive_scan",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)])),
+            scatter: compile_pipeline(device, &library, "emissive_scatter",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer)])),
+            gather: compile_pipeline(device, &library, "emissive_gather",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer), (5, SlotKind::Buffer)])),
+            stats: compile_pipeline(device, &library, "emissive_stats",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)])),
+            alias: compile_pipeline(device, &library, "emissive_alias",
+                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)])),
+        };
+
         Self {
             trace_pipelines,
             upsample_pipeline,
@@ -914,6 +972,7 @@ impl RtPipelines {
             debug_atrous_post_pipeline,
             debug_ray_query_pipeline,
             descriptor_build_pipeline,
+            emissive,
         }
     }
 }
@@ -962,10 +1021,47 @@ impl MetalShadowRayTracer {
             atrous_post_pipeline: p.atrous_post_pipeline.clone(),
             debug_atrous_post_pipeline: p.debug_atrous_post_pipeline.clone(),
             debug_ray_query_pipeline: p.debug_ray_query_pipeline.clone(),
+            emissive: p.emissive.clone(),
+            zero_emissive_stats: device.create_buffer_shared(16),
             dummy_alpha_tex,
             rt_diagnostics,
             tlas_probe: std::sync::OnceLock::new(),
         }
+    }
+
+    /// P4a (§5.1): the emissive-preparation pipeline set (device-global
+    /// code, cloned per tracer) — `encode_emissive_table`'s only consumer.
+    pub(crate) fn emissive_pipelines(&self) -> &EmissivePipelines {
+        &self.emissive
+    }
+
+    /// P4a (§5.1): the shared 16-byte zero stats buffer every
+    /// `dispatch_shadow_rays`/`firefly_clamp` caller binds when the scene
+    /// has no emissive table (entry_count 0 — the sampler skips; the
+    /// firefly floor reduces to its fixed minimum).
+    pub fn zero_emissive_stats(&self) -> &GpuBuffer {
+        &self.zero_emissive_stats
+    }
+
+    /// P4a proof surface (§5.1 "debug proof entry points use the same
+    /// kernels and stats layout"): run a Full emissive preparation on the
+    /// caller's encoder — same kernels, same stats layout as production.
+    /// The caller commits and waits, then maps `table.stats` /
+    /// `table.triangles` / `table.aliases` for value assertions. Never on
+    /// the production path (which reaches `encode_emissive_table` only
+    /// through `encode_accel_update`).
+    pub fn debug_encode_emissive_table(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        accel: &mut RtAccel,
+        objects: &[RtObjectGeometry<'_>],
+        materials: &[GiMaterial],
+    ) -> Result<(), RtAccelError> {
+        super::emissive::encode_emissive_table(
+            self, device, encoder, accel, objects, materials,
+            super::EmissiveRefresh::Full,
+        )
     }
 
     /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` section 8
@@ -1459,10 +1555,31 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         instance_data_changed: bool,
         emissive_data_changed: bool,
     ) -> Result<RtAccelUpdate, RtAccelError> {
-        encode_accel_update(
+        let mut update = encode_accel_update(
             device, encoder, accel, objects, changes, materials,
             instance_data_changed, emissive_data_changed,
-        )
+        )?;
+        // P4a (§5.1): GPU emissive preparation on the SAME command buffer,
+        // right after the AS encoder — refresh tiers: a BLAS build or a
+        // material/emission change re-enumerates everything (Full); a
+        // fast-path transform-only update recomposes world positions and
+        // areas (GatherOnly; instanced mode composes at sample time through
+        // the descriptor buffer, so it needs nothing); an unchanged frame
+        // dispatches none of these passes.
+        let refresh = if update.blas_builds > 0 || emissive_data_changed {
+            Some(super::EmissiveRefresh::Full)
+        } else if instance_data_changed && !accel.instanced {
+            Some(super::EmissiveRefresh::GatherOnly)
+        } else {
+            None
+        };
+        if let Some(refresh) = refresh {
+            super::emissive::encode_emissive_table(
+                self, device, encoder, accel, objects, materials, refresh,
+            )?;
+            update.emissive_refreshes = 1;
+        }
+        Ok(update)
     }
 
     fn dispatch_shadow_rays(
@@ -1470,6 +1587,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         encoder: &mut GpuEncoder,
         device: &GpuDevice,
         accel: &Self::Accel,
+        // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the GPU-written 16-byte
+        // emissive stats buffer — the table's when one exists, the tracer's
+        // zero-stats buffer otherwise. Immediately after `accel`, per the
+        // design's signature amendment.
+        emissive_stats: &GpuBuffer,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
@@ -1574,6 +1696,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 buffer: &accel.instance_buffer,
                 offset: 0,
             },
+            // P4a (§5.1): the GPU-written emissive stats — the kernel's
+            // RIS sampler reads entry_count / entries_are_local /
+            // mean_power / total_area from here (MSL [[buffer(9)]]).
+            GpuBinding::Buffer {
+                binding: 9,
+                buffer: emissive_stats,
+                offset: 0,
+            },
             GpuBinding::Texture {
                 binding: 0,
                 texture: depth_tex,
@@ -1631,9 +1761,16 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         let caster_count = params.caster_count.min(MAX_RT_CASTERS as u32);
         let sun_count = params.casters[..caster_count as usize].iter()
             .filter(|caster| caster.kind == 0).count() as u32;
+        // P4a: the sampler-active heuristic reads the GPU stats buffer's
+        // count (CPU params no longer carry it). A frame-stale value is
+        // fine for a cost estimate; an unmappable buffer reads as inactive.
+        let emissive_active = emissive_stats
+            .mapped_ptr()
+            .map(|p| unsafe { (p as *const u32).read_unaligned() != 0 })
+            .unwrap_or(false);
         let query_units = estimate_trace_query_units_per_pixel(
             caster_count, sun_count, params.shadow_spp, params.ao_spp,
-            params.gi_spp, params.refl_spp, params.emissive_table_count != 0,
+            params.gi_spp, params.refl_spp, emissive_active,
         ).expect("validated RT quality must have a finite query estimate");
         let mut regions = plan_trace_regions(
             params.trace_size[0], params.trace_size[1],
@@ -1870,6 +2007,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     fn firefly_clamp(
         &self,
         encoder: &mut GpuEncoder,
+        // P4a (§5.1): the GPU emissive stats buffer — the kernel computes
+        // max(floor, stats.mean_power) itself, so the floor stays the fixed
+        // minimum and the mean power is never CPU-stale.
+        emissive_stats: &GpuBuffer,
         params: &FireflyClampParams,
         params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
@@ -1885,6 +2026,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Buffer {
                     binding: 1,
                     buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: emissive_stats,
                     offset: 0,
                 },
                 GpuBinding::Texture {
