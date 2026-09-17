@@ -12,8 +12,8 @@
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, DebugRayQueryHit, DebugRayQueryRay, MetalShadowRayTracer,
-    RtObjectGeometry, ShadowRayTracer, DEBUG_RAY_INVALID,
+    ensure_normal_sources, ensure_normal_sources_snapshot, DebugRayQueryHit, DebugRayQueryRay,
+    MetalShadowRayTracer, RtObjectGeometry, ShadowRayTracer, DEBUG_RAY_INVALID,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
@@ -754,13 +754,11 @@ fn cs_main() {
         // kernel, ahead of the descriptor-build dispatch + TLAS refit on
         // the same command buffer — values move GPU→GPU (INV-RTI6), so
         // three uncommitted frames genuinely keep three distinct
-        // snapshots. The non-instanced descriptor table is a CPU-mapped
-        // buffer written at encode time; three uncommitted frames of it
-        // would collapse to whichever CPU write lands last (observed as
-        // snapshot 0 tracing snapshot 1's transform) — that ordering is a
-        // property of the production caller's per-frame pacing, not of
-        // this seam, so it is not what this probe tests. Delayed
-        // completion is FIFO queue order, not a sleep or a thread.
+        // snapshots. The non-instanced descriptor table uses retained CPU
+        // scratch plus an ordered inline copy into private storage; the
+        // same queue ordering protects this path when frames are submitted
+        // without an intermediate wait. Delayed completion is FIFO queue
+        // order, not a sleep or a thread.
         let offsets = [0.0f32, 0.5, -0.5];
         let local = triangle_at(0.0);
         let vertex_buffer = write_vertices(device, &local);
@@ -882,6 +880,104 @@ fn cs_main() {
                 hits[1].hit, 0,
                 "snapshot {i}: the other snapshot's ray must miss — each output matches its own snapshot"
             );
+        }
+
+        // ── Section 2b: three uninstanced transform snapshots queued before
+        // one completion wait. Each frame owns a separate command encoder,
+        // but all three updates target the same resident accel. The normal
+        // source rows are snapshotted onto each encoder before its query, so
+        // the CPU scratch rewrite cannot alias an earlier queued frame.
+        let offsets = [0.0f32, 0.5, -0.5];
+        let local = triangle_at(0.0);
+        let vertex_buffer = write_vertices(device, &local);
+        let plan = tracer
+            .plan_accel(device, None, &[triangle_object(&vertex_buffer, None, IDENTITY)])
+            .expect("plan uninstanced multiframe accel");
+        let mut accel_slot = None;
+        tracer
+            .prepare_accel(device, &mut accel_slot, plan)
+            .expect("prepare uninstanced multiframe accel");
+        let mut accel = accel_slot.unwrap();
+        let mut normal_scratch = None;
+        let mut normal_scratch_capacity = 0usize;
+        let mut normal_destination = None;
+        let mut normal_destination_capacity = 0usize;
+        let mut encoders = Vec::with_capacity(offsets.len());
+        let mut hit_bufs = Vec::with_capacity(offsets.len());
+        for (i, &dx) in offsets.iter().enumerate() {
+            let mut transform = IDENTITY;
+            transform[3][0] = dx;
+            let objects = [triangle_object(&vertex_buffer, None, transform)];
+            let mut enc = device.create_encoder("rt-ordering-uninstanced-multiframe");
+            let material_textures = ensure_normal_sources_snapshot(
+                &mut normal_scratch,
+                &mut normal_scratch_capacity,
+                &mut normal_destination,
+                &mut normal_destination_capacity,
+                device,
+                &mut enc,
+                &objects,
+            );
+            assert!(material_textures.is_empty(), "fixture binds no material textures");
+            let normal_sources = normal_destination
+                .as_ref()
+                .expect("normal snapshot destination");
+            let changes = [if i == 0 {
+                RtGeometryChange::Rebuild
+            } else {
+                RtGeometryChange::Reuse
+            }];
+            let update = tracer
+                .encode_accel_update(
+                    device,
+                    &mut enc,
+                    &mut accel,
+                    &objects,
+                    &changes,
+                    &[],
+                    true,
+                    false,
+                )
+                .unwrap_or_else(|e| panic!("uninstanced snapshot {i} accel update: {e:?}"));
+            if i == 0 {
+                assert_eq!(update.tlas_builds, 1, "snapshot 0 builds the TLAS");
+            } else {
+                assert_eq!(update.blas_builds, 0, "snapshot {i}: transform-only update has no BLAS build");
+                assert_eq!(update.tlas_refits, 1, "snapshot {i}: transform-only update refits the TLAS");
+            }
+            let ray = centroid_ray(dx);
+            hit_bufs.push(tracer.debug_ray_query(
+                device,
+                &mut enc,
+                &accel,
+                normal_sources,
+                &[ray],
+                None,
+                0,
+                0,
+            ));
+            encoders.push(enc);
+        }
+        for (i, enc) in encoders.into_iter().enumerate() {
+            if i + 1 == offsets.len() {
+                enc.commit_and_wait_completed();
+            } else {
+                enc.commit();
+            }
+        }
+        for (i, buf) in hit_bufs.iter().enumerate() {
+            let dx = offsets[i];
+            let hits = read_hits(buf, 1);
+            assert_eq!(hits[0].hit, 1, "uninstanced snapshot {i}: ray at x={dx} must hit");
+            let ray = centroid_ray(dx);
+            let expected = triangle_at(dx);
+            let report = compare_hit_to_oracle(
+                &hits[0],
+                moller_trumbore(&ray, &expected),
+                CENTROID_UV,
+                "uninstanced multiframe",
+            );
+            assert!(report.is_empty(), "uninstanced snapshot {i}: {report}");
         }
 
         // ── Section 3: readiness attaches to the resource set. Encode A's

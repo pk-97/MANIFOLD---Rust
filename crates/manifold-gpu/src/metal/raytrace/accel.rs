@@ -95,9 +95,9 @@ pub struct RtAccel {
     /// simple field access instead of an NSArray walk. pub(crate):
     /// encoder.rs's dispatch useResource coverage (BUG-jddy arm 5).
     pub(crate) blas: Vec<Blas>,
-    /// CPU-writable instance-descriptor buffer (transform per object).
-    /// Retained here so `encode_accel_update` can rewrite transforms in
-    /// place on a transform/mask-only update.
+    /// GPU-private instance-descriptor buffer (transform per object).
+    /// `encode_accel_update` snapshots current transforms/masks here before
+    /// a transform/mask-only update reaches the AS encoder.
     /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
     /// arm 5) declares both BLASes and this buffer.
     ///
@@ -108,6 +108,9 @@ pub struct RtAccel {
     /// — the TLAS descriptor's `instanceDescriptorBuffer` points at it in
     /// BOTH modes, so encoder.rs's existing declaration covers it.
     pub(crate) instance_buffer: GpuBuffer,
+    /// CPU-authored descriptor scratch. Updates snapshot this mapped buffer
+    /// into the GPU-private `instance_buffer` before the AS encoder reads it.
+    pub(crate) instance_buffer_scratch: GpuBuffer,
     /// RT_INSTANCING_DESIGN.md D1/D7: true when the accel was built with
     /// the GPU descriptor-build path (any object had `instances_addr != 0`
     /// at build — P1.5: 1-capacity included). Refit then re-dispatches the descriptor
@@ -121,13 +124,14 @@ pub struct RtAccel {
     /// can't see it). Rigid topology: a real change rebuilds instead.
     pub(crate) instance_slot_total: u32,
     pub(crate) topology: Vec<RtGeometryTopology>,
-    /// RT_INSTANCING_DESIGN.md D1: CPU-mapped per-object descriptor-build
-    /// params (model matrix, `instances_addr`, slot base/count, cast mask) —
-    /// rewritten every instanced build/refit from the CURRENT `objects`
-    /// slice (buffer identity deliberately does NOT ride the topo key; D9),
-    /// consumed by the descriptor-build kernel on the GPU. `None` in the
-    /// D7 fast path.
+    /// RT_INSTANCING_DESIGN.md D1: GPU-private per-object descriptor-build
+    /// params (model matrix, `instances_addr`, slot base/count, cast mask).
+    /// The retained scratch row is snapshotted here every instanced
+    /// build/refit from the CURRENT `objects` slice. `None` in the D7 fast
+    /// path.
     pub(crate) instance_obj_params: Option<GpuBuffer>,
+    /// CPU-mapped source for the private descriptor-build parameter table.
+    pub(crate) instance_obj_params_scratch: Option<GpuBuffer>,
     /// Retained handles to every object's vertex, index and appearance-
     /// weights buffers as built. The trace kernels read these through RAW
     /// GPU ADDRESSES (`RtNormalSource.vertex_base_addr` /
@@ -218,7 +222,9 @@ impl Drop for RtAccel {
             self.refit_scratch.raw.clone(),
             self.blas.iter().map(|b| b.structure.clone()).collect::<Vec<_>>(),
             self.instance_buffer.raw.clone(),
+            self.instance_buffer_scratch.raw.clone(),
             self.instance_obj_params.as_ref().map(|p| p.raw.clone()),
+            self.instance_obj_params_scratch.as_ref().map(|p| p.raw.clone()),
             self.geometry_buffers.clone(),
             self.emissive_table.as_ref().map(|t| {
                 (
@@ -539,6 +545,8 @@ fn encode_descriptor_build(
         enc.setComputePipelineState(&pipeline.state);
         enc.setBuffer_offset_atIndex(Some(descriptor_buffer.raw()), 0, 0);
         enc.setBuffer_offset_atIndex(Some(obj_params.raw()), 0, 1);
+        let () = msg_send![&*enc, useResource: descriptor_buffer.raw(), usage: MTLResourceUsage::Read | MTLResourceUsage::Write];
+        let () = msg_send![&*enc, useResource: obj_params.raw(), usage: MTLResourceUsage::Read];
         for o in objects {
             if let Some(src) = o.instances_buffer {
                 let () = msg_send![&*enc, useResource: &*src.raw, usage: MTLResourceUsage::Read];
@@ -580,6 +588,8 @@ fn instance_mask(cast_shadows: bool) -> u32 {
 /// scratch, ordered on the caller's encoder. setBytes consumes `bytes`
 /// synchronously at encode, so no staging allocation, no mapped destination,
 /// and an earlier in-flight frame's readers are never torn.
+pub(crate) const RT_INLINE_COPY_CHUNK_BYTES: usize = 4096;
+
 pub fn encode_inline_copy(
     device: &GpuDevice,
     encoder: &mut crate::GpuEncoder,
@@ -587,17 +597,20 @@ pub fn encode_inline_copy(
     dst_offset: u64,
     bytes: &[u8],
 ) {
-    const CHUNK: usize = 4096;
     let pipeline = &device.rt_pipelines().copy_inline_pipeline;
+    let end = dst_offset
+        .checked_add(bytes.len() as u64)
+        .expect("inline copy destination range overflows u64");
     assert!(
-        dst_offset + bytes.len() as u64 <= dst.size,
+        end <= dst.size,
         "inline copy writes past the destination table ({} + {} > {})",
         dst_offset,
         bytes.len(),
         dst.size
     );
-    for (chunk_index, chunk) in bytes.chunks(CHUNK).enumerate() {
+    for (chunk_index, chunk) in bytes.chunks(RT_INLINE_COPY_CHUNK_BYTES).enumerate() {
         let count = chunk.len() as u32;
+        let count_bytes = count.to_le_bytes();
         encoder.dispatch_compute(
             pipeline,
             &[
@@ -605,11 +618,11 @@ pub fn encode_inline_copy(
                 crate::GpuBinding::Buffer {
                     binding: 1,
                     buffer: dst,
-                    offset: dst_offset + (chunk_index * CHUNK) as u64,
+                    offset: dst_offset + (chunk_index * RT_INLINE_COPY_CHUNK_BYTES) as u64,
                 },
                 crate::GpuBinding::Bytes {
                     binding: 2,
-                    data: &count.to_le_bytes(),
+                    data: &count_bytes,
                 },
             ],
             [count.div_ceil(64), 1, 1],
@@ -673,7 +686,9 @@ pub(crate) struct AccelPins {
     tlas_build_scratch: Retained<ProtocolObject<dyn MTLBuffer>>,
     tlas_refit_scratch: Retained<ProtocolObject<dyn MTLBuffer>>,
     instance_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    instance_buffer_scratch: Retained<ProtocolObject<dyn MTLBuffer>>,
     instance_obj_params: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    instance_obj_params_scratch: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     geometry_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 /// Send/Sync: pinned handles are HELD, never touched, until the completion
@@ -966,8 +981,10 @@ pub(crate) fn plan_accel(
             + tlas_sizes.accelerationStructureSize as u64
             + (tlas_sizes.buildScratchBufferSize.max(16)) as u64
             + (tlas_sizes.refitScratchBufferSize.max(16)) as u64
-            + descriptor_bytes
-            + obj_params_bytes
+            // Each CPU-authored table has a retained shared scratch plus a
+            // GPU-private destination for encode-time snapshots.
+            + descriptor_bytes * 2
+            + obj_params_bytes * 2
             + emissive_peak_bytes(emissive_candidate_capacity)
     };
 
@@ -1030,22 +1047,31 @@ pub(crate) fn prepare_accel(
     let tlas_build_scratch = device.create_buffer(plan.tlas_build_scratch);
     let tlas_refit_scratch = device.create_buffer(plan.tlas_refit_scratch);
 
-    let instance_buffer = if plan.instanced {
-        device.create_buffer(
-            u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+    let (instance_buffer, instance_buffer_scratch) = if plan.instanced {
+        (
+            device.create_buffer(
+                u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+            ),
+            device.create_buffer_shared(
+                u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+            ),
         )
     } else {
-        // Non-instanced fast path: CPU-mapped descriptors (existing D7
-        // behavior — write_instance/transforms ride the mapped buffer).
+        // Non-instanced fast path: CPU-authored descriptors are staged in a
+        // retained shared scratch buffer and copied into the private table at
+        // encode time, so queued frames cannot overwrite one another.
         build_instance_buffer_from_plan(device, &plan)
     };
     let instance_obj_params = if plan.instanced {
-        Some(device.create_buffer_shared(
+        Some(device.create_buffer(
             (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
         ))
     } else {
         None
     };
+    let instance_obj_params_scratch = instance_obj_params.as_ref().map(|params| {
+        device.create_buffer_shared(params.size)
+    });
 
     let pins = Arc::new(AccelPins {
         tlas: tlas_structure.clone(),
@@ -1057,7 +1083,9 @@ pub(crate) fn prepare_accel(
         tlas_build_scratch: tlas_build_scratch.raw.clone(),
         tlas_refit_scratch: tlas_refit_scratch.raw.clone(),
         instance_buffer: instance_buffer.raw.clone(),
+        instance_buffer_scratch: instance_buffer_scratch.raw.clone(),
         instance_obj_params: instance_obj_params.as_ref().map(|b| b.raw.clone()),
+        instance_obj_params_scratch: instance_obj_params_scratch.as_ref().map(|b| b.raw.clone()),
         geometry_buffers: plan.geometry_buffers.clone(),
     });
 
@@ -1076,10 +1104,12 @@ pub(crate) fn prepare_accel(
         pins,
         blas: blas_out,
         instance_buffer,
+        instance_buffer_scratch,
         instanced: plan.instanced,
         instance_slot_total: plan.total_slots,
         topology: plan.topology,
         instance_obj_params,
+        instance_obj_params_scratch,
         geometry_buffers: plan.geometry_buffers,
         ready: Arc::new(AtomicBool::new(false)),
         // P4a (§5.1): the table and candidate workspace are resident from
@@ -1095,10 +1125,12 @@ pub(crate) fn prepare_accel(
 /// Non-instanced instance-buffer allocation from a plan — zeroed identity
 /// descriptors; encode rewrites transforms/masks from the current objects
 /// every update (same content as the old `build_instance_buffer`).
-fn build_instance_buffer_from_plan(device: &GpuDevice, plan: &RtAccelPlan) -> GpuBuffer {
+fn build_instance_buffer_from_plan(device: &GpuDevice, plan: &RtAccelPlan) -> (GpuBuffer, GpuBuffer) {
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
-    let buf = device.create_buffer_shared((stride * plan.topology.len().max(1)) as u64);
-    let ptr = buf.mapped_ptr().expect("RT instance-descriptor buffer must be CPU-mapped");
+    let size = (stride * plan.topology.len().max(1)) as u64;
+    let destination = device.create_buffer(size);
+    let scratch = device.create_buffer_shared(size);
+    let ptr = scratch.mapped_ptr().expect("RT instance-descriptor scratch must be CPU-mapped");
     for i in 0..plan.topology.len() {
         let desc = MTLAccelerationStructureInstanceDescriptor {
             transformationMatrix: to_packed_4x3([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]),
@@ -1111,7 +1143,7 @@ fn build_instance_buffer_from_plan(device: &GpuDevice, plan: &RtAccelPlan) -> Gp
             std::ptr::write_unaligned(ptr.add(i * stride) as *mut _, desc);
         }
     }
-    buf
+    (destination, scratch)
 }
 
 /// Encode a current-frame acceleration update onto the caller's encoder
@@ -1197,38 +1229,68 @@ pub(crate) fn encode_accel_update(
     accel.ready.store(false, Ordering::Release);
     let mut update = RtAccelUpdate::default();
 
-    // Instance descriptors: instanced mode re-dispatches the GPU builder
-    // (GPU-private buffer; the params rewrite is CPU-mapped obj params),
-    // fast path rewrites the mapped descriptor buffer — both BEFORE the
-    // AS encoder on the same command buffer (sequential encoders run in
-    // creation order). Snapshot discipline: this CPU write happens at
-    // encode time from the caller's current `objects` — §4.3.
+    // Instance descriptors: author current values into retained CPU scratch,
+    // then snapshot into GPU-private storage on the caller's command stream
+    // before the AS encoder reads them. This is the §4.3 fix for queued
+    // frames: a later CPU write never aliases an earlier frame's descriptor
+    // reads.
+    if accel.instanced {
+        let obj_params = accel
+            .instance_obj_params
+            .as_ref()
+            .expect("instanced accel carries instance build params");
+        let obj_params_scratch = accel
+            .instance_obj_params_scratch
+            .as_ref()
+            .expect("instanced accel carries descriptor-build scratch");
+        write_instance_obj_params(
+            obj_params_scratch
+                .mapped_ptr()
+                .expect("RT instance build-params scratch must be CPU-mapped"),
+            objects,
+        );
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                obj_params_scratch.mapped_ptr().unwrap(),
+                objects.len() * std::mem::size_of::<RtInstanceBuildObj>(),
+            )
+        };
+        encode_inline_copy(device, encoder, obj_params, 0, bytes);
+    } else if instance_data_changed || blas_builds > 0 || tlas_build {
+        let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
+        let mask_offset = std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask);
+        let scratch = accel
+            .instance_buffer_scratch
+            .mapped_ptr()
+            .expect("RT instance-descriptor scratch must be CPU-mapped");
+        for (i, obj) in objects.iter().enumerate() {
+            unsafe {
+                let field_ptr = scratch.add(i * stride) as *mut MTLPackedFloat4x3;
+                field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+                let mask_ptr = scratch.add(i * stride + mask_offset) as *mut u32;
+                mask_ptr.write_unaligned(instance_mask(obj.cast_shadows));
+            }
+        }
+        let bytes = unsafe {
+            std::slice::from_raw_parts(scratch, objects.len() * stride)
+        };
+        encode_inline_copy(device, encoder, &accel.instance_buffer, 0, bytes);
+    }
+
     let cb = encoder.raw_cmd_buf();
     if accel.instanced {
         let obj_params = accel
             .instance_obj_params
             .as_ref()
             .expect("instanced accel carries instance build params");
-        write_instance_obj_params(
-            obj_params.mapped_ptr().expect("RT instance build-params buffer must be CPU-mapped"),
+        encode_descriptor_build(
+            device,
+            cb,
             objects,
+            &accel.instance_buffer,
+            obj_params,
+            accel.topology.iter().map(|t| t.instance_slots).max().unwrap_or(1),
         );
-        encode_descriptor_build(device, cb, objects, &accel.instance_buffer, obj_params, accel.topology.iter().map(|t| t.instance_slots).max().unwrap_or(1));
-    } else if instance_data_changed || blas_builds > 0 || tlas_build {
-        let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
-        let mask_offset = std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask);
-        let ptr = accel
-            .instance_buffer
-            .mapped_ptr()
-            .expect("RT instance-descriptor buffer must be CPU-mapped");
-        for (i, obj) in objects.iter().enumerate() {
-            unsafe {
-                let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
-                field_ptr.write_unaligned(to_packed_4x3(obj.transform));
-                let mask_ptr = ptr.add(i * stride + mask_offset) as *mut u32;
-                mask_ptr.write_unaligned(instance_mask(obj.cast_shadows));
-            }
-        }
     }
 
     let enc = cb
@@ -1430,6 +1492,14 @@ fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
 /// the kernel (a material-authoring/scale gap, not a crash). The caller
 /// (`render_scene.rs`) passes the returned list straight through to
 /// [`ShadowRayTracer::dispatch_shadow_rays`]'s `alpha_textures` parameter.
+fn normal_source_row_count(objects: &[RtObjectGeometry<'_>]) -> usize {
+    let slot_total: usize = objects
+        .iter()
+        .map(|o| effective_instance_slots(o) as usize)
+        .sum();
+    (objects.len() + slot_total).max(1)
+}
+
 pub fn ensure_normal_sources<'a>(
     slot: &mut Option<GpuBuffer>,
     capacity: &mut usize,
@@ -1437,12 +1507,8 @@ pub fn ensure_normal_sources<'a>(
     objects: &[RtObjectGeometry<'a>],
 ) -> Vec<&'a GpuTexture> {
     let object_count = objects.len();
-    let slot_total: usize = objects
-        .iter()
-        .map(|o| effective_instance_slots(o) as usize)
-        .sum();
     // D11: canonical rows [0, N) + slot rows [N, N+Σ) in one buffer.
-    let needed = (object_count + slot_total).max(1);
+    let needed = normal_source_row_count(objects);
     if slot.is_none() || *capacity < needed {
         *slot = Some(device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64));
         *capacity = needed;
@@ -1605,6 +1671,56 @@ pub fn ensure_normal_sources<'a>(
         }
     }
     material_textures
+}
+
+/// Rebuild the normal-source rows into retained CPU scratch, then snapshot
+/// those bytes into a GPU-private table on the caller's encoder. The scratch
+/// buffer is deliberately separate from `destination`: CPU writes never race
+/// an earlier frame's trace, and the destination remains stable until the
+/// command buffer's normal Metal resource lifetime ends.
+///
+/// `scratch` and `destination` must be retained by the caller across frames.
+/// They grow only when the scene needs more rows; the steady-state path does
+/// not allocate a staging buffer or a Rust byte vector per frame. The existing
+/// [`ensure_normal_sources`] API remains available for legacy callers.
+#[allow(clippy::too_many_arguments)]
+pub fn ensure_normal_sources_snapshot<'a>(
+    scratch: &mut Option<GpuBuffer>,
+    scratch_capacity: &mut usize,
+    destination: &mut Option<GpuBuffer>,
+    destination_capacity: &mut usize,
+    device: &GpuDevice,
+    encoder: &mut crate::GpuEncoder,
+    objects: &[RtObjectGeometry<'a>],
+) -> Vec<&'a GpuTexture> {
+    let textures = ensure_normal_sources(scratch, scratch_capacity, device, objects);
+    let needed = normal_source_row_count(objects);
+    let bytes = (needed * std::mem::size_of::<RtNormalSource>()) as u64;
+    let needs_private_destination = match destination.as_ref() {
+        None => true,
+        Some(buffer) => buffer.mapped_ptr().is_some(),
+    };
+    if needs_private_destination || *destination_capacity < needed {
+        *destination = Some(device.create_buffer(bytes));
+        *destination_capacity = needed;
+    }
+    let source = scratch.as_ref().expect("normal-source scratch was ensured");
+    let source_ptr = source
+        .mapped_ptr()
+        .expect("normal-source scratch must be CPU-mapped");
+    let source_bytes = unsafe {
+        std::slice::from_raw_parts(source_ptr, bytes as usize)
+    };
+    encode_inline_copy(
+        device,
+        encoder,
+        destination
+            .as_ref()
+            .expect("normal-source destination was ensured"),
+        0,
+        source_bytes,
+    );
+    textures
 }
 
 #[cfg(test)]

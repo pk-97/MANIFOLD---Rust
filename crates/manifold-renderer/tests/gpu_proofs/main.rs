@@ -67,6 +67,7 @@ mod rt_atrous_post;
 mod rt_gesture_response;
 mod rt_instancing;
 mod rt_dynamic_geometry;
+mod rt_dynamic_current_frame;
 mod rt_dynamic_fusion;
 mod rt_dynamic_shading;
 mod rt_normal_tangent_mirror;

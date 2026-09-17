@@ -229,6 +229,9 @@ pub trait ShadowRayTracer {
         // (setBytes snapshots at encode) — no CPU-mapped params buffer a
         // later frame's encode could tear under an in-flight trace.
         params: &ShadowRayParams,
+        // Retained for the existing backend seam; params are now bound from
+        // `params` as inline bytes below.
+        _params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
         current_objects: &[RtObjectGeometry<'_>],
@@ -275,6 +278,8 @@ pub trait ShadowRayTracer {
         // `params.gbuffer_size` also drives the dispatch grid (this replaces
         // the shared params buffer and its read-back sizing hack).
         params: &ShadowRayParams,
+        // Retained for compatibility; params are snapshotted inline below.
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
@@ -308,6 +313,8 @@ pub trait ShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
+        // Retained for compatibility; params are snapshotted inline below.
+        _params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -343,6 +350,8 @@ pub trait ShadowRayTracer {
         // minimum and the mean power is never CPU-stale.
         emissive_stats: &GpuBuffer,
         params: &FireflyClampParams,
+        // Retained for compatibility; params are snapshotted inline below.
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         src: &GpuTexture,
         dst: &GpuTexture,
@@ -358,6 +367,8 @@ pub trait ShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousPostParams,
+        // Retained for compatibility; params are snapshotted inline below.
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         normal_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -382,6 +393,8 @@ pub trait ShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
+        // Retained for compatibility; params are snapshotted inline below.
+        _params_buffer: &GpuBuffer,
         // RT-T2-C: per-object world→prev-world motion matrices
         // (`params.obj_count` entries of column-major `[[f32; 4]; 4]`).
         obj_motion: &GpuBuffer,
@@ -1653,6 +1666,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // (setBytes snapshots at encode) — no CPU-mapped params buffer a
         // later frame's encode could tear under an in-flight trace.
         params: &ShadowRayParams,
+        _params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
         current_objects: &[RtObjectGeometry<'_>],
@@ -1872,6 +1886,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // `params.gbuffer_size` also drives the dispatch grid (this replaces
         // the shared params buffer and its read-back sizing hack).
         params: &ShadowRayParams,
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
@@ -1963,6 +1978,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
+        _params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -2067,6 +2083,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // minimum and the mean power is never CPU-stale.
         emissive_stats: &GpuBuffer,
         params: &FireflyClampParams,
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         src: &GpuTexture,
         dst: &GpuTexture,
@@ -2107,6 +2124,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousPostParams,
+        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         normal_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -2153,6 +2171,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
+        _params_buffer: &GpuBuffer,
         // RT-T2-C: per-object world→prev-world motion matrices
         // (`params.obj_count` entries of column-major `[[f32; 4]; 4]`).
         obj_motion: &GpuBuffer,
@@ -2564,7 +2583,10 @@ mod tests {
         assert!(passes.contains("Some((8, trace_region_bytes(&region)))"));
         assert!(!passes.contains("commit_and_continue"));
         assert!(msl_block(regions, "if regions.peek().is_some()").contains("commit_and_continue(device)"));
-        assert_eq!(dispatch.matches("params_buffer.upload").count(), 1);
+        // P5: every dispatch owns an encode-time inline snapshot; the
+        // compatibility `_params_buffer` argument is intentionally unused.
+        assert_eq!(dispatch.matches("params_buffer.upload").count(), 0);
+        assert!(dispatch.contains("GpuBinding::Bytes"));
         assert_eq!(dispatch.matches("addCompletedHandler").count(), 1);
         assert!(dispatch.find("addCompletedHandler").unwrap() > dispatch.find("commit_and_continue(device)").unwrap());
         assert!(!dispatch.contains("None,\n            groups"));

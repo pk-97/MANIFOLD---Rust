@@ -3,126 +3,50 @@
     use crate::node_graph::transform::Transform;
 
     #[test]
-    fn rejected_topology_cannot_refit() {
-        assert!(!rt_refit_eligible(false, Some(1), 2));
-        assert!(rt_refit_eligible(true, Some(1), 2));
-    }
-
-    #[test]
-    fn rt_topology_validation_precedes_all_consumer_decisions() {
-        // Production source-order contract: no duplicated topology model or
-        // synthetic GPU buffers. A late check would leave uploaded flags and
-        // skipped fallback passes inconsistent with trace suppression.
-        // BUG-trh7 stage 2 shape: the check, the reject path, and the flag
-        // authoring all live inside `validate_topology_and_author_flags`;
-        // every later consumer is ordered by the dispatcher's call order.
+    fn current_frame_rt_update_precedes_flags_depth_and_trace() {
         let source = include_str!("../render_scene.rs");
-        let method = source
-            .split_once("    fn validate_topology_and_author_flags<'ctx, 'gpu>")
-            .unwrap()
-            .1
-            .split_once("\n    /// ")
-            .unwrap()
-            .0;
-        let check = method.find("accel.check_topology(&rt_objects)").unwrap();
-        let reject = method[check..].find("rt_ready = false;").unwrap() + check;
-        for marker in [
-            "let will_rt_accumulate_this_frame =", "uniforms.scene_params[3] =",
-            "uniforms.rt_flags[0] =", "uniforms.rt_flags[1] =",
-            "uniforms.rt_flags[2] =", "uniforms.rt_flags[3] =",
-            "uniforms.fog_params[2] =", "uniforms.fog_params[3] =",
-        ] {
-            assert!(method.find(marker).unwrap() > reject, "consumer precedes topology rejection: {marker}");
-        }
-        assert_eq!(method.matches("let rt_objects:").count(), 1);
-        // The dispatcher: the validate call textually precedes every later
-        // consumer of the topology decision — the ensure call (which owns
-        // denoise_wanted and the shadow-map ensures) and the remaining
-        // inline consumers.
         let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1;
-        let validate_call = evaluate
-            .find(".validate_topology_and_author_flags(ctx")
+        let update = evaluate.find("self.rt_accel_maintenance(").unwrap();
+        let success_reset = evaluate[update..]
+            .find("pre.reset_decision |= changed;")
+            .map(|offset| offset + update)
             .unwrap();
+        let rejection_return = evaluate[update..]
+            .find("FrameRenderStatus::Failed(failure)")
+            .and_then(|offset| evaluate[update + offset..].find("return;").map(|end| update + offset + end))
+            .unwrap();
+
         for marker in [
-            ".ensure_gpu_resources(",
-            ".raster_shadow_prepasses(",
-            ".opaque_depth_snapshot_pass(",
-            "let objects = rt_objects;",
+            "self.author_rt_flags(",
+            "self.ensure_gpu_resources(",
+            "self.raster_shadow_prepasses(",
+            "self.opaque_depth_snapshot_pass(",
+            "self.rt_trace_accumulate(",
         ] {
-            assert!(evaluate.find(marker).unwrap() > validate_call, "dispatcher consumer precedes the validate call: {marker}");
+            let consumer = evaluate.find(marker).unwrap();
+            assert!(consumer > success_reset, "consumer precedes successful RT update: {marker}");
+            assert!(consumer > rejection_return, "consumer follows an RT rejection: {marker}");
         }
-        // The build path (inside `rt_accel_maintenance` after the carve):
-        // a fresh build is observed not-ready before tracing resumes.
-        let maintenance = source
-            .split_once("    fn rt_accel_maintenance<'ctx, 'gpu>")
-            .unwrap()
-            .1;
-        let build = maintenance
-            .split_once("RtGeometryChange::Rebuild; objects.len()]")
-            .unwrap()
-            .1
-            .split_once("} else if rt_refit_eligible")
-            .unwrap()
-            .0;
-        assert!(build.contains("self.rt_accel_built = false;"));
-        assert!(build.contains("rt_ready = false;"));
     }
 
     #[test]
-    fn topology_rejection_is_idempotent_and_clears_once() {
-        let mut s = RenderScene::new();
-        s.rt_accel_topo_key = Some(1); s.rt_accel_key = Some(2); s.rt_accel_content_key = Some(3);
-        s.rt_accel_pending_key = Some(4); s.rt_accel_content_pending_key = Some(5); s.rt_accel_built = true;
-        assert!(reject_topology(&mut s.rt_accel_topo_key, &mut s.rt_accel_key, &mut s.rt_accel_content_key,
-            &mut s.rt_accel_pending_key, &mut s.rt_accel_content_pending_key, &mut s.rt_accel_built,
-            &mut s.rt_topology_rejected));
-        assert!(!s.rt_accel_built && s.rt_accel_topo_key.is_none() && s.rt_accel_key.is_none()
-            && s.rt_accel_content_key.is_none() && s.rt_accel_pending_key.is_none()
-            && s.rt_accel_content_pending_key.is_none());
-        s.rt_accel_pending_key = Some(9); s.rt_accel_content_pending_key = Some(10);
-        assert!(!reject_topology(&mut s.rt_accel_topo_key, &mut s.rt_accel_key, &mut s.rt_accel_content_key,
-            &mut s.rt_accel_pending_key, &mut s.rt_accel_content_pending_key, &mut s.rt_accel_built,
-            &mut s.rt_topology_rejected));
-        assert_eq!(s.rt_accel_pending_key, Some(9));
-        assert!(!s.rt_accel_built && !rt_refit_eligible(false, s.rt_accel_key, 11));
-    }
-
-    #[test]
-    fn deferred_state_defers_builds_and_changed_keys() {
-        let mut pt = None; let mut pc = None;
-        assert_eq!(rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2), RtBuildDecision::Defer);
-        assert_eq!(rt_deferred_build_decision(None, None, &mut pt, &mut pc, 1, 2), RtBuildDecision::Build { content_trigger_fired: false });
-        assert_eq!(rt_deferred_build_decision(Some(1), Some(2), &mut pt, &mut pc, 2, 3), RtBuildDecision::Defer);
-        assert!(!rt_trace_gate(false, Some(1), 1));
-    }
-
-    #[test]
-    fn new_install_resets_rejection_but_not_readiness() {
-        let mut s = RenderScene::new();
-        s.rt_topology_rejected = true; s.rt_accel_built = false;
-        s.rt_topology_rejected = false;
-        assert!(!s.rt_accel_built);
-        assert!(!rt_trace_gate(s.rt_accel_built && !s.rt_topology_rejected, Some(1), 1));
-    }
-
-    #[test]
-    fn fresh_build_forces_local_trace_readiness_off() {
-        let mut local_ready = true;
-        let build_this_frame = true;
-        if build_this_frame { local_ready = false; }
-        assert!(!local_ready);
-        assert!(!rt_trace_gate(local_ready, Some(1), 1));
-    }
-
-    #[test]
-    fn content_settle_does_not_starve_resident_trace_admission() {
-        let mut pending_topo = None;
-        let mut pending_content = None;
-        assert_eq!(rt_deferred_build_decision(Some(1), Some(1), &mut pending_topo, &mut pending_content, 1, 2), RtBuildDecision::Defer);
-        assert!(rt_trace_gate(true, Some(1), 1));
-        assert_eq!(rt_deferred_build_decision(Some(1), Some(1), &mut pending_topo, &mut pending_content, 1, 3), RtBuildDecision::Defer);
-        assert!(rt_trace_gate(true, Some(1), 1));
-        assert!(!rt_trace_gate(true, Some(2), 1));
+    fn current_frame_path_has_no_settle_or_latched_accel_policy() {
+        let source = include_str!("../render_scene.rs");
+        let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1;
+        for obsolete in [
+            "rt_deferred_build_decision",
+            "rt_trace_gate",
+            "rt_refit_eligible",
+            "reject_topology",
+            "rt_accel_built",
+            "rt_topology_rejected",
+            "content_settle",
+            "settled",
+        ] {
+            assert!(!evaluate.contains(obsolete), "obsolete RT policy remains in evaluate: {obsolete}");
+        }
+        assert_eq!(evaluate.matches("self.rt_accel_maintenance(").count(), 1);
+        assert_eq!(evaluate.matches("pre.reset_decision |= changed;").count(), 1);
     }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".

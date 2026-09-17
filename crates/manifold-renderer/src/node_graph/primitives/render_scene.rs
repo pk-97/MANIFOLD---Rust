@@ -65,6 +65,11 @@
 //! `node.render_copies`' private-depth-buffer instancing cannot do inside a
 //! scene.
 
+mod rt_changes;
+use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use crate::node_graph::mesh_change::MeshRevision;
+use crate::node_graph::bindings::Slot;
+use manifold_gpu::raytrace::RtGeometryChange;
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
 use manifold_gpu::raytrace::ShadowRayTracer;
@@ -1044,55 +1049,13 @@ pub struct RenderScene {
     /// performer-gesture gate).
     rt_tracer: Option<manifold_gpu::raytrace::MetalShadowRayTracer>,
     rt_accel: Option<manifold_gpu::raytrace::RtAccel>,
-    /// BUG-320: full accel key — topology (`rt_accel_topo_key`'s inputs)
-    /// plus every object transform. Tracks what the resident accel's
-    /// instance buffer currently holds; a full-key change under an
-    /// UNCHANGED topo key is a transform-only change and takes the
-    /// `refit_accel` path (same-frame, cheap), never a rebuild.
+    /// Last successfully encoded transform, geometry and shading keys.
     rt_accel_key: Option<u64>,
-    /// BUG-320: topology-only accel key — object count, vertex-buffer
-    /// identities, triangle counts, `rebuild_epoch`. Transforms
-    /// deliberately excluded: a moving object must NOT read as a new
-    /// topology (pre-BUG-320 it did — continuous motion changed the one
-    /// combined key every frame). Only a topo-key change triggers
-    /// `build_accel`.
     rt_accel_topo_key: Option<u64>,
-    /// BUG-308/RT-D4 one-frame-defer pending key for topo changes.
-    rt_accel_pending_key: Option<u64>,
-    /// Content-settle key — topo_key plus every caster draw's
-    /// `vertices_generation` (mesh slot write generation). When async
-    /// mesh content (gltf_mesh_source decode + staging copy) lands after
-    /// the initial accel build, the generation bumps, changing the
-    /// content key and triggering a deferred rebuild through the same
-    /// one-frame-recur discipline as the topo path. Separate from the
-    /// topo key so a never-settling (deforming) producer changes this
-    /// key every frame and never triggers a rebuild — the content key
-    /// must settle for one frame before a build fires. `None` until the
-    /// first RT-enabled frame.
     rt_accel_content_key: Option<u64>,
-    /// One-frame-defer pending key for content-settle changes.
-    rt_accel_content_pending_key: Option<u64>,
-    /// BUG-320: latched true the first frame `rt_accel.ready` is observed
-    /// true after a (re)build; reset false when a rebuild replaces the
-    /// accel. This — not raw `ready` — is the "can we trace" gate:
-    /// `refit_accel` flips `ready` false for its async duration, but the
-    /// structure stays valid to trace with its OLD transforms meanwhile
-    /// (raytrace.rs's documented refit contract), so an in-flight refit
-    /// must NOT bounce the scene to the raster shadow path and back —
-    /// that path swap under motion is exactly BUG-320's flicker. Raw
-    /// `ready` still gates ENQUEUING the next refit (never rewrite the
-    /// CPU-mapped instance buffer while a refit/build is in flight).
-    rt_accel_built: bool,
-    rt_topology_rejected: bool,
-    /// SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): per-draw appearance state
-    /// (weights slot generation + gain bits) at the last RT update. The
-    /// trace reads weights/gain LIVE through the normal-source table, so
-    /// hit shading is always current; this key exists for the one baked
-    /// consumer — the emissive light table's corner weights — and triggers
-    /// an emissive-only refresh (design dirty rule 4: appearance changes
-    /// refresh tables, no BLAS work while the nonopaque property holds).
     rt_appearance_key: Option<u64>,
-    rt_topology_mismatch_logged: bool,
+    rt_mesh_revisions: Vec<RtMeshSnapshot>,
+    rt_changes: Vec<RtGeometryChange>,
     rt_source_trace_last_admission: Option<(u64, u64)>,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
@@ -1130,6 +1093,7 @@ pub struct RenderScene {
     /// uses, so a GI ray hit's `instance_id` indexes this directly.
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
+    rt_gi_upload: Vec<manifold_gpu::raytrace::GiMaterial>,
     /// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): true when
     /// any object in the scene has `diffuse_transmission_factor > 0` — selects
     /// the translucent trace pipeline (walk_with_transmission) at dispatch time.
@@ -1157,6 +1121,7 @@ pub struct RenderScene {
     /// are written straight into the mapped buffer (hot-path no-alloc).
     rt_obj_motion: Option<manifold_gpu::GpuBuffer>,
     rt_obj_motion_capacity: usize,
+    rt_motion_upload: Vec<[[f32; 4]; 4]>,
     /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object
     /// [`manifold_gpu::raytrace::RtNormalSource`] bindless indirection table
     /// for real vertex-normal interpolation in the trace kernel — same
@@ -1164,6 +1129,8 @@ pub struct RenderScene {
     /// RT-ready frame from the SAME `objects`/`opaque_draws` order).
     rt_normal_sources: Option<manifold_gpu::GpuBuffer>,
     rt_normal_sources_capacity: usize,
+    rt_normal_sources_scratch: Option<manifold_gpu::GpuBuffer>,
+    rt_normal_sources_scratch_capacity: usize,
     /// RAYTRACING_DESIGN.md section 5.2 P2: half-res/full-res demodulated
     /// irradiance (ambient*ao + gi, no albedo, no direct sun — D3) and its
     /// full-res TEMPORAL HISTORY (persistent across frames, blended by
@@ -1551,45 +1518,20 @@ struct ShaftCompositeUniforms {
 }
 const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
-#[inline]
-fn rt_trace_gate(rt_ready: bool, resident_topo_key: Option<u64>, topo_key: u64) -> bool {
-    rt_ready && resident_topo_key == Some(topo_key)
-}
+type RtMeshSnapshot = Option<(MeshRevision, Option<(Slot, u64)>)>;
+type RtFrameTables<'a> = (
+    Vec<manifold_gpu::raytrace::GiMaterial>, Vec<&'a manifold_gpu::GpuTexture>, u64, u64, bool,
+);
 
-#[inline]
-fn rt_refit_eligible(topology_valid: bool, resident_accel_key: Option<u64>, accel_key: u64) -> bool {
-    topology_valid && resident_accel_key != Some(accel_key)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RtBuildDecision { Defer, Build { content_trigger_fired: bool } }
-
-fn rt_deferred_build_decision(
-    resident_topo: Option<u64>, resident_content: Option<u64>,
-    pending_topo: &mut Option<u64>, pending_content: &mut Option<u64>,
-    topo_key: u64, content_key: u64,
-) -> RtBuildDecision {
-    let mut build = false;
-    let mut content_trigger_fired = false;
-    if resident_topo != Some(topo_key) {
-        if *pending_topo == Some(topo_key) { build = true; } else { *pending_topo = Some(topo_key); }
+fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderFailure {
+    use manifold_gpu::raytrace::RtAccelError;
+    log::error!("node.render_scene: current RT frame rejected: {error:?}");
+    match error {
+        RtAccelError::InvalidGeometry { .. } => FrameRenderFailure::InvalidGeometry,
+        RtAccelError::NeedsPreparation => FrameRenderFailure::RtNeedsPreparation,
+        RtAccelError::Allocation { .. } => FrameRenderFailure::RtAllocation,
+        RtAccelError::Encode(_) => FrameRenderFailure::RtEncode,
     }
-    if resident_topo == Some(topo_key) && resident_content != Some(content_key) {
-        if *pending_content == Some(content_key) { build = true; content_trigger_fired = true; }
-        else { *pending_content = Some(content_key); }
-    }
-    if build { RtBuildDecision::Build { content_trigger_fired } } else { RtBuildDecision::Defer }
-}
-
-fn reject_topology(
-    topo_key: &mut Option<u64>, accel_key: &mut Option<u64>, content_key: &mut Option<u64>,
-    pending_topo: &mut Option<u64>, pending_content: &mut Option<u64>, built: &mut bool,
-    rejected: &mut bool,
-) -> bool {
-    *built = false;
-    if *rejected { return false; }
-    *topo_key = None; *accel_key = None; *content_key = None;
-    *pending_topo = None; *pending_content = None; *rejected = true; true
 }
 // ---- Pass-1 draw record (was local to evaluate(); hoisted for the BUG-trh7
 // stage-2 pass methods — Pass 1 produces, the RT block + Pass 2 consume).
@@ -1648,6 +1590,9 @@ struct ObjectDraw<'ctx> {
     /// resolved array), kept `Option` to mirror `slot_generation`'s
     /// signature exactly rather than unwrap a should-never-fail case.
     vertices_generation: Option<u64>,
+    mesh_revision: Option<MeshRevision>,
+    topology_hint: Option<(Slot, u64)>,
+    rt_texture_generations: [Option<u64>; 4],
     /// Same for `instances_n` — `None` both when the port is
     /// genuinely unwired AND (indistinguishably, which is fine: an
     /// unwired port never contributes model-specific staleness) if
@@ -1911,6 +1856,14 @@ impl RenderScene {
             // legacy per-port lookups got.
             let object_port = &self.object_port_names[n];
             let object_slot_id = port_index.get(object_port.as_ref()).copied();
+            if object_slot_id.is_some_and(|slot| !ctx.inputs.slot_content_ready(slot)) {
+                ctx.mark_outputs_pending();
+                let status = if self.rt_accel.is_some() {
+                    FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
+                } else { FrameRenderStatus::PendingGeometry };
+                ctx.gpu_encoder().merge_frame_status(status);
+                return None;
+            }
             let Some(object) = object_slot_id.and_then(|s| ctx.inputs.object_slot(s)) else {
                 // Unwired `object_n` (no `node.scene_object` feeding this
                 // index yet — an in-progress edit): skip this object
@@ -1927,24 +1880,20 @@ impl RenderScene {
                 continue;
             }
             let mesh_slot = object.mesh;
-            // Async mesh content still in flight (node.gltf_mesh_source
-            // parsing/uploading): the slot's buffer is allocated at full
-            // capacity but holds no geometry — consuming it builds and
-            // traces a garbage BLAS (the Corrosion warmup GPU hang). Treat
-            // exactly like `visible == false`: no draw, no shadow cast.
-            // The object's arrival flips the topo key (object count +
-            // buffer identity), so the first published frame rebuilds the
-            // accel fresh through the one-frame defer — never a refit of
-            // the garbage state.
+            // Incomplete sources invalidate the whole frame; candidate warmup owns retry.
             if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
                 // §5.4 (P5): the skip stays (never draw/trace unlanded
                 // bytes), but the frame is no longer silently complete —
                 // warmup keeps pumping and export rejects it.
-                ctx.gpu_encoder()
-                    .merge_frame_status(crate::frame_status::FrameRenderStatus::PendingGeometry);
-                continue;
+                ctx.mark_outputs_pending();
+                let status = if self.rt_accel.is_some() {
+                    FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
+                } else { FrameRenderStatus::PendingGeometry };
+                ctx.gpu_encoder().merge_frame_status(status);
+                return None;
             }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
+                ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
                 ctx.error(format!(
                     "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
                 ));
@@ -1960,12 +1909,16 @@ impl RenderScene {
             let weights_slot = object.weights;
             if weights_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
                 // §5.4 (P5): same pending contract as the mesh slot above.
-                ctx.gpu_encoder()
-                    .merge_frame_status(crate::frame_status::FrameRenderStatus::PendingGeometry);
-                continue;
+                ctx.mark_outputs_pending();
+                let status = if self.rt_accel.is_some() {
+                    FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
+                } else { FrameRenderStatus::PendingGeometry };
+                ctx.gpu_encoder().merge_frame_status(status);
+                return None;
             }
             let weights = weights_slot.and_then(|s| ctx.inputs.array_slot(s));
             if weights_slot.is_some() && weights.is_none() {
+                ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
                 ctx.error(format!(
                     "object_{n}: wired appearance weights input is unavailable; renderer fell back to magenta clear"
                 ));
@@ -1979,6 +1932,7 @@ impl RenderScene {
             if let Some(weights) = weights
                 && ((weights.size / std::mem::size_of::<f32>() as u64) as u32) < vertex_count
             {
+                ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
                 ctx.error(format!(
                     "object_{n}: appearance weights buffer is shorter than the mesh ({}, need {vertex_count}); renderer fell back to magenta clear",
                     weights.size / std::mem::size_of::<f32>() as u64
@@ -1994,6 +1948,7 @@ impl RenderScene {
             // removed now that `rt_dynamic_coverage_and_attributes` proves
             // the coverage/brightness behavior against the raster formula.
             let Some(material) = object.material else {
+                ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
                 ctx.error(format!(
                     "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
                 ));
@@ -2018,6 +1973,7 @@ impl RenderScene {
                 _ => material,
             };
             if material.requires_envmap() && envmap_wired.is_none() {
+                ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
                 ctx.error(format!(
                     "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
                     material.kind
@@ -2246,6 +2202,10 @@ impl RenderScene {
                 instances,
                 instance_count,
                 vertices_generation,
+                mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
+                topology_hint: object.topology,
+                rt_texture_generations: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map]
+                    .map(|slot| slot.and_then(|slot| ctx.inputs.slot_generation_of(slot))),
                 instances_generation,
                 weights_generation: weights_slot.and_then(|s| inputs.slot_generation_of(s)),
                 gain: object.gain,
@@ -2789,31 +2749,20 @@ impl RenderScene {
                 );
         }
     }
-    /// BUG-trh7 stage 2, pass 7a: RT accel maintenance — gi_materials,
-    /// the three-tier dirty keys (topo / content-settle / accel), the
-    /// deferred-build decision, and the build/refit itself with the
-    /// reject path. Returns the gi_materials table for the dispatch-time
-    /// GPU upload, plus the topo and content keys the trace gate and the
-    /// RT-SOURCE admission log consume. Runs inside evaluate's
-    /// `if rt_enabled` gate, ahead of `rt_trace_accumulate`.
+    /// Update acceleration structures from current mesh revisions on this encoder.
+    /// Returned history invalidation is shared by every temporal consumer.
     fn rt_accel_maintenance<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         rt_ready: &mut bool,
-        topology_valid: bool,
         objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
-        opaque_draws: &[&ObjectDraw<'ctx>],
-    ) -> (
-        Vec<manifold_gpu::raytrace::GiMaterial>,
-        Vec<&'ctx manifold_gpu::GpuTexture>,
-        u64,
-        u64,
-    ) {
+        draws: &[ObjectDraw<'ctx>],
+    ) -> Result<RtFrameTables<'ctx>, FrameRenderFailure> {
+            let opaque_draws = draws.iter().filter(|d| d.alpha_mode != AlphaMode::Blend);
             // RS-B: build gi_materials alongside objects (SAME order) for
             // the emissive light table at accel-build time. Reused below
             // for the GPU upload at dispatch time.
-            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
-                .iter()
+            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws.clone()
                 .map(|d| {
                     manifold_gpu::raytrace::GiMaterial::new(
                         [
@@ -2843,25 +2792,7 @@ impl RenderScene {
             // scene-level flag — true if any object's diffuse_transmission_factor > 0.
             self.rt_has_translucency = gi_materials_data.iter().any(|m| m.translucency[0] > 0.0);
 
-            // Dirty-check keys, three tiers (in priority order):
-            //
-            // TOPO key (identity + count + epoch, no generation) — drives
-            // first build and genuine topology changes (buffer swap, object
-            // count change). Deliberately excludes transforms: a moving
-            // object must NOT read as a new topology (BUG-320).
-            //
-            // CONTENT key (topo + per-draw vertices_generation) — separates
-            // async mesh content arrival (gltf_mesh_source decode + staging
-            // copy lands after initial build) from the topo path. The
-            // generation bumps when new content lands, triggering a deferred
-            // rebuild once the generation settles (stable one frame). A
-            // never-settling (deforming) producer changes generation every
-            // frame, so this key never settles — no rebuild, preserving
-            // pre-fix behavior (D17 documented caveat).
-            //
-            // ACCEL key (topo + transforms) — the refit path. Only checked
-            // when both topo and content are settled; a content rebuild
-            // subsumes any pending refit (both fire → rebuild wins).
+            // Structural/instance keys supplement exact per-object mesh revisions.
             use std::hash::{Hash, Hasher};
             let mut hasher = ahash::AHasher::default();
             hasher.write_usize(objects.len());
@@ -2870,8 +2801,8 @@ impl RenderScene {
                 hasher.write_u32(o.triangle_count);
                 // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
                 // CAPACITY is topology — the TLAS slot count is baked at
-                // build time, so a capacity change rebuilds through
-                // BUG-308's one-frame defer. Same rule as manifold-gpu's
+                // build time, so a capacity change prepares a replacement
+                // before this frame's update. Same rule as manifold-gpu's
                 // `effective_instance_slots` (P1.5: any WIRED object takes
                 // the GPU path, 1-capacity included — its TRS is GPU-side).
                 // The wired buffer's IDENTITY deliberately does NOT ride
@@ -2886,7 +2817,7 @@ impl RenderScene {
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
-            for (o, d) in objects.iter().zip(opaque_draws.iter()) {
+            for (o, d) in objects.iter().zip(opaque_draws.clone()) {
                 hasher.write(bytemuck::bytes_of(&o.transform));
                 // Per-object cast_shadows toggle rewrites only the instance
                 // mask (see `refit_accel`), same cheap path as a transform
@@ -2897,41 +2828,62 @@ impl RenderScene {
                 // buffer's CONTENT changes refit (descriptor-build
                 // re-dispatch + TLAS refit in one command buffer). Static
                 // loop/mirror buffers never bump the generation, so the
-                // common case is zero per-frame cost. Deliberately NOT in
-                // the content-settle key: a re-scattering producer bumps
-                // every frame and would never settle, suppressing its
-                // rebuilds. `None` (unwired) hashes as a distinct state,
+                // common case is zero per-frame cost. Kept separate from
+                // mesh revisions: re-scattering updates instance descriptors
+                // without requiring a BLAS rebuild. `None` (unwired) hashes as a distinct state,
                 // mirroring the vertices_generation Option discipline.
                 d.instances_generation.hash(&mut hasher);
             }
             let accel_key = hasher.finish();
-            // Content key: topo key plus every draw's slot generation, on a
-            // fresh hasher so generation stays OUT of `accel_key` — a
-            // generation bump must not read as a refit trigger (refits only
-            // rewrite instance transforms; a content change needs a full
-            // rebuild via the settle path, and a deforming producer would
-            // otherwise force a refit every frame).
+            // Content key is diagnostic only; revisions drive geometry updates.
             let mut content_hasher = ahash::AHasher::default();
             topo_key.hash(&mut content_hasher);
-            for d in opaque_draws.iter() {
+            for d in opaque_draws.clone() {
                 d.vertices_generation.hash(&mut content_hasher);
             }
             let content_key = content_hasher.finish();
             // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance state —
-            // weights slot generation + gain bits per draw. Hit shading
+            // weights, gain, material values and texture identity/generation.
+            // Hit shading
             // reads these LIVE through the normal-source table (rebuilt
-            // every RT-ready frame below), so this key drives only the one
-            // baked consumer: the emissive light table's corner weights
+            // every RT-ready frame below). This key refreshes the baked
+            // emissive table and invalidates the shared temporal histories
             // (design dirty rule 4 — refresh tables, no BLAS work).
             let mut appearance_hasher = ahash::AHasher::default();
-            for d in opaque_draws.iter() {
+            for d in opaque_draws.clone() {
                 d.weights_generation.hash(&mut appearance_hasher);
                 appearance_hasher.write_u32(d.gain.to_bits());
+            }
+            for material in &gi_materials_data {
+                appearance_hasher.write(bytemuck::bytes_of(&material.albedo));
+                appearance_hasher.write(bytemuck::bytes_of(&material.emissive));
+                appearance_hasher.write(bytemuck::bytes_of(&material.metallic_roughness));
+                appearance_hasher.write(bytemuck::bytes_of(&material.translucency));
+            }
+            for draw in opaque_draws.clone() {
+                draw.rt_texture_generations.hash(&mut appearance_hasher);
+                appearance_hasher.write(bytemuck::bytes_of(&draw.uniforms.alpha_params));
+                for texture in [draw.base_color_map, draw.normal_map, draw.mr_map, draw.emissive_map] {
+                    texture.map(|t| t.identity_key()).hash(&mut appearance_hasher);
+                }
+                appearance_hasher.write(bytemuck::bytes_of(&draw.uniforms.emissive_uv_m));
+                appearance_hasher.write(bytemuck::bytes_of(&draw.uniforms.emissive_uv_t));
             }
             let appearance_key = appearance_hasher.finish();
             let appearance_changed = self.rt_appearance_key != Some(appearance_key);
 
-            let rt_source_trace_generation = ctx.rebuild_epoch;
+            let structural_changed = self.rt_accel_topo_key != Some(topo_key)
+                || self.rt_accel.as_ref().is_none_or(|a| a.check_topology(objects).is_err());
+            self.rt_changes.clear();
+            for (index, draw) in opaque_draws.clone().enumerate() {
+                self.rt_changes.push(rt_changes::classify_mesh_change(
+                    self.rt_mesh_revisions[index], draw.mesh_revision,
+                    draw.topology_hint, structural_changed,
+                ));
+            }
+            let geometry_changed = self.rt_changes.iter().any(|c| *c != RtGeometryChange::Reuse);
+            let history_changed = geometry_changed || appearance_changed;
+            let instance_changed = structural_changed || self.rt_accel_key != Some(accel_key);
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
@@ -2950,6 +2902,38 @@ impl RenderScene {
                 .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
                 .sum::<usize>()
                 + objects.len();
+            let tracer = self.rt_tracer.as_ref().expect("ensured before maintenance");
+            if structural_changed {
+                let plan = tracer.plan_accel(gpu.device, self.rt_accel.as_ref(), objects)
+                    .map_err(rt_frame_failure)?;
+                let mut additional_bytes = plan.additional_peak_bytes();
+                for (capacity, needed, stride) in [
+                    (self.rt_gi_materials_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>()),
+                    (self.rt_obj_motion_capacity, objects.len(), std::mem::size_of::<[[f32; 4]; 4]>()),
+                    (self.rt_normal_sources_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>()),
+                    (self.rt_normal_sources_scratch_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>()),
+                ] {
+                    if capacity < needed {
+                        additional_bytes = additional_bytes.checked_add((needed * stride) as u64)
+                            .ok_or(FrameRenderFailure::RtAllocation)?;
+                    }
+                }
+                crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    gpu.device.modifier_memory_snapshot(), additional_bytes,
+                ).map_err(|error| {
+                    log::error!("node.render_scene: RT candidate admission failed: {error}");
+                    FrameRenderFailure::RtAllocation
+                })?;
+                tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan)
+                    .map_err(rt_frame_failure)?;
+            }
+            // Reserve CPU snapshots only at a capacity preparation boundary.
+            if self.rt_gi_upload.capacity() < rt_gi_slot_count {
+                self.rt_gi_upload.reserve(rt_gi_slot_count.saturating_sub(self.rt_gi_upload.len()));
+            }
+            if self.rt_motion_upload.capacity() < objects.len() {
+                self.rt_motion_upload.reserve(objects.len().saturating_sub(self.rt_motion_upload.len()));
+            }
             ensure_rt_gi_materials(
                 &mut self.rt_gi_materials,
                 &mut self.rt_gi_materials_capacity,
@@ -2975,225 +2959,29 @@ impl RenderScene {
             // BUG-wytp: the same returned list now also carries normal-map
             // textures (and MR maps, since R3), indexed by
             // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
-            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
+            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources_snapshot(
+                &mut self.rt_normal_sources_scratch,
+                &mut self.rt_normal_sources_scratch_capacity,
                 &mut self.rt_normal_sources,
                 &mut self.rt_normal_sources_capacity,
                 gpu.device,
+                gpu.native_enc,
                 objects,
             );
-            // Rebuild-or-refit decision with BUG-308's one-frame defer.
-            //
-            // Two triggers share the same build call site:
-            // 1. Topo trigger (identity + count + epoch) — fires on first
-            //    RT frame or a genuine topology change. Key must recur
-            //    unchanged one frame before build enqueues (BUG-308).
-            // 2. Content-settle trigger (topo + per-draw generation) —
-            //    fires when async mesh content lands and settles. Only
-            //    evaluated when the topo key is stable, so both never
-            //    fight. A never-settling producer (deforming mesh, every-
-            //    frame generation bump) never satisfies the recur check
-            //    — no rebuild, preserving pre-fix D17 behavior.
-            //
-            // The topo key is recorded by ANY build. The content key is
-            // recorded ONLY when the content-settle trigger fired
-            // (BUG-oqta): a topo-triggered build that recorded it would
-            // swallow an in-flight generation bump — async mesh content
-            // landing during the BUG-308 one-frame defer changes the
-            // content key before the build enqueues, and the settle
-            // trigger (which compares against the recorded key) would
-            // then never fire the second build that picks the landed
-            // content up, leaving the empty/stale accel forever. Not
-            // recording it costs one settle-triggered rebuild at startup
-            // even when content was already resident — async and served
-            // by the raster path meanwhile. The refit path (full
-            // accel_key changes under an UNCHANGED topo key) fires only
-            // when neither trigger has work to do — a content rebuild
-            // subsumes any pending refit.
-            let (build_this_frame, content_trigger_fired) = match rt_deferred_build_decision(
-                self.rt_accel_topo_key, self.rt_accel_content_key,
-                &mut self.rt_accel_pending_key, &mut self.rt_accel_content_pending_key,
-                topo_key, content_key,
-            ) {
-                RtBuildDecision::Defer => (false, false),
-                RtBuildDecision::Build { content_trigger_fired } => (true, content_trigger_fired),
-            };
-
-            if build_this_frame {
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                if rt_source_trace_enabled() {
-                    log::info!(
-                        "[RT-SOURCE] accel-build action=build rebuild_epoch={} topo_key={topo_key:#x} content_key={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
-                        rt_source_trace_generation, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
-                    );
-                    for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
-                        log::info!(
-                            "[RT-SOURCE] accel-object action=build index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
-                            index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
-                            object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
-                            object.instance_slots, object.instances_addr
-                        );
-                        log::info!("[RT-SOURCE] accel-generations action=build index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
-                    }
-                }
-                // Q1 probe: what did build_accel see?
-                if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
-                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
-                    for (i, o) in objects.iter().enumerate() {
-                        let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
-                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
-                    }
-                }
-                // SCENE_MODIFIER_RT_DESIGN.md §4 (P3): caller-ordered
-                // plan → prepare → encode onto THIS frame's encoder — no
-                // private AS command buffer anymore. The BUG-308 defer above
-                // still decides WHEN this fires (P5 removes the defer); the
-                // encode orders after this frame's earlier writes on the
-                // shared command buffer.
-                //
-                // Admission/allocation failure keeps the old resident valid
-                // (prepare swaps only on success): the scene keeps tracing
-                // the previous accel rather than losing RT.
-                match tracer.plan_accel(gpu.device, self.rt_accel.as_ref(), objects)
-                    .and_then(|plan| tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan))
-                {
-                    Ok(()) => {
-                        let accel = self.rt_accel.as_mut().expect("prepare succeeded");
-                        let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
-                        if let Err(e) = tracer.encode_accel_update(
-                            gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, true,
-                        ) {
-                            log::error!("node.render_scene: RT accel encode after prepare failed: {e:?}");
-                            *rt_ready = false;
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("node.render_scene: RT accel plan/prepare failed: {e:?} — keeping previous resident scene");
-                        *rt_ready = false;
-                    }
-                }
-                self.rt_accel_topo_key = Some(topo_key);
-                // BUG-oqta: only a content-settle-triggered build records
-                // the content key (why: the trigger block above).
-                if content_trigger_fired {
-                    self.rt_accel_content_key = Some(content_key);
-                }
-                self.rt_accel_key = Some(accel_key);
-                self.rt_accel_pending_key = None;
-                self.rt_accel_content_pending_key = None;
-                // P4b: the build's emissive refresh bakes current corner
-                // weights — the appearance key is current as of this frame.
-                self.rt_appearance_key = Some(appearance_key);
-                // BUG-320: the fresh build must be observed ready
-                // before tracing resumes — the old accel is dropped
-                // (self-retiring Drop) and no longer traced against.
-                self.rt_accel_built = false;
-                *rt_ready = false;
-                self.rt_topology_rejected = false;
-                log::info!(
-                    "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"
-                );
-            } else if rt_refit_eligible(topology_valid, self.rt_accel_key, accel_key) {
-                // BUG-320: same topology, moved transforms — refit the
-                // TLAS in place. Safe same-frame (transforms are
-                // CPU-authored; no upstream GPU write to race — the
-                // BUG-308 defer is a build_accel concern only). Enqueue
-                // only when the accel is idle (`ready`): rewriting the
-                // CPU-mapped instance buffer under an in-flight
-                // refit/build would tear; when busy, skip and catch up
-                // next frame with the then-current transforms. Tracing
-                // continues against the old transforms throughout
-                // (`rt_accel_built` gate above) — one frame of accel
-                // latency on a moving mesh is invisible, the RT↔raster
-                // path swap it replaces was not.
-                if self.rt_accel.as_ref().is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire))
-                {
-                    let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    let accel = self.rt_accel.as_mut().expect("checked above");
-                    // Caller-ordered TLAS update (§4): no BLAS changes,
-                    // instance transforms/masks changed (accel_key moved
-                    // under an unchanged topo key). P4b: an appearance
-                    // change riding the same frame refreshes the emissive
-                    // table's corner weights with it.
-                    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Reuse; objects.len()];
-                    match tracer.encode_accel_update(
-                        gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, appearance_changed,
-                    ) {
-                        Err(e) => {
-                            *rt_ready = false;
-                            let first_rejection = reject_topology(
-                                &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                                &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                                &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                                &mut self.rt_topology_rejected,
-                            );
-                            if first_rejection && !self.rt_topology_mismatch_logged {
-                                log::warn!("node.render_scene: RT accel update rejected before refit: {e:?}");
-                                self.rt_topology_mismatch_logged = true;
-                            }
-                        }
-                        Ok(_) => {
-                        if rt_source_trace_enabled() {
-                            log::info!(
-                                "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
-                                rt_source_trace_generation, accel as *const _ as usize, self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
-                            );
-                            for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
-                                log::info!(
-                                    "[RT-SOURCE] accel-object action=refit index={} vertex_identity={} vertex_size={} instances_identity={} instance_count={} instances_addr={:#x}",
-                                    index, object.vertex_buffer.identity_key(), object.vertex_buffer.size,
-                                    object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
-                                    object.instance_slots, object.instances_addr
-                                );
-                                log::info!("[RT-SOURCE] accel-generations action=refit index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
-                            }
-                        }
-                        self.rt_accel_key = Some(accel_key);
-                        self.rt_appearance_key = Some(appearance_key);
-                        self.rt_topology_mismatch_logged = false;
-                        }
-                    }
-                }
-            } else if topology_valid
-                && appearance_changed
-                && self.rt_accel.as_ref().is_some_and(|a| {
-                    a.ready.load(std::sync::atomic::Ordering::Acquire)
-                })
-            {
-                // P4b (§5.2, design dirty rule 4): appearance-only change —
-                // no BLAS/TLAS work (the descriptor nonopaque property is
-                // unchanged: topology_valid holds), just an emissive table
-                // refresh so its baked corner weights track the current
-                // weights buffer. The trace's hit shading already reads
-                // weights/gain live through this frame's normal-source
-                // table, so a fractional-to-fractional gain change is this
-                // cheap path only.
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                let accel = self.rt_accel.as_mut().expect("checked above");
-                let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Reuse; objects.len()];
-                match tracer.encode_accel_update(
-                    gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, false, true,
-                ) {
-                    Ok(_) => {
-                        self.rt_appearance_key = Some(appearance_key);
-                    }
-                    Err(e) => {
-                        *rt_ready = false;
-                        let first_rejection = reject_topology(
-                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                            &mut self.rt_topology_rejected,
-                        );
-                        if first_rejection && !self.rt_topology_mismatch_logged {
-                            log::warn!("node.render_scene: RT appearance refresh rejected before encode: {e:?}");
-                            self.rt_topology_mismatch_logged = true;
-                        }
-                    }
-                }
+            let accel = self.rt_accel.as_mut().ok_or(FrameRenderFailure::RtNeedsPreparation)?;
+            tracer.encode_accel_update(
+                gpu.device, gpu.native_enc, accel, objects, &self.rt_changes,
+                &gi_materials_data, instance_changed, history_changed,
+            ).map_err(rt_frame_failure)?;
+            for (index, draw) in opaque_draws.clone().enumerate() {
+                self.rt_mesh_revisions[index] = draw.mesh_revision.map(|r| (r, draw.topology_hint));
             }
-
-
-        (gi_materials_data, alpha_textures, topo_key, content_key)
+            self.rt_accel_topo_key = Some(topo_key);
+            self.rt_accel_content_key = Some(content_key);
+            self.rt_accel_key = Some(accel_key);
+            self.rt_appearance_key = Some(appearance_key);
+            *rt_ready = true;
+        Ok((gi_materials_data, alpha_textures, topo_key, content_key, history_changed))
     }
     /// BUG-trh7 stage 2, pass 7b: the RT trace + accumulate half — trace
     /// gate, emissive stats binding, rt_casters, mask/lighting dispatches,
@@ -3235,36 +3023,14 @@ impl RenderScene {
         } = *pre;
         let rt_source_trace_generation = ctx.rebuild_epoch;
         let gpu = ctx.gpu_encoder();
-            // `rt_ready` was captured at the top of `evaluate()` from the
-            // latched `rt_accel_built` flag BEFORE this block ran —
-            // correct either way: a rebuild just enqueued above commits
-            // its build command buffer ahead of this frame's shared
-            // encoder (same queue, so the trace below is GPU-ordered
-            // after it), a refit likewise, and an already-resident
-            // accel's readiness can't change mid-call (the completion
-            // handler runs on a separate Metal-owned thread, never
-            // synchronously inside evaluate()).
-            // BUG-rmmv: during the BUG-308 one-frame defer window,
-            // `rt_accel_built` is still latched true while
-            // `ensure_normal_sources` (above) already rebuilt material
-            // arrays for the CURRENT frame's topology. If the topology
-            // shrunk (objects removed), tracing would bind the old accel
-            // (N_old instances) against the new arrays (N_new < N_old),
-            // overrunning `gi_materials`/`normal_sources` — OOB read
-            // past the buffer. Requiring the accel's topo key to match
-            // the current frame's topo key closes that hole: during the
-            // defer frame the keys don't match, tracing is blocked, and
-            // the raster shadow-map path serves the transition.
-            // Content generations may continue using the resident AS while
-            // the existing two-observation content rebuild settles. Strict
-            // dynamic-content freshness is outside this landing.
-            if rt_trace_gate(rt_ready, self.rt_accel_topo_key, topo_key) {
+            // Only a successfully encoded update authorizes this frame's consumers.
+            if rt_ready {
                 if rt_source_trace_enabled()
                     && self.rt_source_trace_last_admission != Some((topo_key, content_key))
                 {
                     log::info!(
-                        "[RT-SOURCE] trace-admission action=trace rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
-                        rt_source_trace_generation, self.rt_accel.as_ref().map(|accel| accel as *const _ as usize).unwrap_or(0), self.rt_accel_topo_key, self.rt_accel_content_key, self.rt_accel_pending_key, self.rt_accel_content_pending_key, objects.len()
+                        "[RT-SOURCE] trace-admission action=trace rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} objects={}",
+                        rt_source_trace_generation, self.rt_accel.as_ref().map(|accel| accel as *const _ as usize).unwrap_or(0), self.rt_accel_topo_key, self.rt_accel_content_key, objects.len()
                     );
                     for (index, (object, draw)) in objects.iter().zip(opaque_draws.iter()).enumerate() {
                         log::info!(
@@ -3437,77 +3203,37 @@ impl RenderScene {
                 // the canonical block. With every object at ≤ 1 slot the
                 // slot region is a verbatim copy of the canonical block.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
-                {
-                    // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
-                    // only) — same SAFETY discipline as manifold-gpu's own
-                    // `bytemuck_bytes` (bytemuck isn't a manifold-gpu
-                    // dependency, so this crate can't derive `Pod` on it;
-                    // a raw byte view is the same shape without adding one).
-                    const GI_SIZE: usize =
-                        std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>();
-                    let ptr = gi_materials_buffer
-                        .mapped_ptr()
-                        .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
-                    // Canonical block [0, N).
-                    let canonical_bytes: &[u8] = unsafe {
-                        std::slice::from_raw_parts(
-                            gi_materials_data.as_ptr() as *const u8,
-                            std::mem::size_of_val(gi_materials_data),
-                        )
-                    };
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(canonical_bytes.as_ptr(), ptr, canonical_bytes.len());
-                    }
-                    // Slot region [N, N+Σ): per-slot duplicates.
-                    let mut slot_row = 0usize;
-                    for (mat, o) in gi_materials_data.iter().zip(objects.iter()) {
-                        let slots =
-                            if o.instances_addr != 0 { o.instance_slots.max(1) } else { 1 };
-                        for _ in 0..slots {
-                            unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    mat as *const manifold_gpu::raytrace::GiMaterial as *const u8,
-                                    ptr.add((objects.len() + slot_row) * GI_SIZE),
-                                    GI_SIZE,
-                                );
-                            }
-                            slot_row += 1;
-                        }
-                    }
+                self.rt_gi_upload.clear();
+                self.rt_gi_upload.extend_from_slice(gi_materials_data);
+                for (material, object) in gi_materials_data.iter().zip(objects) {
+                    let slots = if object.instances_addr != 0 { object.instance_slots.max(1) } else { 1 };
+                    self.rt_gi_upload.extend(std::iter::repeat_n(*material, slots as usize));
                 }
-                // RT-T2-C: per-object world→prev-world motion delta
-                // (`prev_model * inverse(model)`, both straight off the
-                // draw uniforms MetalFX's velocity pass already
-                // maintains) for `accumulate_irradiance`'s object-aware
-                // reprojection. Identity fallback: a singular model
-                // matrix (degenerate zero scale) reprojects camera-only
-                // that frame. Written straight into the CPU-mapped
-                // buffer — no per-frame Vec.
+                // GiMaterial is repr(C), initialized f32 payload including explicit padding.
+                let material_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        self.rt_gi_upload.as_ptr().cast::<u8>(),
+                        std::mem::size_of_val(self.rt_gi_upload.as_slice()),
+                    )
+                };
+                manifold_gpu::raytrace::encode_inline_copy(
+                    gpu.device, gpu.native_enc, gi_materials_buffer, 0, material_bytes,
+                );
                 let obj_motion_buffer = self.rt_obj_motion.as_ref().expect("ensured above");
-                {
-                    const M4_SIZE: usize = std::mem::size_of::<[[f32; 4]; 4]>();
-                    const IDENTITY_M4: [[f32; 4]; 4] = [
-                        [1.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0, 0.0],
-                        [0.0, 0.0, 0.0, 1.0],
-                    ];
-                    let ptr = obj_motion_buffer
-                        .mapped_ptr()
-                        .expect("rt_obj_motion must be CPU-mapped (create_buffer_shared)");
-                    for (i, d) in opaque_draws.iter().enumerate() {
-                        let delta = mat4_inverse(d.uniforms.model)
-                            .map(|inv| mat4_mul(d.uniforms.prev_model, inv))
-                            .unwrap_or(IDENTITY_M4);
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(
-                                delta.as_ptr() as *const u8,
-                                ptr.add(i * M4_SIZE),
-                                M4_SIZE,
-                            );
-                        }
-                    }
+                const IDENTITY_M4: [[f32; 4]; 4] = [
+                    [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0],
+                ];
+                self.rt_motion_upload.clear();
+                for draw in opaque_draws {
+                    self.rt_motion_upload.push(mat4_inverse(draw.uniforms.model)
+                        .map(|inv| mat4_mul(draw.uniforms.prev_model, inv))
+                        .unwrap_or(IDENTITY_M4));
                 }
+                manifold_gpu::raytrace::encode_inline_copy(
+                    gpu.device, gpu.native_enc, obj_motion_buffer, 0,
+                    bytemuck::cast_slice(&self.rt_motion_upload),
+                );
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 // P4a: the emissive count/mean/area/local flag live in the
@@ -3619,6 +3345,7 @@ impl RenderScene {
                 gpu.checkpoint();
                 tracer.upsample_shadow(
                     gpu.native_enc,
+                    &lighting_params,
                     params_buffer,
                     depth_tex,
                     mask_half,
@@ -5349,19 +5076,9 @@ impl RenderScene {
     /// flags inconsistent with trace suppression. Returns the AS object
     /// list, topology_valid, and rt_just_resumed (both consumed by the
     /// RT block).
-    fn validate_topology_and_author_flags<'ctx, 'gpu>(
-        &mut self,
-        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
-        pre: &FramePrelude<'ctx>,
-        rt_ready: &mut bool,
-        draws: &mut [ObjectDraw<'ctx>],
-        has_transmission: bool,
-    ) -> (Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>>, bool, bool, bool) {
-        let FramePrelude {
-            ref casters,
-            rt_enabled, rt_reflections, rt_shadows_enabled, rt_ao_enabled,
-            rt_gi_enabled, velocity_wired, ao_mask_wired, ..
-        } = *pre;
+    fn collect_rt_objects<'ctx>(
+        draws: &[ObjectDraw<'ctx>], rt_enabled: bool,
+    ) -> Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>> {
         // Resolve resident topology before authoring RT consumer flags or
         // selecting raster fallback. Reuse this exact object list for AS work.
         let rt_objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> =
@@ -5447,29 +5164,21 @@ impl RenderScene {
                 }
                 })
                 .collect();
-            let topology_time = ctx.time;
-            let mut topology_valid = true;
-            if rt_enabled
-                && let Some(accel) = self.rt_accel.as_ref()
-                && let Err(mismatch) = accel.check_topology(&rt_objects)
-            {
-                topology_valid = false;
-                *rt_ready = false;
-                let first_rejection = reject_topology(
-                    &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                    &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                    &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                    &mut self.rt_topology_rejected,
-                );
-                if first_rejection && !self.rt_topology_mismatch_logged {
-                    log::warn!(
-                        "node.render_scene: RT topology mismatch: object={} category={:?} time={:?}",
-                        mismatch.object, mismatch.category, topology_time
-                    );
-                    self.rt_topology_mismatch_logged = true;
-                }
-            }
+        rt_objects
+    }
 
+    fn author_rt_flags<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        pre: &FramePrelude<'ctx>,
+        rt_ready: &bool,
+        draws: &mut [ObjectDraw<'ctx>],
+        has_transmission: bool,
+    ) -> (bool, bool) {
+        let FramePrelude {
+            ref casters, rt_enabled, rt_reflections, rt_shadows_enabled,
+            rt_ao_enabled, rt_gi_enabled, velocity_wired, ao_mask_wired, ..
+        } = *pre;
         let will_rt_accumulate_this_frame = rt_enabled && *rt_ready;
         let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
         self.rt_prev_accumulating = will_rt_accumulate_this_frame;
@@ -5515,8 +5224,8 @@ impl RenderScene {
             // light substitutes rt_sun_tint for the luma vis channel.
             // BUG-majv: gate on rt_shadows_enabled, not bare rt_ready — the
             // svt texture is only written by the mask/lighting dispatches at
-            // shadow_spp > 0, and `rt_ready` is latched (stays true with RT
-            // toggled off), so the old gate read a stale rt_sun_tint with RT
+            // shadow_spp > 0. The previous completion-latched readiness
+            // could read a stale rt_sun_tint with RT
             // off or with the shadow kernel disabled — a zeroed texture
             // zeroed the sun's entire direct contribution.
             uniforms.rt_flags[2] = if rt_shadows_enabled && *rt_ready { rt_svt_slot(casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
@@ -5575,7 +5284,7 @@ impl RenderScene {
             }
         }
 
-        (rt_objects, topology_valid, rt_just_resumed, will_rt_accumulate_this_frame)
+        (rt_just_resumed, will_rt_accumulate_this_frame)
     }
 
     fn frame_preliminaries<'ctx, 'gpu>(
@@ -5856,28 +5565,8 @@ impl RenderScene {
         self.rt_prev_toggle_ao = Some(rt_ao_enabled);
         self.rt_prev_toggle_gi = Some(rt_gi_enabled);
         self.rt_prev_toggle_refl = Some(rt_reflections);
-        // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
-        // `false` whenever there's no resident accel yet, OR a topology
-        // (re)build hasn't completed. Every downstream "use RT shadows"
-        // decision (the raster shadow-map skip below, the WGSL
-        // `scene_params.w` RT-active flag, and the RT dispatch itself
-        // near the end of this fn) gates on `rt_enabled && rt_ready`, not
-        // `rt_enabled` alone — an RT-enabled scene with a not-yet-built
-        // accel keeps rendering the raster shadow-map path (an explicit,
-        // logged transition below) until the async build catches up.
-        // BUG-320: `rt_ready` is the LATCHED built flag, not raw
-        // `accel.ready` — a transform-only `refit_accel` in flight keeps
-        // `ready` false for a few frames, but the structure stays valid
-        // to trace with its old transforms (raytrace.rs refit contract);
-        // gating on raw `ready` here is what ping-ponged RT ↔ raster
-        // under motion.
-        if !self.rt_accel_built {
-            self.rt_accel_built = self
-                .rt_accel
-                .as_ref()
-                .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
-        }
-        let rt_ready = self.rt_accel_built && !self.rt_topology_rejected;
+        // Successful current-frame encoding authorizes tracing, not prior completion.
+        let rt_ready = false;
         // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2, section 8.2 D22 (T2-B): the ONE
         // `detect_reset` call site for every temporal consumer in this node
         // (negative-`rg` gate: no second reset path). Unconditional, once
@@ -6204,13 +5893,10 @@ impl RenderScene {
             rt_accel: None,
             rt_accel_key: None,
             rt_accel_topo_key: None,
-            rt_accel_pending_key: None,
             rt_accel_content_key: None,
-            rt_accel_content_pending_key: None,
-            rt_accel_built: false,
-            rt_topology_rejected: false,
             rt_appearance_key: None,
-            rt_topology_mismatch_logged: false,
+            rt_mesh_revisions: Vec::new(),
+            rt_changes: Vec::new(),
             rt_source_trace_last_admission: None,
             rt_mask_half: None,
             rt_mask_full: None,
@@ -6224,6 +5910,7 @@ impl RenderScene {
             rt_mask_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
+            rt_gi_upload: Vec::new(),
             rt_has_translucency: false,
             rt_prev_toggle_shadows: None,
             rt_prev_toggle_ao: None,
@@ -6233,8 +5920,11 @@ impl RenderScene {
             prev_temporal_upscale: false,
             rt_obj_motion: None,
             rt_obj_motion_capacity: 0,
+            rt_motion_upload: Vec::new(),
             rt_normal_sources: None,
             rt_normal_sources_capacity: 0,
+            rt_normal_sources_scratch: None,
+            rt_normal_sources_scratch_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
             rt_refl_half: None,
@@ -6306,6 +5996,9 @@ impl RenderScene {
         let objects = objects.clamp(1, OBJECT_SAFETY_MAX);
         let lights = lights.clamp(0, LIGHT_SLIDER_MAX);
         let n_obj = objects as usize;
+        self.rt_mesh_revisions.resize(n_obj, None);
+        self.rt_mesh_revisions.fill(None);
+        self.rt_changes = Vec::with_capacity(n_obj);
         let n_lights = lights as usize;
 
         let mut inputs = Vec::with_capacity(3 + n_lights + n_obj * 9);
@@ -8793,14 +8486,14 @@ impl EffectNode for RenderScene {
         // prelude and borrows the three read-only Vecs, so later pass calls
         // can keep taking `&pre` (every borrow here is shared).
         let port_index = ctx.inputs.build_index();
-        let Some((pre, state, (mut shaft_light_data, mut shaft_light_count))) =
+        let Some((mut pre, state, (mut shaft_light_data, mut shaft_light_count))) =
             self.frame_preliminaries(ctx, &port_index)
         else {
             return;
         };
         let FramePrelude {
             probe_t0: _probe_t0, objects: _, cam: _, envmap_wired: _, atmosphere: _,
-            render_mode: _, light_data: _, light_count: _, ref casters,
+            render_mode: _, light_data: _, light_count: _, casters: _,
             caster_table: _,
             native_width, native_height, width, height, aspect: _, temporal_upscale,
             view_proj: _, prev_view_proj: _, jitter_px: _, jitter_ndc: _, prev_jitter_ndc: _,
@@ -8832,13 +8525,23 @@ impl EffectNode for RenderScene {
             return;
         };
 
-        // Resolve resident topology before authoring RT consumer flags
-        // (BUG-trh7 stage 2, `validate_topology_and_author_flags`) — the
-        // check textually precedes every consumer decision, the guarantee
-        // the source-order test now proves inside the method.
-        let (rt_objects, topology_valid, rt_just_resumed, will_rt_accumulate_this_frame) = self
-            .validate_topology_and_author_flags(ctx, &pre, &mut rt_ready, &mut draws, has_transmission);
-
+        let rt_objects = Self::collect_rt_objects(&draws, rt_enabled);
+        let rt_tables = if rt_enabled && !rt_objects.is_empty() {
+            self.ensure_rt_tracer(ctx.gpu_encoder().device);
+            match self.rt_accel_maintenance(ctx, &mut rt_ready, &rt_objects, &draws) {
+                Ok((materials, textures, topo, content, changed)) => {
+                    pre.reset_decision |= changed;
+                    Some((materials, textures, topo, content))
+                }
+                Err(failure) => {
+                    ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(failure));
+                    ctx.error(format!("RT current-frame update failed: {failure:?}"));
+                    return;
+                }
+            }
+        } else { None };
+        let (rt_just_resumed, will_rt_accumulate_this_frame) =
+            self.author_rt_flags(ctx, &pre, &rt_ready, &mut draws, has_transmission);
 
         // ---- Ensure cached GPU resources (mutable phase) — BUG-trh7 stage 2,
         // `ensure_gpu_resources`; the E2a format peek moved inside it, ahead
@@ -8852,7 +8555,7 @@ impl EffectNode for RenderScene {
             has_transmission,
             rt_ready,
         );
-        let has_casters = !casters.is_empty();
+        let has_casters = !pre.casters.is_empty();
 
         // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
         // `ibl_convolution_pass`) — returns the envmap generation the RT
@@ -8903,17 +8606,7 @@ impl EffectNode for RenderScene {
         // the accel below is instance-aware — one TLAS slot per wired
         // instance capacity, composed GPU-side (descriptor-build kernel),
         // so instanced objects trace one copy per live raster slot. ----
-        if rt_enabled {
-            // BUG-trh7 stage 2, pass 7a: accel maintenance (keys, build,
-            // refit) — returns the dispatch-time gi_materials table and the
-            // keys the trace gate + admission log consume.
-            let (gi_materials_data, alpha_textures, topo_key, content_key) = self.rt_accel_maintenance(
-                ctx,
-                &mut rt_ready,
-                topology_valid,
-                &rt_objects,
-                &opaque_draws,
-            );
+        if let Some((gi_materials_data, alpha_textures, topo_key, content_key)) = rt_tables {
             let objects = rt_objects;
 
             // BUG-trh7 stage 2, pass 7b: the trace + accumulate half. false =
