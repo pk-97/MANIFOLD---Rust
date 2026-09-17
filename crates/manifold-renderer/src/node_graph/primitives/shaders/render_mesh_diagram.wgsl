@@ -4,6 +4,7 @@ struct U {
     grid: u32, fragments: u32, ghosts: u32, vectors: u32, trails: u32,
     tri_count: u32, vertex_count: u32, history_head: u32, history_len: u32,
     history_capacity: u32, history_stride: u32, _pad: u32,
+    depth_pass: u32, occlusion: u32, mode: u32, _depth_pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
 };
@@ -16,6 +17,9 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @loca
 @group(0) @binding(4) var<storage, read> history: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> mesh_weights: array<f32>;
 @group(0) @binding(6) var<storage, read> scan_weights: array<f32>;
+@group(0) @binding(7) var surface_depth: texture_2d<f32>;
+@group(0) @binding(8) var scene_depth: texture_2d<f32>;
+@group(0) @binding(9) var depth_sampler: sampler;
 
 fn targeted(target_element: u32, element: u32) -> bool { return target_element == 0u || target_element == element; }
 fn tone(color: vec4<f32>, gain: f32) -> vec4<f32> {
@@ -64,7 +68,19 @@ fn hsv(h: f32) -> vec3<f32> {
 }
 
 fn clip_point(p: vec3<f32>) -> vec4<f32> { return u.view_proj * u.model * vec4<f32>(p, 1.0); }
-fn clip_line(ca: vec4<f32>, cb: vec4<f32>, color: vec4<f32>, vi: u32) -> O {
+fn clip_line(ca_in: vec4<f32>, cb_in: vec4<f32>, color: vec4<f32>, vi: u32) -> O {
+    var ca = ca_in;
+    var cb = cb_in;
+    // X-ray keeps the historic endpoint rejection and average depth exactly.
+    // Depth-tested lines clip the segment against the camera near plane and
+    // retain each endpoint's homogeneous depth for interpolation.
+    if u.occlusion != 0u {
+        // Metal's near clip plane is z=0, for perspective and orthographic
+        // cameras alike. Clip the centre line before expanding its stroke.
+        if ca.z < 0.0 && cb.z < 0.0 { return hidden(); }
+        if ca.z < 0.0 { ca = mix(ca, cb, -ca.z / (cb.z - ca.z)); }
+        if cb.z < 0.0 { cb = mix(cb, ca, -cb.z / (ca.z - cb.z)); }
+    }
     if (ca.w <= 0.001 || cb.w <= 0.001) { return hidden(); }
     let aa = ca.xy / ca.w; let bb = cb.xy / cb.w;
     let d = (bb - aa) * u.viewport.xy; let len = length(d);
@@ -76,7 +92,13 @@ fn clip_line(ca: vec4<f32>, cb: vec4<f32>, color: vec4<f32>, vi: u32) -> O {
     if (c == 1u) { p = bb + side; }
     if (c == 2u || c == 4u) { p = bb - side; }
     if (c == 5u) { p = aa - side; }
-    var o: O; o.p = vec4<f32>(p, (ca.z / ca.w + cb.z / cb.w) * 0.5, 1.0); o.color = color; o.grid = 0u; return o;
+    var o: O;
+    o.p = vec4<f32>(p, (ca.z / ca.w + cb.z / cb.w) * 0.5, 1.0);
+    if u.occlusion != 0u {
+        let endpoint = select(ca, cb, c == 1u || c == 2u || c == 4u);
+        o.p = vec4<f32>(p * endpoint.w, endpoint.z, endpoint.w);
+    }
+    o.color = color; o.grid = 0u; return o;
 }
 
 fn line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
@@ -87,6 +109,14 @@ fn world_line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
     return clip_line(u.view_proj * vec4<f32>(a, 1.0), u.view_proj * vec4<f32>(b, 1.0), color, vi);
 }
 
+fn depth_surface_vertex(vi: u32, triangle: u32) -> O {
+    if u.fragments == 0u || vi >= 3u || triangle >= u.tri_count { return hidden(); }
+    let c = clip_point(current[triangle * 3u + vi].position);
+    // Let the rasterizer clip whole triangles; moving one behind-camera
+    // vertex to hidden() would invent a different surface at the near plane.
+    var o: O; o.p = c; o.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); o.grid = 0u; return o;
+}
+
 fn sample_position(which: u32, idx: u32) -> vec3<f32> {
     if (which == 0u) { return current[idx].position; }
     if (which == 1u) { return reference[idx].position; }
@@ -94,6 +124,7 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
 }
 
 fn vertex_body(vi: u32, instance: u32) -> O {
+    if u.depth_pass != 0u { return depth_surface_vertex(vi, instance); }
     // Draw the world grid first, behind the diagram marks. A fullscreen
     // triangle has no finite mesh boundary and never inherits object pose.
     if (instance == 0u) {
@@ -183,6 +214,10 @@ fn vertex_body(vi: u32, instance: u32) -> O {
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
     var o=vertex_body(vi,instance);
+    if u.depth_pass != 0u {
+        o.color = tone(o.color, appearance(2u, instance));
+        return o;
+    }
     if instance==0u || u.tri_count==0u { return o; }
     let ii=instance-1u;
     var element=2u;
@@ -234,10 +269,53 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     return tone(vec4<f32>(0.18, 0.35, 0.40, alpha * fade * horizon * visible),grid_gain(world));
 }
 
+fn world_grid_position(pixel: vec2<f32>) -> vec3<f32> {
+    let ndc = pixel / u.viewport.xy * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
+    let near_h = u.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
+    let far_h = u.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    let near = near_h.xyz / near_h.w;
+    let far = far_h.xyz / far_h.w;
+    let ray = far - near;
+    let denominator = select(-max(abs(ray.y), 0.000001), max(abs(ray.y), 0.000001), ray.y >= 0.0);
+    let t = -near.y / denominator;
+    return near + t * ray;
+}
+
+fn depth_occluded(depth: f32, pixel: vec2<f32>, bias: f32) -> bool {
+    if u.occlusion == 0u { return false; }
+    let uv = pixel / u.viewport.xy;
+    var cutoff = textureSampleLevel(surface_depth, depth_sampler, uv, 0.0).r;
+    if u.mode == 2u { cutoff = min(cutoff, textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r); }
+    return depth > cutoff + bias;
+}
+
 @fragment
 fn fs_main(in: O) -> @location(0) vec4<f32> {
+    // Keep the original entry point free of depth resources. Existing X-ray
+    // callers bind only the authored array buffers, and this preserves their
+    // pixel path and pipeline layout.
+    let grid = world_grid(in.p.xy);
+    return select(in.color, grid, in.grid != 0u);
+}
+
+@fragment
+fn fs_depth_color(in: O) -> @location(0) vec4<f32> {
     // Evaluate derivatives outside divergent control flow, including quads
     // touched by line primitives, so the grid stays valid at the horizon.
     let grid = world_grid(in.p.xy);
+    let world = world_grid_position(in.p.xy);
+    let clip = u.view_proj * vec4<f32>(world, 1.0);
+    let depth = select(in.p.z, clip.z / max(clip.w, 0.000001), in.grid != 0u);
+    // Widen the tolerance with projected slope, but cap it so distant
+    // surfaces do not acquire a large see-through band. Derivatives stay
+    // outside divergent flow, just like the grid above.
+    let bias = clamp(fwidth(depth) * (u.line_width + 1.0), 0.000002, 0.0002);
+    if depth_occluded(depth, in.p.xy, bias) { return vec4<f32>(0.0); }
     return select(in.color, grid, in.grid != 0u);
+}
+
+@fragment
+fn fs_depth(in: O) -> @location(0) f32 {
+    if in.color.a <= 0.0 { return 1.0; }
+    return clamp(in.p.z, 0.0, 1.0);
 }

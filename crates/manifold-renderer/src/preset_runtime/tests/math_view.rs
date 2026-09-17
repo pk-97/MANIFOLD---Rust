@@ -101,6 +101,92 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
 
 #[cfg(feature = "gpu-proofs")]
 #[test]
+fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
+    let guard = crate::test_device();
+    let device = guard.arc();
+    let owner = owner();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut params = manifest(&owner);
+    for (name, value) in [("mode", 1.0), ("grid", 0.0), ("trails", 0.0), ("density", 8.0)] {
+        set(&owner, &mut params, &format!("math_view_{name}"), value);
+    }
+    set(&owner, &mut params, "orbit", 0.5);
+    let energy = |pixels: &[u8]| -> f64 {
+        pixels.chunks_exact(8).map(|pixel| {
+            pixel[..6].chunks_exact(2).map(|channel| {
+                f64::from(half::f16::from_le_bytes([channel[0], channel[1]]).to_f32())
+            }).sum::<f64>()
+        }).sum()
+    };
+    let mut standalone: Option<Vec<u8>> = None;
+    for fused in [false, true] {
+        let mut runtime = PresetRuntime::from_def_for_render(
+            owner.clone(), &registry, Some(&params), fused,
+        ).unwrap().with_generator_device(device.clone(), 320, 180, GpuTextureFormat::Rgba16Float).unwrap();
+        for (w, h) in [(320, 180), (240, 160)] {
+            if w != 320 { runtime.resize(&device, w, h); }
+            let target = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "math-depth-runtime-proof");
+            let render = |runtime: &mut PresetRuntime, params: &ParamManifest| {
+                let ctx = PresetContext {
+                    time: 0.0, beat: 0.0, dt: 0.0, width: w, height: h,
+                    output_width: w, output_height: h, aspect: w as f32 / h as f32,
+                    owner_key: 1, is_clip_level: false, frame_count: 1,
+                    anim_progress: 0.0, trigger_count: 0,
+                };
+                let mut encoder = device.create_encoder("math-depth-runtime-proof");
+                runtime.render(&mut GpuEncoder::new(&mut encoder, &device), &target.texture, &ctx, params);
+                encoder.commit_and_wait_completed();
+                crate::headless_readback::readback_raw_halves(&device, &target.texture, w, h)
+            };
+            for scope in [0.0, 1.0] {
+                set(&owner, &mut params, "math_view_scope", scope);
+                set(&owner, &mut params, "math_view_mode", 1.0);
+                set(&owner, &mut params, "math_view_occlusion", 0.0);
+                let xray = render(&mut runtime, &params);
+                set(&owner, &mut params, "math_view_occlusion", 1.0);
+                let depth = render(&mut runtime, &params);
+                assert!(energy(&depth) > 1.0, "Depth must not blank Math view");
+                assert!(energy(&depth) < energy(&xray), "Depth must hide rear marks: fused={fused} scope={scope}");
+                set(&owner, &mut params, "math_view_occlusion", 0.0);
+                assert_eq!(xray, render(&mut runtime, &params), "X-ray must restore the original image");
+                set(&owner, &mut params, "math_view_mode", 2.0);
+                let overlay_xray = render(&mut runtime, &params);
+                set(&owner, &mut params, "math_view_occlusion", 1.0);
+                let overlay_depth = render(&mut runtime, &params);
+                assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
+                let view = &runtime.math_views[0];
+                for (variant, resources) in view.variants.iter().zip(&view.shared_depth) {
+                    for &(source, destination) in resources {
+                        let parent = runtime.executor.backend();
+                        let child = variant.executor.backend();
+                        let original = parent.texture_2d(parent.slot_for(source).unwrap()).unwrap();
+                        let borrowed = child.texture_2d(child.slot_for(destination).unwrap()).unwrap();
+                        assert!(original.ptr_eq(borrowed), "view must borrow the retained scene depth");
+                        assert_eq!((borrowed.width, borrowed.height), (w, h));
+                        assert_eq!(borrowed.format, GpuTextureFormat::R32Float);
+                    }
+                }
+                if w == 320 && scope == 1.0 {
+                    if fused {
+                        assert!(crate::headless_readback::mean_abs_half_diff(
+                            standalone.as_ref().unwrap(), &overlay_depth,
+                        ) < 0.002, "fused Depth diverged");
+                    } else {
+                        standalone = Some(overlay_depth);
+                        if let Ok(path) = std::env::var("MANIFOLD_MATH_DEPTH_PREVIEW") {
+                            std::fs::write(path, crate::headless_readback::readback_to_srgb_png_linear(
+                                &device, &target.texture, w, h,
+                            )).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gpu-proofs")]
+#[test]
 fn math_view_native_scene_parity_orbit_change_and_overlay() {
     const W: u32 = 640;
     const H: u32 = 360;

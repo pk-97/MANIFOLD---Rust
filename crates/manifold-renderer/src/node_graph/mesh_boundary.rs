@@ -17,6 +17,12 @@ pub struct MeshOutput {
 
 const INPUT_OUTPUTS: &[NodeOutput] = &[
     NodePort {
+        name: Cow::Borrowed("depth"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
         name: Cow::Borrowed("vertices"),
         ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
         kind: PortKind::Output,
@@ -30,6 +36,12 @@ const INPUT_OUTPUTS: &[NodeOutput] = &[
     },
 ];
 const OUTPUT_INPUTS: &[NodeInput] = &[
+    NodePort {
+        name: Cow::Borrowed("depth"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Input,
+        required: false,
+    },
     NodePort {
         name: Cow::Borrowed("vertices"),
         ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
@@ -68,6 +80,9 @@ impl EffectNode for MeshInput {
     }
     fn parameters(&self) -> &[ParamDef] {
         &[]
+    }
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        (port == "depth").then_some(manifold_gpu::GpuTextureFormat::R32Float)
     }
     fn depth_rule(&self) -> super::depth_rule::DepthRule {
         super::depth_rule::DepthRule::Terminal

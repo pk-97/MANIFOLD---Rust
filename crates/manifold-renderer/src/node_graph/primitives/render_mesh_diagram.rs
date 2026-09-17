@@ -11,7 +11,10 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
 use crate::node_graph::transform::Transform;
-use manifold_gpu::{GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction};
+use manifold_gpu::{
+    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuSamplerDesc,
+    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 use std::borrow::Cow;
 
 const MSAA_SAMPLE_COUNT: u32 = 4;
@@ -49,6 +52,10 @@ struct DiagramUniforms {
     history_capacity: u32,
     history_stride: u32,
     _pad: u32,
+    depth_pass: u32,
+    occlusion: u32,
+    mode: u32,
+    _depth_pad: u32,
     inv_view_proj: [[f32; 4]; 4],
     camera_pos_far: [f32; 4],
     brightness: [f32;4],
@@ -69,7 +76,7 @@ struct HistoryCaptureUniforms {
 crate::primitive! {
     name: RenderMeshDiagram,
     type_id: "node.render_mesh_diagram",
-    purpose: "Render sparse evaluated MeshVertex samples through the authored Camera for Math View. This presentation node contains no modifier math.",
+    purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; this presentation node contains no modifier math.",
     inputs: {
         current: Array(MeshVertex) required,
         reference: Array(MeshVertex) required,
@@ -102,8 +109,12 @@ crate::primitive! {
         scan_width: ScalarF32 optional,
         scan_direction: ScalarF32 optional,
         scan_mode: ScalarF32 optional,
+        surface_depth: Texture2D optional,
+        scene_depth: Texture2D optional,
+        occlusion: ScalarF32 optional,
+        mode: ScalarF32 optional,
     },
-    outputs: { color: Texture2D },
+    outputs: { color: Texture2D, depth: Texture2D },
     params: [
         ParamDef { name: Cow::Borrowed("grid_brightness"), label: "grid brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragments_brightness"), label: "fragments brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
@@ -119,6 +130,8 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("scan_width"), label: "scan width", ty: ParamType::Float, default: ParamValue::Float(0.2), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("scan_direction"), label: "scan direction", ty: ParamType::Float, default: ParamValue::Float(2.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("scan_mode"), label: "scan mode", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("occlusion"), label: "Occlusion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("mode"), label: "Mode", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 2.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("grid"), label: "Grid", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragments"), label: "Fragments", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("ghosts"), label: "Ghosts", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -131,12 +144,16 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 100.0)), enum_values: &[] },
     ],
     depth_rule: SourceHeight,
-    composition_notes: "Current, reference, and incoming arrays are authored graph outputs. The transparent overlay uses the real Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories.",
+    composition_notes: "Current, reference, and incoming arrays are authored graph outputs. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Wire depth-only instances in a surface_depth chain (matching canvas-sized R32Float), then feed its final depth to colour instances. Occlusion=1 tests shared surfaces; Mode=2 also tests scene_depth at its own resolution. Ghosts/trails remain translucent, and the grid never writes depth. Unwired depth inputs mean no external occluder.",
     examples: [], picker: { label: "Mesh Diagram", category: Atom },
     summary: "Draws sparse evaluated mesh samples as a transparent native diagram.",
     category: Geometry3D, role: Filter, aliases: ["mesh diagram", "math view"], boundary_reason: DrawCall,
     extra_fields: {
         render_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        depth_color_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        depth_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        depth_sampler: Option<manifold_gpu::GpuSampler> = None,
+        dummy_depth: Option<manifold_gpu::GpuTexture> = None,
         capture_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         msaa: Option<manifold_gpu::GpuTexture> = None,
         width: u32 = 0,
@@ -166,6 +183,30 @@ impl RenderMeshDiagram {
             MSAA_SAMPLE_COUNT,
             Self::TYPE_ID,
         );
+        device.create_render_pipeline_msaa(
+            SHADER,
+            "vs_main",
+            "fs_depth_color",
+            GpuTextureFormat::Rgba16Float,
+            Some(DIAGRAM_BLEND),
+            MSAA_SAMPLE_COUNT,
+            Self::TYPE_ID,
+        );
+        device.create_render_pipeline(
+            SHADER,
+            "vs_main",
+            "fs_depth",
+            GpuTextureFormat::R32Float,
+            Some(GpuBlendState {
+                src_factor: GpuBlendFactor::One,
+                dst_factor: GpuBlendFactor::One,
+                operation: GpuBlendOp::Min,
+                src_alpha_factor: GpuBlendFactor::One,
+                dst_alpha_factor: GpuBlendFactor::One,
+                alpha_operation: GpuBlendOp::Min,
+            }),
+            Self::TYPE_ID,
+        );
         device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "math-view-history-capture");
     }
 
@@ -178,6 +219,30 @@ impl RenderMeshDiagram {
         let history = device.create_buffer_shared(bytes);
         history.zero_fill();
         self.history = Some(history);
+    }
+
+    fn ensure_depth_resources(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.depth_sampler.is_none() {
+            self.depth_sampler = Some(device.create_sampler(&GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Nearest,
+                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+                ..GpuSamplerDesc::default()
+            }));
+        }
+        if self.dummy_depth.is_none() {
+            let texture = device.create_texture(&GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                format: GpuTextureFormat::R32Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
+                label: "node.render_mesh_diagram far depth",
+                mip_levels: 1,
+            });
+            device.upload_texture(&texture, bytemuck::bytes_of(&1.0f32));
+            self.dummy_depth = Some(texture);
+        }
     }
 
     fn model_matrix(t: Transform, camera: &Camera) -> [[f32; 4]; 4] {
@@ -204,10 +269,16 @@ impl Primitive for RenderMeshDiagram {
         let Some(camera) = ctx.inputs.camera("camera") else {
             return;
         };
-        let Some(out) = ctx.outputs.texture_2d("color") else {
+        let color_out = ctx.outputs.texture_2d("color");
+        let depth_out = ctx.outputs.texture_2d("depth");
+        if color_out.is_none() && depth_out.is_none() {
             return;
-        };
-        if out.width == 0 || out.height == 0 {
+        }
+        let (width, height) = color_out
+            .or(depth_out)
+            .map(|target| (target.width, target.height))
+            .unwrap_or((0, 0));
+        if width == 0 || height == 0 {
             return;
         }
         let seconds = ctx.time.seconds.0;
@@ -261,7 +332,7 @@ impl Primitive for RenderMeshDiagram {
                 .unwrap_or(true);
             u32::from(enabled)
         };
-        let view_proj = camera.view_proj(out.width as f32 / out.height as f32);
+        let view_proj = camera.view_proj(width as f32 / height as f32);
         let Some(inv_view_proj) = super::render_scene::mat4_inverse(view_proj) else {
             log::error!("Math View cannot project the world grid: singular scene camera");
             return;
@@ -272,7 +343,7 @@ impl Primitive for RenderMeshDiagram {
                 ctx.inputs.transform("transform").unwrap_or_default(),
                 &camera,
             ),
-            viewport: [out.width as f32, out.height as f32, 0.0, 0.0],
+            viewport: [width as f32, height as f32, 0.0, 0.0],
             radius: ctx.scalar_or_param("radius", 1.0).max(0.001),
             line_width: ctx.scalar_or_param("line_width", 1.0).clamp(0.5, 4.0),
             geometry_hue: ctx.scalar_or_param("geometry_hue", 0.52).fract().abs(),
@@ -289,6 +360,10 @@ impl Primitive for RenderMeshDiagram {
             history_capacity: HISTORY_SAMPLES,
             history_stride: MAX_VERTICES,
             _pad: 0,
+            depth_pass: 0,
+            occlusion: ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32,
+            mode: ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32,
+            _depth_pad: 0,
             inv_view_proj,
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
             brightness: ["grid_brightness","fragments_brightness","ghosts_brightness","vectors_brightness"].map(|n|ctx.scalar_or_param(n,1.0).max(0.0)),
@@ -296,9 +371,19 @@ impl Primitive for RenderMeshDiagram {
             scan_values: [ctx.scalar_or_param("scan_width",0.2),ctx.scalar_or_param("scan_direction",2.0),ctx.scalar_or_param("scan_mode",0.0),ctx.scalar_or_param("connect_mesh",0.0)],
             event_targets: [ctx.scalar_or_param("pulse_target",0.0).round().clamp(0.0,5.0) as u32,ctx.scalar_or_param("scan_target",0.0).round().clamp(0.0,5.0) as u32,mesh_triangles,scan_weights.map_or(0,|b|(b.size/4) as u32)],
         };
+        let input_surface_depth = ctx.inputs.texture_2d("surface_depth");
+        let input_scene_depth = ctx.inputs.texture_2d("scene_depth");
         let gpu = ctx.gpu_encoder();
-        self.ensure_history(gpu.device);
-        if self.render_pipeline.is_none() {
+        if color_out.is_some() {
+            self.ensure_history(gpu.device);
+        }
+        self.ensure_depth_resources(gpu.device);
+        let dummy_depth = self.dummy_depth.as_ref().expect("depth resources initialized");
+        let surface_depth = input_surface_depth.unwrap_or(dummy_depth);
+        let scene_depth = input_scene_depth.unwrap_or(dummy_depth);
+        let depth_sampler = self.depth_sampler.as_ref().expect("depth sampler initialized");
+
+        if color_out.is_some() && self.render_pipeline.is_none() {
             self.render_pipeline = Some(gpu.device.create_render_pipeline_msaa(
                 SHADER,
                 "vs_main",
@@ -309,25 +394,38 @@ impl Primitive for RenderMeshDiagram {
                 Self::TYPE_ID,
             ));
         }
-        if self.capture_pipeline.is_none() {
+        if color_out.is_some()
+            && uniforms.occlusion != 0
+            && self.depth_color_pipeline.is_none()
+        {
+            self.depth_color_pipeline = Some(gpu.device.create_render_pipeline_msaa(
+                SHADER,
+                "vs_main",
+                "fs_depth_color",
+                GpuTextureFormat::Rgba16Float,
+                Some(DIAGRAM_BLEND),
+                MSAA_SAMPLE_COUNT,
+                Self::TYPE_ID,
+            ));
+        }
+        if color_out.is_some() && self.capture_pipeline.is_none() {
             self.capture_pipeline = Some(gpu.device.create_compute_pipeline(
                 CAPTURE_SHADER,
                 "cs_main",
                 "math-view-history-capture",
             ));
         }
-        if self.width != out.width || self.height != out.height || self.msaa.is_none() {
+        if color_out.is_some() && (self.width != width || self.height != height || self.msaa.is_none()) {
             self.msaa = Some(gpu.device.create_texture_msaa_memoryless(
-                out.width,
-                out.height,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                width,
+                height,
+                GpuTextureFormat::Rgba16Float,
                 MSAA_SAMPLE_COUNT,
                 "node.render_mesh_diagram MSAA",
             ));
-            self.width = out.width;
-            self.height = out.height;
+            self.width = width;
+            self.height = height;
         }
-        let history = self.history.as_ref().expect("history allocated");
         let arrow_count = tri_count;
         let grid_count = 1;
         let axes_count = 6;
@@ -337,52 +435,98 @@ impl Primitive for RenderMeshDiagram {
             0
         };
         let instance_count = tri_count * 3 + arrow_count + grid_count + axes_count + trail_count;
-        gpu.native_enc.draw_instanced_msaa(
-            self.render_pipeline.as_ref().expect("pipeline initialized"),
-            self.msaa.as_ref().expect("MSAA initialized"),
-            out,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: current,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: reference,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: incoming,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 4,
-                    buffer: history,
-                    offset: 0,
-                },
-                GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
-            ],
-            18,
-            instance_count.max(1),
-            GpuLoadAction::Clear,
-            Self::TYPE_ID,
-        );
+        if let Some(out) = color_out {
+            let history = self.history.as_ref().expect("history allocated");
+            let depth_tested = uniforms.occlusion != 0;
+            if depth_tested {
+                gpu.native_enc.draw_instanced_msaa(
+                    self.depth_color_pipeline.as_ref().expect("depth colour pipeline initialized"),
+                    self.msaa.as_ref().expect("MSAA initialized"), out,
+                    &[
+                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                        GpuBinding::Buffer { binding: 1, buffer: current, offset: 0 },
+                        GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
+                        GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
+                        GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
+                        GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
+                        GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
+                        GpuBinding::Texture { binding: 7, texture: surface_depth },
+                        GpuBinding::Texture { binding: 8, texture: scene_depth },
+                        GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
+                    ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
+                );
+            } else {
+                gpu.native_enc.draw_instanced_msaa(
+                    self.render_pipeline.as_ref().expect("pipeline initialized"),
+                    self.msaa.as_ref().expect("MSAA initialized"), out,
+                    &[
+                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                        GpuBinding::Buffer { binding: 1, buffer: current, offset: 0 },
+                        GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
+                        GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
+                        GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
+                        GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
+                        GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
+                    ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
+                );
+            }
+        }
+        if let Some(depth_out) = depth_out {
+            if self.depth_pipeline.is_none() {
+                self.depth_pipeline = Some(gpu.device.create_render_pipeline(
+                    SHADER, "vs_main", "fs_depth", GpuTextureFormat::R32Float,
+                    Some(GpuBlendState {
+                        src_factor: GpuBlendFactor::One, dst_factor: GpuBlendFactor::One,
+                        operation: GpuBlendOp::Min, src_alpha_factor: GpuBlendFactor::One,
+                        dst_alpha_factor: GpuBlendFactor::One, alpha_operation: GpuBlendOp::Min,
+                    }), Self::TYPE_ID,
+                ));
+            }
+            if let Some(previous) = input_surface_depth {
+                if (previous.width, previous.height, previous.format)
+                    != (depth_out.width, depth_out.height, GpuTextureFormat::R32Float)
+                {
+                    log::error!("Mesh diagram surface depth accumulation requires matching canvas-sized R32Float inputs");
+                    return;
+                }
+                gpu.copy_texture_to_texture(previous, depth_out, depth_out.width, depth_out.height);
+            } else {
+                gpu.native_enc.clear_texture(depth_out, 1.0, 1.0, 1.0, 1.0);
+            }
+            let mut depth_uniforms = uniforms;
+            depth_uniforms.depth_pass = 1;
+            depth_uniforms.occlusion = uniforms.occlusion;
+            gpu.native_enc.draw_instanced(
+                self.depth_pipeline.as_ref().expect("depth pipeline initialized"),
+                depth_out,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&depth_uniforms) },
+                    GpuBinding::Buffer { binding: 1, buffer: current, offset: 0 },
+                    GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
+                    GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
+                    // The depth entry point never reads history. Bind an
+                    // existing vertex buffer to keep the shared layout valid
+                    // without allocating or capturing trail state.
+                    GpuBinding::Buffer { binding: 4, buffer: current, offset: 0 },
+                    GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
+                    GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
+                    GpuBinding::Texture { binding: 7, texture: surface_depth },
+                    GpuBinding::Texture { binding: 8, texture: scene_depth },
+                    GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
+                ],
+                3, if uniforms.occlusion != 0 { tri_count } else { 0 }, GpuLoadAction::Load, Self::TYPE_ID,
+            );
+        }
         // The capture follows the diagram pass in the same command stream,
         // after the authored graph has produced `current`. This is a GPU
         // storage-buffer copy; no CPU readback or CPU-authored trajectory is
         // involved. Trails off: skip the copy entirely — the ring is only
         // read when trails render — and mark it stale so re-enabling starts
         // clean instead of replaying pre-toggle positions.
-        if uniforms.trails == 0 {
+        if color_out.is_none() || uniforms.trails == 0 {
             self.history_reset = true;
         } else if vertex_count != 0 {
+            let history = self.history.as_ref().expect("history allocated for colour pass");
             if self.history_reset {
                 self.history_head = 0;
                 self.history_len = 0;
@@ -435,7 +579,11 @@ impl Primitive for RenderMeshDiagram {
         port: &str,
         _p: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
-        (port == "color").then_some((1, 1))
+        matches!(port, "color" | "depth").then_some((1, 1))
+    }
+
+    fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {
+        (port == "depth").then_some(GpuTextureFormat::R32Float)
     }
 }
 
@@ -483,3 +631,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "render_mesh_diagram/gpu_tests.rs"]
 mod gpu_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "render_mesh_diagram_depth_tests.rs"]
+mod depth_tests;

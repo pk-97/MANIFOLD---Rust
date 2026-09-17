@@ -153,6 +153,7 @@
         "wraps": true
       },
       {"id":"math_view_mode","name":"Mode","min":0,"max":2,"defaultValue":0,"wholeNumbers":true,"valueLabels":["Scene","Math","Overlay"],"section":"Math View"},
+      {"id":"math_view_occlusion","name":"Occlusion","min":0,"max":1,"defaultValue":0,"wholeNumbers":true,"valueLabels":["X-ray","Depth"],"section":"Math View"},
       {"id":"math_view_grid","name":"Grid","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
       {"id":"math_view_fragments","name":"Fragments","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
       {"id":"math_view_ghosts","name":"Ghosts","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
@@ -368,6 +369,7 @@
         }
       },
       {"id":"math_view_mode","label":"Mode","defaultValue":0,"target":{"kind":"node","nodeId":"__math_view_mode","param":"value"}},
+      {"id":"math_view_occlusion","label":"Occlusion","defaultValue":0,"target":{"kind":"node","nodeId":"__math_view_occlusion","param":"value"}},
       {"id":"math_view_grid","label":"Grid","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_grid","param":"value"}},
       {"id":"math_view_fragments","label":"Fragments","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_fragments","param":"value"}},
       {"id":"math_view_ghosts","label":"Ghosts","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_ghosts","param":"value"}},
@@ -822,7 +824,8 @@
     {"id":38,"nodeId":"__math_view_scan_target","typeId":"node.value","handle":"math_view_scan_target","params":{"value":{"type":"Float","value":0.0}}},
     {"id":39,"nodeId":"__math_view_scan_beats","typeId":"node.value","handle":"math_view_scan_beats","params":{"value":{"type":"Float","value":4.0}}},
     {"id":40,"nodeId":"__math_view_scan_trigger","typeId":"node.value","handle":"math_view_scan_trigger","params":{"value":{"type":"Float","value":0.0}}},
-    {"id":41,"nodeId":"__math_view_connect_mesh","typeId":"node.value","handle":"math_view_connect_mesh","params":{"value":{"type":"Float","value":0.0}}}
+    {"id":41,"nodeId":"__math_view_connect_mesh","typeId":"node.value","handle":"math_view_connect_mesh","params":{"value":{"type":"Float","value":0.0}}},
+    {"id":42,"nodeId":"__math_view_occlusion","typeId":"node.value","handle":"math_view_occlusion","params":{"value":{"type":"Float","value":0.0}}}
   ],
   "wires": []
 }
