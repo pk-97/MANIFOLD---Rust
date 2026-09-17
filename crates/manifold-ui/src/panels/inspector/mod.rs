@@ -1545,6 +1545,7 @@ mod tests {
                 is_trigger_gate: false,
                 value_labels: None,
                 section: None,
+                disabled: None,
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),

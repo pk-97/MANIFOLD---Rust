@@ -854,6 +854,22 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     .flatten();
                 if let Some(old_val) = old_val {
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
+                    // Connect to Mesh ENABLE on an unsupported Math View chain
+                    // is rejected with the same reason the card row shows —
+                    // the compiler would silently drop the appearance anyway.
+                    // Disabling stays legal so an unsupported chain can be
+                    // switched off after the fact.
+                    if new_val > 0.5
+                        && let Some(reason) =
+                            crate::scene_modifier_edit::math_view_connect_mesh_enable_lock_reason(
+                                ctx.project,
+                                &target,
+                                param_id.as_ref(),
+                            )
+                    {
+                        ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason));
+                        return DispatchResult::handled();
+                    }
                     ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), new_val);
                     });

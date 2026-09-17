@@ -49,6 +49,12 @@ pub struct RowSpec {
     /// Card-bundling section name; contiguous `Some(name)` runs share one
     /// collapsible header. Straight off the manifest spec.
     pub section: Option<String>,
+    /// `None` = the row is interactive. `Some(reason)` = the row renders
+    /// greyed with the reason appended to its label (the modifier-picker
+    /// convention) and every gesture is a dead click. Set by the projection
+    /// (e.g. Math View's Connect to Mesh on an unsupported chain); the row
+    /// builders + dispatch honour it, never the renderer.
+    pub disabled: Option<String>,
 }
 
 /// Value state at projection time. Per-frame effective values keep riding
