@@ -1,7 +1,11 @@
 # P5 dynamic RT checkpoint — 2026-09-17
 
-Unfinished work for BUG-e3p6.4. This is an archival checkpoint, not an app landing.
-Main was not changed. Resume from this archive, not the older feature-branch tip.
+Unfinished work for BUG-e3p6.4. This is a local checkpoint, not an app landing.
+Main was not changed. Source checkpoint: `f442dd763` on the feature branch.
+Remote retirement was blocked by automatic approval review because the repository
+is public and the source/handoff payload is unpublished. Do not retry publication
+without user approval. The lease is released, cache scrubbed, and source checkout
+retained safely in slot-0 pending approved remote archival and retirement.
 User requested a 30-minute implementation window and tests at the end.
 
 Parent feature branch: `feat/rt-p5-dynamic-scene-path` at
