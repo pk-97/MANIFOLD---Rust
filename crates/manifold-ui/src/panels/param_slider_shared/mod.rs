@@ -13,7 +13,6 @@ use crate::param_surface::ParamRow;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Theme, View};
 use crate::color;
-use crate::drag::DragController;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
@@ -101,6 +100,24 @@ pub(crate) const AUDIO_SHAPE_LABEL_W: f32 = 52.0;
 pub(crate) const AUDIO_SENS_DEFAULT: f32 = 1.0;
 pub(crate) const AUDIO_ATTACK_DEFAULT_MS: f32 = 5.0;
 pub(crate) const AUDIO_RELEASE_DEFAULT_MS: f32 = 120.0;
+
+/// Map a normalized position to an audio shaping scalar.
+pub(crate) fn audio_shape_value_from_norm(which: AudioShapeParam, norm: f32) -> f32 {
+    let n = norm.clamp(0.0, 1.0);
+    match which {
+        AudioShapeParam::Sensitivity => n * AUDIO_SENS_MAX,
+        AudioShapeParam::Attack => n * AUDIO_ATTACK_MAX_MS,
+        AudioShapeParam::Release => n * AUDIO_RELEASE_MAX_MS,
+    }
+}
+
+/// Format an audio shaping scalar for its value cell.
+pub(crate) fn audio_shape_value_text(which: AudioShapeParam, value: f32) -> String {
+    match which {
+        AudioShapeParam::Sensitivity => format!("{value:.2}"),
+        AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
+    }
+}
 
 // ── PARAM_STEP_ACTIONS D2/D8: the Action/Amount/Wrap rows ──────────────
 //

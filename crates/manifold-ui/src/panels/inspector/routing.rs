@@ -594,7 +594,7 @@ impl InspectorCompositePanel {
             let mut actions = match target {
                 PressedTarget::Macros => self.macros_panel.handle_press(node_id, pos.x),
                 PressedTarget::AudioTriggers => {
-                    self.audio_trigger_section.handle_press(node_id, pos.x)
+                    self.audio_trigger_section.handle_press(node_id, pos.x, tree)
                 }
                 PressedTarget::MasterChrome => {
                     self.master_chrome.handle_pointer_down(node_id, pos)

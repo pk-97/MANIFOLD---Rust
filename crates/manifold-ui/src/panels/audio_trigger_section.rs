@@ -29,11 +29,13 @@
 //! `ParamCardPanel` has with its drawer builder (builder = visuals + the
 //! slider's reset action; click/drag resolution = caller-owned).
 
-use crate::{AudioSetupAction, ScrubPhase, ScrubValue, ValueRef};
+use crate::{AudioSetupAction, ScrubValue, ValueRef};
+#[cfg(test)]
+use crate::ScrubPhase;
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
     AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS,
-    AUDIO_SENS_MAX, AudioRowState, AudioSendChoice, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS,
+    AudioRowState, AudioSendChoice, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS,
     ParamModState, ROW_HEIGHT,
     audio_band_from_index, audio_kind_from_index, build_clip_trigger_drawer,
     clip_trigger_drawer_height, de_btn_style, toggle_btn_style,
@@ -41,12 +43,12 @@ use super::param_slider_shared::{
 use super::{AudioShapeParam, PanelAction};
 use crate::chrome::{Align, ChromeHost, Sizing, View};
 use crate::color;
-use crate::drag::DragController;
 use crate::node::*;
-use crate::slider::BitmapSlider;
+use crate::slider::{BitmapSlider, TrackSpan};
 use crate::tree::UITree;
 use crate::types::AudioFeature;
 use manifold_foundation::{AudioSendId, LayerId};
+use super::scrub::ScrubGesture;
 
 const HEADER_ROW_H: f32 = 22.0;
 const ADD_ROW_H: f32 = 22.0;
@@ -111,12 +113,10 @@ pub struct AudioTriggerSection {
     audio_configs: Vec<Option<(DrawerIds, usize)>>,
     first_node: Option<NodeId>,
     node_count: usize,
-    /// `(row_index, which)` of the shaping slider currently being dragged.
-    /// Only `AudioShapeParam::Sensitivity` is grabbable (it's the drawer's
-    /// only slider); the payload keeps the enum so the action family stays
-    /// uniformly typed. Lifecycle on `DragController` (P7,
-    /// `docs/UI_WIDGET_UNIFICATION_DESIGN.md`).
-    dragging_shape: DragController<(usize, AudioShapeParam)>,
+    /// Captured address + row context for the sensitivity slider. The address
+    /// stays bound to the original layer through rebuilds and selection
+    /// changes; the live row geometry is resolved on each move.
+    dragging_shape: ScrubGesture<(usize, AudioShapeParam)>,
 }
 
 impl Default for AudioTriggerSection {
@@ -139,7 +139,7 @@ impl AudioTriggerSection {
             audio_configs: Vec::new(),
             first_node: None,
             node_count: 0,
-            dragging_shape: DragController::new(),
+            dragging_shape: ScrubGesture::new(),
         }
     }
 
@@ -501,64 +501,81 @@ impl AudioTriggerSection {
     // `ParamCardPanel`'s audio-shaping press/drag/release, addressed by row
     // index and emitting `AudioTrigger*` instead of `AudioMod*`.
 
-    pub fn handle_press(&mut self, node_id: NodeId, pos_x: f32) -> Vec<PanelAction> {
+    pub fn handle_press(&mut self, node_id: NodeId, pos_x: f32, tree: &UITree) -> Vec<PanelAction> {
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             if let Some(sl) = dids.sliders.first()
                 && node_id == sl.track
             {
-                let norm = BitmapSlider::x_to_normalized(sl.track_span, pos_x).clamp(0.0, 1.0);
-                let value = norm * AUDIO_SENS_MAX;
-                self.dragging_shape
-                    .start((i, AudioShapeParam::Sensitivity), Vec2::new(pos_x, 0.0));
-                return vec![
-                    PanelAction::Scrub(
-                        ValueRef::AudioTriggerShape(layer_id.clone(), i, AudioShapeParam::Sensitivity),
-                        ScrubPhase::Begin,
+                let track_span = TrackSpan::of(tree.get_bounds(sl.track));
+                let norm = BitmapSlider::x_to_normalized(track_span, pos_x).clamp(0.0, 1.0);
+                let value = super::param_slider_shared::audio_shape_value_from_norm(
+                    AudioShapeParam::Sensitivity,
+                    norm,
+                );
+                let begin = self.dragging_shape.begin(
+                    ValueRef::AudioTriggerShape(
+                        layer_id,
+                        i,
+                        AudioShapeParam::Sensitivity,
                     ),
-                    PanelAction::Scrub(
-                        ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
-                        ScrubPhase::Move(ScrubValue::Scalar(value)),
-                    ),
-                ];
+                    (i, AudioShapeParam::Sensitivity),
+                    Vec2::new(pos_x, 0.0),
+                );
+                let moved = self
+                    .dragging_shape
+                    .update(Vec2::new(pos_x, 0.0), ScrubValue::Scalar(value));
+                let mut actions = vec![begin];
+                if let Some(action) = moved {
+                    actions.push(action);
+                }
+                return actions;
             }
         }
         Vec::new()
     }
 
     pub fn handle_drag(&mut self, pos_x: f32, tree: &mut UITree) -> Vec<PanelAction> {
-        let Some(&(i, _)) = self.dragging_shape.payload() else { return Vec::new() };
-        let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
-        let rect = self
+        let Some(ValueRef::AudioTriggerShape(captured_layer, i, which)) =
+            self.dragging_shape.address().cloned()
+        else {
+            return Vec::new();
+        };
+        // A replacement layer must not supply geometry for the old gesture.
+        // The release still commits the captured address exactly once.
+        if self.layer_id.as_ref() != Some(&captured_layer) {
+            return Vec::new();
+        }
+        let Some(rect) = self
             .audio_configs
             .get(i)
             .and_then(|c| c.as_ref())
             .and_then(|(d, _)| d.sliders.first())
-            .map(|sl| sl.track_span);
-        let Some(rect) = rect else { return Vec::new() };
-        let norm = BitmapSlider::x_to_normalized(rect, pos_x).clamp(0.0, 1.0);
-        let value = norm * AUDIO_SENS_MAX;
-        if let Some(row) = self.mod_state.audio_rows.get_mut(i) { row.sensitivity = value; }
-        let text = format!("{value:.2}");
+            .map(|sl| tree.get_bounds(sl.track))
+        else {
+            return Vec::new();
+        };
+        let track_span = TrackSpan::of(rect);
+        let norm = BitmapSlider::x_to_normalized(track_span, pos_x).clamp(0.0, 1.0);
+        let value = super::param_slider_shared::audio_shape_value_from_norm(which, norm);
+        if let Some(row) = self.mod_state.audio_rows.get_mut(i) {
+            row.sensitivity = value;
+        }
         if let Some((d, _)) = self.audio_configs.get(i).and_then(|c| c.as_ref())
             && let Some(sl) = d.sliders.first()
         {
+            let text = super::param_slider_shared::audio_shape_value_text(which, value);
             BitmapSlider::update_value(tree, sl, norm, &text);
         }
-        vec![PanelAction::Scrub(
-            ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
-            ScrubPhase::Move(ScrubValue::Scalar(value)),
-        )]
+        self.dragging_shape
+            .update(Vec2::new(pos_x, rect.y), ScrubValue::Scalar(value))
+            .into_iter()
+            .collect()
     }
 
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
-        let Some((i, _)) = self.dragging_shape.release() else { return Vec::new() };
-        let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
-        vec![PanelAction::Scrub(
-            ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
-            ScrubPhase::Commit,
-        )]
+        self.dragging_shape.end().into_iter().collect()
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -655,9 +672,15 @@ mod tests {
         section.layer_id = Some(LayerId::new("layer-1"));
 
         // Simulate `handle_press` having grabbed row 2's Sensitivity slider.
-        section
-            .dragging_shape
-            .start((2, AudioShapeParam::Sensitivity), Vec2::ZERO);
+        section.dragging_shape.begin(
+            ValueRef::AudioTriggerShape(
+                LayerId::new("layer-1"),
+                2,
+                AudioShapeParam::Sensitivity,
+            ),
+            (2, AudioShapeParam::Sensitivity),
+            Vec2::ZERO,
+        );
         assert!(section.is_dragging());
 
         let actions = section.handle_release();
@@ -678,14 +701,26 @@ mod tests {
     }
 
     #[test]
-    fn release_without_layer_id_emits_nothing_but_still_clears() {
+    fn release_uses_captured_layer_and_still_clears_after_host_layer_loss() {
         let mut section = AudioTriggerSection::new();
-        section
-            .dragging_shape
-            .start((0, AudioShapeParam::Sensitivity), Vec2::ZERO);
+        section.dragging_shape.begin(
+            ValueRef::AudioTriggerShape(
+                LayerId::new("layer-1"),
+                0,
+                AudioShapeParam::Sensitivity,
+            ),
+            (0, AudioShapeParam::Sensitivity),
+            Vec2::ZERO,
+        );
 
         let actions = section.handle_release();
-        assert!(actions.is_empty());
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Scrub(
+                ValueRef::AudioTriggerShape(layer_id, 0, AudioShapeParam::Sensitivity),
+                ScrubPhase::Commit
+            )] if layer_id == &LayerId::new("layer-1")
+        ));
         assert!(!section.is_dragging());
     }
 
@@ -694,6 +729,101 @@ mod tests {
         let mut tree = UITree::new();
         let mut section = AudioTriggerSection::new();
         assert!(section.handle_drag(0.5, &mut tree).is_empty());
+    }
+
+    #[test]
+    fn layer_switch_suppresses_move_but_keeps_original_commit_address() {
+        let mut section = AudioTriggerSection::new();
+        section.layer_id = Some(LayerId::new("layer-1"));
+        section.dragging_shape.begin(
+            ValueRef::AudioTriggerShape(
+                LayerId::new("layer-1"),
+                0,
+                AudioShapeParam::Sensitivity,
+            ),
+            (0, AudioShapeParam::Sensitivity),
+            Vec2::ZERO,
+        );
+        section.layer_id = Some(LayerId::new("layer-2"));
+        let mut tree = UITree::new();
+        assert!(section.handle_drag(20.0, &mut tree).is_empty());
+        assert!(matches!(
+            section.handle_release().as_slice(),
+            [PanelAction::Scrub(
+                ValueRef::AudioTriggerShape(layer_id, 0, AudioShapeParam::Sensitivity),
+                ScrubPhase::Commit
+            )] if layer_id == &LayerId::new("layer-1")
+        ));
+    }
+
+    #[test]
+    fn sensitivity_drag_uses_live_track_bounds_and_commits_once() {
+        let layer = LayerId::new("layer-live");
+        let mut section = AudioTriggerSection::new();
+        section.configure(
+            Some(layer.clone()),
+            &AudioTriggerSectionConfig {
+                rows: vec![AudioTriggerRowConfig {
+                    enabled: true,
+                    label: "Kick".to_string(),
+                    sensitivity: 1.0,
+                    send_id: Some(AudioSendId::new("send-1")),
+                    ..Default::default()
+                }],
+                sends: vec![AudioSendChoice {
+                    label: "Send 1".to_string(),
+                    id: AudioSendId::new("send-1"),
+                }],
+            },
+        );
+        section.toggle_collapsed();
+        section.expand_row(0);
+        let mut tree = UITree::new();
+        section.build(&mut tree, Rect::new(0.0, 0.0, 420.0, 260.0));
+        let track = section.audio_configs[0]
+            .as_ref()
+            .expect("expanded drawer")
+            .0
+            .sliders[0]
+            .track;
+        let mut live = tree.get_bounds(track);
+        live.x += 75.0;
+        tree.set_bounds(track, live);
+
+        let press_x = live.x + live.width * 0.5;
+        let begin = section.handle_press(track, press_x, &tree);
+        assert!(matches!(
+            begin.as_slice(),
+            [
+                PanelAction::Scrub(
+                    ValueRef::AudioTriggerShape(address_layer, 0, AudioShapeParam::Sensitivity),
+                    ScrubPhase::Begin
+                ),
+                PanelAction::Scrub(
+                    ValueRef::AudioTriggerShape(move_layer, 0, AudioShapeParam::Sensitivity),
+                    ScrubPhase::Move(ScrubValue::Scalar(value))
+                )
+            ] if address_layer == &layer && move_layer == &layer && (*value - 2.0).abs() < 0.02
+        ));
+
+        let move_x = live.x + live.width * 0.75;
+        let moved = section.handle_drag(move_x, &mut tree);
+        assert!(matches!(
+            moved.as_slice(),
+            [PanelAction::Scrub(
+                ValueRef::AudioTriggerShape(move_layer, 0, AudioShapeParam::Sensitivity),
+                ScrubPhase::Move(ScrubValue::Scalar(value))
+            )] if move_layer == &layer && (*value - 3.0).abs() < 0.02
+        ));
+        let released = section.handle_release();
+        assert!(matches!(
+            released.as_slice(),
+            [PanelAction::Scrub(
+                ValueRef::AudioTriggerShape(commit_layer, 0, AudioShapeParam::Sensitivity),
+                ScrubPhase::Commit
+            )] if commit_layer == &layer
+        ));
+        assert!(section.handle_release().is_empty());
     }
 
     #[test]
