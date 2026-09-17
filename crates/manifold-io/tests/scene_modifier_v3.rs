@@ -145,7 +145,7 @@ fn scene_modifier_v3_owner_frames_and_local_snapshot_survive_project_reload() {
     )
     .unwrap();
     assert_eq!(back.embedded_presets[0].def, graph);
-    assert_eq!(back.project_version, "1.15.0");
+    assert_eq!(back.project_version, manifold_core::project::CURRENT_PROJECT_VERSION);
 }
 
 #[test]

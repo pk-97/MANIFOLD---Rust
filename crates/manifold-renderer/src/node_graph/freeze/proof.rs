@@ -1035,6 +1035,11 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
         fused_wgsl
     );
     assert!(
+        fused_wgsl.contains("(near + raw * (far - near))"),
+        "the fused camera-depth helper must retain the reversed-Z inverse, rather than a stale forward-depth formula:\n{}",
+        fused_wgsl
+    );
+    assert!(
         fused_wgsl.contains("@camera_external: camera_ext_0")
             && fused_wgsl.contains("@derived_uniform_member:"),
         "the fused kernel must carry both D7/P0 markers (camera_ext port + \

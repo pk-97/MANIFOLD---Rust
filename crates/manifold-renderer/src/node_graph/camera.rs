@@ -18,7 +18,7 @@
 //! exposes helpers (`Camera::proj`, `Camera::view_proj`) that take the
 //! consumer-supplied aspect to build the projection.
 
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, perspective_rh};
+use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul};
 
 /// Discriminator for the projection style. Carried in [`Camera::mode`] so
 /// consumers that have meaningfully different code paths (e.g. fluid scatter's
@@ -368,6 +368,7 @@ impl Camera {
         );
     }
 
+    /// Reversed-Z projection: near maps to 1, far/background to 0.
     /// Projection matrix for the given consumer-supplied aspect ratio
     /// (`width / height` of the consumer's render target). Aspect lives here
     /// rather than on the struct because the camera primitive doesn't know
@@ -375,7 +376,7 @@ impl Camera {
     pub fn proj(&self, aspect: f32) -> [[f32; 4]; 4] {
         match self.mode {
             CameraMode::Perspective { fov_y } => {
-                perspective_rh(fov_y, aspect, self.near, self.far)
+                perspective_reversed_rh(fov_y, aspect, self.near, self.far)
             }
             CameraMode::Orthographic { half_height } => {
                 let half_width = half_height * aspect;
@@ -431,24 +432,33 @@ pub struct PixelProjection {
     pub py: f32,
     /// Pre-viewport NDC, `+y` up, each component nominally in `[-1, 1]`.
     pub ndc: [f32; 2],
-    /// Clip-space depth in `[0, 1]` (raw, non-linear — Metal depth range).
+    /// Reversed clip depth in `[0, 1]`: near = 1, far = 0.
+    /// Non-linear for perspective cameras; linear for orthographic cameras.
     pub depth: f32,
     /// Linear view-space distance along `-fwd` (i.e. `dot(world - pos,
     /// fwd)`), for CoC / SSAO consumers that want a linear depth.
     pub view_z: f32,
 }
 
-/// CPU twin of `shared/depth_common.wgsl`'s `linearize_depth`
-/// (`docs/GBUFFER_DESIGN.md` section 2 D4) — the exact inverse of
-/// [`crate::generators::mesh_pipeline::perspective_rh`]'s depth mapping
-/// (`range = far / (near - far)`). Both implementations MUST stay
-/// bit-for-bit the same formula (I3's unit test checks them against the
-/// same `Camera::project_to_pixel` oracle); re-deriving this inline in a
-/// consumer atom instead of sharing the WGSL header is the synthesis-drift
-/// bug class this exists to prevent.
+/// CPU twin of `generators/shaders/depth_common.wgsl`'s perspective inverse.
+/// Reversed depth avoids subtracting nearly equal numbers at distant surfaces.
+/// Keep this expression consistent with the shared WGSL helper.
 pub fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
-    let range = far / (near - far);
-    (range * near) / (raw + range)
+    (near * far) / (near + raw * (far - near))
+}
+
+/// Finite right-handed reversed-Z projection for Metal's [0, 1] depth range.
+/// Build reversed coefficients directly: subtracting a forward depth from 1
+/// after projection would already have lost the precision we need to preserve.
+fn perspective_reversed_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
+    let f = 1.0 / (fov_y * 0.5).tan();
+    let range = near / (far - near);
+    [
+        [f / aspect, 0.0, 0.0, 0.0],
+        [0.0, f, 0.0, 0.0],
+        [0.0, 0.0, range, -1.0],
+        [0.0, 0.0, range * far, 0.0],
+    ]
 }
 
 /// Multiply a column-major 4x4 matrix (`m[col][row]`, matching `mat4_mul`'s
@@ -486,9 +496,8 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// Right-handed orthographic projection matrix. Mirrors `perspective_rh` in
-/// `generators::mesh_pipeline` but for ortho — needed for fluid-scatter's
-/// ortho mode, which `mesh_pipeline` doesn't ship.
+/// Right-handed orthographic camera projection, near = 1 and far = 0.
+/// Light shadow maps use the separate forward helper in `mesh_pipeline`.
 fn ortho_rh(
     left: f32,
     right: f32,
@@ -503,11 +512,11 @@ fn ortho_rh(
     [
         [2.0 / rml, 0.0, 0.0, 0.0],
         [0.0, 2.0 / tmb, 0.0, 0.0],
-        [0.0, 0.0, -1.0 / fmn, 0.0],
+        [0.0, 0.0, 1.0 / fmn, 0.0],
         [
             -(right + left) / rml,
             -(top + bottom) / tmb,
-            -near / fmn,
+            far / fmn,
             1.0,
         ],
     ]
@@ -771,38 +780,38 @@ mod tests {
     }
 
     #[test]
-    fn linearize_depth_is_the_exact_perspective_rh_inverse() {
-        // I3 (GBUFFER_DESIGN.md section 2 D4): `linearize_depth` must invert
-        // `perspective_rh`'s depth mapping exactly — checked against the
-        // SAME oracle (`Camera::project_to_pixel`) every other conformance
-        // gate in this cluster uses, at 5 depths spanning the near/far
-        // range.
-        // Depths kept modest (not spanning to `far`): the forward mapping
-        // compresses almost the entire [0,1] raw-depth range into values
-        // extremely close to 1.0 as view_z approaches `far`, so recovering
-        // view_z from raw loses f32 precision (catastrophic cancellation in
-        // `raw + range`) the further out a point sits — a property of the
-        // depth encoding itself, present in the GPU path too, not a defect
-        // in this formula. Peter's stated scene profile ("pure black
-        // backgrounds with the models... main focus") is exactly this
-        // regime: hero objects close to camera, not deep background reads.
-        let near = 0.05;
-        let far = 200.0;
-        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, near, far);
-        for &d in &[0.1_f32, 0.5, 1.0, 3.0, 8.0] {
-            let world = [0.0, 0.0, -d];
-            let oracle = cam
-                .project_to_pixel(world, 256, 256)
-                .unwrap_or_else(|| panic!("depth {d}: point unexpectedly behind camera"));
-            let lin = linearize_depth(oracle.depth, cam.near, cam.far);
-            assert!(
-                (lin - oracle.view_z).abs() < 1e-4,
-                "depth {d}: linearize_depth({}, {}, {}) = {lin}, oracle.view_z = {}",
-                oracle.depth,
-                cam.near,
-                cam.far,
-                oracle.view_z,
-            );
+    fn reversed_depth_preserves_close_surfaces_with_small_near_plane() {
+        let cam = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, 0.001, 200.0);
+        let front = cam.project_to_pixel([0.0, 0.0, -23.0], 256, 256).unwrap();
+        let back = cam.project_to_pixel([0.0, 0.0, -23.001], 256, 256).unwrap();
+        assert!(front.depth > back.depth);
+        for p in [front, back] {
+            assert!((linearize_depth(p.depth, cam.near, cam.far) - p.view_z).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn linearize_depth_is_the_exact_perspective_inverse() {
+        for near in [0.001, 0.05, 4.0] {
+            let far = 10000.0;
+            let cam = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, near, far);
+            for d in [near, near * 2.0, 23.0, 200.0, far] {
+                let p = cam.project_to_pixel([0.0, 0.0, -d], 256, 256).unwrap();
+                let recovered = linearize_depth(p.depth, near, far);
+                assert!((recovered - d).abs() <= d * 2e-6, "near={near}, d={d}, recovered={recovered}");
+            }
+        }
+    }
+
+    #[test]
+    fn camera_projection_endpoints_are_reversed_for_both_modes() {
+        let mut cam = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 200.0);
+        for mode in [CameraMode::Perspective { fov_y: 0.9 }, CameraMode::Orthographic { half_height: 2.0 }] {
+            cam.mode = mode;
+            let near = cam.project_to_pixel([0.0, 0.0, -cam.near], 256, 256).unwrap();
+            let far = cam.project_to_pixel([0.0, 0.0, -cam.far], 256, 256).unwrap();
+            assert!((near.depth - 1.0).abs() < 1e-6, "{mode:?}: {near:?}");
+            assert!(far.depth.abs() < 1e-6, "{mode:?}: {far:?}");
         }
     }
 

@@ -511,7 +511,7 @@ mod gpu_tests {
 
     /// **I7b — `bilateral_depth_edge_no_bleed`**: a hard step-edge depth
     /// discontinuity down the middle of the buffer (near-plane left half,
-    /// far-plane right half — a difference many multiples of `depth_sigma`)
+    /// far-plane right half — represented by reversed-Z raw depth)
     /// must suppress cross-edge weight almost entirely. Measures the actual
     /// numeric weight contribution from across the edge (not just the pixel
     /// output) and asserts it's under 1% of the total, directly exercising
@@ -524,7 +524,7 @@ mod gpu_tests {
         let mut raw_depth = vec![0.0f32; (w * h) as usize];
         for y in 0..h {
             for x in 0..w {
-                raw_depth[(y * w + x) as usize] = if x < half { 0.05 } else { 0.95 };
+                raw_depth[(y * w + x) as usize] = if x < half { 0.95 } else { 0.05 };
             }
         }
         let (near, far, depth_sigma) = (0.1f32, 100.0f32, 0.1f32);
@@ -618,7 +618,7 @@ mod gpu_tests {
             for x in 0..w {
                 let fx = x as f32 / (w.saturating_sub(1).max(1)) as f32;
                 let fy = y as f32 / (h.saturating_sub(1).max(1)) as f32;
-                raw_depth[(y * w + x) as usize] = 0.1 + 0.8 * (0.5 * fx + 0.5 * fy);
+                raw_depth[(y * w + x) as usize] = 0.9 - 0.8 * (0.5 * fx + 0.5 * fy);
             }
         }
         let color = color_gradient(w, h);

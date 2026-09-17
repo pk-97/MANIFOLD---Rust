@@ -5,7 +5,7 @@
 //! neighborhood — no ray tracing, no full-res pass involved).
 //!
 //! The clamp: median luma over the non-void texels of the 3x3 (center
-//! included — the "3..9-element non-void subset"; void = depth >= 1-1e-6);
+//! included — the "3..9-element non-void subset"; void = depth <= 0);
 //! a center void texel or fewer than 3 non-void texels passes through
 //! untouched; otherwise `threshold = gain * max(median, floor)` and
 //! `rgb *= threshold / luma` when the center's luma exceeds it. `luma`
@@ -34,8 +34,8 @@ use crate::harness;
 const TOLERANCE: f32 = 1e-4;
 /// Mirrors the MSL `FIREFLY_MEDIAN_GAIN` constant.
 const GAIN: f32 = 8.0;
-/// Depth value marking a void texel (depth >= 1-1e-6 in the kernel).
-const VOID: f32 = 1.0;
+/// Depth value marking a void texel (depth <= 0 in the kernel).
+const VOID: f32 = 0.0;
 const NON_VOID: f32 = 0.5;
 
 fn luma(c: [f32; 3]) -> f32 {
@@ -54,13 +54,13 @@ fn median_luma(samples: &[f32]) -> f32 {
 /// logic, against the same row-major 3x3 layout the debug surface uses.
 fn clamp_center(color: &[[f32; 4]; 9], depth: &[f32; 9], gain: f32, floor: f32) -> [f32; 3] {
     let center = [color[4][0], color[4][1], color[4][2]];
-    if depth[4] >= 1.0 - 1e-6 {
+    if depth[4] <= 0.0 {
         return center; // void center: passthrough
     }
     let mut lumas = vec![luma(center)];
     // 8 neighbors in row-major order (indices 0,1,2,3,5,6,7,8 around center 4).
     for i in [0usize, 1, 2, 3, 5, 6, 7, 8] {
-        if depth[i] >= 1.0 - 1e-6 {
+        if depth[i] <= 0.0 {
             continue;
         }
         lumas.push(luma([color[i][0], color[i][1], color[i][2]]));

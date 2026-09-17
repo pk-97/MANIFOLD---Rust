@@ -1170,7 +1170,7 @@ impl GpuEncoder {
         unsafe {
             depth.setTexture(Some(&desc.msaa_depth.raw));
             depth.setLoadAction(MTLLoadAction::Clear);
-            depth.setClearDepth(1.0);
+            depth.setClearDepth(desc.depth_stencil_state.clear_depth);
             match desc.depth_resolve {
                 Some(resolve) => {
                     assert_eq!(
@@ -1317,7 +1317,7 @@ impl GpuEncoder {
             depth.setTexture(Some(&depth_target.raw));
             depth.setLoadAction(convert_load_action(depth_load));
             depth.setStoreAction(MTLStoreAction::DontCare);
-            depth.setClearDepth(1.0);
+            depth.setClearDepth(depth_stencil_state.clear_depth);
         }
 
         let enc = self.make_render_encoder(&desc, label);
@@ -1401,7 +1401,7 @@ impl GpuEncoder {
             depth.setTexture(Some(&depth_target.raw));
             depth.setLoadAction(convert_load_action(load_action));
             depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(1.0);
+            depth.setClearDepth(depth_stencil_state.clear_depth);
         }
 
         let enc = self.make_render_encoder(&desc, label);
@@ -1483,7 +1483,7 @@ impl GpuEncoder {
             depth.setTexture(Some(&depth_target.raw));
             depth.setLoadAction(convert_load_action(load_action));
             depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(1.0);
+            depth.setClearDepth(depth_stencil_state.clear_depth);
         }
 
         let enc = self.make_render_encoder(&desc, label);
@@ -1559,7 +1559,7 @@ impl GpuEncoder {
             depth.setTexture(Some(&depth_target.raw));
             depth.setLoadAction(MTLLoadAction::Clear);
             depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(1.0);
+            depth.setClearDepth(depth_stencil_state.clear_depth);
             desc.setRenderTargetWidth(depth_target.width as usize);
             desc.setRenderTargetHeight(depth_target.height as usize);
         }

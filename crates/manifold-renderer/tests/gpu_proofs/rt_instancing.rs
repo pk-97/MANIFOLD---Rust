@@ -198,8 +198,9 @@ struct Probe {
 
 /// Probe-target scheme: targets sit at z = 0.5 with |x| < z (inside the
 /// unit-cube frustum) and NOT at a column-center ratio (that makes depth
-/// 1.0, which reads as VOID) — each target's x picks its column via the
-/// ratio x/z, and the runner derives the depth that puts the pixel ray
+/// 1.0, which is the near-plane value under reversed-Z) — each target's x
+/// picks its column via the ratio x/z, and the runner derives the depth that
+/// puts the pixel ray
 /// exactly through it. Fixture x positions: ±0.45 and ±0.2 (columns 0/7
 /// and 2/5); the miss target sits at column 4, whose ray clears every
 /// quad at the fixture depths.
@@ -267,7 +268,7 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
     // satisfy depth = ndc_col · target.z / target.x — the fixtures place
     // every target at a column center (target.x/target.z = ndc_col), which
     // makes depth = target.z exactly. depth must stay in the valid clip
-    // range (>= 1.0 - 1e-6 reads as VOID).
+    // range (> 0.0; zero is the reversed-Z VOID sentinel).
     const W: u32 = 8;
     let mut depth_px = [0.0f32; W as usize];
     let mut columns: Vec<u32> = Vec::with_capacity(probes.len());

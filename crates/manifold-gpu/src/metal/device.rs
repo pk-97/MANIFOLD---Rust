@@ -1229,7 +1229,14 @@ impl GpuDevice {
             .device
             .newDepthStencilStateWithDescriptor(&ds_desc)
             .expect("newDepthStencilStateWithDescriptor failed");
-        GpuDepthStencilState { raw: state }
+        let clear_depth = match desc.compare {
+            crate::GpuCompareFunction::Greater | crate::GpuCompareFunction::GreaterEqual => 0.0,
+            _ => 1.0,
+        };
+        GpuDepthStencilState {
+            raw: state,
+            clear_depth,
+        }
     }
 
     /// Create a render pipeline configured for depth testing.

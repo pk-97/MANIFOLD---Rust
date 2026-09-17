@@ -1244,8 +1244,8 @@ static float2 blue_noise_sample(uint2 p, uint frame, uint ray, uint spp) {
 // 0.5`), inverted. `raw_depth` is Metal's native [0,1] clip.z/clip.w
 // range (no linearization — `inv_view_proj` already undoes the whole
 // projection, linear or not). Returns false (void background — the
-// prepass never wrote this texel) via `out_valid` when `raw_depth >=
-// 1.0 - 1e-6` (the depth-clear value).
+// prepass never wrote this texel) via `out_valid` when `raw_depth <=
+// 0.0` (the reversed-Z depth-clear value).
 // BUG-84fv: bit-level finite test — fast-math-safe. isfinite()/NaN
 // comparisons can be compiled away under fast math (the compiler assumes
 // no NaNs); integer ops on the bit pattern can't. Exponent all-ones =
@@ -1255,7 +1255,7 @@ static bool rt_finite(float x) {
 }
 
 static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_depth, constant float4x4& inv_view_proj, thread bool& out_valid) {
-    if (!rt_finite(raw_depth) || raw_depth >= 1.0 - 1e-6) { out_valid = false; return float3(0.0); }
+    if (!rt_finite(raw_depth) || raw_depth <= 0.0) { out_valid = false; return float3(0.0); }
     float2 uv = (float2(pix) + 0.5) / float2(gbuffer_size);
     float ndc_x = uv.x * 2.0 - 1.0;
     float ndc_y = 1.0 - uv.y * 2.0;
@@ -2174,7 +2174,7 @@ kernel void upsample_shadow(
     // native mask needs no resample at all: pass the texel through. Detect
     // by texture size so the params ABI and fused path are untouched.
     bool sv_native = lo_sv.get_width() == p.gbuffer_size.x && lo_sv.get_height() == p.gbuffer_size.y;
-    if (d >= 1.0 - 1e-6) {
+    if (d <= 0.0) {
         hi_sv.write(sv_native ? lo_sv.read(tid) : float4(1, 1, 1, 1), tid);
         hi_sv2.write(sv_native ? lo_sv2.read(tid) : float4(1, 1, 1, 1), tid);
         // RT-TL-C: void sky = unoccluded sun; white tint. sv_native passthrough
@@ -2221,7 +2221,7 @@ kernel void upsample_shadow(
     // void tap paints a bright ring along silhouettes (dashed where the
     // depth gate flickers tap-to-tap). The depth gate can't be trusted to
     // reject them: in nonlinear [0,1] depth, distant surfaces compress
-    // toward the void's 1.0 and pass. Skip them outright; the all-reject
+    // toward the void's 0.0 and pass. Skip them outright; the all-reject
     // fallback then prefers the nearest NON-VOID tap.
     int2 nearest_nonvoid = nearest_lo;
     bool any_nonvoid = false;
@@ -2230,7 +2230,7 @@ kernel void upsample_shadow(
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
         uint2 gq = min(uint2((float2(q) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
         float qd = depth_tex.read(gq, 0);
-        if (qd >= 1.0 - 1e-6) { void_taps++; continue; }
+        if (qd <= 0.0) { void_taps++; continue; }
         float3 qn = lo_n.read(uint2(q)).xyz;
         float2 f = saturate(1.0 - fabs(lo_uv - 0.5 - float2(q)));
         float w_bilin = f.x * f.y;
@@ -2351,7 +2351,7 @@ kernel void atrous_filter(
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float center_depth = depth_tex.read(tid, 0);
-    if (center_depth >= 1.0 - 1e-6) {
+    if (center_depth <= 0.0) {
         // Void background: pass through unfiltered (nothing to edge-stop
         // against; matches every other stage's void-background handling).
         dst_sv.write(src_sv.read(tid), tid);
@@ -2469,7 +2469,7 @@ kernel void atrous_filter(
         if (q.x < 0 || q.y < 0 || q.x >= int(p.size.x) || q.y >= int(p.size.y)) continue;
         uint2 uq = uint2(q);
         float qd = depth_tex.read(uq, 0);
-        if (qd >= 1.0 - 1e-6) continue;
+        if (qd <= 0.0) continue;
         float3 qn = src_n.read(uq).xyz;
         float3 qirr = src_irr.read(uq).rgb;
         float w_depth = exp(-fabs(qd - center_depth) / ATROUS_DEPTH_SIGMA);
@@ -2510,7 +2510,7 @@ kernel void atrous_filter(
 // smear RT firefly outliers into bright bokeh blobs. The median is over the
 // non-void texels of the 3x3 (center included — the "3..9-element non-void
 // subset" of RT_STAGE3_DENOISE_DESIGN.md section 3.2); void texels (depth
-// >= 1-1e-6) are excluded, a center void texel passes through untouched (an
+// <= 0.0) are excluded, a center void texel passes through untouched (an
 // EXR sun disc in the void background is legit content, never clamped), and
 // fewer than 3 non-void texels also passes through (a silhouette glint
 // can't establish a median). `gain`/`floor` ride the CPU-mirrored
@@ -2565,7 +2565,7 @@ static float4 firefly_clamp_center(
 {
     float4 center = src.read(tid);
     float center_depth = read_firefly_depth(depth_tex, tid);
-    if (center_depth >= 1.0 - 1e-6) {
+    if (center_depth <= 0.0) {
         return center; // void center: passthrough (sun disc in void is content)
     }
     float3 vals[FIREFLY_MEDIAN_MAX];
@@ -2579,7 +2579,7 @@ static float4 firefly_clamp_center(
         int2 q = int2(tid) + offsets[i];
         if (q.x < 0 || q.y < 0 || q.x >= int(p.size.x) || q.y >= int(p.size.y)) continue;
         uint2 uq = uint2(q);
-        if (read_firefly_depth(depth_tex, uq) >= 1.0 - 1e-6) continue;
+        if (read_firefly_depth(depth_tex, uq) <= 0.0) continue;
         vals[n++] = src.read(uq).rgb;
     }
     if (n < 3u) {
@@ -2943,7 +2943,7 @@ kernel void accumulate_irradiance(
     // every frame, all temporal amortization lost (the helmet shimmer).
     float3 cur_normal_prev = cur_normal;
     bool oid_ok = false; float4x4 obj_m = float4x4(0); uint oid = 0;
-    if (cur_depth < 1.0 - 1e-6) {
+    if (cur_depth > 0.0) {
         float2 uv = (float2(tid) + 0.5) / float2(p.size);
         float4 clip = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, cur_depth, 1.0);
         float4 wh = p.inv_view_proj * clip;
@@ -3605,7 +3605,7 @@ static float4 atrous_post_center(
     const float POST_EARLY_OUT = 0.004;
     float4 src = src_irr.read(tid);
     float center_depth = read_firefly_depth(depth_tex, tid);
-    if (center_depth >= 1.0 - 1e-6) {
+    if (center_depth <= 0.0) {
         return src; // void: bit-exact passthrough (blend-queue void pattern)
     }
     float4 mo = moments_read.read(tid);
@@ -3661,7 +3661,7 @@ static float4 atrous_post_center(
         int2 q = clamp(int2(tid) + offsets[i] * int(p.step), int2(0), int2(p.size) - 1);
         uint2 uq = uint2(q);
         float qd = read_firefly_depth(depth_tex, uq);
-        if (qd >= 1.0 - 1e-6) continue;
+        if (qd <= 0.0) continue;
         float4 qn4 = normal_tex.read(uq);
         float3 qn = qn4.xyz;
         float4 qr = src_irr.read(uq);

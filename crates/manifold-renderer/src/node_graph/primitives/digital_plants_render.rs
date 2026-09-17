@@ -268,7 +268,7 @@ impl Primitive for DigitalPlantsRender {
         if self.render_depth_stencil.is_none() {
             self.render_depth_stencil = Some(gpu.device.create_depth_stencil_state(
                 &manifold_gpu::GpuDepthStencilDesc {
-                    compare: manifold_gpu::GpuCompareFunction::Less,
+                    compare: manifold_gpu::GpuCompareFunction::Greater,
                     write_enabled: true,
                 },
             ));

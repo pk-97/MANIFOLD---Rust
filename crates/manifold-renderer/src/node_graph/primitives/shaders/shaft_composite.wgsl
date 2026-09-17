@@ -22,8 +22,7 @@ struct Uniforms {
 @group(0) @binding(3) var full_depth: texture_2d<f32>;
 
 fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
-    let range = far / (near - far);
-    return (range * near) / (raw + range);
+    return (near * far) / (near + raw * (far - near));
 }
 
 struct VertexOutput {

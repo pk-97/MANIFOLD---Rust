@@ -28,8 +28,7 @@ const GTAO_HALF_PI: f32 = 1.5707963267948966;
 @group(0) @binding(2) var output_tex: texture_storage_2d<rgba16float, write>;
 
 fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
-    let range = far / (near - far);
-    return (range * near) / (raw + range);
+    return (near * far) / (near + raw * (far - near));
 }
 
 fn hash_angle(px: vec2<f32>) -> f32 {

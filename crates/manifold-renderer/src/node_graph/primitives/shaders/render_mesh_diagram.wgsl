@@ -256,8 +256,9 @@ fn grid_lines(p: vec2<f32>, footprint: vec2<f32>, spacing: f32) -> f32 {
 fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     // Native Metal framebuffer Y runs down; Camera clip-space Y runs up.
     let ndc = pixel / u.viewport.xy * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
-    let near_h = u.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
-    let far_h = u.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    // Camera depth is reversed-Z: clip z=1 is near and z=0 is far.
+    let near_h = u.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    let far_h = u.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
     let near = near_h.xyz / near_h.w;
     let far = far_h.xyz / far_h.w;
     let ray = far - near;
@@ -281,8 +282,9 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
 
 fn world_grid_position(pixel: vec2<f32>) -> vec3<f32> {
     let ndc = pixel / u.viewport.xy * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
-    let near_h = u.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
-    let far_h = u.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    // Camera depth is reversed-Z: clip z=1 is near and z=0 is far.
+    let near_h = u.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    let far_h = u.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
     let near = near_h.xyz / near_h.w;
     let far = far_h.xyz / far_h.w;
     let ray = far - near;
@@ -295,8 +297,8 @@ fn depth_occluded(depth: f32, pixel: vec2<f32>, bias: f32) -> bool {
     if u.occlusion == 0u { return false; }
     let uv = pixel / u.viewport.xy;
     var cutoff = textureSampleLevel(surface_depth, depth_sampler, uv, 0.0).r;
-    if u.mode == 2u { cutoff = min(cutoff, textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r); }
-    return depth > cutoff + bias;
+    if u.mode == 2u { cutoff = max(cutoff, textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r); }
+    return depth < cutoff - bias;
 }
 
 @fragment
@@ -326,6 +328,6 @@ fn fs_depth_color(in: O) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_depth(in: O) -> @location(0) f32 {
-    if in.color.a <= 0.0 { return 1.0; }
+    if in.color.a <= 0.0 { return 0.0; }
     return clamp(in.p.z, 0.0, 1.0);
 }

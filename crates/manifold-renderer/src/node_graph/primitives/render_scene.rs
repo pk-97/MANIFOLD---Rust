@@ -718,7 +718,7 @@ pub struct RenderScene {
     /// populated; +1 entry in practice.
     pipelines: AHashMap<(MaterialKind, bool, bool, bool, bool, bool), manifold_gpu::GpuRenderPipeline>,
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
-    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: depth TEST on (`Less`, matching
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: depth TEST on (`Greater`, matching
     /// `depth_stencil` above) but WRITE off — the sorted transparent
     /// group's depth-stencil state, drawn as `DepthMsaaPassDesc::second_pass`
     /// right after the opaque group in the same encoder pass.
@@ -2289,17 +2289,17 @@ impl RenderScene {
             if self.depth_stencil.is_none() {
                 self.depth_stencil = Some(gpu.device.create_depth_stencil_state(
                     &manifold_gpu::GpuDepthStencilDesc {
-                        compare: manifold_gpu::GpuCompareFunction::Less,
+                        compare: manifold_gpu::GpuCompareFunction::Greater,
                         write_enabled: true,
                     },
                 ));
             }
-            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: same compare, write disabled
+            // Reversed-Z camera depth uses the same Greater compare, write disabled
             // — the sorted transparent group's depth-stencil state.
             if self.blend_depth_stencil.is_none() {
                 self.blend_depth_stencil = Some(gpu.device.create_depth_stencil_state(
                     &manifold_gpu::GpuDepthStencilDesc {
-                        compare: manifold_gpu::GpuCompareFunction::Less,
+                        compare: manifold_gpu::GpuCompareFunction::Greater,
                         write_enabled: false,
                     },
                 ));
@@ -2720,7 +2720,7 @@ impl RenderScene {
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         if has_transmission || rt_enabled {
             let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
-            let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
+            let opaque_depth_ds = self.depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
             let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
                 .iter()

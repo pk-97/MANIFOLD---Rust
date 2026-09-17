@@ -205,7 +205,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
     let current = vertices_buffer(
         &device,
         &[
-            // The edge spans raw device depth from about 0.34 to 0.96 while
+            // The edge spans reversed-Z raw device depth from about 0.66 to 0.04 while
             // remaining inside the view, so a constant 0.5 occluder splits it.
             vertex([-0.06, -0.05, -0.85]),
             vertex([0.8, 0.55, 1.2]),
@@ -213,7 +213,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         ],
     );
     let surface = texture_f32(&device, 0.5, "mesh-diagram-constant-occluder");
-    let scene = texture_f32(&device, 1.0, "mesh-diagram-far-scene");
+    let scene = texture_f32(&device, 0.0, "mesh-diagram-far-scene");
     let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
         min_filter: manifold_gpu::GpuFilterMode::Nearest,
         mag_filter: manifold_gpu::GpuFilterMode::Nearest,
@@ -378,7 +378,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
 }
 
 #[test]
-fn surface_depth_is_minimum_and_zero_appearance_does_not_occlude() {
+fn surface_depth_is_maximum_and_zero_appearance_does_not_occlude() {
     let guard = crate::test_device();
     let device = guard.arc();
     let camera = Camera::look_at(
@@ -415,20 +415,20 @@ fn surface_depth_is_minimum_and_zero_appearance_does_not_occlude() {
         Some(GpuBlendState {
             src_factor: GpuBlendFactor::One,
             dst_factor: GpuBlendFactor::One,
-            operation: GpuBlendOp::Min,
+            operation: GpuBlendOp::Max,
             src_alpha_factor: GpuBlendFactor::One,
             dst_alpha_factor: GpuBlendFactor::One,
-            alpha_operation: GpuBlendOp::Min,
+            alpha_operation: GpuBlendOp::Max,
         }),
         "mesh-diagram-surface-depth",
     );
-    let far = texture_f32(&device, 1.0, "mesh-diagram-depth-far");
+    let far = texture_f32(&device, 0.0, "mesh-diagram-depth-far");
     let sampler = device.create_sampler(&Default::default());
     let render = |gain: f32| {
         let u = uniforms(&camera, 2, 6, 1, 1, gain);
         let b = bindings(&u, &current, &far, &far, &sampler);
         let mut encoder = device.create_encoder("mesh-diagram-surface-depth-proof");
-        encoder.clear_texture(&target.texture, 1.0, 1.0, 1.0, 1.0);
+        encoder.clear_texture(&target.texture, 0.0, 0.0, 0.0, 0.0);
         encoder.draw_instanced(
             &pipeline,
             &target.texture,
@@ -441,14 +441,14 @@ fn surface_depth_is_minimum_and_zero_appearance_does_not_occlude() {
         encoder.commit_and_wait_completed();
         depth_values(&device, &target.texture)
     };
-    let minimum = render(1.0)[64 * W as usize + 64];
+    let maximum = render(1.0)[64 * W as usize + 64];
     assert!(
-        minimum > 0.0 && minimum < 0.2,
-        "surface depth did not keep the nearer triangle: {minimum}"
+        maximum > 0.8,
+        "surface depth did not keep the nearer triangle: {maximum}"
     );
     let hidden = render(0.0)[64 * W as usize + 64];
     assert!(
-        hidden > 0.99,
+        hidden < 0.01,
         "zero appearance gain wrote occluding depth: {hidden}"
     );
 }
@@ -464,7 +464,7 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
     let msaa = device.create_texture_msaa_memoryless(
         W, H, GpuTextureFormat::Rgba16Float, MSAA_SAMPLE_COUNT, "math-axes-proof",
     );
-    let far = texture_f32(&device, 1.0, "math-axes-far-depth");
+    let far = texture_f32(&device, 0.0, "math-axes-far-depth");
     let sampler = device.create_sampler(&GpuSamplerDesc::default());
     let mut preview = vec![0u8; (W * 2 * H * 2 * 4) as usize];
     // Two objects have their first face at the same world position. The
