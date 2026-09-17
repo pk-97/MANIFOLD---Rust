@@ -1,0 +1,1038 @@
+{
+  "version": 3,
+  "name": "Math View",
+  "presetMetadata": {
+    "id": "MathView",
+    "displayName": "Math View",
+    "category": "Geometry",
+    "oscPrefix": "mathview",
+    "available": true,
+    "params": [
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "math_view_mode",
+        "name": "Mode",
+        "min": 0,
+        "max": 2,
+        "defaultValue": 0,
+        "wholeNumbers": true,
+        "valueLabels": [
+          "Scene",
+          "Math",
+          "Overlay"
+        ],
+        "section": "Display"
+      },
+      {
+        "id": "math_view_occlusion",
+        "name": "Occlusion",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 0,
+        "wholeNumbers": true,
+        "valueLabels": [
+          "X-ray",
+          "Depth"
+        ],
+        "section": "Display"
+      },
+      {
+        "id": "math_view_grid",
+        "name": "Grid",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "isToggle": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_fragments",
+        "name": "Fragments",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "isToggle": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_ghosts",
+        "name": "Ghosts",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "isToggle": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_vectors",
+        "name": "Vectors",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "isToggle": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_axes",
+        "name": "Axes",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "isToggle": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_trails",
+        "name": "Motion trails",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 1,
+        "isToggle": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_grid_brightness",
+        "name": "Grid Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_fragments_brightness",
+        "name": "Fragments Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_ghosts_brightness",
+        "name": "Ghosts Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_vectors_brightness",
+        "name": "Vectors Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_trails_brightness",
+        "name": "Trails Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_pulse",
+        "name": "Pulse",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Pulse"
+      },
+      {
+        "id": "math_view_pulse_strength",
+        "name": "Pulse Strength",
+        "min": -1.0,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "section": "Pulse"
+      },
+      {
+        "id": "math_view_pulse_target",
+        "name": "Pulse Target",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 0.0,
+        "section": "Pulse",
+        "wholeNumbers": true,
+        "valueLabels": [
+          "All",
+          "Grid",
+          "Fragments",
+          "Ghosts",
+          "Vectors",
+          "Trails"
+        ]
+      },
+      {
+        "id": "math_view_pulse_beats",
+        "name": "Pulse Beats",
+        "min": 0.0625,
+        "max": 32.0,
+        "defaultValue": 1.0,
+        "section": "Pulse"
+      },
+      {
+        "id": "math_view_pulse_trigger",
+        "name": "Pulse Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Pulse",
+        "isToggle": true,
+        "isTriggerGate": true
+      },
+      {
+        "id": "math_view_scan_amount",
+        "name": "Scan Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Scan"
+      },
+      {
+        "id": "math_view_scan_progress",
+        "name": "Scan Progress",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Scan"
+      },
+      {
+        "id": "math_view_scan_width",
+        "name": "Scan Width",
+        "min": 0.01,
+        "max": 2.0,
+        "defaultValue": 0.2,
+        "section": "Scan"
+      },
+      {
+        "id": "math_view_scan_direction",
+        "name": "Scan Direction",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 2.0,
+        "section": "Scan",
+        "wholeNumbers": true,
+        "valueLabels": [
+          "+X",
+          "-X",
+          "+Y",
+          "-Y",
+          "+Z",
+          "-Z"
+        ]
+      },
+      {
+        "id": "math_view_scan_mode",
+        "name": "Scan Mode",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Scan",
+        "wholeNumbers": true,
+        "valueLabels": [
+          "Highlight",
+          "Reveal"
+        ]
+      },
+      {
+        "id": "math_view_scan_target",
+        "name": "Scan Target",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 0.0,
+        "section": "Scan",
+        "wholeNumbers": true,
+        "valueLabels": [
+          "All",
+          "Grid",
+          "Fragments",
+          "Ghosts",
+          "Vectors",
+          "Trails"
+        ]
+      },
+      {
+        "id": "math_view_scan_beats",
+        "name": "Scan Beats",
+        "min": 0.0625,
+        "max": 32.0,
+        "defaultValue": 4.0,
+        "section": "Scan"
+      },
+      {
+        "id": "math_view_scan_trigger",
+        "name": "Scan Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Scan",
+        "isToggle": true,
+        "isTriggerGate": true
+      },
+      {
+        "id": "math_view_connect_mesh",
+        "name": "Connect to Mesh",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "section": "Mesh",
+        "isToggle": true
+      },
+      {
+        "id": "math_view_density",
+        "name": "Density",
+        "min": 2,
+        "max": 8,
+        "defaultValue": 3,
+        "wholeNumbers": true,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_line_width",
+        "name": "Line Width",
+        "min": 0.5,
+        "max": 4,
+        "defaultValue": 1,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_geometry_hue",
+        "name": "Geometry Hue",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 0.52,
+        "section": "Display"
+      },
+      {
+        "id": "math_view_path_hue",
+        "name": "Path Hue",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 0.13,
+        "section": "Display"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mv_enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_mode",
+        "label": "Mode",
+        "defaultValue": 0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_mode",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_occlusion",
+        "label": "Occlusion",
+        "defaultValue": 0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_occlusion",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_grid",
+        "label": "Grid",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_grid",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_fragments",
+        "label": "Fragments",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_fragments",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_ghosts",
+        "label": "Ghosts",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_ghosts",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_vectors",
+        "label": "Vectors",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_vectors",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_axes",
+        "label": "Axes",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_axes",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_trails",
+        "label": "Motion trails",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_trails",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_density",
+        "label": "Density",
+        "defaultValue": 3,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_density",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_line_width",
+        "label": "Line Width",
+        "defaultValue": 1,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_line_width",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_geometry_hue",
+        "label": "Geometry Hue",
+        "defaultValue": 0.52,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_geometry_hue",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_path_hue",
+        "label": "Path Hue",
+        "defaultValue": 0.13,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_path_hue",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_grid_brightness",
+        "label": "Grid Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_grid_brightness",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_fragments_brightness",
+        "label": "Fragments Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_fragments_brightness",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_ghosts_brightness",
+        "label": "Ghosts Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_ghosts_brightness",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_vectors_brightness",
+        "label": "Vectors Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_vectors_brightness",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_trails_brightness",
+        "label": "Trails Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_trails_brightness",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_pulse",
+        "label": "Pulse",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_pulse",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_pulse_strength",
+        "label": "Pulse Strength",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_pulse_strength",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_pulse_target",
+        "label": "Pulse Target",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_pulse_target",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_pulse_beats",
+        "label": "Pulse Beats",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_pulse_beats",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_pulse_trigger",
+        "label": "Pulse Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_pulse_trigger",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_amount",
+        "label": "Scan Amount",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_amount",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_progress",
+        "label": "Scan Progress",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_progress",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_width",
+        "label": "Scan Width",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_width",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_direction",
+        "label": "Scan Direction",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_direction",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_mode",
+        "label": "Scan Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_mode",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_target",
+        "label": "Scan Target",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_target",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_beats",
+        "label": "Scan Beats",
+        "defaultValue": 4.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_beats",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_scan_trigger",
+        "label": "Scan Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_scan_trigger",
+          "param": "value"
+        }
+      },
+      {
+        "id": "math_view_connect_mesh",
+        "label": "Connect to Mesh",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "__math_view_connect_mesh",
+          "param": "value"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": true,
+      "enabledParam": "enabled"
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "mv_enabled",
+      "typeId": "node.value",
+      "handle": "enabled",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "__math_view_mode",
+      "typeId": "node.value",
+      "handle": "math_view_mode",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "__math_view_grid",
+      "typeId": "node.value",
+      "handle": "math_view_grid",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "__math_view_fragments",
+      "typeId": "node.value",
+      "handle": "math_view_fragments",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "__math_view_ghosts",
+      "typeId": "node.value",
+      "handle": "math_view_ghosts",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "__math_view_vectors",
+      "typeId": "node.value",
+      "handle": "math_view_vectors",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "__math_view_trails",
+      "typeId": "node.value",
+      "handle": "math_view_trails",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "__math_view_density",
+      "typeId": "node.value",
+      "handle": "math_view_density",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 3
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "__math_view_line_width",
+      "typeId": "node.value",
+      "handle": "math_view_line_width",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "__math_view_geometry_hue",
+      "typeId": "node.value",
+      "handle": "math_view_geometry_hue",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.52
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "__math_view_path_hue",
+      "typeId": "node.value",
+      "handle": "math_view_path_hue",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.13
+        }
+      }
+    },
+    {
+      "id": 12,
+      "nodeId": "__math_view_grid_brightness",
+      "typeId": "node.value",
+      "handle": "math_view_grid_brightness",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 13,
+      "nodeId": "__math_view_fragments_brightness",
+      "typeId": "node.value",
+      "handle": "math_view_fragments_brightness",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 14,
+      "nodeId": "__math_view_ghosts_brightness",
+      "typeId": "node.value",
+      "handle": "math_view_ghosts_brightness",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 15,
+      "nodeId": "__math_view_vectors_brightness",
+      "typeId": "node.value",
+      "handle": "math_view_vectors_brightness",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 16,
+      "nodeId": "__math_view_trails_brightness",
+      "typeId": "node.value",
+      "handle": "math_view_trails_brightness",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 17,
+      "nodeId": "__math_view_pulse",
+      "typeId": "node.value",
+      "handle": "math_view_pulse",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 18,
+      "nodeId": "__math_view_pulse_strength",
+      "typeId": "node.value",
+      "handle": "math_view_pulse_strength",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 19,
+      "nodeId": "__math_view_pulse_target",
+      "typeId": "node.value",
+      "handle": "math_view_pulse_target",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "__math_view_pulse_beats",
+      "typeId": "node.value",
+      "handle": "math_view_pulse_beats",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "__math_view_pulse_trigger",
+      "typeId": "node.value",
+      "handle": "math_view_pulse_trigger",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 22,
+      "nodeId": "__math_view_scan_amount",
+      "typeId": "node.value",
+      "handle": "math_view_scan_amount",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 23,
+      "nodeId": "__math_view_scan_progress",
+      "typeId": "node.value",
+      "handle": "math_view_scan_progress",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 24,
+      "nodeId": "__math_view_scan_width",
+      "typeId": "node.value",
+      "handle": "math_view_scan_width",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 25,
+      "nodeId": "__math_view_scan_direction",
+      "typeId": "node.value",
+      "handle": "math_view_scan_direction",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 2.0
+        }
+      }
+    },
+    {
+      "id": 26,
+      "nodeId": "__math_view_scan_mode",
+      "typeId": "node.value",
+      "handle": "math_view_scan_mode",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 27,
+      "nodeId": "__math_view_scan_target",
+      "typeId": "node.value",
+      "handle": "math_view_scan_target",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 28,
+      "nodeId": "__math_view_scan_beats",
+      "typeId": "node.value",
+      "handle": "math_view_scan_beats",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 4.0
+        }
+      }
+    },
+    {
+      "id": 29,
+      "nodeId": "__math_view_scan_trigger",
+      "typeId": "node.value",
+      "handle": "math_view_scan_trigger",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "__math_view_connect_mesh",
+      "typeId": "node.value",
+      "handle": "math_view_connect_mesh",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 31,
+      "nodeId": "__math_view_occlusion",
+      "typeId": "node.value",
+      "handle": "math_view_occlusion",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 32,
+      "nodeId": "__math_view_axes",
+      "typeId": "node.value",
+      "handle": "math_view_axes",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1
+        }
+      }
+    }
+  ],
+  "wires": []
+}

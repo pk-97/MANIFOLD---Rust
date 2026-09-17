@@ -1,10 +1,23 @@
 # Scene modifier Math View — perform the structure behind the scene
 
-**Status:** IN PROGRESS · 2026-09-17 · Codex. Native grid repair and connected graphics events implemented (BUG-ywdj, BUG-657u); optional depth occlusion adds shared sampled-surface and scene-depth testing (D8). Representative fragment axes and clean trail re-enabling address BUG-cw9z and BUG-lln0. Broader mathematical presentation remains tracked in BUG-fgfk.
+**Status:** IN PROGRESS · 2026-09-17 · Codex. Native grid repair and connected graphics events implemented (BUG-ywdj, BUG-657u); optional depth occlusion adds shared sampled-surface and scene-depth testing (D8). Representative fragment axes and clean trail re-enabling address BUG-cw9z and BUG-lln0. Broader mathematical presentation remains tracked in BUG-fgfk. Section 8 (standalone Math View) supersedes per-modifier sections.
 **Prerequisites:** unified scene modifier recipes, parameter surface, native Metal.
 **Execution contract:** DESIGN_DOC_STANDARD.md sections 5–6; current AGENTS.md controls validation and delivery.
 
 Peter wants to show “the pure math, the graphs, lines, behaviours” behind a modifier, with a native section on its card and cuts between mathematics and the scene. The generated mockup establishes a visual direction, not the shader's trajectories. Content owns settings; normal parameter commands mutate them; the UI projects snapshots. Presentation controls are ordinary animatable generator macros. Rendering must remain bounded and must not duplicate deformation mathematics.
+
+## 8. Standalone Math View — one modifier owns the view — k3 (lead), 2026-09-17
+
+Sections 1–7 embedded Math View controls in each qualified modifier's recipe. That direction is superseded: Math View is now one standalone scene modifier that visualises the combined deformation of all preceding modifiers in its scene. No target selector, no per-modifier sections.
+
+Verified mechanics behind the design:
+
+- `prepare_scene_modifier_math_view(owner, registry, modifier_id, scope)` (`scene_modifier_expand/compiler.rs:148`) is already parameterised by an arbitrary modifier id; chain state keys (`attachment_key`, compiler.rs:1440) are per scene/object/endpoint, not per modifier, so captures at the view's chain position read the accumulated output of every preceding modifier.
+- `MathViewScope::WithinChain` seeds sampled faces at the first modifier of the scene (compiler.rs:281-303) and evaluates each preceding stage through the ordinary compiler, fusion, value routes and backend. The standalone view always uses these chain semantics; the two-variant runtime and the Scope control are dropped.
+- A stage-less recipe is schema-valid (`SceneModifierRecipe.stages` defaults empty; `validate_recipe` requires only `enabledParam`, scene_modifier_preset.rs:831); `append_instance` clones non-stage nodes as shared and writes no endpoints, so the view modifier passes the chain through unchanged.
+- Diagram semantics for the combined view: `incoming` wires from the reference samples (not the chain output), so ghosts show the undeformed mesh and arrows show the total reference→current displacement (`render_mesh_diagram.wgsl:124-173`).
+- Connect to Mesh keeps its patch-family contract (`compiler/math_events.rs:100-117`): supported when exactly one preceding modifier in the scene carries one reference patch transform per selected object with its reference wired from the saved original mesh. Unsupported chains force the control neutral and lock the card row with the reason; nothing partially connects.
+- Compatibility: on load, legacy `math_view_*` controls are stripped from carrier recipes and their host binding values are moved onto one appended Math View instance per scene. Legacy Scope values are dropped; a single-modifier chain renders identically to the old This-modifier scope.
 
 ## 1. Audit — verified 2026-09-13
 
