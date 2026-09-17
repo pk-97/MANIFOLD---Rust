@@ -941,22 +941,32 @@ impl RtPipelines {
 
         // P4a (§5.1): emissive-preparation kernels — all 1D buffer-only
         // dispatches (shift constants ride GpuBinding::Bytes, declared as
-        // Buffer slots, the atrous_post discipline).
+        // Buffer slots, the atrous_post discipline). CRITICAL dispatch
+        // geometry: these kernels read a SCALAR thread_position_in_grid,
+        // which collapses to the x component under a 2D threadgroup — the
+        // shared SHADOW_WORKGROUP [8,8,1] would process every candidate
+        // once per y-row (3 tuples read as 24 entries). Force a 1D
+        // workgroup so the scalar index is unique per thread.
+        let emissive_1d = |entry: &str, slots: &[(u32, SlotKind)]| {
+            let mut p = compile_pipeline(device, &library, entry, identity_slot_map(slots));
+            p.workgroup_size = [64, 1, 1];
+            p
+        };
         let emissive = EmissivePipelines {
-            enumerate: compile_pipeline(device, &library, "emissive_enumerate",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)])),
-            hist: compile_pipeline(device, &library, "emissive_hist",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)])),
-            scan: compile_pipeline(device, &library, "emissive_scan",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)])),
-            scatter: compile_pipeline(device, &library, "emissive_scatter",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer)])),
-            gather: compile_pipeline(device, &library, "emissive_gather",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer), (5, SlotKind::Buffer)])),
-            stats: compile_pipeline(device, &library, "emissive_stats",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)])),
-            alias: compile_pipeline(device, &library, "emissive_alias",
-                identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)])),
+            enumerate: emissive_1d("emissive_enumerate",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]),
+            hist: emissive_1d("emissive_hist",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)]),
+            scan: emissive_1d("emissive_scan",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]),
+            scatter: emissive_1d("emissive_scatter",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer)]),
+            gather: emissive_1d("emissive_gather",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer), (5, SlotKind::Buffer)]),
+            stats: emissive_1d("emissive_stats",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]),
+            alias: emissive_1d("emissive_alias",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)]),
         };
 
         Self {
