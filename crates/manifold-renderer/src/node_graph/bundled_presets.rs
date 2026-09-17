@@ -271,7 +271,7 @@ mod tests {
             let def = bundled_preset_def(&type_id)
                 .expect("registered preset must have a parsed def")
                 .clone();
-            let graph = def.into_graph(&registry).unwrap_or_else(|e| {
+            let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap_or_else(|e| {
                 panic!("bundled preset {}: into_graph failed: {e}", type_id.as_str())
             });
             validate(&graph).unwrap_or_else(|e| {
@@ -299,7 +299,7 @@ mod tests {
             def.preset_metadata.is_some(),
             "LED Fill must carry presetMetadata so the picker/inspector can show its params",
         );
-        let graph = def.into_graph(&registry).expect("LED Fill must build a graph");
+        let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("LED Fill must build a graph");
         validate(&graph).expect("LED Fill graph must validate");
         compile(&graph).expect("LED Fill graph must compile");
     }
@@ -445,7 +445,7 @@ mod tests {
             let def = bundled_preset_def(&type_id).expect("registered");
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
-            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None);
+            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default());
             assert!(
                 result.is_some(),
                 "bundled preset {} failed to splice into a chain — preset and chain runtime have \
@@ -515,7 +515,7 @@ mod tests {
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
             let Some(result) =
-                splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None)
+                splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             else {
                 failures.push(format!("{preset_id}: splice failed"));
                 continue;
@@ -612,7 +612,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None)
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("Color Compass splices");
 
         // Resolve handle → chain-node-id map for the inner nodes the
@@ -792,7 +792,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None)
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("splice ok");
 
         // Look up smoothing_y (vertical axis = N-S compass).
@@ -984,7 +984,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None)
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("splice");
         let final_out = chain.add_node(Box::new(FinalOutput::new()));
         chain.connect(result.output, (final_out, "in")).unwrap();

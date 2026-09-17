@@ -1,6 +1,8 @@
 //! Effect-group helpers for [`PresetRuntime`].
 
 use super::*;
+use super::errors::record_chain_error;
+use crate::node_graph::mesh_change::PreparedMeshRules;
 
 /// State tracked for an open partial-wet-dry group during
 /// `try_build`'s walk over active effects. Captures the pre-group
@@ -113,4 +115,56 @@ pub(super) fn validate_mask_groups(
         }
     }
     Some(())
+}
+
+/// Splice one effect card's def into the chain graph, its mesh-rule
+/// sidecar traveling with the def (SCENE_MODIFIER_RT_DESIGN.md section 3.3):
+/// a fused card's sidecar is keyed by the fused def's generated node ids;
+/// an unfused/edited def has none (empty map is correct only when fusion
+/// did not occur). When the divergent (edited/fused) def fails to splice,
+/// record the divergence and fall back to the canonical def + canonical
+/// sidecar. Returns None only when the canonical splice itself fails.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn splice_card_with_canonical_fallback(
+    graph: &mut Graph,
+    card_input: (NodeInstanceId, &'static str),
+    splice_def: &EffectGraphDef,
+    mesh_rules: &PreparedMeshRules,
+    canonical_def: &EffectGraphDef,
+    canonical_mesh_rules: &PreparedMeshRules,
+    primitives: &PrimitiveRegistry,
+    relight_params: Option<&RelightParams>,
+    divergent: Option<(EffectId, PresetTypeId)>,
+    errors: &mut Vec<ChainError>,
+) -> Option<SpliceResult> {
+    if let Some(r) = splice_def_into_chain(
+        graph,
+        card_input,
+        splice_def,
+        primitives,
+        relight_params,
+        mesh_rules,
+    ) {
+        return Some(r);
+    }
+    if let Some((effect_id, effect_type)) = divergent {
+        record_chain_error(
+            errors,
+            ChainError::DivergentGraphFellBack { effect_id, effect_type },
+        );
+    }
+    match splice_def_into_chain(
+        graph,
+        card_input,
+        canonical_def,
+        primitives,
+        relight_params,
+        canonical_mesh_rules,
+    ) {
+        Some(r) => Some(r),
+        None => {
+            eprintln!("[chain-build-fail] canonical splice failed after fallback");
+            None
+        }
+    }
 }

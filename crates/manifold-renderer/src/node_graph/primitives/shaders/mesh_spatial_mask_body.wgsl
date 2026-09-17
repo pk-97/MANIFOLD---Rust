@@ -1,4 +1,10 @@
 // node.mesh_spatial_mask — current mesh gather body, returning one f32 weight.
+//
+// ABI: `in` stays BufferGather (the body indexes buf_in at neighbour corners
+// for triangle-centroid / patch-cell sampling, so the standalone wrapper
+// binds it whole and the fused region keeps it as a gathered external);
+// `weights` is COINCIDENT — a per-element `e_weights` pre-read, gated by the
+// `idx < weights_len` check (0 when unwired → identity, matching run()).
 fn rotate_basis(v: vec3<f32>, yaw: f32, pitch: f32) -> vec3<f32> {
     let cp = cos(pitch);
     let sp = sin(pitch);
@@ -8,7 +14,7 @@ fn rotate_basis(v: vec3<f32>, yaw: f32, pitch: f32) -> vec3<f32> {
     return vec3<f32>(cy * rx.x + sy * rx.z, rx.y, -sy * rx.x + cy * rx.z);
 }
 
-fn body(idx: u32, count: u32, shape: u32, sample_mode: u32, center_x: f32, center_y: f32, center_z: f32, yaw: f32, pitch: f32, width: f32, feather: f32, invert: f32, amount: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32, cell_size: f32, low: f32, high: f32, weights_len: u32) -> f32 {
+fn body(idx: u32, count: u32, e_weights: f32, shape: u32, sample_mode: u32, center_x: f32, center_y: f32, center_z: f32, yaw: f32, pitch: f32, width: f32, feather: f32, invert: f32, amount: f32, scale: f32, source_offset_x: f32, source_offset_y: f32, source_offset_z: f32, cell_size: f32, low: f32, high: f32, weights_len: u32) -> f32 {
     let base = (idx / 3u) * 3u;
     var sample_position = buf_in[idx].position;
     if (sample_mode == 1u || sample_mode == 2u) && base + 2u < count {
@@ -35,6 +41,6 @@ fn body(idx: u32, count: u32, shape: u32, sample_mode: u32, center_x: f32, cente
     }
     let mask_after_invert = mix(mask, 1.0 - mask, clamp(invert, 0.0, 1.0));
     var incoming = 1.0;
-    if idx < weights_len { incoming = buf_weights[idx]; }
+    if idx < weights_len { incoming = e_weights; }
     return incoming * mix(1.0, mix(low, high, mask_after_invert), clamp(amount, 0.0, 1.0));
 }

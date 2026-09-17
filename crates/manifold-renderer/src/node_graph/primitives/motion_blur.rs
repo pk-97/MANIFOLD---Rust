@@ -141,6 +141,7 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.motion_blur",
+        array_ports: &[],
         recompute: |ctx| ctx.camera.map(|c| vec![c.lens.shutter_angle]),
     }
 }

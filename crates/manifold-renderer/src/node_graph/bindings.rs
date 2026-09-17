@@ -54,6 +54,16 @@ pub struct NodeInputs<'a> {
     /// (async upload in flight — the bytes are allocation, not content).
     /// Empty on test-constructed inputs: absent entries read as ready.
     pending: &'a [bool],
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: per-physical-slot mesh revision
+    /// snapshots, indexed by `Slot.0`, owned by the
+    /// [`Executor`](crate::node_graph::execution::Executor) and published
+    /// from the logical per-resource revisions at the output-commit choke
+    /// point. Empty on test-constructed inputs: absent entries read as
+    /// `None` from the accessors, which callers treat as conservative
+    /// "changed every evaluated frame" (the design's compatibility rule
+    /// for externally prebound buffers, never a fallback from malformed
+    /// prepared metadata).
+    mesh_revisions: &'a [crate::node_graph::mesh_change::MeshRevision],
 }
 
 impl<'a> NodeInputs<'a> {
@@ -62,7 +72,7 @@ impl<'a> NodeInputs<'a> {
         backend: &'a dyn Backend,
         generations: &'a [u64],
     ) -> Self {
-        Self { bindings, backend, generations, pending: &[] }
+        Self { bindings, backend, generations, pending: &[], mesh_revisions: &[] }
     }
 
     /// Executor-only: thread the content-availability flags through.
@@ -72,6 +82,35 @@ impl<'a> NodeInputs<'a> {
     pub(crate) fn with_pending(mut self, pending: &'a [bool]) -> Self {
         self.pending = pending;
         self
+    }
+
+    /// Executor-only: thread the mesh revision snapshots through
+    /// (SCENE_MODIFIER_RT_DESIGN.md §3.2). Same builder pattern as
+    /// [`Self::with_pending`].
+    pub(crate) fn with_mesh_revisions(
+        mut self,
+        mesh_revisions: &'a [crate::node_graph::mesh_change::MeshRevision],
+    ) -> Self {
+        self.mesh_revisions = mesh_revisions;
+        self
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision of the physical
+    /// slot currently bound to `port`, or `None` if the port is unwired
+    /// or the slot carries no mesh metadata. `None` reads as
+    /// conservative "changed" to RT consumers — never as "unchanged".
+    pub fn mesh_revision(&self, port: &str) -> Option<crate::node_graph::mesh_change::MeshRevision> {
+        let slot = self.slot(port)?;
+        self.mesh_revision_of(slot)
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision published for a
+    /// physical slot, or `None` when no mesh metadata covers it.
+    pub fn mesh_revision_of(
+        &self,
+        slot: Slot,
+    ) -> Option<crate::node_graph::mesh_change::MeshRevision> {
+        self.mesh_revisions.get(slot.0 as usize).copied()
     }
 
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — write generation of the

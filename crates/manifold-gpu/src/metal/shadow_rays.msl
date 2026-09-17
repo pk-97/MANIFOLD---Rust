@@ -127,6 +127,56 @@ struct EmissiveAliasEntry {
     uint  alias;
 };
 
+// SCENE_MODIFIER_RT_DESIGN.md §5.1 (P4a): the emissive table's count/mean/
+// area/local-flag live GPU-side in this 16-byte stats buffer — the trace
+// kernel's RIS sampler and the firefly clamp read it directly (no CPU-
+// authoritative copies on ShadowRayParams). Mirrors the Rust
+// `EmissiveTableStats` field-for-field.
+struct EmissiveTableStats {
+    uint  entry_count;
+    uint  entries_are_local;
+    float mean_power;
+    float total_area;
+};
+
+// P4a GPU emissive preparation — CPU-written header + per-emissive-object
+// table (one shared buffer: header at offset 0, entries at offset 16).
+// `valid_count` is the enumerate kernel's atomic accepted-candidate count
+// (CPU zeroes it at encode time); the other header fields are CPU metadata.
+// Mirrors Rust `EmissivePrepHeader`/`EmissiveObjParams` field-for-field.
+struct EmissivePrepHeader {
+    uint active_count;        // Σ (slots × triangles) over emissive objects
+    atomic_uint valid_count;  // accepted candidates (power > 0, finite)
+    uint entries_are_local;   // instanced mode — gather keeps local verts
+    uint object_count;        // rows in the object table below
+};
+struct EmissiveObjParams {
+    uint64_t vertex_base_addr;  // raw GPU address of the vertex buffer
+    uint64_t index_base_addr;   // raw GPU address of the u32 index buffer (0 = flat)
+    uint vertex_stride;
+    uint vertex_offset;
+    uint uv_offset;
+    uint tri_count;
+    uint candidate_base;        // first flat tuple index of this object
+    uint slot_base;             // first TLAS descriptor slot of this object
+    uint object_index;          // canonical gi_materials/normal_sources row
+    float luma;                 // material-factor emissive luma (Rec.709)
+};
+
+// P4a: one enumerated (object, slot, triangle) candidate. `key` is the
+// radix-sort key: accepted candidates sort by DESCENDING power as
+// (u32::MAX - as_type<uint>(power)) — positive floats sort monotonically by
+// bit pattern, so the strongest candidate gets the smallest key; rejected
+// candidates get u32::MAX and sort to the tail. The gather reads the front:
+// top-4096 with identity ties resolved in favor of the LOWER identity
+// (stable sort over identity-ascending input, §5.1's tie rule).
+struct EmissiveCandidate {
+    uint key;
+    uint obj_index;    // row in the EmissiveObjParams table
+    uint desc_index;   // TLAS descriptor slot of this copy
+    uint tri_index;    // triangle within the object
+};
+
 // RT instance mask bits — matches manifold-gpu's Rust `RT_MASK_VISIBLE` /
 // `RT_MASK_SHADOW_CASTER` (same manual-sync discipline as `MAX_RT_CASTERS`
 // above). Shadow rays (direct-light visibility + the GI/reflection
@@ -168,18 +218,11 @@ struct ShadowRayParams {
     uint   refl_spp;
     float  refl_max_roughness;
     float  refl_rough_band;
-    // RS-B (RAYTRACING_DESIGN.md section 15.2 RS8): per-sample firefly cap
-    // anchor — the emissive table's mean power (CPU-computed at build, refit
-    // on accel rebuild). Multiplied by `RT_EMISSIVE_FIREFLY_GAIN` kernel-side
-    // (RS-C) to cap each direct-emissive sample's luminance.
-    float  emissive_table_mean_power;
     // RS-C: number of valid entries in `emissive_table`/`emissive_aliases`
     // buffers. 0 = no emissive geometry in the scene — the sampler is skipped.
-    uint   emissive_table_count;
-    // RS-C: total world-space area of all emissive triangles in the table.
-    // The RIS estimator corrects for uniform area sampling — the geometry
-    // weight factor is total_area, not entry_count.
-    float  emissive_table_total_area;
+    // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the CPU-authoritative
+    // count/mean/area/local fields are DELETED — the kernels read the
+    // GPU-written 16-byte `EmissiveTableStats` buffer ([[buffer(9)]] below).
     // RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): index of the designated
     // sun caster whose rgb tint goes to out_svt; SVT_SLOT_NONE = no designated
     // sun (u32::MAX on the Rust side — every slot index is below that).
@@ -200,15 +243,9 @@ struct ShadowRayParams {
     // and slot rows are identical). Object-indexed sites (n4.w readers,
     // the RS-C emissive sampler) read through the un-offset pointers.
     uint   slot_row_base;
-    // RT_INSTANCING_DESIGN.md D8: non-zero when emissive_table entries are
-    // LOCAL-space (instanced mode) — the kernel composes each entry's
-    // world triangle from emissive_descriptors[entry.descriptor_index]
-    // (the SAME buffer the TLAS references — no second source of truth) and
-    // weights by the entry's true world area. 0 = the D7 fast path:
-    // entries are world-space (CPU-composed at build/refit), byte-identical
-    // to the pre-instancing data path.
-    uint   emissive_entries_are_local;
-    uint   _pad_slot[2];
+    // P4a: `emissive_entries_are_local` also moved into the GPU stats buffer
+    // (read as `emissive_stats.entries_are_local` below).
+    uint   _pad_slot[3];
 };
 
 // RT-P3: one entry per RT object (SAME order as `RtObjectGeometry`'s
@@ -414,6 +451,270 @@ struct RtAsInstanceDescriptor {
     uint  intersection_function_table_offset;
     uint  acceleration_structure_index;
 };
+
+// P4a: one thread per flat (object, slot, triangle) tuple — deterministic
+// identity order (object, slot, triangle) ascending, the radix sort's tie
+// order. Rejects nonfinite/zero-area/nonpositive-power candidates exactly
+// like the deleted CPU path, plus the nonfinite rejection the CPU path
+// lacked (§5.1). Vertex/index reads are raw-address fetches of the CURRENT
+// buffers — this is what makes deformed geometry reach the light table.
+static uint em_index_at(device const EmissiveObjParams& op, uint i) {
+    if (op.index_base_addr == 0) return i;
+    device const uint* ib = (device const uint*)(uintptr_t)op.index_base_addr;
+    return ib[i];
+}
+static float3 em_fetch_pos(device const EmissiveObjParams& op, uint vi) {
+    device const char* base = (device const char*)(uintptr_t)op.vertex_base_addr;
+    return *(device const packed_float3*)(base + op.vertex_offset + (uint64_t)vi * op.vertex_stride);
+}
+static float2 em_fetch_uv(device const EmissiveObjParams& op, uint vi) {
+    device const char* base = (device const char*)(uintptr_t)op.vertex_base_addr;
+    return *(device const packed_float2*)(base + op.vertex_offset + (uint64_t)vi * op.vertex_stride + op.uv_offset);
+}
+
+kernel void emissive_enumerate(
+    device EmissivePrepHeader* header [[buffer(0)]],
+    device const EmissiveObjParams* objs [[buffer(1)]],
+    device EmissiveCandidate* candidates [[buffer(2)]],
+    uint tid [[thread_position_in_grid]])
+{
+    uint active = header->active_count;
+    if (tid >= active) return;
+    // Linear scan for the owning object — object counts are small (RT caster
+    // sets), and the scan is over CPU-compacted EMISSIVE objects only.
+    uint oi = 0;
+    while (oi + 1u < header->object_count && objs[oi + 1u].candidate_base <= tid) oi++;
+    device const EmissiveObjParams& op = objs[oi];
+    uint q = tid - op.candidate_base;
+    uint slot = q / op.tri_count;
+    uint tri = q - slot * op.tri_count;
+    uint i0 = em_index_at(op, tri * 3u);
+    uint i1 = em_index_at(op, tri * 3u + 1u);
+    uint i2 = em_index_at(op, tri * 3u + 2u);
+    float3 v0 = em_fetch_pos(op, i0);
+    float3 v1 = em_fetch_pos(op, i1);
+    float3 v2 = em_fetch_pos(op, i2);
+    float3 c = cross(v1 - v0, v2 - v0);
+    // power = local area × material luma (the current ranking policy in
+    // both modes, §5.1) — 0.5|cross| × luma.
+    float power = 0.5f * length(c) * op.luma;
+    uint key = 0xFFFFFFFFu; // rejected → sorts to the tail
+    if (rt_finite(power) && power > 0.0f) {
+        // Descending power: strongest gets the smallest key (see the
+        // EmissiveCandidate comment for the tie-order contract).
+        key = 0xFFFFFFFFu - as_type<uint>(power);
+        atomic_fetch_add_explicit(&header->valid_count, 1u, memory_order_relaxed);
+    }
+    candidates[tid] = { key, oi, op.slot_base + slot, tri };
+}
+
+// P4a radix sort — LSD, 8 bits/pass × 4 passes, stable (deterministic
+// identity tie order, §5.1). One thread per EM_TILE-sized tile per
+// dispatch: hist builds per-tile digit histograms in device memory (each
+// row private to its tile — no atomics), scan (single thread) exclusive-
+// scans them digit-major, scatter re-emits each tile in order against its
+// private offset row. Simplicity and determinism over throughput: this
+// runs on the refresh path, sized by candidate count.
+#define EM_TILE 1024u
+kernel void emissive_hist(
+    device const EmissivePrepHeader* header [[buffer(0)]],
+    device const EmissiveCandidate* in [[buffer(1)]],
+    device uint* hist [[buffer(2)]],   // [num_tiles][256]
+    constant uint& shift [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    uint active = header->active_count;
+    uint num_tiles = (active + EM_TILE - 1u) / EM_TILE;
+    if (gid >= num_tiles) return;
+    device uint* row = hist + gid * 256u;
+    for (uint d = 0u; d < 256u; d++) row[d] = 0u;
+    uint end = min(gid * EM_TILE + EM_TILE, active);
+    for (uint i = gid * EM_TILE; i < end; i++) {
+        row[(in[i].key >> shift) & 0xFFu]++;
+    }
+}
+
+kernel void emissive_scan(
+    device const EmissivePrepHeader* header [[buffer(0)]],
+    device uint* hist [[buffer(1)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid != 0u) return;
+    uint num_tiles = (header->active_count + EM_TILE - 1u) / EM_TILE;
+    uint sum = 0u;
+    // Digit-major exclusive scan: for digit d, tile g's base follows every
+    // earlier tile's digit-d count — cross-tile stability (§5.1 tie order).
+    for (uint d = 0u; d < 256u; d++) {
+        for (uint t = 0u; t < num_tiles; t++) {
+            uint c = hist[t * 256u + d];
+            hist[t * 256u + d] = sum;
+            sum += c;
+        }
+    }
+}
+
+kernel void emissive_scatter(
+    device const EmissivePrepHeader* header [[buffer(0)]],
+    device const EmissiveCandidate* in [[buffer(1)]],
+    device EmissiveCandidate* out [[buffer(2)]],
+    device uint* offsets [[buffer(3)]],  // scanned hist, mutated per tile
+    constant uint& shift [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    uint active = header->active_count;
+    uint num_tiles = (active + EM_TILE - 1u) / EM_TILE;
+    if (gid >= num_tiles) return;
+    device uint* row = offsets + gid * 256u;
+    uint end = min(gid * EM_TILE + EM_TILE, active);
+    for (uint i = gid * EM_TILE; i < end; i++) {
+        EmissiveCandidate c = in[i];
+        out[row[(c.key >> shift) & 0xFFu]++] = c;
+    }
+}
+
+// P4a: compose the final table entries from the sorted tail — thread j
+// reads the j-th most powerful valid candidate. Fast path (entries world-
+// space): world positions are composed HERE from the same TLAS descriptor
+// buffer the trace kernels use, so transform updates reach the table with
+// no CPU rewrite. Instanced: entries stay local; the trace kernel composes
+// per sample (D8). Writes per-entry (power, area) scratch for the stats
+// and alias kernels.
+kernel void emissive_gather(
+    device const EmissivePrepHeader* header [[buffer(0)]],
+    device const EmissiveObjParams* objs [[buffer(1)]],
+    device const EmissiveCandidate* sorted [[buffer(2)]],
+    device EmissiveTriangle* tris [[buffer(3)]],
+    device float2* entry_pw [[buffer(4)]],   // x = local power, y = entry area
+    device const RtAsInstanceDescriptor* descs [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    uint entry_count = min(atomic_load_explicit(&header->valid_count, memory_order_relaxed),
+                           MAX_RT_EMISSIVE_TRIANGLES);
+    if (tid >= entry_count) return;
+    // Front of the descending sort: the top-4096 with §5.1's tie order.
+    EmissiveCandidate c = sorted[tid];
+    device const EmissiveObjParams& op = objs[c.obj_index];
+    uint i0 = em_index_at(op, c.tri_index * 3u);
+    uint i1 = em_index_at(op, c.tri_index * 3u + 1u);
+    uint i2 = em_index_at(op, c.tri_index * 3u + 2u);
+    float3 v0 = em_fetch_pos(op, i0);
+    float3 v1 = em_fetch_pos(op, i1);
+    float3 v2 = em_fetch_pos(op, i2);
+    float local_area = 0.5f * length(cross(v1 - v0, v2 - v0));
+    float3 p0, p1, p2;
+    float area;
+    if (header->entries_are_local != 0u) {
+        p0 = v0; p1 = v1; p2 = v2;
+        area = local_area; // D8: stats carry the LOCAL aggregate in instanced mode
+    } else {
+        device const RtAsInstanceDescriptor& d = descs[c.desc_index];
+        p0 = float3(d.t0) * v0.x + float3(d.t1) * v0.y + float3(d.t2) * v0.z + float3(d.t3);
+        p1 = float3(d.t0) * v1.x + float3(d.t1) * v1.y + float3(d.t2) * v1.z + float3(d.t3);
+        p2 = float3(d.t0) * v2.x + float3(d.t1) * v2.y + float3(d.t2) * v2.z + float3(d.t3);
+        area = 0.5f * length(cross(p1 - p0, p2 - p0)); // fast path: Σ world areas
+    }
+    EmissiveTriangle t;
+    t.v0 = p0; t._pad0 = 0.0f;
+    t.v1 = p1; t._pad1 = 0.0f;
+    t.v2 = p2; t._pad2 = 0.0f;
+    t.uv0 = em_fetch_uv(op, i0);
+    t.uv1 = em_fetch_uv(op, i1);
+    t.uv2 = em_fetch_uv(op, i2);
+    t.object_index = op.object_index;
+    t.descriptor_index = c.desc_index;
+    tris[tid] = t;
+    entry_pw[tid] = float2(local_area * op.luma, area);
+}
+
+// P4a: single-thread stats reduction — writes the 16-byte stats buffer the
+// trace and firefly kernels read. Valid even when the scene has no
+// emissive candidates (count 0, zero mean/area): a zero-emission refresh
+// dispatches ONLY this kernel.
+kernel void emissive_stats(
+    device const EmissivePrepHeader* header [[buffer(0)]],
+    device const float2* entry_pw [[buffer(1)]],
+    device EmissiveTableStats* stats [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid != 0u) return;
+    uint n = min(atomic_load_explicit(&header->valid_count, memory_order_relaxed),
+                 MAX_RT_EMISSIVE_TRIANGLES);
+    float total_power = 0.0f;
+    float total_area = 0.0f;
+    for (uint i = 0u; i < n; i++) {
+        total_power += entry_pw[i].x;
+        total_area += entry_pw[i].y;
+    }
+    stats->entry_count = n;
+    stats->entries_are_local = header->entries_are_local;
+    stats->mean_power = n > 0u ? total_power / float(n) : 0.0f;
+    stats->total_area = total_area;
+}
+
+// P4a: single-thread Vose alias construction over the final entries —
+// mirrors the deleted CPU `build_alias_table` operation-for-operation
+// (same stack discipline → identical tables). Bounded at 4096 entries;
+// preallocated small/large stacks ride `stacks` (2 × cap u32). Runs after
+// emissive_stats; overwrites entry_pw.x with the scaled probability (the
+// power is dead by then).
+kernel void emissive_alias(
+    device const EmissivePrepHeader* header [[buffer(0)]],
+    device float2* entry_pw [[buffer(1)]],
+    device EmissiveAliasEntry* aliases [[buffer(2)]],
+    device uint* stacks [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid != 0u) return;
+    uint n = min(atomic_load_explicit(&header->valid_count, memory_order_relaxed),
+                 MAX_RT_EMISSIVE_TRIANGLES);
+    if (n == 0u) return;
+    device uint* small = stacks;
+    device uint* large = stacks + MAX_RT_EMISSIVE_TRIANGLES;
+    uint n_small = 0u, n_large = 0u;
+    float total = 0.0f;
+    for (uint i = 0u; i < n; i++) total += entry_pw[i].x;
+    float n_f = float(n);
+    float avg = 1.0f / n_f;
+    if (total <= 0.0f) {
+        // Degenerate (unreachable: accepted candidates have power > 0) —
+        // uniform probabilities, alias to self, same as the CPU guard.
+        for (uint i = 0u; i < n; i++) aliases[i] = { 1.0f, i };
+        return;
+    }
+    float inv_total = 1.0f / total;
+    for (uint i = 0u; i < n; i++) {
+        float p = entry_pw[i].x * inv_total;
+        entry_pw[i].x = p;
+        aliases[i].alias = i;
+        if (p < avg) { small[n_small++] = i; } else { large[n_large++] = i; }
+    }
+    while (n_small > 0u && n_large > 0u) {
+        uint s = small[n_small - 1u];
+        uint l = large[n_large - 1u];
+        float ps = entry_pw[s].x * n_f; // scaled probability p * n
+        entry_pw[s].x = ps;
+        aliases[s].prob = ps;
+        aliases[s].alias = l;
+        float pl = entry_pw[l].x + ps / n_f - avg;
+        entry_pw[l].x = pl;
+        n_small--;
+        if (pl < avg) {
+            n_large--;
+            small[n_small++] = l;
+        }
+    }
+    // Remaining entries (rounding) — prob 1, alias to self.
+    for (uint k = 0u; k < n_small; k++) {
+        uint s = small[k];
+        aliases[s].prob = 1.0f;
+        aliases[s].alias = s;
+    }
+    for (uint k = 0u; k < n_large; k++) {
+        uint l = large[k];
+        aliases[l].prob = 1.0f;
+        aliases[l].alias = l;
+    }
+}
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
 // its bindless GPU address, then transform to world space with `src`'s
@@ -1005,6 +1306,11 @@ kernel void trace_shadow_rays(
     device const RtAsInstanceDescriptor* emissive_descriptors [[buffer(6)]],
     device RtTraceDiagnostics* diagnostics [[buffer(7)]],
     constant uint4& trace_region [[buffer(8)]],
+    // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): GPU-written emissive stats —
+    // entry_count / entries_are_local / mean_power / total_area, replacing
+    // the deleted ShadowRayParams fields. Always bound (the tracer's
+    // zero-stats buffer when the scene has no table).
+    device const EmissiveTableStats* emissive_stats [[buffer(9)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
@@ -1138,7 +1444,7 @@ kernel void trace_shadow_rays(
     // primary ray's origin/normal — widen the cast condition. The sampler
     // itself only runs inside the gi_spp block below, so gi_spp==0 (the
     // RT-A3a mask dispatch) must not pay for a primary cast it never uses.
-    bool sampler_active = (p.emissive_table_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr) && (p.gi_spp > 0u);
+    bool sampler_active = (emissive_stats->entry_count > 0u) && (emissive_table != nullptr) && (emissive_aliases != nullptr) && (p.gi_spp > 0u);
     if (do_diffuse || do_reflection) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
@@ -1488,7 +1794,7 @@ kernel void trace_shadow_rays(
         float3 emissive_direct = float3(0.0);
         if (sampler_active) {
             float2 u1 = rand2(tid, p.frame_index, 700u);
-            uint n = p.emissive_table_count;
+            uint n = emissive_stats->entry_count;
             uint i = uint(u1.x * float(n));
             i = min(i, n - 1u);
             float u_prime = u1.x * float(n) - float(i);
@@ -1509,7 +1815,7 @@ kernel void trace_shadow_rays(
             float3 w1 = float3(0.0f);
             float3 w2 = float3(0.0f);
             float entry_world_area = 0.0f;
-            if (p.emissive_entries_are_local != 0u) {
+            if (emissive_stats->entries_are_local != 0u) {
                 device const RtAsInstanceDescriptor& desc =
                     emissive_descriptors[tri.descriptor_index];
                 if (desc.mask != 0u) {
@@ -1565,7 +1871,7 @@ kernel void trace_shadow_rays(
                     // skip (instanced mode); the fast path never computes
                     // per-entry area, so gate it on the flag to keep that
                     // path byte-identical.
-                    bool area_ok = (p.emissive_entries_are_local != 0u)
+                    bool area_ok = (emissive_stats->entries_are_local != 0u)
                         ? (entry_world_area > 0.0f)
                         : true;
                     if (cos_emit > 0.0f && area_ok) {
@@ -1597,13 +1903,13 @@ kernel void trace_shadow_rays(
                             // the area the estimator must see); the D7 fast
                             // path keeps the historical global total_area
                             // scalar (INV-RTI3 byte-identical).
-                            float area_term = (p.emissive_entries_are_local != 0u)
+                            float area_term = (emissive_stats->entries_are_local != 0u)
                                 ? entry_world_area
-                                : max(p.emissive_table_total_area, 1e-12f);
+                                : max(emissive_stats->total_area, 1e-12f);
                             float geom_weight = cos_theta * cos_emit * area_term / (l_len * l_len);
                             emissive_direct = em_contrib * geom_weight;
                             float em_l = luma(emissive_direct);
-                            float em_cap = RT_EMISSIVE_FIREFLY_GAIN * p.emissive_table_mean_power;
+                            float em_cap = RT_EMISSIVE_FIREFLY_GAIN * emissive_stats->mean_power;
                             if (em_l > em_cap && em_cap > 0.0f) {
                                 emissive_direct *= em_cap / em_l;
                             }
@@ -2245,10 +2551,14 @@ static float read_firefly_depth(texture2d<float> t, uint2 p) { return t.read(p).
 
 // Per-texel clamp body shared by `firefly_clamp` (production) and
 // `debug_firefly_clamp` (value test). Returns the texel's final rgba —
-// alpha always passes through untouched.
+// alpha always passes through untouched. P4a: `stats` is the GPU emissive
+// stats buffer — the absolute floor is max(p.floor, stats->mean_power)
+// (p.floor stays the fixed 4.0 minimum; the mean power rides the GPU
+// table, so a CPU-stale mean can no longer cap a brighter current scene).
 template<typename DepthTex>
 static float4 firefly_clamp_center(
     constant FireflyClampParams& p,
+    device const EmissiveTableStats* stats,
     DepthTex depth_tex,
     texture2d<float> src,
     uint2 tid)
@@ -2276,7 +2586,7 @@ static float4 firefly_clamp_center(
         return center; // <3 non-void texels: can't establish a median
     }
     float median = firefly_median_luma(vals, n);
-    float threshold = p.gain * max(median, p.floor);
+    float threshold = p.gain * max(median, max(p.floor, stats->mean_power));
     float center_luma = luma(center.rgb);
     if (center_luma > threshold) {
         center.rgb *= threshold / center_luma;
@@ -2286,13 +2596,16 @@ static float4 firefly_clamp_center(
 
 kernel void firefly_clamp(
     constant FireflyClampParams&          p         [[buffer(1)]],
+    // P4a: GPU emissive stats (the max(floor, mean_power) input above) —
+    // always bound; the tracer's zero-stats buffer when emission is absent.
+    device const EmissiveTableStats*      stats     [[buffer(2)]],
     depth2d<float>                        depth_tex [[texture(0)]],
     texture2d<float>                      src       [[texture(1)]],
     texture2d<float, access::write>       dst       [[texture(2)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
-    dst.write(firefly_clamp_center(p, depth_tex, src, tid), tid);
+    dst.write(firefly_clamp_center(p, stats, depth_tex, src, tid), tid);
 }
 
 // RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
@@ -3105,6 +3418,105 @@ struct DebugFetchNormalParams {
     uint slot_row_base;
 };
 
+// SCENE_MODIFIER_RT_DESIGN.md P0/A0 (BUG-e3p6.4): deterministic ray-query
+// debug surface — traces CALLER-SUPPLIED world-space rays through the SAME
+// acceleration structure, slot-row indexing and candidate-hit walk
+// (`walk_with_alpha_test`, closest-hit mode) the production kernels use,
+// and records the committed hit plus the production interpolated normal/UV
+// helpers' outputs. Exists so gpu_proofs can assert same-frame geometry
+// state against an analytical CPU oracle instead of screen-space image
+// similarity. Callers supply valid finite rays (production's
+// `rt_sanitize_ray` guards screen-space reconstruction; test rays are
+// analytical by construction). Value-test-only: never called by
+// `render_scene.rs`.
+constant uint DEBUG_RAY_INVALID = 0xFFFFFFFFu;
+
+struct DebugRayQueryRay {
+    packed_float3 origin;
+    packed_float3 direction;
+    float min_distance;
+    float max_distance;
+};
+
+struct DebugRayQueryHit {
+    uint hit;            // 1 = committed triangle hit, 0 = miss
+    uint object_id;      // canonical object index (RtNormalSource.object_index); DEBUG_RAY_INVALID on miss
+    uint instance_id;    // committed slot id; DEBUG_RAY_INVALID on miss
+    uint primitive_id;   // committed triangle index; DEBUG_RAY_INVALID on miss
+    float distance;      // committed ray t; -1 on miss
+    packed_float2 bary;  // committed barycentrics; (0,0) on miss — Rust repr(C) packs to offset 20, so no MSL float2 8-byte alignment
+    float coverage;      // 1.0 on an accepted hit — fractional appearance coverage lands in P4b
+    float pad0;
+    packed_float3 normal; // production interpolated vertex normal; (0,0,0) on miss
+    float pad1;
+    packed_float2 uv;    // production interpolated UV; (0,0) on miss
+    packed_float2 pad2;  // Rust repr(C) keeps the struct at 68 bytes; a plain float2 here aligns to 8 and makes the MSL stride 72, desyncing hits[i]
+};
+
+struct DebugRayQueryParams {
+    // RT_INSTANCING_DESIGN.md D11: same slot-row base the production
+    // kernel's params carry — the query exercises production slot-row
+    // indexing, not the canonical rows.
+    uint slot_row_base;
+    uint ray_count;
+    // Linearization width of the 2D dispatch grid (workgroups_x * 8).
+    uint grid_x;
+    uint pad;
+};
+
+kernel void debug_ray_query(
+    instance_acceleration_structure accel [[buffer(0)]],
+    device const DebugRayQueryRay* rays [[buffer(1)]],
+    device DebugRayQueryHit* hits [[buffer(2)]],
+    device RtNormalSource* normal_sources [[buffer(3)]],
+    constant DebugRayQueryParams& p [[buffer(4)]],
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures [[texture(0)]],
+    uint2 tid2 [[thread_position_in_grid]])
+{
+    uint tid = tid2.y * p.grid_x + tid2.x;
+    if (tid >= p.ray_count) return;
+    device DebugRayQueryHit& out = hits[tid];
+    device const DebugRayQueryRay& in = rays[tid];
+    device RtNormalSource* slot_sources = normal_sources + p.slot_row_base;
+    ray pr;
+    pr.origin = float3(in.origin);
+    pr.direction = float3(in.direction);
+    pr.min_distance = in.min_distance;
+    pr.max_distance = in.max_distance;
+    intersection_query<triangle_data, instancing> q;
+    q.reset(pr, accel, RT_MASK_VISIBLE);
+    if (walk_with_alpha_test(q, slot_sources, material_textures, false)) {
+        uint iid = q.get_committed_instance_id();
+        uint pid = q.get_committed_primitive_id();
+        float2 bary = q.get_committed_triangle_barycentric_coord();
+        out.hit = 1u;
+        out.object_id = slot_sources[iid].object_index;
+        out.instance_id = iid;
+        out.primitive_id = pid;
+        out.distance = q.get_committed_distance();
+        out.bary = bary;
+        out.coverage = 1.0;
+        out.pad0 = 0.0;
+        out.normal = packed_float3(fetch_interpolated_normal(slot_sources, iid, pid, bary));
+        out.pad1 = 0.0;
+        out.uv = packed_float2(fetch_interpolated_uv(slot_sources, iid, pid, bary));
+        out.pad2 = float2(0.0);
+    } else {
+        out.hit = 0u;
+        out.object_id = DEBUG_RAY_INVALID;
+        out.instance_id = DEBUG_RAY_INVALID;
+        out.primitive_id = DEBUG_RAY_INVALID;
+        out.distance = -1.0;
+        out.bary = float2(0.0);
+        out.coverage = 0.0;
+        out.pad0 = 0.0;
+        out.normal = packed_float3(0.0);
+        out.pad1 = 0.0;
+        out.uv = packed_float2(0.0);
+        out.pad2 = float2(0.0);
+    }
+}
+
 kernel void debug_fetch_interpolated_normal(
     device RtNormalSource*         normal_sources [[buffer(0)]],
     constant DebugFetchNormalParams& p              [[buffer(1)]],
@@ -3143,13 +3555,16 @@ kernel void debug_clamp_refl_history(
 // (never called by `render_scene.rs`).
 kernel void debug_firefly_clamp(
     constant FireflyClampParams& p         [[buffer(0)]],
+    // P4a: the value test binds a hand-written stats row — same layout as
+    // the production table's stats buffer (shared helper, one layout).
+    device const EmissiveTableStats* stats [[buffer(2)]],
     texture2d<float>             depth_tex [[texture(0)]],
     texture2d<float>             color_tex [[texture(1)]],
     device packed_float3*        out       [[buffer(1)]],
     uint tid [[thread_position_in_grid]])
 {
     if (tid != 0u) return;
-    float4 c = firefly_clamp_center(p, depth_tex, color_tex, uint2(1, 1));
+    float4 c = firefly_clamp_center(p, stats, depth_tex, color_tex, uint2(1, 1));
     out[0] = packed_float3(c.rgb);
 }
 

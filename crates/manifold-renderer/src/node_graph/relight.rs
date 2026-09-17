@@ -683,7 +683,7 @@ mod tests {
             // Path A: the production wrapper, relight OFF.
             let mut graph_a = Graph::new();
             let src_a = graph_a.add_node(Box::new(Source::new()));
-            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None) else {
+            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None, &crate::node_graph::mesh_change::PreparedMeshRules::default()) else {
                 continue; // a preset that fails to splice fails identically on both paths; skip rather than false-fail
             };
             let final_a = graph_a.add_node(Box::new(FinalOutput::new()));
@@ -701,7 +701,7 @@ mod tests {
                 BoundaryHandling::Splice {
                     source_endpoint: (src_b, "out"),
                 },
-            )
+            &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("instantiate_def B");
             let final_b = graph_b.add_node(Box::new(FinalOutput::new()));
             graph_b

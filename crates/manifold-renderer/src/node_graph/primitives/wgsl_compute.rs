@@ -48,6 +48,9 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::freeze::classify::{CapacityExpr, FusionKind};
 use crate::node_graph::freeze::markers::Marker;
+use crate::node_graph::mesh_change::{
+    MeshOutputRule, PreparedMeshOutputRule, PreparedMeshRevisionRule,
+};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
     ArrayType, ChannelElementType, ChannelSpec, NodeInput, NodeOutput, NodePort, PortKind,
@@ -205,6 +208,16 @@ pub struct WgslCompute {
     /// that reads `time` or aliases a persistent array must NOT carry it.
     source_pure: bool,
 
+    /// Compiler-installed prepared mesh-output rules (design
+    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) — the fused-graph sidecar
+    /// for MeshVertex outputs whose revision behaviour the fused kernel
+    /// owns but the authored declaration can't describe. Validated
+    /// against the parsed port layout at installation; cleared by
+    /// `reparse` (a new WGSL source re-derives the layout, so stale
+    /// overrides can't survive it). Authored WGSL can never populate
+    /// this — no marker parsing exists.
+    mesh_output_overrides: Vec<PreparedMeshOutputRule>,
+
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
@@ -305,6 +318,13 @@ struct DerivedUniformMember {
     /// `camera_ext_N` port name to read for this member's recompute, if its
     /// derived uniforms are sourced from a wired Camera external.
     camera_port: Option<String>,
+    /// Member array port → the name it carries inside this fused kernel
+    /// (`src_<e>` for a wired external, the `count` sentinel for a
+    /// region-internal register), from the marker's trailing
+    /// `<member_port>=<fused_port>` pairs. Ports absent from this map
+    /// (unwired optionals) degrade to length 0 in the recompute, matching
+    /// the unfused `run()`.
+    array_ports: Vec<(String, String)>,
 }
 
 impl UniformMemberType {
@@ -373,6 +393,7 @@ impl WgslCompute {
             dispatch_count_param: None,
             fused_output_capacity: None,
             derived_uniform_members: Vec::new(),
+            mesh_output_overrides: Vec::new(),
             pipeline: None,
             sampler: None,
             compiled_hash: None,
@@ -399,6 +420,11 @@ impl WgslCompute {
     fn reparse(&mut self, source: String) {
         self.pipeline = None;
         self.compiled_hash = None;
+        // A new source re-derives the whole port layout, so installed
+        // mesh-output overrides (validated against the OLD layout) must
+        // not survive it — clear unconditionally, including the parse-
+        // failure early returns below.
+        self.mesh_output_overrides.clear();
 
         // FUSION FRAGMENT contract (design: wgsl_compute fusion contract). A
         // source carrying a `// @fusion:` marker + a `fn body(` is a fusable
@@ -1043,6 +1069,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                 words: m.words,
                 type_id: m.type_id.clone(),
                 camera_port: m.camera_port.clone(),
+                array_ports: m.array_ports.clone(),
             });
         }
         if !excluded.is_empty() {
@@ -1199,6 +1226,24 @@ fn element_to_array_type(
     //
     // align=4 not naga's vec3-padded alignment of 16 — matches the
     // Rust-side layout convention every other primitive uses.
+    //
+    // Bare scalar element (`array<f32>` — a per-vertex weights plane, the
+    // stock mesh deformers' `weights` port shape): a single-channel Array
+    // with f32's KnownItem signature, byte-identical to `ArrayType::
+    // of_known::<f32>()` so the introspected port wires against the typed
+    // producers/consumers. Only f32 is admitted — anything else falls to
+    // the unsupported-shape error below.
+    if let naga::TypeInner::Scalar(scalar) = &element.inner {
+        if scalar.kind == naga::ScalarKind::Float && scalar.width == 4 {
+            return Ok(ArrayType {
+                item_size: 4,
+                item_align: 4,
+                specs: <f32 as crate::node_graph::ports::KnownItem>::SPECS,
+                match_mode: crate::node_graph::ports::MatchMode::Exact,
+            });
+        }
+        return Err("storage array scalar element is not f32".into());
+    }
     let naga::TypeInner::Struct { span, members } = &element.inner else {
         return Err("storage array element is not a struct".into());
     };
@@ -1601,6 +1646,7 @@ struct RawDerivedUniformMarker {
     words: u32,
     type_id: String,
     camera_port: Option<String>,
+    array_ports: Vec<(String, String)>,
 }
 
 /// Scan for `// @derived_uniform_member:` markers (emitted by
@@ -1612,10 +1658,16 @@ fn extract_derived_uniform_markers(source: &str) -> Vec<RawDerivedUniformMarker>
     let stripped = strip_block_comments(source);
     let mut markers = Vec::new();
     for line in stripped.lines() {
-        if let Some(Marker::DerivedUniformMember { first_field, words, type_id, camera_port }) =
+        if let Some(Marker::DerivedUniformMember { first_field, words, type_id, camera_port, array_ports }) =
             Marker::parse(line)
         {
-            markers.push(RawDerivedUniformMarker { first_field, words, type_id, camera_port });
+            markers.push(RawDerivedUniformMarker {
+                first_field,
+                words,
+                type_id,
+                camera_port,
+                array_ports,
+            });
         }
     }
     markers
@@ -2057,6 +2109,67 @@ impl EffectNode for WgslCompute {
         params.get("max_capacity").and_then(|v| v.as_u32_clamped(1))
     }
 
+    fn mesh_output_rule(&self, port: &str) -> MeshOutputRule<'_> {
+        // An installed compiler-provided override for this port wins (design
+        // §3.3); every other output keeps the conservative trait default
+        // (Written/Written). The borrow is a faithful re-borrow of the owned
+        // prepared form — plan compilation builds its compiled rule from it.
+        if let Some(rule) = self
+            .mesh_output_overrides
+            .iter()
+            .find(|r| r.output == port)
+        {
+            return MeshOutputRule {
+                topology: rule.topology.as_borrowed(),
+                positions: rule.positions.as_borrowed(),
+            };
+        }
+        MeshOutputRule {
+            topology: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+            positions: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+        }
+    }
+
+    fn install_mesh_output_rules(
+        &mut self,
+        rules: &[PreparedMeshOutputRule],
+    ) -> Result<(), String> {
+        use crate::node_graph::ports::KnownItem;
+        let mesh_vertex_specs =
+            <crate::generators::mesh_common::MeshVertex as KnownItem>::SPECS;
+        for rule in rules {
+            let output = self.outputs.iter().find(|p| p.name == rule.output).ok_or_else(|| {
+                format!(
+                    "mesh rule targets undeclared output port '{}'",
+                    rule.output
+                )
+            })?;
+            match output.ty {
+                PortType::Array(ref array_ty) if array_ty.specs == mesh_vertex_specs => {}
+                _ => {
+                    return Err(format!(
+                        "mesh rule output port '{}' does not carry the MeshVertex channel layout",
+                        rule.output
+                    ));
+                }
+            }
+            for aspect in [&rule.topology, &rule.positions] {
+                if let PreparedMeshRevisionRule::Dependencies(deps) = aspect {
+                    for dep in deps {
+                        if !self.inputs.iter().any(|p| p.name == dep.input.as_ref()) {
+                            return Err(format!(
+                                "mesh rule for '{}' depends on undeclared input port '{}'",
+                                rule.output, dep.input
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        self.mesh_output_overrides = rules.to_vec();
+        Ok(())
+    }
+
     fn requires(&self) -> NodeRequires {
         NodeRequires {
             gpu_encoder: true,
@@ -2207,6 +2320,30 @@ impl EffectNode for WgslCompute {
                             crate::node_graph::freeze::derived_uniform_registry::DerivedUniformContext {
                                 frame: &ctx.time,
                                 camera: camera.as_ref(),
+                                // Fused kernels rename inputs to `src_<k>`, so
+                                // resolve the member port through the marker's
+                                // map first. The `count` sentinel (a
+                                // region-internal register source) is the
+                                // kernel's own element count — the register
+                                // exists for exactly the dispatched range.
+                                // Ports with no mapping (unwired optionals)
+                                // fall through to the raw name, which misses
+                                // → 0, the unfused `run()` degrade.
+                                array_len: &|port| {
+                                    let mapped = d
+                                        .array_ports
+                                        .iter()
+                                        .find(|(member, _)| member == port)
+                                        .map(|(_, fused)| fused.as_str());
+                                    match mapped {
+                                        Some("count") => self.buffer_element_count(ctx),
+                                        Some(fused) => ctx
+                                            .inputs
+                                            .array(fused)
+                                            .map(|b| (b.size / 4) as u32),
+                                        None => ctx.inputs.array(port).map(|b| (b.size / 4) as u32),
+                                    }
+                                },
                             };
                         let Some(values) =
                             crate::node_graph::freeze::derived_uniform_registry::recompute(
@@ -2399,53 +2536,62 @@ impl WgslCompute {
             return Some((tex.width.div_ceil(wx), tex.height.div_ceil(wy.max(1)), 1));
         }
         // Then array output (atomic accum or particle in/out).
-        if let Some(buf) = ctx.outputs.array(port) {
-            // Look up the declared item_size for this port from our
-            // introspected outputs list — the WGSL storage struct's
-            // byte span. count = buf_bytes / item_size = number of
-            // items the shader needs to process. The shader's
-            // `arrayLength(&items)` returns the same value, so the
-            // early-return at `i >= arrayLength(...)` lines up with
-            // the dispatch geometry: no wasted workgroups, no missed
-            // items. Falls back to the 4-byte-stride default if the
-            // port type isn't an Array(...) somehow — defensive only.
-            //
-            // The earlier `buf.size() / 4` formula treated every
-            // 4-byte slot as one work item, which dispatched 16×
-            // more workgroups than needed for a 64-byte Particle
-            // buffer (8M particles → 500K workgroups). That
-            // exceeded Apple Silicon's per-dim threadgroup grid
-            // limit (~64K-128K depending on family) and silently
-            // dropped the dispatch — the FluidSim2D seed_pattern
-            // bug manifested as "uniform updates fine, edges fire
-            // fine, but the seed buffer never receives the
-            // shader's writes."
-            let item_size = self
-                .outputs
-                .iter()
-                .find(|p| p.name == port)
-                .and_then(|p| match p.ty {
-                    PortType::Array(at) => Some(at.item_size),
-                    _ => None,
-                })
-                .unwrap_or(4)
-                .max(1);
-            let mut count = (buf.size() as u32) / item_size;
-            // `// @dispatch_count_param`: cap the grid at the live element
-            // count (the fused particle integrators' `active_count`) — the
-            // kernel guards the same bound, so threads past it are pure waste.
-            // Missing/unwired param falls back to the capacity dispatch.
-            if let Some(p) = &self.dispatch_count_param {
-                let live = ctx.scalar_or_param(p, f32::MAX);
-                if live.is_finite() {
-                    // Floor of one group: a zero live count still dispatches one
-                    // (immediately-guarded) group rather than a zero-dim grid.
-                    count = count.min(live.max(0.0).round() as u32).max(1);
-                }
+        let count = self.buffer_element_count(ctx)?;
+        Some((count.div_ceil(wx), wy.max(1), wz.max(1)))
+    }
+
+    /// Live element count of the buffer (storage-array) dispatch port — the
+    /// output array's byte size over its introspected item stride, capped by
+    /// `// @dispatch_count_param`'s live count. Shared by `compute_dispatch`
+    /// and the derived-uniform recompute's `count` sentinel (a region-internal
+    /// register source's length IS the kernel's element count).
+    fn buffer_element_count(&self, ctx: &EffectNodeContext<'_, '_>) -> Option<u32> {
+        let port = self.dispatch_port.as_deref()?;
+        let buf = ctx.outputs.array(port)?;
+        // Look up the declared item_size for this port from our
+        // introspected outputs list — the WGSL storage struct's
+        // byte span. count = buf_bytes / item_size = number of
+        // items the shader needs to process. The shader's
+        // `arrayLength(&items)` returns the same value, so the
+        // early-return at `i >= arrayLength(...)` lines up with
+        // the dispatch geometry: no wasted workgroups, no missed
+        // items. Falls back to the 4-byte-stride default if the
+        // port type isn't an Array(...) somehow — defensive only.
+        //
+        // The earlier `buf.size() / 4` formula treated every
+        // 4-byte slot as one work item, which dispatched 16×
+        // more workgroups than needed for a 64-byte Particle
+        // buffer (8M particles → 500K workgroups). That
+        // exceeded Apple Silicon's per-dim threadgroup grid
+        // limit (~64K-128K depending on family) and silently
+        // dropped the dispatch — the FluidSim2D seed_pattern
+        // bug manifested as "uniform updates fine, edges fire
+        // fine, but the seed buffer never receives the
+        // shader's writes."
+        let item_size = self
+            .outputs
+            .iter()
+            .find(|p| p.name == port)
+            .and_then(|p| match p.ty {
+                PortType::Array(at) => Some(at.item_size),
+                _ => None,
+            })
+            .unwrap_or(4)
+            .max(1);
+        let mut count = (buf.size() as u32) / item_size;
+        // `// @dispatch_count_param`: cap the grid at the live element
+        // count (the fused particle integrators' `active_count`) — the
+        // kernel guards the same bound, so threads past it are pure waste.
+        // Missing/unwired param falls back to the capacity dispatch.
+        if let Some(p) = &self.dispatch_count_param {
+            let live = ctx.scalar_or_param(p, f32::MAX);
+            if live.is_finite() {
+                // Floor of one group: a zero live count still dispatches one
+                // (immediately-guarded) group rather than a zero-dim grid.
+                count = count.min(live.max(0.0).round() as u32).max(1);
             }
-            return Some((count.div_ceil(wx), wy.max(1), wz.max(1)));
         }
-        None
+        Some(count)
     }
 }
 

@@ -138,6 +138,9 @@ impl From<&LoadError> for ValidationIssue {
             // the structured field, kept in the message text.
             BindingConvertTypeMismatch { param, .. } => (None, None, Some(param.clone())),
             SceneModifier(_) | Flatten(_) => (None, None, None),
+            // Stable node id, not the u32 doc id — kept in the message text
+            // like `BindingConvertTypeMismatch` above.
+            MeshRules { .. } => (None, None, None),
         };
         ValidationIssue {
             node_id,
@@ -259,7 +262,7 @@ pub fn validate_def(
     // doc comment for why a bare registry lookup isn't fidelity-safe
     // here) — so they run against the same `graph` this function
     // builds for `compile`, not a second parse.
-    let graph = match def.clone().into_graph(registry) {
+    let graph = match def.clone().into_graph(registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()) {
         Ok(g) => g,
         Err(e) => {
             let (card_errors, card_warnings) = check_card_lints(def, None);
@@ -825,7 +828,7 @@ mod tests {
         let registry = registry();
         let graph = def
             .clone()
-            .into_graph(&registry)
+            .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .unwrap_or_else(|e| panic!("fixture into_graph failed: {e}"));
         check_card_lints(def, Some(&graph))
     }

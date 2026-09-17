@@ -113,7 +113,7 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
 
     let registry = PrimitiveRegistry::with_builtin();
     let mut graph = def
-        .into_graph(&registry)
+        .into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default())
         .unwrap_or_else(|e| panic!("FilmGrain graph load failed: {e}"));
     let plan = compile(&graph).unwrap_or_else(|e| panic!("FilmGrain compile failed: {e:?}"));
 

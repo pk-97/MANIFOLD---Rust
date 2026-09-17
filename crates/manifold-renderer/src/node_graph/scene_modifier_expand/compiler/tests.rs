@@ -211,7 +211,7 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
             "loading never mutates the canonical snapshot"
         );
     }
-    let graph = fusion_fixture().into_graph(&registry).unwrap();
+    let graph = fusion_fixture().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     assert!(
         graph.modifier_buffer_budget().is_some(),
         "direct host graph loads retain admission metadata too"
@@ -285,7 +285,7 @@ fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
         .find(|route| route.local.node.as_str() == "shear_x")
         .unwrap();
     assert_eq!(route.copies.len(), 2);
-    let mut graph = prepared.def.clone().into_graph(&registry).unwrap();
+    let mut graph = prepared.def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     let writes = PreparedGraphValueWrites::prepare(
         &owner,
         &prepared.routes,
@@ -375,7 +375,7 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
     let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
     let fused = crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def)
         .expect("existing elastic mesh atoms fuse");
-    let mut graph = (*fused.def).clone().into_graph(&registry).unwrap();
+    let mut graph = (*fused.def).clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     use crate::node_graph::resource_allocation::plan_array_allocations;
     use crate::node_graph::scene_modifier_expand::PreparedModifierBufferBudget;
     let allocation = plan_array_allocations(
@@ -395,7 +395,7 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
     let fused_usage = budget.account(&allocation).unwrap();
     let scene = &owner.scene_modifiers[0].scene;
     assert!(fused_usage.modifier_bytes[scene] > 0);
-    let unfused_graph = prepared.def.clone().into_graph(&registry).unwrap();
+    let unfused_graph = prepared.def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     let unfused_allocation = plan_array_allocations(
         &unfused_graph,
         &crate::node_graph::compile(&unfused_graph).unwrap(),
@@ -629,7 +629,7 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
     use crate::node_graph::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
     use crate::node_graph::parameters::ParamValue;
     use manifold_core::params::{Param, ParamManifest};
-    let mut graph = expanded.clone().into_graph(&registry).unwrap();
+    let mut graph = expanded.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     let resolved = bindings
         .iter()
         .map(|binding| {

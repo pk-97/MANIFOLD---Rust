@@ -16,6 +16,8 @@
 //! `ceil(vertex_count / 3)` so the same one-thread-per-triangle dispatch
 //! also covers that trailing group.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -73,6 +75,33 @@ impl Primitive for FacetNormals {
             return None;
         }
         input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+    }
+
+    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): the
+    /// kernel writes normals only — output record `idx` keeps its input
+    /// position and uv (`shaders/facet_normals_body.wgsl`) — so topology
+    /// tracks input `in` topology and positions track input `in`
+    /// positions.
+    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        use crate::node_graph::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
+        if port == "out" {
+            return MeshOutputRule {
+                topology: MeshRevisionRule::Dependencies(&[MeshDependency {
+                    input: Cow::Borrowed("in"),
+                    aspect: MeshAspect::Topology,
+                }]),
+                positions: MeshRevisionRule::Dependencies(&[MeshDependency {
+                    input: Cow::Borrowed("in"),
+                    aspect: MeshAspect::Positions,
+                }]),
+            };
+        }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

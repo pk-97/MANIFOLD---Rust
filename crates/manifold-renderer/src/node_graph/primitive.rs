@@ -620,6 +620,20 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::mesh_output_rule`](crate::node_graph::effect_node::EffectNode::mesh_output_rule).
+    /// Per design `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.1. Default is
+    /// conservative `Written`/`Written`; primitives with fixed
+    /// connectivity or aspect inheritance from a named input port
+    /// override. Only outputs with the `MeshVertex` channel layout are
+    /// queried.
+    fn mesh_output_rule(&self, _port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        crate::node_graph::mesh_change::MeshOutputRule {
+            topology: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+            positions: crate::node_graph::mesh_change::MeshRevisionRule::Written,
+        }
+    }
+
+    /// Mirror of
     /// [`EffectNode::emitted_material_kind`](crate::node_graph::effect_node::EffectNode::emitted_material_kind).
     /// Material atoms (`node.{unlit,phong,pbr,cel}_material`) override
     /// to return their fixed kind. Default `None` — most primitives
@@ -729,6 +743,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         Primitive::array_output_capacity(self, port_name, params, input_capacities)
+    }
+    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        Primitive::mesh_output_rule(self, port)
     }
     fn aliased_array_io(&self) -> &[(&str, &str)] {
         Primitive::aliased_array_io(self)

@@ -3,6 +3,8 @@
 //! The map is deliberately a separate buffer so current and original reference
 //! geometry can be remapped by the same map before a fragment stage runs.
 
+use std::borrow::Cow;
+
 use crate::generators::mesh_common::{MeshVertex, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
@@ -49,6 +51,38 @@ impl Primitive for RemapMeshCut {
                     .map(|(_, n)| *n)
             })
             .flatten()
+    }
+
+    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1):
+    /// output record `idx` is a barycentric gather of the source
+    /// triangle named by the coincident map record's `w`
+    /// (`shaders/remap_mesh_cut_body.wgsl`), and output capacity follows
+    /// the `map` input (see `array_output_capacity` above) — so topology
+    /// depends on the source's topology plus the map's content, and
+    /// positions are Written.
+    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        use crate::node_graph::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
+        if port == "out" {
+            return MeshOutputRule {
+                topology: MeshRevisionRule::Dependencies(&[
+                    MeshDependency {
+                        input: Cow::Borrowed("in"),
+                        aspect: MeshAspect::Topology,
+                    },
+                    MeshDependency {
+                        input: Cow::Borrowed("map"),
+                        aspect: MeshAspect::Content,
+                    },
+                ]),
+                positions: MeshRevisionRule::Written,
+            };
+        }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

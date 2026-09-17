@@ -804,7 +804,7 @@ fn render_graph_node_textures(
     // Final Output, Source) that a preset def references — a bare `new()` omits
     // them and `into_graph` fails with UnknownTypeId on `system.generator_input`.
     let registry = PrimitiveRegistry::with_builtin();
-    let mut graph = match def.clone().into_graph(&registry) {
+    let mut graph = match def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("ui-snap graph: into_graph failed: {e:?}");

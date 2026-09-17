@@ -121,6 +121,7 @@ impl PrimitiveSpec for TestCameraPointwise {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "test.camera_pointwise",
+        array_ports: &[],
         recompute: |ctx| ctx.camera.map(|c| vec![c.pos[0]]),
     }
 }

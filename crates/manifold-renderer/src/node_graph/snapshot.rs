@@ -539,7 +539,7 @@ impl GraphSnapshot {
         {
             return Self::from_def_structural(def, &registry);
         }
-        let graph = match def.clone().into_graph(&registry) {
+        let graph = match def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!(

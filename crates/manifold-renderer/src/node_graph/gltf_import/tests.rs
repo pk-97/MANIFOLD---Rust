@@ -2982,7 +2982,7 @@ fn animation_cards_are_one_linked_section_per_glb() {
     // The fan-out shape must be lint-legal end to end.
     use crate::node_graph::persistence::EffectGraphDefExt;
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = def.clone().into_graph(&registry).expect("import graph must build");
+    let graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
     let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&def, Some(&graph));
     assert!(errors.is_empty(), "card lints must accept the shared-anim import: {errors:?}");
 
@@ -3019,7 +3019,7 @@ fn animated_and_rigged_import_passes_card_lints() {
     let (def, _report) =
         super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = def.clone().into_graph(&registry).expect("import graph must build");
+    let graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
     let (errors, _warnings) =
         crate::node_graph::validate::check_card_lints(&def, Some(&graph));
     assert!(
@@ -3204,7 +3204,7 @@ fn hostile_fixtures_assemble_validate_and_build() {
         let registry = PrimitiveRegistry::with_builtin();
         let graph = def
             .clone()
-            .into_graph(&registry)
+            .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .unwrap_or_else(|e| panic!("{name}: import graph failed to build: {e:?}"));
         let (errors, _warnings) =
             crate::node_graph::validate::check_card_lints(&def, Some(&graph));
@@ -3262,7 +3262,7 @@ fn hostile_fixtures_merge_into_existing_scene() {
         let registry = PrimitiveRegistry::with_builtin();
         let graph = merged
             .clone()
-            .into_graph(&registry)
+            .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .unwrap_or_else(|e| panic!("{name}: merged graph failed to build: {e:?}"));
         let (errors, _warnings) =
             crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
@@ -3336,7 +3336,7 @@ fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() 
     }
 
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = merged.clone().into_graph(&registry).expect("merged graph must build");
+    let graph = merged.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("merged graph must build");
     let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
     assert!(errors.is_empty(), "card lints rejected the merged def: {errors:?}");
 
@@ -3802,7 +3802,7 @@ fn render_scene_with_three_objects_loads_object_port() {
     // wiring, which this minimal two-node def deliberately omits — out
     // of scope for the port-surface regression.)
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = def.into_graph(&registry).expect(
+    let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect(
         "render_scene with objects=3 must accept an object_2 wire at load \
          (reconfigure runs before port validation)",
     );
@@ -4053,7 +4053,7 @@ fn imported_azalea_renders_faithfully_to_png() {
 /// `imported_azalea_renders_faithfully_to_png` (which drives
 /// `PresetRuntime::from_def_with_device` directly) in one load-bearing way:
 /// `is_watched = false` routes through the **on-demand fusion** attempt
-/// (`fused_generator_def_for`) that the raw-def path skips. So this closes
+/// (`fused_generator_view_for`) that the raw-def path skips. So this closes
 /// the last gap — proving the imported graph survives the fuser and renders
 /// through the same code an installed timeline layer hits.
 ///

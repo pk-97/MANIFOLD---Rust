@@ -112,6 +112,7 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.block_displace_field",
+        array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
     }
 }

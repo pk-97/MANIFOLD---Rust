@@ -259,7 +259,7 @@ impl GeneratorRegistry {
             // On-demand fusion (design step 2): fuse THIS exact shape — shipped,
             // edited, or created — unless the editor is watching it (then unfused
             // so per-node preview can sample inner-node textures and edits render
-            // live). `fused_generator_def_for` compiles-on-miss + caches by the
+            // live). `fused_generator_view_for` compiles-on-miss + caches by the
             // def's content, so an edited generator fuses on editor-close exactly
             // like a shipped one. The fused def loads through the SAME `from_def`
             // path — only the def changed (fused kernels + bindings retargeted onto

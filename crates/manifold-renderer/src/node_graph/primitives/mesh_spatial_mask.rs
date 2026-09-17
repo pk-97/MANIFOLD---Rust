@@ -97,9 +97,29 @@ crate::primitive! {
     pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/mesh_spatial_mask_body.wgsl"),
-    input_access: [BufferGather, BufferGather],
+    // `in` is BufferGather (triangle-centroid/patch-cell sampling reads
+    // neighbour corners); `weights` is COINCIDENT — the body reads only
+    // `buf_weights[idx]`, so it threads as a per-element register. Keeping
+    // weights coincident (not gather) is what lets an UNWIRED optional
+    // weights input fuse: the region admits it, threads a zero element, and
+    // the body's `idx < weights_len` gate (weights_len recomputes to 0)
+    // degrades to identity — exactly what `run()` does with its dummy bind.
+    input_access: [BufferGather, Coincident],
     derived_uniforms: ["weights_len:u32"],
     wgsl_includes: [PATCH_CELL_COMMON],
+}
+
+// Per-frame recompute for a FUSED region's derived block: `weights_len` is
+// the live element count of the wired `weights` buffer (0 when unwired — the
+// body's `idx < weights_len` gate degrades every weight to 1.0, exactly what
+// `run()` does). The marker carries the member→fused-port mapping for the
+// `weights` port (fused kernels rename inputs to `src_<k>`).
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.mesh_spatial_mask",
+        array_ports: &["weights"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
+    }
 }
 
 impl Primitive for MeshSpatialMask {
@@ -499,18 +519,16 @@ mod gpu_tests {
         assert!(identity_values.iter().all(|v| *v == 1.0));
     }
 
-    /// BUG-x72p: the old pin asserted `generate_fused` fails for a gathered
-    /// region — stale once the `BufferGather` admission landed — and passed
-    /// only because its hand-built region was MALFORMED (one input source vs
-    /// two `BufferGather` access entries, a shape `BadInput`), pinning the
-    /// validation, not the gather semantics. The atom's true live-path status:
-    /// the gathered kernel IS expressible, and the identity probe PASSES
-    /// (`weights` capacity = the `in` capacity) — what refuses fusion is the
-    /// derived uniform: `weights_len:u32` has NO registered recompute, so
-    /// install's `has_recompute` gate fails any region containing it closed
-    /// (unfused, always correct). Same shape as `node.mesh_stagger_envelope`.
+    /// BUG-x72p follow-on (BUG-e3p6.4): the gathered mask kernel IS
+    /// expressible and the identity probe passes; the region used to refuse
+    /// at install because `weights_len` had no registered recompute. The
+    /// recompute is registered now (weights coincident since the body only
+    /// reads `buf_weights[idx]`), and the emitted marker must carry the
+    /// member→fused-port mapping for `weights` — fused kernels rename inputs
+    /// to `src_<k>`, so the recompute's `array_len("weights")` resolves
+    /// through `weights=src_1`.
     #[test]
-    fn overnight_modifier_mesh_spatial_mask_refuses_at_derived_uniform_recompute() {
+    fn modifier_mesh_spatial_mask_fuses_with_weights_port_mapping() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -519,7 +537,7 @@ mod gpu_tests {
                 body: MeshSpatialMask::WGSL_BODY.unwrap(),
                 params: MeshSpatialMask::PARAMS,
                 inputs: vec![InputSource::External(0), InputSource::External(1)],
-                input_access: vec![InputAccess::BufferGather, InputAccess::BufferGather],
+                input_access: vec![InputAccess::BufferGather, InputAccess::Coincident],
                 node_inputs: MeshSpatialMask::INPUTS,
                 node_outputs: MeshSpatialMask::OUTPUTS,
                 node_includes: MeshSpatialMask::WGSL_INCLUDES,
@@ -546,6 +564,20 @@ mod gpu_tests {
             "fused gathered mask kernel parses:\n{}",
             g.wgsl
         );
+        use crate::node_graph::freeze::markers::Marker;
+        let expected = Marker::DerivedUniformMember {
+            first_field: "n0_weights_len".to_string(),
+            words: 1,
+            type_id: MeshSpatialMask::TYPE_ID.to_string(),
+            camera_port: None,
+            array_ports: vec![("weights".to_string(), "src_1".to_string())],
+        }
+        .emit();
+        assert!(
+            g.wgsl.contains(&expected),
+            "the marker maps member port `weights` to the fused `src_1` input:\n{}",
+            g.wgsl
+        );
         let prim = MeshSpatialMask::new();
         let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
         assert_eq!(
@@ -554,10 +586,10 @@ mod gpu_tests {
             "identity capacity — passes the gather identity probe"
         );
         assert!(
-            !crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+            crate::node_graph::freeze::derived_uniform_registry::has_recompute(
                 MeshSpatialMask::TYPE_ID
             ),
-            "weights_len has no registered recompute — install refuses the region"
+            "weights_len has a registered recompute — install admits the region"
         );
     }
 }

@@ -110,12 +110,23 @@ crate::primitive! {
     frame_time_inputs: ["time"],
 }
 
-// Per-frame recompute for a FUSED region's `time` field — `run()` packs
-// `ctx.time.seconds.0` into the `time` uniform when the input is unwired.
+// Per-frame recompute for a FUSED region's derived block, in
+// `effective_derived` order (`weights_len` from the declared
+// `derived_uniforms`, then the unwired frame-time `time` input):
+// `weights_len` is the live element count of the wired `weights` buffer
+// (0 when unwired — the body's `idx < weights_len` gate degrades every
+// weight to 1.0, exactly what `run()` does), `time` is the frame clock
+// `run()` packs when the input is unwired.
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ripple_mesh",
-        recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
+        // The recompute consults the `weights` array input's live length —
+        // the marker carries the member→fused-port mapping for this port.
+        array_ports: &["weights"],
+        recompute: |ctx| {
+            let weights_len = (ctx.array_len)("weights").unwrap_or(0);
+            Some(vec![weights_len as f32, ctx.frame.seconds.0 as f32])
+        },
     }
 }
 

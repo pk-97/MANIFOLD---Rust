@@ -312,8 +312,10 @@ const EMISSIVE_GLOW_RANGE_WORLD_UNITS: f32 = 3.0;
 const FIREFLY_MEDIAN_GAIN: f32 = 8.0;
 /// RT-Stage-3 P1 (BUG-mkgh): the clamp's absolute luma floor — the bare
 /// gain (8 × 1.0) would hard-ceiling an isolated legit emitter at 8 luma,
-/// so the floor is `max(4.0, emissive_table_mean_power)` (a bright-emissive
-/// scene raises its own ceiling; worst case 8 × 4 = 32).
+/// so the floor exists at all. P4a: the value passed here is the FIXED
+/// minimum; the kernel itself applies `max(floor, stats->mean_power)` from
+/// the GPU emissive table stats buffer, so a bright-emissive scene still
+/// raises its own ceiling (worst case 8 × 4 = 32).
 const FIREFLY_ABS_FLOOR_MIN: f32 = 4.0;
 
 /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered specular
@@ -1852,7 +1854,6 @@ struct FrameRtState {
     denoise_active: bool,
     rt_rendered_this_frame: bool,
     irr_filtered_valid: bool,
-    emissive_table_mean_power: f32,
 }
 
 impl RenderScene {
@@ -3019,12 +3020,34 @@ impl RenderScene {
                         eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
                     }
                 }
-                // The old accel is dropped here — safe: `RtAccel`'s
-                // `Drop` self-retires its Metal handles through
-                // `retire_on_queue` (raytrace.rs), so prior frames'
-                // Generators traces provably finish before anything
-                // frees. No caller-side handoff needed.
-                self.rt_accel = Some(tracer.build_accel(gpu.device, objects, &gi_materials_data));
+                // SCENE_MODIFIER_RT_DESIGN.md §4 (P3): caller-ordered
+                // plan → prepare → encode onto THIS frame's encoder — no
+                // private AS command buffer anymore. The BUG-308 defer above
+                // still decides WHEN this fires (P5 removes the defer); the
+                // encode orders after this frame's earlier writes on the
+                // shared command buffer.
+                //
+                // Admission/allocation failure keeps the old resident valid
+                // (prepare swaps only on success): the scene keeps tracing
+                // the previous accel rather than losing RT.
+                match tracer.plan_accel(gpu.device, self.rt_accel.as_ref(), objects)
+                    .and_then(|plan| tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan))
+                {
+                    Ok(()) => {
+                        let accel = self.rt_accel.as_mut().expect("prepare succeeded");
+                        let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+                        if let Err(e) = tracer.encode_accel_update(
+                            gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, true,
+                        ) {
+                            log::error!("node.render_scene: RT accel encode after prepare failed: {e:?}");
+                            *rt_ready = false;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("node.render_scene: RT accel plan/prepare failed: {e:?} — keeping previous resident scene");
+                        *rt_ready = false;
+                    }
+                }
                 self.rt_accel_topo_key = Some(topo_key);
                 // BUG-oqta: only a content-settle-triggered build records
                 // the content key (why: the trigger block above).
@@ -3056,23 +3079,31 @@ impl RenderScene {
                 // (`rt_accel_built` gate above) — one frame of accel
                 // latency on a moving mesh is invisible, the RT↔raster
                 // path swap it replaces was not.
-                if let Some(accel) = self.rt_accel.as_ref()
-                    && accel.ready.load(std::sync::atomic::Ordering::Acquire)
+                if self.rt_accel.as_ref().is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire))
                 {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    if let Err(mismatch) = tracer.refit_accel(gpu.device, accel, objects) {
-                        *rt_ready = false;
-                        let first_rejection = reject_topology(
-                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
-                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
-                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
-                            &mut self.rt_topology_rejected,
-                        );
-                        if first_rejection && !self.rt_topology_mismatch_logged {
-                            log::warn!("node.render_scene: RT topology mismatch before refit: object={} category={:?}", mismatch.object, mismatch.category);
-                            self.rt_topology_mismatch_logged = true;
+                    let accel = self.rt_accel.as_mut().expect("checked above");
+                    // Caller-ordered TLAS update (§4): no BLAS changes,
+                    // instance transforms/masks changed (accel_key moved
+                    // under an unchanged topo key).
+                    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Reuse; objects.len()];
+                    match tracer.encode_accel_update(
+                        gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, false,
+                    ) {
+                        Err(e) => {
+                            *rt_ready = false;
+                            let first_rejection = reject_topology(
+                                &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                                &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                                &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                                &mut self.rt_topology_rejected,
+                            );
+                            if first_rejection && !self.rt_topology_mismatch_logged {
+                                log::warn!("node.render_scene: RT accel update rejected before refit: {e:?}");
+                                self.rt_topology_mismatch_logged = true;
+                            }
                         }
-                    } else {
+                        Ok(_) => {
                         if rt_source_trace_enabled() {
                             log::info!(
                                 "[RT-SOURCE] accel-refit action=refit rebuild_epoch={} resident_accel={:#x} resident_topo={:?} resident_content={:?} current_topo={topo_key:#x} current_content={content_key:#x} pending_topo={:?} pending_content={:?} objects={}",
@@ -3090,6 +3121,7 @@ impl RenderScene {
                         }
                         self.rt_accel_key = Some(accel_key);
                         self.rt_topology_mismatch_logged = false;
+                        }
                     }
                 }
             }
@@ -3098,7 +3130,7 @@ impl RenderScene {
         (gi_materials_data, alpha_textures, topo_key, content_key)
     }
     /// BUG-trh7 stage 2, pass 7b: the RT trace + accumulate half — trace
-    /// gate, emissive table reads, rt_casters, mask/lighting dispatches,
+    /// gate, emissive stats binding, rt_casters, mask/lighting dispatches,
     /// upsample, hit-dist extract, the two atrous passes, lighting/geo
     /// keys + gestures, accumulate_irradiance, THE ping flip (single flip
     /// clock for every history pair), atrous_post, the emissive pseudo-
@@ -3115,7 +3147,6 @@ impl RenderScene {
         rt_ready: bool,
         rt_rendered_this_frame: &mut bool,
         irr_filtered_valid: &mut bool,
-        emissive_table_mean_power: &mut f32,
         denoise_active: bool,
         rt_just_resumed: bool,
         objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
@@ -3180,45 +3211,12 @@ impl RenderScene {
                     }
                     self.rt_source_trace_last_admission = Some((topo_key, content_key));
                 }
-                // RS-B: thread the emissive table's mean power (firefly-cap
-                // anchor) through the params — 0.0 when the scene has no
-                // emissive geometry. Hoisted to the evaluate scope (mut
-                // declared above) so the firefly clamp's floor can read it
-                // at the tail.
-                *emissive_table_mean_power = self
-                    .rt_accel
-                    .as_ref()
-                    .and_then(|a| a.emissive_table.as_ref())
-                    .map(|t| t.mean_power)
-                    .unwrap_or(0.0);
-                // RT_INSTANCING_DESIGN.md D8: the kernel composes emissive
-                // entries from the TLAS descriptor buffer when the table is
-                // local-space (instanced mode); the D7 fast path uploads
-                // world entries (flag 0, byte-identical data path).
-                let emissive_entries_are_local = self
-                    .rt_accel
-                    .as_ref()
-                    .and_then(|a| a.emissive_table.as_ref())
-                    .map(|t| t.entries_are_local)
-                    .unwrap_or(false);
-                let emissive_table_entry_count = self
-                    .rt_accel
-                    .as_ref()
-                    .and_then(|a| a.emissive_table.as_ref())
-                    .map(|t| t.entry_count)
-                    .unwrap_or(0);
-                // RS-C test-only gate: force the sampler kernel block off.
-                let emissive_table_entry_count = if std::env::var("MANIFOLD_DISABLE_EMISSIVE_SAMPLER").as_deref() == Ok("1") {
-                    0u32
-                } else {
-                    emissive_table_entry_count
-                };
-                let emissive_table_total_area = self
-                    .rt_accel
-                    .as_ref()
-                    .and_then(|a| a.emissive_table.as_ref())
-                    .map(|t| t.total_area)
-                    .unwrap_or(0.0);
+                // RS-C test-only gate: force the sampler kernel block off by
+                // binding zeroed emissive stats at the dispatch below (P4a:
+                // the count lives GPU-side now — the gate swaps the bound
+                // stats buffer instead of zeroing a CPU field).
+                let emissive_sampler_disabled =
+                    std::env::var("MANIFOLD_DISABLE_EMISSIVE_SAMPLER").as_deref() == Ok("1");
 
                 // Multi-caster shadow fix: previously only `casters[0]`
                 // (the first shadow-casting light) was traced — every
@@ -3317,15 +3315,11 @@ impl RenderScene {
                     0,      // refl_spp
                     0.6,    // refl_max_roughness (unused)
                     0.1,    // refl_rough_band (unused)
-                    *emissive_table_mean_power,
-                    emissive_table_entry_count,
-                    emissive_table_total_area,
                     svt_slot,
                 )
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
-                .with_slot_row_base(objects.len() as u32)
-                .with_emissive_entries_local(emissive_entries_are_local);
+                .with_slot_row_base(objects.len() as u32);
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
@@ -3361,15 +3355,11 @@ impl RenderScene {
                     if rt_reflections { rtq.refl_spp } else { 0 },
                     0.6,
                     0.1,
-                    *emissive_table_mean_power,
-                    emissive_table_entry_count,
-                    emissive_table_total_area,
                     svt_slot,
                 )
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
-                .with_slot_row_base(objects.len() as u32)
-                .with_emissive_entries_local(emissive_entries_are_local);
+                .with_slot_row_base(objects.len() as u32);
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
                 // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
@@ -3454,6 +3444,18 @@ impl RenderScene {
                 }
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
+                // P4a: the emissive count/mean/area/local flag live in the
+                // GPU-written stats buffer, not CPU params. Bind the table's
+                // stats; the tracer's shared zero buffer when there is no
+                // table (kernel guards on entry_count == 0), and the same
+                // zero buffer under the RS-C disable gate above.
+                let emissive_stats = if emissive_sampler_disabled {
+                    tracer.zero_emissive_stats()
+                } else {
+                    accel.emissive_table.as_ref()
+                        .map(|t| &t.stats)
+                        .unwrap_or_else(|| tracer.zero_emissive_stats())
+                };
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
                 let mask_params_buffer = self.rt_mask_params_buffer.as_ref().expect("ensured above");
                 let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
@@ -3481,6 +3483,7 @@ impl RenderScene {
                         gpu.native_enc,
                         gpu.device,
                         accel,
+                        emissive_stats,
                         &mask_params,
                         mask_params_buffer,
                         gi_materials_buffer,
@@ -3516,6 +3519,7 @@ impl RenderScene {
                     gpu.native_enc,
                     gpu.device,
                     accel,
+                    emissive_stats,
                     &lighting_params,
                     params_buffer,
                     gi_materials_buffer,
@@ -4915,7 +4919,6 @@ impl RenderScene {
         target: &manifold_gpu::GpuTexture,
         rt_rendered_this_frame: bool,
         denoise_active: bool,
-        emissive_table_mean_power: f32,
     ) {
         let FramePrelude { width, height, rt_firefly_clamp_enabled, .. } = *pre;
         // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the fully
@@ -4948,10 +4951,23 @@ impl RenderScene {
             let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new(
                 [width, height],
                 FIREFLY_MEDIAN_GAIN,
-                FIREFLY_ABS_FLOOR_MIN.max(emissive_table_mean_power),
+                // P4a: the FIXED minimum — the kernel applies
+                // max(floor, stats->mean_power) itself.
+                FIREFLY_ABS_FLOOR_MIN,
             );
+            // P4a: the floor's mean-power rider rides the GPU stats buffer;
+            // bind the table's stats (the kernel reads mean_power even with
+            // entry_count 0 — zero stats reduce the floor to the minimum,
+            // which is the no-emissive-scene intent).
+            let emissive_stats = self
+                .rt_accel
+                .as_ref()
+                .and_then(|a| a.emissive_table.as_ref())
+                .map(|t| &t.stats)
+                .unwrap_or_else(|| tracer.zero_emissive_stats());
             tracer.firefly_clamp(
                 ctx.gpu_encoder().native_enc,
+                emissive_stats,
                 &firefly_params,
                 firefly_params_buffer,
                 firefly_depth,
@@ -5845,13 +5861,6 @@ impl RenderScene {
         // ran this frame — gates the composite rebind (the composite
         // binds `rt_irr_filtered` when true, raw history slot when false).
         let irr_filtered_valid = false;
-        // RT-Stage-3 P1 (BUG-mkgh): the emissive table's mean power — the
-        // firefly clamp's absolute floor anchor (`max(4.0, mean_power)`).
-        // Computed inside the RT block (only there is the emissive table
-        // resident), so hoisted to this scope the way `denoise_active` is,
-        // defaulting to 0.0 (floor falls back to 4.0) on any frame RT
-        // didn't render.
-        let emissive_table_mean_power: f32 = 0.0;
         // GBUFFER_DESIGN.md section 2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -6020,7 +6029,6 @@ impl RenderScene {
                 denoise_active,
                 rt_rendered_this_frame,
                 irr_filtered_valid,
-                emissive_table_mean_power,
             },
             (shaft_light_data, shaft_light_count),
         ))
@@ -8733,7 +8741,6 @@ impl EffectNode for RenderScene {
             mut denoise_active,
             mut rt_rendered_this_frame,
             mut irr_filtered_valid,
-            mut emissive_table_mean_power,
         } = state;
 
         // ---- Pass 1 (mutable phase): validate every object's required
@@ -8840,7 +8847,6 @@ impl EffectNode for RenderScene {
                 rt_ready,
                 &mut rt_rendered_this_frame,
                 &mut irr_filtered_valid,
-                &mut emissive_table_mean_power,
                 denoise_active,
                 rt_just_resumed,
                 &objects,
@@ -8899,7 +8905,6 @@ impl EffectNode for RenderScene {
             target,
             rt_rendered_this_frame,
             denoise_active,
-            emissive_table_mean_power,
         );
 
         // ---- MetalFX Temporal upscale tail (BUG-trh7 stage 2,

@@ -403,7 +403,7 @@ fn prepare_scene_modifiers_impl(
     }
     let graph = prepared
         .clone()
-        .into_graph(registry)
+        .into_graph(registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .map_err(|error| invalid("expandedGraph", error.to_string()))?;
     validate_binding_leaves(&prepared, &graph)?;
     crate::node_graph::validation::validate(&graph)

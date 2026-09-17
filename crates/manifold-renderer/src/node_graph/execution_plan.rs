@@ -22,9 +22,11 @@
 
 use ahash::AHashMap;
 
+use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
-use crate::node_graph::ports::PortType;
+use crate::node_graph::mesh_change::{MeshAspect, MeshRevisionRule};
+use crate::node_graph::ports::{KnownItem, PortType};
 use crate::node_graph::validation::{GraphError, topological_sort, validate};
 
 /// Identifier for one logical resource (texture, scalar) flowing on a wire.
@@ -161,6 +163,40 @@ pub struct ExecutionPlan {
     /// non-stateful nodes here keeps the late pass cost proportional
     /// to the number of feedback / accumulator nodes in the graph.
     late_capture_steps: Vec<usize>,
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: plan-compiled mesh revision
+    /// rules, indexed by `ResourceId`, parallel to `resource_types`.
+    /// `Some` only for outputs with the `MeshVertex` channel layout —
+    /// no general array is assumed to be a triangle mesh. Dependency
+    /// port names are resolved to `ResourceId`s here at compile time,
+    /// so the executor's per-frame commit does no name lookups.
+    mesh_rules: Vec<Option<CompiledMeshOutputRule>>,
+}
+
+/// SCENE_MODIFIER_RT_DESIGN.md §3.2: a
+/// [`crate::node_graph::mesh_change::MeshRevisionRule`] with its named
+/// input dependencies resolved to plan `ResourceId`s. An aspect whose
+/// declaration could not be resolved honestly (unwired or back-edge
+/// input) degrades to `Written` here at compile time — conservative,
+/// never under-rebuilds; a dependency naming a port the node does not
+/// have is a [`GraphError::PortNotFound`] preparation error instead.
+#[derive(Debug, Clone)]
+pub enum CompiledMeshRevisionRule {
+    /// Revise after every actual write.
+    Written,
+    /// Stable across writes while identity/layout and epoch are stable.
+    Fixed,
+    /// Revise when any of these `(input resource, watched aspect)`
+    /// values changes.
+    Dependencies(Vec<(ResourceId, crate::node_graph::mesh_change::MeshAspect)>),
+}
+
+/// SCENE_MODIFIER_RT_DESIGN.md §3.2: the two structural rules for one
+/// mesh output, compiled. Content always revises on an actual write and
+/// needs no compiled rule.
+#[derive(Debug, Clone)]
+pub struct CompiledMeshOutputRule {
+    pub topology: CompiledMeshRevisionRule,
+    pub positions: CompiledMeshRevisionRule,
 }
 
 impl ExecutionPlan {
@@ -170,6 +206,13 @@ impl ExecutionPlan {
 
     pub fn resource_count(&self) -> usize {
         self.resource_types.len()
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: the compiled mesh revision rule
+    /// for a resource, or `None` when the resource is not a
+    /// `MeshVertex`-layout output.
+    pub fn mesh_rule(&self, id: ResourceId) -> Option<&CompiledMeshOutputRule> {
+        self.mesh_rules.get(id.0 as usize).and_then(Option::as_ref)
     }
 
     pub fn resource_type(&self, id: ResourceId) -> Option<PortType> {
@@ -401,6 +444,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     let mut output_resources: AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), ResourceId> =
         AHashMap::default();
     let mut resource_types: Vec<PortType> = Vec::new();
+    let mut mesh_rules: Vec<Option<CompiledMeshOutputRule>> = Vec::new();
     let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
     let mut mipmapped_resources: Vec<ResourceId> = Vec::new();
     let mut resource_dims: Vec<Option<(u32, u32)>> = Vec::new();
@@ -490,6 +534,16 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             let id = ResourceId(resource_types.len() as u32);
             output_resources.insert((node_id, output_port.name.clone()), id);
             resource_types.push(output_port.ty);
+            // SCENE_MODIFIER_RT_DESIGN.md §3.1/3.2: compile the producer's
+            // mesh revision rule for MeshVertex-layout outputs only; every
+            // other resource gets None.
+            mesh_rules.push(compile_mesh_rule(
+                inst,
+                node_id,
+                output_port,
+                &wire_by_target,
+                &output_resources,
+            )?);
             // Format declaration is only meaningful for Texture2D
             // outputs; other port types ignore it. Query the producer
             // even for non-textures so the parallel arrays stay
@@ -939,7 +993,98 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         held_resources: held,
         hoistable_steps,
         late_capture_steps,
+        mesh_rules,
     })
+}
+
+/// SCENE_MODIFIER_RT_DESIGN.md §3.1/3.2: compile one output port's mesh
+/// revision rule. `None` unless the output carries the `MeshVertex`
+/// channel layout — "no general array is assumed to be a triangle mesh."
+fn compile_mesh_rule(
+    inst: &crate::node_graph::graph::NodeInstance,
+    node_id: NodeInstanceId,
+    output_port: &crate::node_graph::ports::NodePort,
+    wire_by_target: &AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), &NodeWire>,
+    output_resources: &AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), ResourceId>,
+) -> Result<Option<CompiledMeshOutputRule>, GraphError> {
+    let PortType::Array(array_ty) = output_port.ty else {
+        return Ok(None);
+    };
+    if array_ty.specs != <MeshVertex as KnownItem>::SPECS {
+        return Ok(None);
+    }
+    let rule = inst.node.mesh_output_rule(output_port.name.as_ref());
+    Ok(Some(CompiledMeshOutputRule {
+        topology: resolve_mesh_aspect_rule(
+            rule.topology,
+            inst,
+            node_id,
+            wire_by_target,
+            output_resources,
+        )?,
+        positions: resolve_mesh_aspect_rule(
+            rule.positions,
+            inst,
+            node_id,
+            wire_by_target,
+            output_resources,
+        )?,
+    }))
+}
+
+/// Resolve one declared aspect rule's named input dependencies to
+/// `ResourceId`s. A dependency naming a port the node does not declare is
+/// a preparation error (design §3.1: "missing required dependencies are
+/// preparation errors, not fixed revisions"). A dependency that names a
+/// declared but unwired input, or whose producer is a state-capture
+/// back-edge not yet assigned at this point in the topo walk, cannot be
+/// tracked honestly — the whole aspect degrades to `Written`, which is
+/// conservative (rebuilds more, never less).
+fn resolve_mesh_aspect_rule(
+    rule: MeshRevisionRule<'_>,
+    inst: &crate::node_graph::graph::NodeInstance,
+    node_id: NodeInstanceId,
+    wire_by_target: &AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), &NodeWire>,
+    output_resources: &AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), ResourceId>,
+) -> Result<CompiledMeshRevisionRule, GraphError> {
+    match rule {
+        MeshRevisionRule::Written => Ok(CompiledMeshRevisionRule::Written),
+        MeshRevisionRule::Fixed => Ok(CompiledMeshRevisionRule::Fixed),
+        MeshRevisionRule::Dependencies(deps) => {
+            if deps.is_empty() {
+                // Design §3.1: an empty dependency list is `Fixed`.
+                return Ok(CompiledMeshRevisionRule::Fixed);
+            }
+            let mut resolved: Vec<(ResourceId, MeshAspect)> = Vec::with_capacity(deps.len());
+            for dep in deps {
+                if !inst
+                    .node
+                    .inputs()
+                    .iter()
+                    .any(|p| p.name.as_ref() == dep.input.as_ref())
+                {
+                    return Err(GraphError::PortNotFound {
+                        node: node_id,
+                        port: dep.input.to_string(),
+                    });
+                }
+                let res = wire_by_target
+                    .get(&(node_id, dep.input.clone()))
+                    .and_then(|w| {
+                        output_resources.get(&(w.from.0, std::borrow::Cow::Borrowed(w.from.1)))
+                    });
+                match res {
+                    Some(&r) => {
+                        if !resolved.contains(&(r, dep.aspect)) {
+                            resolved.push((r, dep.aspect));
+                        }
+                    }
+                    None => return Ok(CompiledMeshRevisionRule::Written),
+                }
+            }
+            Ok(CompiledMeshRevisionRule::Dependencies(resolved))
+        }
+    }
 }
 
 #[cfg(test)]

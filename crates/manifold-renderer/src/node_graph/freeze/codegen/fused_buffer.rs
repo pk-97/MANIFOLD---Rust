@@ -11,7 +11,7 @@ use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::classify::InputAccess;
 use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::parameters::ParamType;
-use crate::node_graph::ports::{ChannelSpec, NodeInput, NodeOutput, PortType};
+use crate::node_graph::ports::{ChannelElementType, ChannelSpec, NodeInput, NodeOutput, PortType};
 
 use super::fused::{FnBlock, is_param_derived, rename_ident, split_fns};
 use super::types::{
@@ -345,7 +345,7 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     out.push_str("struct Params {\n");
     out.push_str(&struct_body);
     out.push_str("}\n\n");
-    emit_derived_uniform_markers(&mut out, region);
+    emit_derived_uniform_markers(&mut out, region, true);
 
     // --- bindings: uniform(0), then the external arrays. Two output models:
     //
@@ -589,6 +589,34 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
             }
             match src {
                 InputSource::External(e) => args.push(format!("e_{e}")),
+                // OPTIONAL coincident array input with no wire: the body
+                // receives a zero element, gated off by its own
+                // `idx < weights_len` check (the derived uniform recomputes
+                // to 0 unwired, exactly what `run()` degrades to). Scalar and
+                // small-vector elements zero literally; a multi-channel struct
+                // element is a v1 refusal (no stock atom needs it).
+                InputSource::Unwired => {
+                    let specs = member_io[i]
+                        .in_specs
+                        .get(k)
+                        .ok_or(CodegenError::BadInput)?;
+                    let zero = match *specs {
+                        [ChannelSpec { ty: ChannelElementType::F32, .. }] => "0.0".to_string(),
+                        [ChannelSpec { ty: ChannelElementType::I32, .. }] => "0".to_string(),
+                        [ChannelSpec { ty: ChannelElementType::U32, .. }] => "0u".to_string(),
+                        [ChannelSpec { ty: ChannelElementType::Vec2F, .. }] => {
+                            "vec2<f32>(0.0)".to_string()
+                        }
+                        [ChannelSpec { ty: ChannelElementType::Vec3F, .. }] => {
+                            "vec3<f32>(0.0)".to_string()
+                        }
+                        [ChannelSpec { ty: ChannelElementType::Vec4F, .. }] => {
+                            "vec4<f32>(0.0)".to_string()
+                        }
+                        _ => return Err(CodegenError::BadInput),
+                    };
+                    args.push(zero);
+                }
                 InputSource::Node(id) => {
                     let Some(j) = index_of(*id) else {
                         return Err(CodegenError::BadInput);
@@ -598,14 +626,14 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
                     }
                     args.push(format!("r{j}"));
                 }
-                // Optional-unwired is a texture-domain contract (use-flag bodies);
-                // no buffer ARRAY input fuses unwired, and virtual sources are
-                // texture-domain only — reaching either here is a finder bug.
-                // A multi-output NodeOutput source is texture-domain only too
-                // (D4/P6: buffer atoms with texture outputs are boundaries, so
-                // no ARRAY register ever comes from one) — reaching it here is
-                // the same class of finder bug.
-                InputSource::Unwired | InputSource::Virtual(_) | InputSource::NodeOutput(..) => {
+                // A gather-consumed unwired input can't fuse (the finder
+                // rejects it), and virtual sources are texture-domain only —
+                // reaching either here is a finder bug. A multi-output
+                // NodeOutput source is texture-domain only too (D4/P6: buffer
+                // atoms with texture outputs are boundaries, so no ARRAY
+                // register ever comes from one) — reaching it here is the
+                // same class of finder bug.
+                InputSource::Virtual(_) | InputSource::NodeOutput(..) => {
                     return Err(CodegenError::BadInput);
                 }
             }

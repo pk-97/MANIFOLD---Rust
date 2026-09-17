@@ -240,8 +240,8 @@ fn motion_blur_output_differs_under_motion_fused_route() {
         serde_json::from_str(&scene_json(SHUTTER)).expect("shutter=180 def parses");
     let def_off: manifold_core::effect_graph_def::EffectGraphDef =
         serde_json::from_str(&scene_json(0.0)).expect("shutter=0 def parses");
-    let fused_on = manifold_renderer::node_graph::freeze::install::fused_generator_def_for(&def_on);
-    let fused_off = manifold_renderer::node_graph::freeze::install::fused_generator_def_for(&def_off);
+    let fused_on = manifold_renderer::node_graph::freeze::install::fused_generator_view_for(&def_on);
+    let fused_off = manifold_renderer::node_graph::freeze::install::fused_generator_view_for(&def_off);
     if fused_on.is_none() || fused_off.is_none() {
         eprintln!(
             "motion_blur fused-route: freeze compiler refused the chain \
@@ -252,8 +252,8 @@ fn motion_blur_output_differs_under_motion_fused_route() {
         return;
     }
     let (fused_on, fused_off) = (fused_on.unwrap(), fused_off.unwrap());
-    let json_on = serde_json::to_string(&*fused_on).expect("fused def serializes");
-    let json_off = serde_json::to_string(&*fused_off).expect("fused def serializes");
+    let json_on = serde_json::to_string(&*fused_on.def).expect("fused def serializes");
+    let json_off = serde_json::to_string(&*fused_off.def).expect("fused def serializes");
     assert_blur_visible_on_route(
         &move |shutter: f32| {
             if shutter > 0.0 {

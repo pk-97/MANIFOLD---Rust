@@ -112,7 +112,7 @@
             registry,
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .expect("single bake_environment node instantiates cleanly");
         let inst = graph
             .instance_by_node_id(&NodeId::new("env"))

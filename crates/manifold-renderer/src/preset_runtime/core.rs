@@ -3,6 +3,7 @@
 //! this type. Extracted from preset_runtime.rs (Wave 3 P3-R, design D3).
 
 use super::*;
+use super::groups::splice_card_with_canonical_fallback;
 
 pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
@@ -623,6 +624,11 @@ impl PresetRuntime {
                             // every member folded into `view.def` has
                             // `relight == false`.
                             None,
+                            // The segment sidecar is keyed by generated
+                            // node id in the same `c{i}.`-prefixed
+                            // address space as `view.def`'s node ids
+                            // (design §3.3), so it forwards as-is.
+                            &view.mesh_rules,
                         )
                     else {
                         // Near-unreachable: compile_segment_view verified the def
@@ -876,44 +882,21 @@ impl PresetRuntime {
             } else {
                 (prev_node, prev_out_port)
             };
-            let splice_result = match splice_def_into_chain(
+            // The spliced def and its mesh-rule sidecar travel together —
+            // see splice_card_with_canonical_fallback.
+            let splice_result = splice_card_with_canonical_fallback(
                 &mut graph,
                 card_input,
                 splice_def,
+                &view.mesh_rules,
+                &base_view.canonical_def,
+                &base_view.mesh_rules,
                 primitives,
                 relight_params,
-            ) {
-                Some(r) => r,
-                None => {
-                    if fx.graph.is_some() || fused_view.is_some() {
-                        record_chain_error(
-                            &mut errors,
-                            ChainError::DivergentGraphFellBack {
-                                effect_id: fx.id.clone(),
-                                effect_type: fx.effect_type().clone(),
-                            },
-                        );
-                    }
-                    match splice_def_into_chain(
-                        &mut graph,
-                        card_input,
-                        &base_view.canonical_def,
-                        primitives,
-                        relight_params,
-                    ) {
-                        Some(r) => r,
-                        None => {
-                            eprintln!(
-                                "[chain-build-fail] canonical splice failed for \
-                                 effect_type={:?} (effect_id={:?}) after fallback",
-                                fx.effect_type(),
-                                fx.id,
-                            );
-                            return None;
-                        }
-                    }
-                }
-            };
+                (fx.graph.is_some() || fused_view.is_some())
+                    .then(|| (fx.id.clone(), fx.effect_type().clone())),
+                &mut errors,
+            )?;
             let SpliceResult {
                 output,
                 handles,

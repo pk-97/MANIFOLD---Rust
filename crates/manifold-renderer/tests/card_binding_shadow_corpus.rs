@@ -43,7 +43,7 @@ fn effect_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefPara
         &view.canonical_def,
         &primitives,
         None,
-    ) else {
+    &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) else {
         panic!("{}: canonical def must splice", type_id.as_str());
     };
     let node_map: Vec<_> = splice
@@ -164,7 +164,7 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
             &fused.canonical_def,
             &primitives,
             None,
-        ) else {
+        &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) else {
             panic!("{}: fused def must splice", id.as_str());
         };
         let node_map: Vec<_> = splice

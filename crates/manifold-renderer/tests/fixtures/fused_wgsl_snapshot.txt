@@ -4456,6 +4456,813 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r3);
 }
 
+=== generator:ApricotWeather node:73 ===
+struct Element {
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    tangent: vec4<f32>,
+}
+
+struct Params {
+    n0_axis: u32,
+    n0_origin_x: f32,
+    n0_origin_y: f32,
+    n0_origin_z: f32,
+    n0_phase: f32,
+    n0_feather: f32,
+    n0_bound_min: f32,
+    n0_bound_max: f32,
+    n0_invert: u32,
+    n1_angle_x: f32,
+    n1_angle_y: f32,
+    n1_angle_z: f32,
+    n2_axis: u32,
+    n2_angle: f32,
+    n2_center: f32,
+    n3_angle_x: f32,
+    n3_angle_y: f32,
+    n3_angle_z: f32,
+    n4_axis: u32,
+    n4_angle: f32,
+    n4_center: f32,
+    n5_angle_x: f32,
+    n5_angle_y: f32,
+    n5_angle_z: f32,
+    n2_weights_len: u32,
+    n4_weights_len: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+// @derived_uniform_member: n2_weights_len words=1 node.bend_mesh weights=count
+// @derived_uniform_member: n4_weights_len words=1 node.bend_mesh weights=count
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<Element>;
+
+fn rotate_xyz_local(p: vec3<f32>, ax: f32, ay: f32, az: f32) -> vec3<f32> {
+    let cx = cos(ax);
+    let sx = sin(ax);
+    let cy = cos(ay);
+    let sy = sin(ay);
+    let cz = cos(az);
+    let sz = sin(az);
+
+    var x = p.x;
+    var y = p.y;
+    var z = p.z;
+
+    // Rotate around X
+    let ny1 = y * cx - z * sx;
+    let nz1 = y * sx + z * cx;
+    y = ny1;
+    z = nz1;
+
+    // Rotate around Y
+    let nx2 = x * cy + z * sy;
+    let nz2 = -x * sy + z * cy;
+    x = nx2;
+    z = nz2;
+
+    // Rotate around Z
+    let nx3 = x * cz - y * sz;
+    let ny3 = x * sz + y * cz;
+    x = nx3;
+    y = ny3;
+
+    return vec3<f32>(x, y, z);
+}
+
+fn n0_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    axis: u32,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
+    phase: f32,
+    feather: f32,
+    bound_min: f32,
+    bound_max: f32,
+    invert: u32,
+) -> f32 {
+    let d = e_in.position - vec3<f32>(origin_x, origin_y, origin_z);
+
+    var m: f32;
+    if axis == 0u {
+        m = d.x;
+    } else if axis == 1u {
+        m = d.y;
+    } else if axis == 2u {
+        m = d.z;
+    } else if axis == 3u {
+        m = length(vec2<f32>(d.x, d.z));
+    } else {
+        m = length(d);
+    }
+
+    let denom = max(bound_max - bound_min, 1e-6);
+    let t = clamp((m - bound_min) / denom, 0.0, 1.0);
+    let edge1 = phase + max(feather, 1e-6);
+    var w = 1.0 - smoothstep(phase, edge1, t);
+    w = select(w, 1.0 - w, invert == 1u);
+    return w;
+}
+
+fn n1_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+fn n2_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    e_weights: f32,
+    axis: u32,
+    angle: f32,
+    center: f32,
+    weights_len: u32,
+) -> Element {
+    let w = select(1.0, e_weights, idx < weights_len);
+
+    var coord: f32;
+    if axis == 0u {
+        coord = e_in.position.x;
+    } else if axis == 1u {
+        coord = e_in.position.y;
+    } else {
+        coord = e_in.position.z;
+    }
+    let s = coord - center;
+    let theta = angle * s * w;
+    let c = cos(theta);
+    let sn = sin(theta);
+
+    var pos = e_in.position;
+    var nrm = e_in.normal;
+    if axis == 0u {
+        let py = pos.y;
+        pos.x = center + s * c - py * sn;
+        pos.y = s * sn + py * c;
+        let nx = nrm.x;
+        let ny = nrm.y;
+        nrm.x = nx * c - ny * sn;
+        nrm.y = nx * sn + ny * c;
+    } else if axis == 1u {
+        let pz = pos.z;
+        pos.y = center + s * c - pz * sn;
+        pos.z = s * sn + pz * c;
+        let ny = nrm.y;
+        let nz = nrm.z;
+        nrm.y = ny * c - nz * sn;
+        nrm.z = ny * sn + nz * c;
+    } else {
+        let px = pos.x;
+        pos.z = center + s * c - px * sn;
+        pos.x = s * sn + px * c;
+        let nz = nrm.z;
+        let nx = nrm.x;
+        nrm.z = nz * c - nx * sn;
+        nrm.x = nz * sn + nx * c;
+    }
+
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
+}
+
+fn n3_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+fn n4_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    e_weights: f32,
+    axis: u32,
+    angle: f32,
+    center: f32,
+    weights_len: u32,
+) -> Element {
+    let w = select(1.0, e_weights, idx < weights_len);
+
+    var coord: f32;
+    if axis == 0u {
+        coord = e_in.position.x;
+    } else if axis == 1u {
+        coord = e_in.position.y;
+    } else {
+        coord = e_in.position.z;
+    }
+    let s = coord - center;
+    let theta = angle * s * w;
+    let c = cos(theta);
+    let sn = sin(theta);
+
+    var pos = e_in.position;
+    var nrm = e_in.normal;
+    if axis == 0u {
+        let py = pos.y;
+        pos.x = center + s * c - py * sn;
+        pos.y = s * sn + py * c;
+        let nx = nrm.x;
+        let ny = nrm.y;
+        nrm.x = nx * c - ny * sn;
+        nrm.y = nx * sn + ny * c;
+    } else if axis == 1u {
+        let pz = pos.z;
+        pos.y = center + s * c - pz * sn;
+        pos.z = s * sn + pz * c;
+        let ny = nrm.y;
+        let nz = nrm.z;
+        nrm.y = ny * c - nz * sn;
+        nrm.z = ny * sn + nz * c;
+    } else {
+        let px = pos.x;
+        pos.z = center + s * c - px * sn;
+        pos.x = s * sn + px * c;
+        let nz = nrm.z;
+        let nx = nrm.x;
+        nrm.z = nz * c - nx * sn;
+        nrm.x = nz * sn + nx * c;
+    }
+
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
+}
+
+fn n5_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let r0 = n0_body(idx, count, e_0, params.n0_axis, params.n0_origin_x, params.n0_origin_y, params.n0_origin_z, params.n0_phase, params.n0_feather, params.n0_bound_min, params.n0_bound_max, params.n0_invert);
+    let r1 = n1_body(idx, count, e_0, params.n1_angle_x, params.n1_angle_y, params.n1_angle_z);
+    let r2 = n2_body(idx, count, r1, r0, params.n2_axis, params.n2_angle, params.n2_center, params.n2_weights_len);
+    let r3 = n3_body(idx, count, r2, params.n3_angle_x, params.n3_angle_y, params.n3_angle_z);
+    let r4 = n4_body(idx, count, r3, r0, params.n4_axis, params.n4_angle, params.n4_center, params.n4_weights_len);
+    let r5 = n5_body(idx, count, r4, params.n5_angle_x, params.n5_angle_y, params.n5_angle_z);
+    dst[idx] = r5;
+}
+
+=== generator:ApricotWeather node:74 ===
+struct Element {
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    tangent: vec4<f32>,
+}
+
+struct Params {
+    n0_axis: u32,
+    n0_origin_x: f32,
+    n0_origin_y: f32,
+    n0_origin_z: f32,
+    n0_phase: f32,
+    n0_feather: f32,
+    n0_bound_min: f32,
+    n0_bound_max: f32,
+    n0_invert: u32,
+    n1_angle_x: f32,
+    n1_angle_y: f32,
+    n1_angle_z: f32,
+    n2_axis: u32,
+    n2_angle: f32,
+    n2_center: f32,
+    n3_angle_x: f32,
+    n3_angle_y: f32,
+    n3_angle_z: f32,
+    n4_axis: u32,
+    n4_angle: f32,
+    n4_center: f32,
+    n5_angle_x: f32,
+    n5_angle_y: f32,
+    n5_angle_z: f32,
+    n2_weights_len: u32,
+    n4_weights_len: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+// @derived_uniform_member: n2_weights_len words=1 node.bend_mesh weights=count
+// @derived_uniform_member: n4_weights_len words=1 node.bend_mesh weights=count
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<Element>;
+
+fn rotate_xyz_local(p: vec3<f32>, ax: f32, ay: f32, az: f32) -> vec3<f32> {
+    let cx = cos(ax);
+    let sx = sin(ax);
+    let cy = cos(ay);
+    let sy = sin(ay);
+    let cz = cos(az);
+    let sz = sin(az);
+
+    var x = p.x;
+    var y = p.y;
+    var z = p.z;
+
+    // Rotate around X
+    let ny1 = y * cx - z * sx;
+    let nz1 = y * sx + z * cx;
+    y = ny1;
+    z = nz1;
+
+    // Rotate around Y
+    let nx2 = x * cy + z * sy;
+    let nz2 = -x * sy + z * cy;
+    x = nx2;
+    z = nz2;
+
+    // Rotate around Z
+    let nx3 = x * cz - y * sz;
+    let ny3 = x * sz + y * cz;
+    x = nx3;
+    y = ny3;
+
+    return vec3<f32>(x, y, z);
+}
+
+fn n0_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    axis: u32,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
+    phase: f32,
+    feather: f32,
+    bound_min: f32,
+    bound_max: f32,
+    invert: u32,
+) -> f32 {
+    let d = e_in.position - vec3<f32>(origin_x, origin_y, origin_z);
+
+    var m: f32;
+    if axis == 0u {
+        m = d.x;
+    } else if axis == 1u {
+        m = d.y;
+    } else if axis == 2u {
+        m = d.z;
+    } else if axis == 3u {
+        m = length(vec2<f32>(d.x, d.z));
+    } else {
+        m = length(d);
+    }
+
+    let denom = max(bound_max - bound_min, 1e-6);
+    let t = clamp((m - bound_min) / denom, 0.0, 1.0);
+    let edge1 = phase + max(feather, 1e-6);
+    var w = 1.0 - smoothstep(phase, edge1, t);
+    w = select(w, 1.0 - w, invert == 1u);
+    return w;
+}
+
+fn n1_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+fn n2_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    e_weights: f32,
+    axis: u32,
+    angle: f32,
+    center: f32,
+    weights_len: u32,
+) -> Element {
+    let w = select(1.0, e_weights, idx < weights_len);
+
+    var coord: f32;
+    if axis == 0u {
+        coord = e_in.position.x;
+    } else if axis == 1u {
+        coord = e_in.position.y;
+    } else {
+        coord = e_in.position.z;
+    }
+    let s = coord - center;
+    let theta = angle * s * w;
+    let c = cos(theta);
+    let sn = sin(theta);
+
+    var pos = e_in.position;
+    var nrm = e_in.normal;
+    if axis == 0u {
+        let py = pos.y;
+        pos.x = center + s * c - py * sn;
+        pos.y = s * sn + py * c;
+        let nx = nrm.x;
+        let ny = nrm.y;
+        nrm.x = nx * c - ny * sn;
+        nrm.y = nx * sn + ny * c;
+    } else if axis == 1u {
+        let pz = pos.z;
+        pos.y = center + s * c - pz * sn;
+        pos.z = s * sn + pz * c;
+        let ny = nrm.y;
+        let nz = nrm.z;
+        nrm.y = ny * c - nz * sn;
+        nrm.z = ny * sn + nz * c;
+    } else {
+        let px = pos.x;
+        pos.z = center + s * c - px * sn;
+        pos.x = s * sn + px * c;
+        let nz = nrm.z;
+        let nx = nrm.x;
+        nrm.z = nz * c - nx * sn;
+        nrm.x = nz * sn + nx * c;
+    }
+
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
+}
+
+fn n3_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+fn n4_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    e_weights: f32,
+    axis: u32,
+    angle: f32,
+    center: f32,
+    weights_len: u32,
+) -> Element {
+    let w = select(1.0, e_weights, idx < weights_len);
+
+    var coord: f32;
+    if axis == 0u {
+        coord = e_in.position.x;
+    } else if axis == 1u {
+        coord = e_in.position.y;
+    } else {
+        coord = e_in.position.z;
+    }
+    let s = coord - center;
+    let theta = angle * s * w;
+    let c = cos(theta);
+    let sn = sin(theta);
+
+    var pos = e_in.position;
+    var nrm = e_in.normal;
+    if axis == 0u {
+        let py = pos.y;
+        pos.x = center + s * c - py * sn;
+        pos.y = s * sn + py * c;
+        let nx = nrm.x;
+        let ny = nrm.y;
+        nrm.x = nx * c - ny * sn;
+        nrm.y = nx * sn + ny * c;
+    } else if axis == 1u {
+        let pz = pos.z;
+        pos.y = center + s * c - pz * sn;
+        pos.z = s * sn + pz * c;
+        let ny = nrm.y;
+        let nz = nrm.z;
+        nrm.y = ny * c - nz * sn;
+        nrm.z = ny * sn + nz * c;
+    } else {
+        let px = pos.x;
+        pos.z = center + s * c - px * sn;
+        pos.x = s * sn + px * c;
+        let nz = nrm.z;
+        let nx = nrm.x;
+        nrm.z = nz * c - nx * sn;
+        nrm.x = nz * sn + nx * c;
+    }
+
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
+}
+
+fn n5_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let r0 = n0_body(idx, count, e_0, params.n0_axis, params.n0_origin_x, params.n0_origin_y, params.n0_origin_z, params.n0_phase, params.n0_feather, params.n0_bound_min, params.n0_bound_max, params.n0_invert);
+    let r1 = n1_body(idx, count, e_0, params.n1_angle_x, params.n1_angle_y, params.n1_angle_z);
+    let r2 = n2_body(idx, count, r1, r0, params.n2_axis, params.n2_angle, params.n2_center, params.n2_weights_len);
+    let r3 = n3_body(idx, count, r2, params.n3_angle_x, params.n3_angle_y, params.n3_angle_z);
+    let r4 = n4_body(idx, count, r3, r0, params.n4_axis, params.n4_angle, params.n4_center, params.n4_weights_len);
+    let r5 = n5_body(idx, count, r4, params.n5_angle_x, params.n5_angle_y, params.n5_angle_z);
+    dst[idx] = r5;
+}
+
+=== generator:ApricotWeather node:75 ===
+struct Element {
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    tangent: vec4<f32>,
+}
+
+struct Params {
+    n0_axis: u32,
+    n0_origin_x: f32,
+    n0_origin_y: f32,
+    n0_origin_z: f32,
+    n0_phase: f32,
+    n0_feather: f32,
+    n0_bound_min: f32,
+    n0_bound_max: f32,
+    n0_invert: u32,
+    n1_angle_x: f32,
+    n1_angle_y: f32,
+    n1_angle_z: f32,
+    n2_axis: u32,
+    n2_angle: f32,
+    n2_center: f32,
+    n3_angle_x: f32,
+    n3_angle_y: f32,
+    n3_angle_z: f32,
+    n4_axis: u32,
+    n4_angle: f32,
+    n4_center: f32,
+    n5_angle_x: f32,
+    n5_angle_y: f32,
+    n5_angle_z: f32,
+    n2_weights_len: u32,
+    n4_weights_len: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+// @derived_uniform_member: n2_weights_len words=1 node.bend_mesh weights=count
+// @derived_uniform_member: n4_weights_len words=1 node.bend_mesh weights=count
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<Element>;
+
+fn rotate_xyz_local(p: vec3<f32>, ax: f32, ay: f32, az: f32) -> vec3<f32> {
+    let cx = cos(ax);
+    let sx = sin(ax);
+    let cy = cos(ay);
+    let sy = sin(ay);
+    let cz = cos(az);
+    let sz = sin(az);
+
+    var x = p.x;
+    var y = p.y;
+    var z = p.z;
+
+    // Rotate around X
+    let ny1 = y * cx - z * sx;
+    let nz1 = y * sx + z * cx;
+    y = ny1;
+    z = nz1;
+
+    // Rotate around Y
+    let nx2 = x * cy + z * sy;
+    let nz2 = -x * sy + z * cy;
+    x = nx2;
+    z = nz2;
+
+    // Rotate around Z
+    let nx3 = x * cz - y * sz;
+    let ny3 = x * sz + y * cz;
+    x = nx3;
+    y = ny3;
+
+    return vec3<f32>(x, y, z);
+}
+
+fn n0_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    axis: u32,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
+    phase: f32,
+    feather: f32,
+    bound_min: f32,
+    bound_max: f32,
+    invert: u32,
+) -> f32 {
+    let d = e_in.position - vec3<f32>(origin_x, origin_y, origin_z);
+
+    var m: f32;
+    if axis == 0u {
+        m = d.x;
+    } else if axis == 1u {
+        m = d.y;
+    } else if axis == 2u {
+        m = d.z;
+    } else if axis == 3u {
+        m = length(vec2<f32>(d.x, d.z));
+    } else {
+        m = length(d);
+    }
+
+    let denom = max(bound_max - bound_min, 1e-6);
+    let t = clamp((m - bound_min) / denom, 0.0, 1.0);
+    let edge1 = phase + max(feather, 1e-6);
+    var w = 1.0 - smoothstep(phase, edge1, t);
+    w = select(w, 1.0 - w, invert == 1u);
+    return w;
+}
+
+fn n1_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+fn n2_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    e_weights: f32,
+    axis: u32,
+    angle: f32,
+    center: f32,
+    weights_len: u32,
+) -> Element {
+    let w = select(1.0, e_weights, idx < weights_len);
+
+    var coord: f32;
+    if axis == 0u {
+        coord = e_in.position.x;
+    } else if axis == 1u {
+        coord = e_in.position.y;
+    } else {
+        coord = e_in.position.z;
+    }
+    let s = coord - center;
+    let theta = angle * s * w;
+    let c = cos(theta);
+    let sn = sin(theta);
+
+    var pos = e_in.position;
+    var nrm = e_in.normal;
+    if axis == 0u {
+        let py = pos.y;
+        pos.x = center + s * c - py * sn;
+        pos.y = s * sn + py * c;
+        let nx = nrm.x;
+        let ny = nrm.y;
+        nrm.x = nx * c - ny * sn;
+        nrm.y = nx * sn + ny * c;
+    } else if axis == 1u {
+        let pz = pos.z;
+        pos.y = center + s * c - pz * sn;
+        pos.z = s * sn + pz * c;
+        let ny = nrm.y;
+        let nz = nrm.z;
+        nrm.y = ny * c - nz * sn;
+        nrm.z = ny * sn + nz * c;
+    } else {
+        let px = pos.x;
+        pos.z = center + s * c - px * sn;
+        pos.x = s * sn + px * c;
+        let nz = nrm.z;
+        let nx = nrm.x;
+        nrm.z = nz * c - nx * sn;
+        nrm.x = nz * sn + nx * c;
+    }
+
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
+}
+
+fn n3_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+fn n4_body(
+    idx: u32,
+    count: u32,
+    e_in: Element,
+    e_weights: f32,
+    axis: u32,
+    angle: f32,
+    center: f32,
+    weights_len: u32,
+) -> Element {
+    let w = select(1.0, e_weights, idx < weights_len);
+
+    var coord: f32;
+    if axis == 0u {
+        coord = e_in.position.x;
+    } else if axis == 1u {
+        coord = e_in.position.y;
+    } else {
+        coord = e_in.position.z;
+    }
+    let s = coord - center;
+    let theta = angle * s * w;
+    let c = cos(theta);
+    let sn = sin(theta);
+
+    var pos = e_in.position;
+    var nrm = e_in.normal;
+    if axis == 0u {
+        let py = pos.y;
+        pos.x = center + s * c - py * sn;
+        pos.y = s * sn + py * c;
+        let nx = nrm.x;
+        let ny = nrm.y;
+        nrm.x = nx * c - ny * sn;
+        nrm.y = nx * sn + ny * c;
+    } else if axis == 1u {
+        let pz = pos.z;
+        pos.y = center + s * c - pz * sn;
+        pos.z = s * sn + pz * c;
+        let ny = nrm.y;
+        let nz = nrm.z;
+        nrm.y = ny * c - nz * sn;
+        nrm.z = ny * sn + nz * c;
+    } else {
+        let px = pos.x;
+        pos.z = center + s * c - px * sn;
+        pos.x = s * sn + px * c;
+        let nz = nrm.z;
+        let nx = nrm.x;
+        nrm.z = nz * c - nx * sn;
+        nrm.x = nz * sn + nx * c;
+    }
+
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
+}
+
+fn n5_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
+    var v = e_in;
+    v.position = rotate_xyz_local(e_in.position, angle_x, angle_y, angle_z);
+    v.normal = rotate_xyz_local(e_in.normal, angle_x, angle_y, angle_z);
+    // uv is a parametric surface value — does not rotate with position.
+    return v;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let r0 = n0_body(idx, count, e_0, params.n0_axis, params.n0_origin_x, params.n0_origin_y, params.n0_origin_z, params.n0_phase, params.n0_feather, params.n0_bound_min, params.n0_bound_max, params.n0_invert);
+    let r1 = n1_body(idx, count, e_0, params.n1_angle_x, params.n1_angle_y, params.n1_angle_z);
+    let r2 = n2_body(idx, count, r1, r0, params.n2_axis, params.n2_angle, params.n2_center, params.n2_weights_len);
+    let r3 = n3_body(idx, count, r2, params.n3_angle_x, params.n3_angle_y, params.n3_angle_z);
+    let r4 = n4_body(idx, count, r3, r0, params.n4_axis, params.n4_angle, params.n4_center, params.n4_weights_len);
+    let r5 = n5_body(idx, count, r4, params.n5_angle_x, params.n5_angle_y, params.n5_angle_z);
+    dst[idx] = r5;
+}
+
 === generator:Cymatics node:45 ===
 struct Params {
     n1_a: f32,

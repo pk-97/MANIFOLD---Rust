@@ -20,6 +20,12 @@
 //! center 100 => median 5, clamped to 8*5 = 40). Expected values are computed
 //! by a CPU mirror (same f32 math), each with a closed-form sanity assertion
 //! so a broken mirror can't agree with a broken GPU.
+//!
+//! P4a: the kernel's floor is `max(floor, stats->mean_power)` — the
+//! mean rides a GPU stats buffer, so the debug surface takes it as an
+//! argument. The existing cases pass 0.0 (pre-P4a black-scene behavior:
+//! the floor stays the fixed minimum); the mean-rider case pins the new
+//! behavior against a CPU mirror fed the same effective floor.
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
@@ -100,7 +106,7 @@ fn firefly_clamp_void_center_passes_through_unclamped() {
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
     assert_close(expected, [100.0, 100.0, 100.0], "mirror sanity: void passthrough");
 
-    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0);
+    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "void center passthrough");
 }
 
@@ -123,7 +129,7 @@ fn firefly_clamp_isolated_glint_passes_through_unclamped() {
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
     assert_close(expected, [50.0, 50.0, 50.0], "mirror sanity: isolated glint passthrough");
 
-    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0);
+    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "isolated glint passthrough");
 }
 
@@ -147,7 +153,7 @@ fn firefly_clamp_hot_outlier_surrounded_by_dim_neighbors_is_clamped() {
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
     assert_close(expected, [8.0, 8.0, 8.0], "mirror sanity: clamps to gain * max(median, floor)");
 
-    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0);
+    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "hot outlier clamps to gain * max(median, floor)");
 }
 
@@ -182,6 +188,36 @@ fn firefly_clamp_median_matches_cpu_expected() {
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
     assert_close(expected, [40.0, 40.0, 40.0], "mirror sanity: median 5 => clamp to 40");
 
-    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0);
+    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "median selection + clamp math");
+}
+
+/// P4a: the kernel applies `max(floor, stats->mean_power)` itself — a
+/// bright-emissive scene raises its own ceiling. Pin: fixed minimum 4.0
+/// (production `FIREFLY_ABS_FLOOR_MIN`), mean_power 50, dim neighbors
+/// (median 1), center 500 → threshold 8*50 = 400 (NOT the 8*4 = 32 the
+/// fixed floor alone would give). The CPU mirror gets the effective floor
+/// (50) — max(median, 50) is the same order statistic the kernel computes.
+#[test]
+fn firefly_clamp_mean_power_raises_floor() {
+    let h = harness::shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    const FLOOR: f32 = 4.0;
+    const MEAN: f32 = 50.0;
+    let color: [[f32; 4]; 9] = std::array::from_fn(|i| {
+        if i == 4 {
+            [500.0, 500.0, 500.0, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let depth = [NON_VOID; 9];
+
+    // Kernel: threshold = 8 * max(max(1, 4), 50) = 400 → clamps to [400;3].
+    let expected = clamp_center(&color, &depth, GAIN, MEAN);
+    assert_close(expected, [400.0, 400.0, 400.0], "mirror sanity: mean_power 50 => clamp to 8*50");
+
+    let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, FLOOR, MEAN);
+    assert_close(got, expected, "mean_power raises the floor past the fixed 4.0 minimum");
 }

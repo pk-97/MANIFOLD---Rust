@@ -274,10 +274,13 @@ impl PresetRuntime {
     /// Compile a generator runtime from an already prepared render definition.
     /// The caller owns scene-modifier expansion; this method performs the
     /// common graph validation, binding setup, and resource preparation.
+    /// `mesh_rules` is the fused view's prepared mesh-revision sidecar
+    /// (design §3.3); canonical/unfused defs pass an empty map.
     pub(super) fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
+        mesh_rules: &crate::node_graph::mesh_change::PreparedMeshRules,
     ) -> Result<Self, JsonGeneratorLoadError> {
         if doc.version == 0 || doc.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
             return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
@@ -406,7 +409,7 @@ impl PresetRuntime {
             }
         }
 
-        let mut graph = doc.into_graph(registry)?;
+        let mut graph = doc.into_graph(registry, mesh_rules)?;
 
         // Re-locate the boundary nodes by runtime id now that we have the live
         // graph.
