@@ -1100,8 +1100,12 @@ static bool walk_with_alpha_test(
             if (any_hit) return true;
         }
     }
-    if (any_hit) return false;
-    if (q.get_committed_intersection_type() == intersection_type::triangle) {
+    // Terminal check is load-bearing for BOTH modes: an OPAQUE-BLAS object
+    // auto-commits in hardware without ever delivering a candidate, so a
+    // ray that ended on plain opaque geometry falls out of the loop with a
+    // committed hit and no visible candidate.
+    if (q.get_committed_intersection_type() == intersection_type::none) return false;
+    if (!any_hit && q.get_committed_intersection_type() == intersection_type::triangle) {
         // The committed hit is the CLOSEST accepted candidate — recompute
         // its brightness directly (deterministic) rather than tracking the
         // last acceptance's, which candidate delivery order does not
@@ -1111,9 +1115,8 @@ static bool walk_with_alpha_test(
             normal_sources[iid],
             q.get_committed_primitive_id(),
             q.get_committed_triangle_barycentric_coord()).y;
-        return true;
     }
-    return false;
+    return true;
 }
 
 // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4): visibility rays transmit,
