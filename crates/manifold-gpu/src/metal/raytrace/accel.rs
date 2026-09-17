@@ -574,6 +574,51 @@ fn instance_mask(cast_shadows: bool) -> u32 {
 // `GpuEncoder`). This replaces the independent `build_accel`/`refit_accel`
 // pair that committed its own command buffer mid-frame.
 
+/// §4.3 (P5): upload `bytes` into GPU-private `dst` at `dst_offset` through
+/// the prewarmed inline-copy kernel — at most 4 KiB of inline bytes per
+/// dispatch (Metal's setBytes limit), chunked from the caller's retained
+/// scratch, ordered on the caller's encoder. setBytes consumes `bytes`
+/// synchronously at encode, so no staging allocation, no mapped destination,
+/// and an earlier in-flight frame's readers are never torn.
+pub fn encode_inline_copy(
+    device: &GpuDevice,
+    encoder: &mut crate::GpuEncoder,
+    dst: &GpuBuffer,
+    dst_offset: u64,
+    bytes: &[u8],
+) {
+    const CHUNK: usize = 4096;
+    let pipeline = &device.rt_pipelines().copy_inline_pipeline;
+    assert!(
+        dst_offset + bytes.len() as u64 <= dst.size,
+        "inline copy writes past the destination table ({} + {} > {})",
+        dst_offset,
+        bytes.len(),
+        dst.size
+    );
+    for (chunk_index, chunk) in bytes.chunks(CHUNK).enumerate() {
+        let count = chunk.len() as u32;
+        encoder.dispatch_compute(
+            pipeline,
+            &[
+                crate::GpuBinding::Bytes { binding: 0, data: chunk },
+                crate::GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: dst,
+                    offset: dst_offset + (chunk_index * CHUNK) as u64,
+                },
+                crate::GpuBinding::Bytes {
+                    binding: 2,
+                    data: &count.to_le_bytes(),
+                },
+            ],
+            [count.div_ceil(64), 1, 1],
+            "RT inline table copy",
+        );
+    }
+}
+
+
 /// Per-object geometry change class for [`encode_accel_update`] — the
 /// caller's dirty decision from its revision metadata (§4.1). Until P6,
 /// `Refit` intentionally executes the rebuild branch and reports

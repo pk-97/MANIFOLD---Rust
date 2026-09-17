@@ -225,8 +225,10 @@ pub trait ShadowRayTracer {
         // zero-stats buffer otherwise. Immediately after `accel`, per the
         // design's signature amendment.
         emissive_stats: &GpuBuffer,
+        // §4.3 (P5): params ride the command buffer as inline bytes
+        // (setBytes snapshots at encode) — no CPU-mapped params buffer a
+        // later frame's encode could tear under an in-flight trace.
         params: &ShadowRayParams,
-        params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
         current_objects: &[RtObjectGeometry<'_>],
@@ -269,7 +271,10 @@ pub trait ShadowRayTracer {
     fn upsample_shadow(
         &self,
         encoder: &mut GpuEncoder,
-        params_buffer: &GpuBuffer,
+        // §4.3 (P5): the same inline-bytes snapshot as the trace dispatch —
+        // `params.gbuffer_size` also drives the dispatch grid (this replaces
+        // the shared params buffer and its read-back sizing hack).
+        params: &ShadowRayParams,
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
@@ -303,7 +308,6 @@ pub trait ShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
-        params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -339,7 +343,6 @@ pub trait ShadowRayTracer {
         // minimum and the mean power is never CPU-stale.
         emissive_stats: &GpuBuffer,
         params: &FireflyClampParams,
-        params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         src: &GpuTexture,
         dst: &GpuTexture,
@@ -355,7 +358,6 @@ pub trait ShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousPostParams,
-        params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         normal_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -380,7 +382,6 @@ pub trait ShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
-        params_buffer: &GpuBuffer,
         // RT-T2-C: per-object world→prev-world motion matrices
         // (`params.obj_count` entries of column-major `[[f32; 4]; 4]`).
         obj_motion: &GpuBuffer,
@@ -627,6 +628,10 @@ pub struct RtPipelines {
     /// alias, dispatched by `encode_emissive_table` on the shared AS update
     /// path only.
     pub emissive: EmissivePipelines,
+    /// §4.3 (P5): inline-bytes → GPU-private table copy. Every CPU-authored
+    /// RT input lands through this kernel on the caller's encoder — no
+    /// mapped-table writes at encode time (the last-write-wins tear).
+    pub copy_inline_pipeline: GpuComputePipeline,
 }
 
 /// P4a (§5.1): the emissive-preparation pipeline set — device-global code
@@ -971,6 +976,17 @@ impl RtPipelines {
                 &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)]),
         };
 
+        // §4.3 (P5): the inline-copy kernel — scalar grid index, so force a
+        // 1D workgroup (the emissive_1d discipline: a 2D group would run
+        // every byte once per y-row).
+        let mut copy_inline_pipeline = compile_pipeline(
+            device,
+            &library,
+            "rt_copy_inline",
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]),
+        );
+        copy_inline_pipeline.workgroup_size = [64, 1, 1];
+
         Self {
             trace_pipelines,
             upsample_pipeline,
@@ -985,6 +1001,7 @@ impl RtPipelines {
             debug_ray_query_pipeline,
             descriptor_build_pipeline,
             emissive,
+            copy_inline_pipeline,
         }
     }
 }
@@ -1632,8 +1649,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // zero-stats buffer otherwise. Immediately after `accel`, per the
         // design's signature amendment.
         emissive_stats: &GpuBuffer,
+        // §4.3 (P5): params ride the command buffer as inline bytes
+        // (setBytes snapshots at encode) — no CPU-mapped params buffer a
+        // later frame's encode could tear under an in-flight trace.
         params: &ShadowRayParams,
-        params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
         current_objects: &[RtObjectGeometry<'_>],
@@ -1662,7 +1681,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         }
         assert!(params.refl_spp <= MAX_RT_REFLECTION_SPP,
             "reflection spp exceeds the supported quality ladder maximum");
-        params_buffer.upload(bytemuck_bytes(params));
         let diagnostic_slot = if super::super::gpu_fault::diagnostics_enabled() {
             self.rt_diagnostics.busy.iter().position(|busy|
                 busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok())
@@ -1701,10 +1719,9 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         let diagnostic_buffer = diagnostic_slot.map(|slot| &self.rt_diagnostics.buffers[slot])
             .unwrap_or(&self.rt_diagnostics.disabled);
         let mut bindings = vec![
-            GpuBinding::Buffer {
+            GpuBinding::Bytes {
                 binding: 1,
-                buffer: params_buffer,
-                offset: 0,
+                data: bytemuck_bytes(params),
             },
             GpuBinding::Buffer {
                 binding: 2,
@@ -1851,7 +1868,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     fn upsample_shadow(
         &self,
         encoder: &mut GpuEncoder,
-        params_buffer: &GpuBuffer,
+        // §4.3 (P5): the same inline-bytes snapshot as the trace dispatch —
+        // `params.gbuffer_size` also drives the dispatch grid (this replaces
+        // the shared params buffer and its read-back sizing hack).
+        params: &ShadowRayParams,
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
@@ -1867,20 +1887,16 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         hi_svt: &GpuTexture,
         label: &str,
     ) {
-        // `params.gbuffer_size` (already uploaded by `dispatch_shadow_rays`
-        // this frame — both calls share one params buffer per P1's single
-        // pass) drives the dispatch grid.
-        let Some(gbuffer_size) = params_buffer_gbuffer_size(params_buffer) else {
-            return;
-        };
+        // `params.gbuffer_size` drives the dispatch grid (P5: read from the
+        // params value, not a shared params buffer's read-back).
+        let gbuffer_size = params.gbuffer_size;
         let groups = dispatch_groups_2d(gbuffer_size, SHADOW_WORKGROUP);
         encoder.dispatch_compute(
             &self.upsample_pipeline,
             &[
-                GpuBinding::Buffer {
+                GpuBinding::Bytes {
                     binding: 1,
-                    buffer: params_buffer,
-                    offset: 0,
+                    data: bytemuck_bytes(params),
                 },
                 GpuBinding::Texture {
                     binding: 0,
@@ -1947,7 +1963,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
-        _params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -2052,21 +2067,18 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // minimum and the mean power is never CPU-stale.
         emissive_stats: &GpuBuffer,
         params: &FireflyClampParams,
-        params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         src: &GpuTexture,
         dst: &GpuTexture,
         label: &str,
     ) {
-        params_buffer.upload(firefly_clamp_params_bytes(params));
         let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
         encoder.dispatch_compute(
             &self.firefly_clamp_pipeline,
             &[
-                GpuBinding::Buffer {
+                GpuBinding::Bytes {
                     binding: 1,
-                    buffer: params_buffer,
-                    offset: 0,
+                    data: firefly_clamp_params_bytes(params),
                 },
                 GpuBinding::Buffer {
                     binding: 2,
@@ -2095,7 +2107,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AtrousPostParams,
-        _params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         normal_tex: &GpuTexture,
         moments_read: &GpuTexture,
@@ -2142,7 +2153,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
-        params_buffer: &GpuBuffer,
         // RT-T2-C: per-object world→prev-world motion matrices
         // (`params.obj_count` entries of column-major `[[f32; 4]; 4]`).
         obj_motion: &GpuBuffer,
@@ -2194,15 +2204,13 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         svt_history_write: &GpuTexture,
         label: &str,
     ) {
-        params_buffer.upload(accumulate_params_bytes(params));
         let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
         encoder.dispatch_compute(
             &self.accumulate_pipeline,
             &[
-                GpuBinding::Buffer {
+                GpuBinding::Bytes {
                     binding: 1,
-                    buffer: params_buffer,
-                    offset: 0,
+                    data: accumulate_params_bytes(params),
                 },
                 GpuBinding::Buffer {
                     binding: 2,
@@ -2369,21 +2377,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     }
 }
 
-/// Read back `gbuffer_size` from an uploaded `ShadowRayParams` buffer —
-/// avoids threading a second copy of the params struct through the
-/// `upsample_shadow` call. `None` if the buffer isn't CPU-mapped (should
-/// not happen for the shared-storage params buffer P1 always allocates).
-fn params_buffer_gbuffer_size(buffer: &GpuBuffer) -> Option<[u32; 2]> {
-    let ptr = buffer.mapped_ptr()?;
-    // Compile-time offset (not a hand-counted magic number) — survives any
-    // future `ShadowRayParams` field reordering/resizing without drifting.
-    let offset = std::mem::offset_of!(ShadowRayParams, gbuffer_size);
-    unsafe {
-        let p = ptr.add(offset) as *const u32;
-        Some([p.read_unaligned(), p.add(1).read_unaligned()])
-    }
-}
-
 fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
     // SAFETY: `ShadowRayParams` is `#[repr(C)]`, all-POD (f32/u32 fields
     // only), no padding, no interior pointers.
@@ -2404,21 +2397,6 @@ fn accumulate_params_bytes(params: &AccumulateParams) -> &[u8] {
             (params as *const AccumulateParams) as *const u8,
             std::mem::size_of::<AccumulateParams>(),
         )
-    }
-}
-
-trait UploadBytes {
-    fn upload(&self, bytes: &[u8]);
-}
-
-impl UploadBytes for GpuBuffer {
-    fn upload(&self, bytes: &[u8]) {
-        let Some(ptr) = self.mapped_ptr() else {
-            panic!("ShadowRayParams buffer must be CPU-mapped (create_buffer_shared)");
-        };
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
-        }
     }
 }
 
