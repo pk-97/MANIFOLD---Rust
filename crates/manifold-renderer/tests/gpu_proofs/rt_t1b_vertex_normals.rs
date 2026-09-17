@@ -113,6 +113,8 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
 
     let mut normal_sources_slot = None;

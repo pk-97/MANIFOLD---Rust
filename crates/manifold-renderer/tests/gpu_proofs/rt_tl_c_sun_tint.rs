@@ -355,6 +355,8 @@ fn red_petal_tints_transmitted_pool() {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 0.1, 0.1], // red albedo
@@ -430,6 +432,8 @@ fn point_caster_control_svt_stays_white() {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 0.1, 0.1],
@@ -494,6 +498,8 @@ fn factor_zero_occluder_svt_reads_zero() {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
@@ -553,6 +559,8 @@ fn unoccluded_texels_read_white_in_svt() {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],

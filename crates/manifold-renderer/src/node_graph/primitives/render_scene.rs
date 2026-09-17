@@ -1084,6 +1084,14 @@ pub struct RenderScene {
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
     rt_topology_rejected: bool,
+    /// SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): per-draw appearance state
+    /// (weights slot generation + gain bits) at the last RT update. The
+    /// trace reads weights/gain LIVE through the normal-source table, so
+    /// hit shading is always current; this key exists for the one baked
+    /// consumer — the emissive light table's corner weights — and triggers
+    /// an emissive-only refresh (design dirty rule 4: appearance changes
+    /// refresh tables, no BLAS work while the nonopaque property holds).
+    rt_appearance_key: Option<u64>,
     rt_topology_mismatch_logged: bool,
     rt_source_trace_last_admission: Option<(u64, u64)>,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
@@ -1973,16 +1981,10 @@ impl RenderScene {
                 }
                 return None;
             }
-            if *rt_enabled && (weights_slot.is_some() || object.gain != 1.0) {
-                ctx.error(format!(
-                    "object_{n}: per-vertex appearance weights and gain are unsupported when RT is enabled; renderer fell back to magenta clear"
-                ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
-                return None;
-            }
+            // P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance weights and
+            // gain are SUPPORTED under RT — the old rejection here is
+            // removed now that `rt_dynamic_coverage_and_attributes` proves
+            // the coverage/brightness behavior against the raster formula.
             let Some(material) = object.material else {
                 ctx.error(format!(
                     "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
@@ -2907,6 +2909,19 @@ impl RenderScene {
                 d.vertices_generation.hash(&mut content_hasher);
             }
             let content_key = content_hasher.finish();
+            // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance state —
+            // weights slot generation + gain bits per draw. Hit shading
+            // reads these LIVE through the normal-source table (rebuilt
+            // every RT-ready frame below), so this key drives only the one
+            // baked consumer: the emissive light table's corner weights
+            // (design dirty rule 4 — refresh tables, no BLAS work).
+            let mut appearance_hasher = ahash::AHasher::default();
+            for d in opaque_draws.iter() {
+                d.weights_generation.hash(&mut appearance_hasher);
+                appearance_hasher.write_u32(d.gain.to_bits());
+            }
+            let appearance_key = appearance_hasher.finish();
+            let appearance_changed = self.rt_appearance_key != Some(appearance_key);
 
             let rt_source_trace_generation = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
@@ -3057,6 +3072,9 @@ impl RenderScene {
                 self.rt_accel_key = Some(accel_key);
                 self.rt_accel_pending_key = None;
                 self.rt_accel_content_pending_key = None;
+                // P4b: the build's emissive refresh bakes current corner
+                // weights — the appearance key is current as of this frame.
+                self.rt_appearance_key = Some(appearance_key);
                 // BUG-320: the fresh build must be observed ready
                 // before tracing resumes — the old accel is dropped
                 // (self-retiring Drop) and no longer traced against.
@@ -3085,10 +3103,12 @@ impl RenderScene {
                     let accel = self.rt_accel.as_mut().expect("checked above");
                     // Caller-ordered TLAS update (§4): no BLAS changes,
                     // instance transforms/masks changed (accel_key moved
-                    // under an unchanged topo key).
+                    // under an unchanged topo key). P4b: an appearance
+                    // change riding the same frame refreshes the emissive
+                    // table's corner weights with it.
                     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Reuse; objects.len()];
                     match tracer.encode_accel_update(
-                        gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, false,
+                        gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, true, appearance_changed,
                     ) {
                         Err(e) => {
                             *rt_ready = false;
@@ -3120,7 +3140,45 @@ impl RenderScene {
                             }
                         }
                         self.rt_accel_key = Some(accel_key);
+                        self.rt_appearance_key = Some(appearance_key);
                         self.rt_topology_mismatch_logged = false;
+                        }
+                    }
+                }
+            } else if topology_valid
+                && appearance_changed
+                && self.rt_accel.as_ref().is_some_and(|a| {
+                    a.ready.load(std::sync::atomic::Ordering::Acquire)
+                })
+            {
+                // P4b (§5.2, design dirty rule 4): appearance-only change —
+                // no BLAS/TLAS work (the descriptor nonopaque property is
+                // unchanged: topology_valid holds), just an emissive table
+                // refresh so its baked corner weights track the current
+                // weights buffer. The trace's hit shading already reads
+                // weights/gain live through this frame's normal-source
+                // table, so a fractional-to-fractional gain change is this
+                // cheap path only.
+                let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                let accel = self.rt_accel.as_mut().expect("checked above");
+                let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Reuse; objects.len()];
+                match tracer.encode_accel_update(
+                    gpu.device, gpu.native_enc, accel, objects, &changes, &gi_materials_data, false, true,
+                ) {
+                    Ok(_) => {
+                        self.rt_appearance_key = Some(appearance_key);
+                    }
+                    Err(e) => {
+                        *rt_ready = false;
+                        let first_rejection = reject_topology(
+                            &mut self.rt_accel_topo_key, &mut self.rt_accel_key,
+                            &mut self.rt_accel_content_key, &mut self.rt_accel_pending_key,
+                            &mut self.rt_accel_content_pending_key, &mut self.rt_accel_built,
+                            &mut self.rt_topology_rejected,
+                        );
+                        if first_rejection && !self.rt_topology_mismatch_logged {
+                            log::warn!("node.render_scene: RT appearance refresh rejected before encode: {e:?}");
+                            self.rt_topology_mismatch_logged = true;
                         }
                     }
                 }
@@ -5367,6 +5425,17 @@ impl RenderScene {
                     },
                     instances_buffer: if rt_instances_wired { d.instances } else { None },
                     instance_slots: if rt_instances_wired { d.instance_count } else { 1 },
+                    // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance
+                    // reaches RT — per-vertex weights (bindless, pinned in
+                    // the accel's geometry set) + the per-object gain. A
+                    // wired buffer's float count was checked against the
+                    // mesh vertex count in Pass 1 (and again, structured,
+                    // at plan/encode). The descriptor-nonopaque property
+                    // (weights wired || gain != 1.0, via
+                    // `blas_geometry_nonopaque`) rides the topology check,
+                    // so a change in it rebuilds the affected BLAS.
+                    appearance_weights: d.weights,
+                    appearance_gain: d.gain,
                 }
                 })
                 .collect();
@@ -6132,6 +6201,7 @@ impl RenderScene {
             rt_accel_content_pending_key: None,
             rt_accel_built: false,
             rt_topology_rejected: false,
+            rt_appearance_key: None,
             rt_topology_mismatch_logged: false,
             rt_source_trace_last_admission: None,
             rt_mask_half: None,

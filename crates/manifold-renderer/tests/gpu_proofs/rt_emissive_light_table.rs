@@ -132,6 +132,8 @@ fn rt_object_geom<'a>(
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }
 }
 
@@ -416,6 +418,8 @@ fn emissive_table_truncates_at_cap() {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         });
     }
 

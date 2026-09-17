@@ -164,6 +164,8 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         },
         RtObjectGeometry {
             vertex_buffer: &emitter_vertex_buffer,
@@ -187,6 +189,8 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         },
     ];
 
