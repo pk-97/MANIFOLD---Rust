@@ -235,18 +235,22 @@ fn run_tl_fixture(
         0,       // refl_spp
         0.6,     // refl_max_roughness
         0.1,     // refl_rough_band
-        0.0,     // emissive_table_mean_power
-        0,       // emissive_table_count
-        0.0,     // emissive_table_total_area
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = harness::dummy_emissive_buffer(device);
+    // P4a: the GPU emissive preparation indexes one material row per
+    // object — this fixture has no emissive geometry, so zeroed rows
+    // (luma 0 → zero stats, the old "no emissive table" behavior).
+    let materials = vec![
+        manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
+        objects.len()
+    ];
 
     let mut encoder = device.create_encoder("rt-tlb-transmission-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, &[], true, true)
+        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, &materials, true, true)
         .expect("encode accel update");
     let out_sv2_dummy = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -272,6 +276,11 @@ fn run_tl_fixture(
         &mut encoder,
         device,
         &accel,
+        accel
+            .emissive_table
+            .as_ref()
+            .map(|t| &t.stats)
+            .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
         &params_buffer,
         &gi_materials_buffer,

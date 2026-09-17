@@ -15,7 +15,7 @@ use manifold_renderer::node_graph::camera::Camera;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_gpu::raytrace::{build_emissive_table,EmissiveAliasEntry,EmissiveTriangleGpu,GiMaterial,RtObjectGeometry};
+use manifold_gpu::raytrace::{EmissiveAliasEntry,EmissiveTableStats,EmissiveTriangleGpu,GiMaterial,MetalShadowRayTracer,RtObjectGeometry,ShadowRayTracer};
 use manifold_gpu::{GpuBuffer,GpuDevice};
 use std::time::Instant;
 use crate::harness;
@@ -175,8 +175,21 @@ fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{vertex_bu
     let h=harness::shared();let d=&h.device;
     let vs=[Pv{pos:[0.,0.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,1.,0.]}];
     let b=wb(d,&vs);let o=[o(&b,2)];let m=[GiMaterial::new([0.5,0.5,0.5],[1.,0.,0.],[0.,0.5,0.,0.],[0.,0.,0.,0.])];
-    let t=build_emissive_table(d,&o,&m).expect("t");let ap=t.aliases.mapped_ptr().unwrap();
-    let a:&[EmissiveAliasEntry]=unsafe{std::slice::from_raw_parts(ap as *const EmissiveAliasEntry,t.entry_count as usize)};
-    for(i,a)in a.iter().enumerate(){assert!(a.prob>=0.&&a.prob<=1.01,"{i}:p {}",a.prob);assert!(a.alias<t.entry_count);}
-    assert!(t.entry_count>0);
+    // P4a: production GPU preparation (same enumerate/sort/gather/alias/
+    // stats kernels as the shared AS update path), read back through the
+    // mapped shared buffers.
+    let tracer=MetalShadowRayTracer::new(d);
+    let plan=tracer.plan_accel(d,None,&o).expect("plan");
+    let mut slot=None;
+    tracer.prepare_accel(d,&mut slot,plan).expect("prepare");
+    let mut accel=slot.unwrap();
+    let mut enc=d.create_encoder("rs-c-alias-proof");
+    tracer.debug_encode_emissive_table(d,&mut enc,&mut accel,&o,&m).expect("encode");
+    enc.commit_and_wait_completed();
+    let t=accel.emissive_table.as_ref().expect("table");
+    let stats=unsafe{(t.stats.mapped_ptr().unwrap() as *const EmissiveTableStats).read_unaligned()};
+    let ap=t.aliases.mapped_ptr().unwrap();
+    let a:&[EmissiveAliasEntry]=unsafe{std::slice::from_raw_parts(ap as *const EmissiveAliasEntry,stats.entry_count as usize)};
+    for(i,a)in a.iter().enumerate(){assert!(a.prob>=0.&&a.prob<=1.01,"{i}:p {}",a.prob);assert!(a.alias<stats.entry_count);}
+    assert!(stats.entry_count>0);
 }
