@@ -231,6 +231,8 @@ mod rt_dynamic_baseline {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         }];
         let mut as_builds = 0u32;
         // P3 seam: plan/prepare allocate; the encode rides the first
@@ -267,6 +269,7 @@ mod rt_dynamic_baseline {
             normal_sources,
             &[ray_a],
             None,
+            0,
             0,
         );
         enc.commit_and_wait_completed();
@@ -318,6 +321,7 @@ mod rt_dynamic_baseline {
             normal_sources,
             &[ray_b, ray_a],
             None,
+            0,
             0,
         );
         enc.commit_and_wait_completed();
@@ -531,6 +535,8 @@ fn cs_main() {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         }
     }
 
@@ -605,6 +611,7 @@ fn cs_main() {
                 &normal_sources,
                 &[ray_cur, ray_prev],
                 None,
+                0,
                 0,
             );
             enc.commit_and_wait_completed();
@@ -725,6 +732,7 @@ fn cs_main() {
             &[ray],
             None,
             0,
+            0,
         );
         drop(accel);
         drop(vertex_buffer);
@@ -779,6 +787,8 @@ fn cs_main() {
             instances_addr: instances_buffer.gpu_address(),
             instances_buffer: Some(&instances_buffer),
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         }];
         let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
         let mut accel_slot = None;
@@ -847,6 +857,7 @@ fn cs_main() {
                 &normal_sources,
                 &rays,
                 None,
+                0,
                 0,
             ));
             if i + 1 == offsets.len() {
@@ -939,6 +950,7 @@ fn cs_main() {
             &[ray_b],
             None,
             0,
+            0,
         );
         enc_b.commit_and_wait_completed();
         assert!(accel_b.ready.load(Ordering::Acquire), "B's own completion flips B's flag");
@@ -1022,6 +1034,7 @@ fn cs_main() {
             &normal_sources,
             &[ray],
             None,
+            0,
             0,
         );
         enc.commit_and_wait_completed();
@@ -1166,6 +1179,7 @@ fn cs_main() {
             &normal_sources2,
             &[ray_a, ray_b],
             None,
+            0,
             0,
         );
         enc3.commit_and_wait_completed();

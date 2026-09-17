@@ -64,15 +64,26 @@ struct EmissiveObjParams {
     slot_base: u32,
     object_index: u32,
     luma: f32,
+    /// P4b (§5.2): bindless address of the object's per-vertex appearance
+    /// weights (0 = unwired → corner weights 1.0). The gather bakes the
+    /// three corner weights into each table entry; the GAIN stays out of
+    /// this table (the trace kernel reads it from the normal-source row at
+    /// sample time, so a fractional-to-fractional gain change needs no
+    /// emissive refresh).
+    appearance_weights_addr: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<EmissiveObjParams>() == 48);
+const _: () = assert!(std::mem::size_of::<EmissiveObjParams>() == 56);
 
 /// RS-B: GPU-side emissive triangle entry — world-space positions of the
 /// three vertices plus per-vertex UVs and the owning object index for
 /// gi_materials/normal_sources lookups (RS-C). `packed_float3` discipline:
 /// `[f32; 3]` + explicit pad (P0 section 5.1 kernel lesson). P4a: written by
-/// the `emissive_gather` kernel, never by the CPU.
+/// the `emissive_gather` kernel, never by the CPU. P4b (§5.2): grew the
+/// per-corner APPEARANCE WEIGHTS (`w0/w1/w2`, 1.0 when unwired) — explicit
+/// emitter samples have not passed the hit test, so the trace kernel
+/// multiplies `coverage * brightness` at the sampled barycentrics from
+/// these corners and the normal-source row's current gain.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct EmissiveTriangleGpu {
@@ -92,9 +103,15 @@ pub struct EmissiveTriangleGpu {
     /// the D7 fast path sets this to the object index (descriptor_index ==
     /// object_index there) and never reads it.
     pub descriptor_index: u32,
+    /// P4b: per-corner appearance weights (vertex-order, post index
+    /// resolution), 1.0 when the object has no weights wired.
+    pub w0: f32,
+    pub w1: f32,
+    pub w2: f32,
+    _pad3: f32,
 }
 
-const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 80);
+const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 96);
 
 /// RS-B: GPU-side alias-table entry — `prob` is the probability of selecting
 /// the entry's own triangle; when the draw fails the self-probability, `alias`
@@ -136,7 +153,7 @@ impl EmissiveLightTable {
     pub(crate) fn new(device: &GpuDevice) -> Self {
         let cap = u64::from(MAX_RT_EMISSIVE_TRIANGLES);
         Self {
-            triangles: device.create_buffer_shared(cap * 80),
+            triangles: device.create_buffer_shared(cap * 96),
             aliases: device.create_buffer_shared(cap * 8),
             stats: device.create_buffer_shared(16),
             entry_power: device.create_buffer(cap * 8),
@@ -265,17 +282,23 @@ pub(crate) fn encode_emissive_table(
             slot_base: object_slot_base,
             object_index: oi as u32,
             luma: obj_luma,
+            appearance_weights_addr: obj.appearance_weights.map_or(0, GpuBuffer::gpu_address),
         });
     }
 
-    // Raw-address vertex/index reads are the BUG-84fv indirect-reach class:
-    // every buffer the kernels can touch is useResource-declared on the
-    // dispatch (the accel's geometry set is exactly the objects' buffers).
-    let mut indirect_reads: Vec<&GpuBuffer> = Vec::with_capacity(objects.len() * 2);
+    // Raw-address vertex/index/weights reads are the BUG-84fv indirect-
+    // reach class: every buffer the kernels can touch is useResource-
+    // declared on the dispatch (the accel's geometry set carries the
+    // objects' vertex/index/weights buffers; declared again here so the
+    // list names this kernel's own reads).
+    let mut indirect_reads: Vec<&GpuBuffer> = Vec::with_capacity(objects.len() * 3);
     for obj in objects {
         indirect_reads.push(obj.vertex_buffer);
         if let Some(ib) = obj.index_buffer {
             indirect_reads.push(ib);
+        }
+        if let Some(w) = obj.appearance_weights {
+            indirect_reads.push(w);
         }
     }
 

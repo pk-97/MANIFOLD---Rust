@@ -140,6 +140,8 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
     }];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
@@ -411,6 +413,8 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         },
         RtObjectGeometry {
             vertex_buffer: &occ_vertex_buffer,
@@ -434,6 +438,8 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         },
     ];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder

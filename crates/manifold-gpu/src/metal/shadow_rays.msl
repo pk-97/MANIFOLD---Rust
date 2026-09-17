@@ -96,6 +96,17 @@ constant uint TRACE_REFLECTION = 2u;
 // discipline as `MAX_RT_CASTERS` above).
 constant uint MAX_RT_EMISSIVE_TRIANGLES = 4096;
 
+// P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): ONE shared triangle-index
+// resolution for every kernel in this file — normal/UV/appearance fetch,
+// normal-map frame derivation, and emissive generation. `index_base_addr ==
+// 0` means flat triangles (corner i is vertex i); otherwise the buffer is
+// u32 indices at offset zero (the existing backend representation).
+static uint rt_index_at(uint64_t index_base_addr, uint i) {
+    if (index_base_addr == 0ul) return i;
+    device const uint* ib = (device const uint*)(uintptr_t)index_base_addr;
+    return ib[i];
+}
+
 // RS-B: one entry in the emissive-triangle light table (world-space positions,
 // per-vertex UVs for emissive-map sampling, and the owning object's index for
 // gi_materials/normal_sources lookups — RS-C). Packed-float3 discipline per
@@ -116,8 +127,18 @@ struct EmissiveTriangle {
     // emissive_descriptors[descriptor_index] when entries are local
     // (instanced mode); the D7 fast path sets it to the object index
     // (descriptor_index == object_index there, one descriptor per object)
-    // and never reads it. Replaces the old `_pad_obj` (size stays 80 B).
+    // and never reads it. Replaces the old `_pad_obj`.
     uint   descriptor_index;
+    // P4b (§5.2): per-corner APPEARANCE WEIGHTS (vertex order, post index
+    // resolution; 1.0 when the object has no weights wired), baked by
+    // emissive_gather. Explicit emitter samples never passed the hit test,
+    // so the trace kernel multiplies coverage × brightness at the sampled
+    // barycentrics from these corners and the normal-source row's current
+    // gain. Grew the entry 80 → 96 bytes.
+    float  w0;
+    float  w1;
+    float  w2;
+    float  _pad3;
 };
 
 // RS-B: alias-table entry — `prob` (probability of selecting self) and
@@ -161,6 +182,11 @@ struct EmissiveObjParams {
     uint slot_base;             // first TLAS descriptor slot of this object
     uint object_index;          // canonical gi_materials/normal_sources row
     float luma;                 // material-factor emissive luma (Rec.709)
+    // P4b (§5.2): raw GPU address of the per-vertex appearance-weight
+    // buffer (0 = unwired → corner weights 1.0). Gather bakes corner
+    // weights into the table entry; the gain deliberately stays OUT (the
+    // trace kernel reads it from the normal-source row at sample time).
+    uint64_t appearance_weights_addr;
 };
 
 // P4a: one enumerated (object, slot, triangle) candidate. `key` is the
@@ -360,10 +386,25 @@ struct RtNormalSource {
     // per-slot row (packed into out_n.w at the primary hit) + the bindless
     // address of THIS slot's InstanceTransform (0 = unwired). Declared in
     // this order so the ulong lands 8-aligned at 112 — the Rust mirror
-    // asserts offsets 108/112 and sizeof 120 (the old `_pad2[2]` words,
-    // consumed field-for-field).
+    // asserts offsets 108/112 (the old `_pad2[2]` words, consumed
+    // field-for-field).
     uint   object_index;
     ulong  instance_addr;
+    // P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance + indexed hit
+    // attributes. `appearance_weights_addr` is the bindless address of the
+    // per-vertex f32 weight buffer (0 = unwired, weight 1);
+    // `appearance_weight_count` its float count (CPU-validated to equal
+    // `vertex_count`); `appearance_gain` the object's `u.appearance.x`.
+    // `index_base_addr` is the bindless address of the u32 index buffer
+    // (0 = flat triangles) — `rt_index_at` (declared above the emissive
+    // kernels) resolves every corner fetch. The Rust mirror asserts
+    // offsets 120/128/132/136/144 and sizeof 152 (field-for-field order).
+    ulong  appearance_weights_addr;
+    uint   appearance_weight_count;
+    float  appearance_gain;
+    ulong  index_base_addr;
+    uint   vertex_count;
+    uint   _pad_p4b;
 };
 
 // RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
@@ -458,11 +499,7 @@ struct RtAsInstanceDescriptor {
 // like the deleted CPU path, plus the nonfinite rejection the CPU path
 // lacked (§5.1). Vertex/index reads are raw-address fetches of the CURRENT
 // buffers — this is what makes deformed geometry reach the light table.
-static uint em_index_at(device const EmissiveObjParams& op, uint i) {
-    if (op.index_base_addr == 0) return i;
-    device const uint* ib = (device const uint*)(uintptr_t)op.index_base_addr;
-    return ib[i];
-}
+// P4b: corner resolution is the shared `rt_index_at` (0 address = flat).
 static float3 em_fetch_pos(device const EmissiveObjParams& op, uint vi) {
     device const char* base = (device const char*)(uintptr_t)op.vertex_base_addr;
     return *(device const packed_float3*)(base + op.vertex_offset + (uint64_t)vi * op.vertex_stride);
@@ -488,9 +525,9 @@ kernel void emissive_enumerate(
     uint q = tid - op.candidate_base;
     uint slot = q / op.tri_count;
     uint tri = q - slot * op.tri_count;
-    uint i0 = em_index_at(op, tri * 3u);
-    uint i1 = em_index_at(op, tri * 3u + 1u);
-    uint i2 = em_index_at(op, tri * 3u + 2u);
+    uint i0 = rt_index_at(op.index_base_addr, tri * 3u);
+    uint i1 = rt_index_at(op.index_base_addr, tri * 3u + 1u);
+    uint i2 = rt_index_at(op.index_base_addr, tri * 3u + 2u);
     float3 v0 = em_fetch_pos(op, i0);
     float3 v1 = em_fetch_pos(op, i1);
     float3 v2 = em_fetch_pos(op, i2);
@@ -594,9 +631,9 @@ kernel void emissive_gather(
     // Front of the descending sort: the top-4096 with §5.1's tie order.
     EmissiveCandidate c = sorted[tid];
     device const EmissiveObjParams& op = objs[c.obj_index];
-    uint i0 = em_index_at(op, c.tri_index * 3u);
-    uint i1 = em_index_at(op, c.tri_index * 3u + 1u);
-    uint i2 = em_index_at(op, c.tri_index * 3u + 2u);
+    uint i0 = rt_index_at(op.index_base_addr, c.tri_index * 3u);
+    uint i1 = rt_index_at(op.index_base_addr, c.tri_index * 3u + 1u);
+    uint i2 = rt_index_at(op.index_base_addr, c.tri_index * 3u + 2u);
     float3 v0 = em_fetch_pos(op, i0);
     float3 v1 = em_fetch_pos(op, i1);
     float3 v2 = em_fetch_pos(op, i2);
@@ -620,6 +657,18 @@ kernel void emissive_gather(
     t.uv0 = em_fetch_uv(op, i0);
     t.uv1 = em_fetch_uv(op, i1);
     t.uv2 = em_fetch_uv(op, i2);
+    // P4b (§5.2): bake the per-corner appearance weights (1.0 unwired) —
+    // the trace kernel's explicit emitter samples multiply coverage ×
+    // brightness at the sampled barycentrics from these.
+    if (op.appearance_weights_addr != 0ul) {
+        device const float* aw = (device const float*)(uintptr_t)op.appearance_weights_addr;
+        t.w0 = aw[i0];
+        t.w1 = aw[i1];
+        t.w2 = aw[i2];
+    } else {
+        t.w0 = 1.0f; t.w1 = 1.0f; t.w2 = 1.0f;
+    }
+    t._pad3 = 0.0f;
     t.object_index = op.object_index;
     t.descriptor_index = c.desc_index;
     tris[tid] = t;
@@ -718,10 +767,9 @@ kernel void emissive_alias(
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
 // its bindless GPU address, then transform to world space with `src`'s
-// normal matrix. `vi` is a flat, non-indexed triangle-list vertex index
-// (`primitive_id*3 + which_vertex` — render_scene.rs's ONLY RT-caster
-// convention today; an indexed RT-caster would need its own index-buffer
-// GPU address threaded too — un-suppression trigger if that ever shows up).
+// normal matrix. `vi` is a VERTEX index — P4b (§5.2): callers resolve
+// triangle corners through `rt_index_at` (`src.index_base_addr`, 0 = flat),
+// so indexed meshes fetch the same way as flat ones.
 static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     device const uchar* base = (device const uchar*)src.vertex_base_addr;
     device const packed_float3* n_ptr =
@@ -737,17 +785,29 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
 }
 
 // RT-T1-B: barycentric-interpolate the three vertices of triangle
-// `primitive_id` (flat, non-indexed layout) in `normal_sources[instance_id]`
-// and return the NORMALIZED world-space normal. Metal's ray-tracing
-// barycentric convention: hit = (1-u-v)*v0 + u*v1 + v*v2.
+// `primitive_id` in `normal_sources[instance_id]` and return the NORMALIZED
+// world-space normal. Metal's ray-tracing barycentric convention: hit =
+// (1-u-v)*v0 + u*v1 + v*v2. P4b: corners resolve through the shared index
+// helper (`rt_index_at`, 0 = flat).
 static bool rt_finite(float x);
+static uint pcg(uint v);
+
+// P4b (§5.2): one corner-resolution call per triangle fetch — every
+// per-corner consumer (normals, UVs, appearance weights, the normal-map
+// frame) goes through this, never its own flat-layout corner math.
+static uint3 rt_triangle_corners(device const RtNormalSource& src, uint primitive_id) {
+    return uint3(
+        rt_index_at(src.index_base_addr, primitive_id * 3u),
+        rt_index_at(src.index_base_addr, primitive_id * 3u + 1u),
+        rt_index_at(src.index_base_addr, primitive_id * 3u + 2u));
+}
 
 static float3 fetch_interpolated_normal(device RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
     device RtNormalSource& src = normal_sources[instance_id];
-    uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
-    float3 n0 = fetch_world_normal(src, v0);
-    float3 n1 = fetch_world_normal(src, v1);
-    float3 n2 = fetch_world_normal(src, v2);
+    uint3 c = rt_triangle_corners(src, primitive_id);
+    float3 n0 = fetch_world_normal(src, c.x);
+    float3 n1 = fetch_world_normal(src, c.y);
+    float3 n2 = fetch_world_normal(src, c.z);
     float w0 = 1.0 - bary.x - bary.y;
     float3 n = n0 * w0 + n1 * bary.x + n2 * bary.y;
     float len2 = length_squared(n);
@@ -764,14 +824,14 @@ static float2 fetch_uv(device RtNormalSource& src, uint vi) {
     return float2(*uv_ptr);
 }
 
-// RT-T2-A: barycentric-interpolate triangle `primitive_id`'s UV (same flat,
-// non-indexed convention as `fetch_interpolated_normal`).
+// RT-T2-A: barycentric-interpolate triangle `primitive_id`'s UV (same
+// index-resolved corner convention as `fetch_interpolated_normal`).
 static float2 fetch_interpolated_uv(device RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
     device RtNormalSource& src = normal_sources[instance_id];
-    uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
-    float2 uv0 = fetch_uv(src, v0);
-    float2 uv1 = fetch_uv(src, v1);
-    float2 uv2 = fetch_uv(src, v2);
+    uint3 c = rt_triangle_corners(src, primitive_id);
+    float2 uv0 = fetch_uv(src, c.x);
+    float2 uv1 = fetch_uv(src, c.y);
+    float2 uv2 = fetch_uv(src, c.z);
     float w0 = 1.0 - bary.x - bary.y;
     return uv0 * w0 + uv1 * bary.x + uv2 * bary.y;
 }
@@ -820,7 +880,9 @@ static float3 perturb_normal_with_map(
     float3 n)
 {
     if (src.normal_tex_index >= MAX_RT_MATERIAL_TEXTURES) return n; // no texture bound: vertex normal stands (pre-BUG-wytp behavior)
-    uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
+    // P4b: corners resolve through the shared index helper (0 = flat).
+    uint3 c = rt_triangle_corners(src, primitive_id);
+    uint v0 = c.x, v1 = c.y, v2 = c.z;
     device const uchar* base = (device const uchar*)src.vertex_base_addr;
     // Position is the first field of `MeshVertex` (offset 0) — render_scene.rs's
     // ONLY RT-caster convention (the same single-convention assumption
@@ -901,6 +963,78 @@ static float sample_candidate_alpha(
     return material_textures[src.alpha_tex_index].sample(alpha_sampler, uv).a;
 }
 
+// ─── P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance coverage ────────
+// Appearance weights are a coverage/brightness control. The math is pinned
+// to the raster's `apply_appearance` (render_scene.wgsl:889):
+//   level = gain * weight (unwired weight = 1)
+//   coverage = clamp(level, 0, 1)   brightness = max(level, 1)
+// This matches the EXPECTED appearance coverage of raster alpha-to-
+// coverage, not its exact MSAA mask. Nonfinite level rejects (coverage 0)
+// rather than becoming an unchecked acceptance.
+
+// Evaluate coverage/brightness at a hit's barycentrics. Returns
+// (coverage, brightness). The weights fetch is bounds-checked against the
+// CPU-validated count: an out-of-range corner reads as zero coverage, never
+// an unchecked bindless load.
+static float2 appearance_coverage_brightness(device const RtNormalSource& src, uint primitive_id, float2 bary) {
+    float w = 1.0f;
+    if (src.appearance_weights_addr != 0ul) {
+        uint3 c = rt_triangle_corners(src, primitive_id);
+        if (c.x >= src.appearance_weight_count || c.y >= src.appearance_weight_count || c.z >= src.appearance_weight_count) {
+            return float2(0.0f, 1.0f);
+        }
+        device const float* weights = (device const float*)(uintptr_t)src.appearance_weights_addr;
+        float w0 = weights[c.x], w1 = weights[c.y], w2 = weights[c.z];
+        w = w0 * (1.0f - bary.x - bary.y) + w1 * bary.x + w2 * bary.y;
+    }
+    float level = src.appearance_gain * w;
+    if (!rt_finite(level)) return float2(0.0f, 1.0f);
+    return float2(clamp(level, 0.0f, 1.0f), max(level, 1.0f));
+}
+
+// Deterministic uniform variate for fractional-coverage acceptance — the
+// existing pcg ray RNG on a SEPARATE hash stream (the domain salt below),
+// keyed by pixel, frame, the caller's ray/sample seed and the candidate's
+// identity. It draws nothing from rand2/blue_noise, so appearance tests
+// never shift unrelated sampling sequences; per-class stream offsets at
+// the call sites keep same-pixel ray classes decorrelated.
+static float appearance_variate(uint2 tid, uint frame, uint ray_seed, uint instance_id, uint primitive_id) {
+    uint h = pcg(tid.x + pcg(tid.y + pcg(frame * 61u + ray_seed)));
+    h = pcg(h ^ 0xA9164B7Du);                        // appearance stream salt
+    h = pcg(h + pcg(instance_id + 0x9E3779B9u));     // candidate identity …
+    h = pcg(h + pcg(primitive_id + 0x85EBCA6Bu));    // … (instance, primitive)
+    return float(h & 0xFFFFFFu) / 16777216.0;
+}
+
+// The ONE candidate appearance-acceptance test every walker shares (the
+// phase's no-duplicated-logic rule). coverage == 0 rejects, == 1 accepts
+// without drawing a variate, fractional accepts when the draw lands below
+// coverage. `out_brightness` receives max(level, 1) — the accepted hit's
+// radiance multiplier (1.0 whenever appearance is inactive). Objects with
+// no weights wired and gain 1 take the fast path — byte-identical to the
+// pre-P4b walk.
+static bool appearance_accepts(device const RtNormalSource& src, uint instance_id, uint primitive_id, float2 bary, uint2 tid, uint frame, uint ray_seed, thread float& out_brightness) {
+    if (src.appearance_weights_addr == 0ul && src.appearance_gain == 1.0f) {
+        out_brightness = 1.0f;
+        return true;
+    }
+    float2 cb = appearance_coverage_brightness(src, primitive_id, bary);
+    out_brightness = cb.y;
+    if (cb.x <= 0.0f) return false;
+    if (cb.x >= 1.0f) return true;
+    return appearance_variate(tid, frame, ray_seed, instance_id, primitive_id) < cb.x;
+}
+
+// Appearance stream bases per ray class (see appearance_variate) — the
+// caller's per-sample seed is added to these.
+#define RT_APP_STREAM_PRIMARY 901u
+#define RT_APP_STREAM_SHADOW 910u
+#define RT_APP_STREAM_AO 1000u
+#define RT_APP_STREAM_GI 1100u
+#define RT_APP_STREAM_EMISSIVE_VIS 1200u
+#define RT_APP_STREAM_REFLECTION 1300u
+#define RT_APP_STREAM_SUN_BOUNCE 1400u
+
 // Shared luminance weighting (Rec.709) — the transmission early-out, the
 // sv luma fold, the reflection firefly clamp, the upsample gather, and
 // `atrous_filter`'s edge-stopping function all use it. Declared before the
@@ -911,11 +1045,12 @@ static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 // this kernel's ray casts (primary visibility, shadow, AO, GI + its
 // sun-bounce) — ONE alpha-test mechanism, not a per-ray-class copy (the
 // gate's "one mechanism, not three copies" requirement). Per-object BLAS
-// opacity (`encode_blas_build`'s `setOpaque(!alpha_mask)`) already gives
-// OPAQUE objects the hardware early-termination fast path; this manual walk
-// only pays a per-candidate texture sample for objects actually flagged
-// `alpha_mask` (a non-alpha-masked candidate's `pass` is unconditionally
-// true, no texture touch). `any_hit`: true stops at the first accepted
+// opacity (the descriptor nonopaque property — `blas_geometry_nonopaque`:
+// alpha mask, translucency, wired appearance weights, nonunit gain)
+// already gives OPAQUE objects the hardware early-termination fast path;
+// this manual walk only pays the per-candidate tests for objects actually
+// in the nonopaque class (an opaque candidate's `pass` is unconditionally
+// true, no texture/weights touch). `any_hit`: true stops at the first accepted
 // candidate (shadow/AO/GI occlusion tests only need existence — the
 // original `accept_any_intersection(true)` semantics); false walks every
 // candidate so the query commits its true CLOSEST accepted hit (primary
@@ -925,18 +1060,36 @@ static bool walk_with_alpha_test(
     thread intersection_query<triangle_data, instancing>& q,
     device RtNormalSource* normal_sources,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
-    bool any_hit)
+    bool any_hit,
+    // P4b (§5.2): appearance acceptance seeding (pixel, frame, per-sample
+    // ray seed — RT_APP_STREAM_* class bases at the call sites) and the
+    // COMMITTED hit's brightness out-param (1.0 when appearance is
+    // inactive or the walk missed; closest-hit callers multiply their
+    // evaluated radiance by it ONCE).
+    uint2 tid,
+    uint frame,
+    uint ray_seed,
+    thread float& out_brightness)
 {
+    out_brightness = 1.0f;
     while (q.next()) {
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         device RtNormalSource& src = normal_sources[iid];
+        uint pid = q.get_candidate_primitive_id();
+        float2 bary = q.get_candidate_triangle_barycentric_coord();
         bool pass = true;
         if (src.alpha_mask != 0u) {
             float alpha = sample_candidate_alpha(
                 src, normal_sources, material_textures,
-                iid, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
+                iid, pid, bary);
             pass = alpha >= src.alpha_cutoff;
+        }
+        // §5.2: the material alpha-mask cutoff test stays FIRST; the
+        // shared appearance coverage test follows it.
+        if (pass) {
+            float candidate_brightness;
+            pass = appearance_accepts(src, iid, pid, bary, tid, frame, ray_seed, candidate_brightness);
         }
         if (pass) {
             // `commit_triangle_intersection()`, not `accept_intersection()`
@@ -947,7 +1100,23 @@ static bool walk_with_alpha_test(
             if (any_hit) return true;
         }
     }
-    return q.get_committed_intersection_type() != intersection_type::none;
+    // Terminal check is load-bearing for BOTH modes: an OPAQUE-BLAS object
+    // auto-commits in hardware without ever delivering a candidate, so a
+    // ray that ended on plain opaque geometry falls out of the loop with a
+    // committed hit and no visible candidate.
+    if (q.get_committed_intersection_type() == intersection_type::none) return false;
+    if (!any_hit && q.get_committed_intersection_type() == intersection_type::triangle) {
+        // The committed hit is the CLOSEST accepted candidate — recompute
+        // its brightness directly (deterministic) rather than tracking the
+        // last acceptance's, which candidate delivery order does not
+        // guarantee.
+        uint iid = q.get_committed_instance_id();
+        out_brightness = appearance_coverage_brightness(
+            normal_sources[iid],
+            q.get_committed_primitive_id(),
+            q.get_committed_triangle_barycentric_coord()).y;
+    }
+    return true;
 }
 
 // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4): visibility rays transmit,
@@ -984,7 +1153,15 @@ static float3 walk_with_transmission(
     thread intersection_query<triangle_data, instancing>& q,
     device RtNormalSource* normal_sources,
     device GiMaterial* gi_materials,
-    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures)
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    // P4b (§5.2): appearance acceptance seeding, same shared helper as the
+    // binary walk. A rejected candidate passes through (never commits, same
+    // as a below-cutoff texel); an ACCEPTED translucent hit transmits its
+    // tint unchanged — brightness multiplies reflected/emitted radiance
+    // only, never a transmission tint.
+    uint2 tid,
+    uint frame,
+    uint ray_seed)
 {
     float3 tint = float3(1.0);
     uint transmitted = 0u;
@@ -992,12 +1169,18 @@ static float3 walk_with_transmission(
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         device RtNormalSource& src = normal_sources[iid];
+        uint pid = q.get_candidate_primitive_id();
+        float2 bary = q.get_candidate_triangle_barycentric_coord();
         bool pass = true;
         if (src.alpha_mask != 0u) {
             float alpha = sample_candidate_alpha(
                 src, normal_sources, material_textures,
-                iid, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
+                iid, pid, bary);
             pass = alpha >= src.alpha_cutoff;
+        }
+        if (pass) {
+            float candidate_brightness;
+            pass = appearance_accepts(src, iid, pid, bary, tid, frame, ray_seed, candidate_brightness);
         }
         if (!pass) continue;
         float tl = gi_materials[iid].translucency.x;
@@ -1154,10 +1337,11 @@ static float3 sun_bounce_at_hit(
         // binary scenes use walk_with_alpha_test (pre-TL-B codegen).
         float hit_ndotl = max(dot(hit_n, sdir), 0.0);
         if (HAS_TRANSLUCENCY) {
-            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures);
+            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc);
             term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
         } else {
-            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+            float sun_brightness;
+            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc, sun_brightness) ? 0.0 : 1.0;
             term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
         }
     }
@@ -1456,7 +1640,8 @@ kernel void trace_shadow_rays(
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
             rt_sanitize_ray(pr, 0u, tid, diagnostics); primary_q.reset(pr, accel, RT_MASK_VISIBLE);
-            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false)) {
+            float primary_brightness;
+            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_PRIMARY, primary_brightness)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 primary_pid = primary_q.get_committed_primitive_id();
                 primary_bary = primary_q.get_committed_triangle_barycentric_coord();
@@ -1600,10 +1785,11 @@ kernel void trace_shadow_rays(
                     intersection_params transmission_params;
                     transmission_params.force_opacity(forced_opacity::non_opaque);
                     shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
-                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures);
+                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s);
                 } else {
                     shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
-                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true);
+                    float shadow_brightness;
+                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s, shadow_brightness);
                     if (!blocked) vis += 1.0;
                 }
             }
@@ -1646,7 +1832,8 @@ kernel void trace_shadow_rays(
             ao_r.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
                 rt_sanitize_ray(ao_r, 2u, tid, diagnostics); ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
-            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true)) ao += 1.0;
+            float ao_brightness;
+            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_AO + s, ao_brightness)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -1739,7 +1926,10 @@ kernel void trace_shadow_rays(
             for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
                 intersection_query<triangle_data, instancing> gi_q;
                 rt_sanitize_ray(gr, 3u, tid, diagnostics); gi_q.reset(gr, accel, RT_MASK_VISIBLE);
-                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false)) {
+                // P4b (§5.2): the committed hit's appearance brightness
+                // multiplies its evaluated radiance ONCE (below).
+                float gi_brightness;
+                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_GI + s * 4u + bounce, gi_brightness)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
                     float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
@@ -1770,7 +1960,10 @@ kernel void trace_shadow_rays(
                 // Bounce >= 1 emissive is indirect and stays in the gather.
                 float3 bounce_emissive = (sampler_active && bounce == 0u)
                     ? float3(0.0) : hit_emissive;
-                gi += throughput * (bounce_emissive + bounce_term);
+                // P4b: brightness of the accepted hit scales its evaluated
+                // radiance once; coverage was already applied stochastically
+                // by the walk and must not multiply again here.
+                gi += throughput * (bounce_emissive + bounce_term) * gi_brightness;
                 if (bounce + 1u < RT_GI_MAX_BOUNCES) {
                     // ED4: the throughput multiplier is the hit albedo alone
                     // — the cosine-weighted estimator's 1/pi cancels (the
@@ -1882,7 +2075,8 @@ kernel void trace_shadow_rays(
                         em_r.direction = l_hat;
                         intersection_query<triangle_data, instancing> em_q;
                         rt_sanitize_ray(em_r, 4u, tid, diagnostics); em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
-                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true);
+                        float em_vis_brightness;
+                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_EMISSIVE_VIS, em_vis_brightness);
                         if (!blocked) {
                             float3 em_factor = float3(gi_materials[tri.object_index].emissive);
                             float2 uv0 = tri.uv0;
@@ -1898,6 +2092,22 @@ kernel void trace_shadow_rays(
                                 em_tex = material_textures[em_src.emissive_tex_index].sample(em_sampler_direct, uv).rgb;
                             }
                             float3 em_contrib = em_factor * em_tex;
+                            // P4b (§5.2): explicit emitter samples never
+                            // passed the hit test — multiply coverage ×
+                            // brightness at the SAMPLED barycentrics (a, b),
+                            // once, from the entry's baked corner weights and
+                            // the canonical row's CURRENT gain (a fractional
+                            // gain change rewrites only that row). Coverage
+                            // 0 zeroes the contribution outright.
+                            {
+                                float ew = tri.w0 * a + tri.w1 * b + tri.w2 * (1.0f - a - b);
+                                float elevel = em_src.appearance_gain * ew;
+                                if (!rt_finite(elevel) || elevel <= 0.0f) {
+                                    em_contrib = float3(0.0f);
+                                } else {
+                                    em_contrib *= clamp(elevel, 0.0f, 1.0f) * max(elevel, 1.0f);
+                                }
+                            }
                             // D8 RIS weight: instanced mode uses THIS entry's
                             // true world area (exact under per-slot scales —
                             // the area the estimator must see); the D7 fast
@@ -1999,7 +2209,10 @@ kernel void trace_shadow_rays(
             rt_sanitize_ray(rr, 5u, tid, diagnostics); refl_q.reset(rr, accel, RT_MASK_VISIBLE);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
-            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false)) {
+            // P4b (§5.2): the committed hit's appearance brightness
+            // multiplies its evaluated radiance ONCE (below).
+            float refl_hit_brightness;
+            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_REFLECTION + rs, refl_hit_brightness)) {
                 // Raster-parity reflections (RAYTRACING_DESIGN.md section 9.6): hit
                 // shading now includes the hit surface's own environment
                 // contribution (diffuse irradiance + one-bounce specular), so
@@ -2048,7 +2261,10 @@ kernel void trace_shadow_rays(
                     accel, slot_sources, slot_materials, material_textures, p, n_casters,
                     hit_pos, hit_n, hit_albedo, bias_eps, tid, 500u, diagnostics);
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
-                traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
+                // P4b: the accepted hit's appearance brightness scales the
+                // evaluated radiance ONCE (coverage was applied
+                // stochastically by the walk — never multiplied here).
+                traced = (hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term) * refl_hit_brightness;
             } else {
                 // RD4: miss returns the env at the ray's actual (possibly
                 // GGX-perturbed) direction, roughness mip.
@@ -3445,8 +3661,8 @@ struct DebugRayQueryHit {
     uint primitive_id;   // committed triangle index; DEBUG_RAY_INVALID on miss
     float distance;      // committed ray t; -1 on miss
     packed_float2 bary;  // committed barycentrics; (0,0) on miss — Rust repr(C) packs to offset 20, so no MSL float2 8-byte alignment
-    float coverage;      // 1.0 on an accepted hit — fractional appearance coverage lands in P4b
-    float pad0;
+    float coverage;      // P4b: the accepted hit's appearance coverage (clamp(gain*weight,0,1)); 1.0 with no appearance wired, 0 on miss
+    float brightness;    // P4b: the accepted hit's appearance brightness (max(gain*weight,1)); 1.0 with no appearance wired, 0 on miss
     packed_float3 normal; // production interpolated vertex normal; (0,0,0) on miss
     float pad1;
     packed_float2 uv;    // production interpolated UV; (0,0) on miss
@@ -3461,7 +3677,10 @@ struct DebugRayQueryParams {
     uint ray_count;
     // Linearization width of the 2D dispatch grid (workgroups_x * 8).
     uint grid_x;
-    uint pad;
+    // P4b: seed for the fractional-appearance acceptance draws — each ray's
+    // draw keys on (seed_base, ray index, candidate identity), so N
+    // identical rays are N independent fixed-seed coverage samples.
+    uint seed_base;
 };
 
 kernel void debug_ray_query(
@@ -3485,18 +3704,22 @@ kernel void debug_ray_query(
     pr.max_distance = in.max_distance;
     intersection_query<triangle_data, instancing> q;
     q.reset(pr, accel, RT_MASK_VISIBLE);
-    if (walk_with_alpha_test(q, slot_sources, material_textures, false)) {
+    // P4b: the fractional acceptance draw keys on (seed_base, ray index)
+    // via the shared helper — the ray index rides the ray-seed slot.
+    float hit_brightness = 1.0f;
+    if (walk_with_alpha_test(q, slot_sources, material_textures, false, tid2, p.seed_base, tid, hit_brightness)) {
         uint iid = q.get_committed_instance_id();
         uint pid = q.get_committed_primitive_id();
         float2 bary = q.get_committed_triangle_barycentric_coord();
+        float2 cov_bri = appearance_coverage_brightness(slot_sources[iid], pid, bary);
         out.hit = 1u;
         out.object_id = slot_sources[iid].object_index;
         out.instance_id = iid;
         out.primitive_id = pid;
         out.distance = q.get_committed_distance();
         out.bary = bary;
-        out.coverage = 1.0;
-        out.pad0 = 0.0;
+        out.coverage = cov_bri.x;
+        out.brightness = cov_bri.y;
         out.normal = packed_float3(fetch_interpolated_normal(slot_sources, iid, pid, bary));
         out.pad1 = 0.0;
         out.uv = packed_float2(fetch_interpolated_uv(slot_sources, iid, pid, bary));
@@ -3509,7 +3732,7 @@ kernel void debug_ray_query(
         out.distance = -1.0;
         out.bary = float2(0.0);
         out.coverage = 0.0;
-        out.pad0 = 0.0;
+        out.brightness = 0.0;
         out.normal = packed_float3(0.0);
         out.pad1 = 0.0;
         out.uv = packed_float2(0.0);

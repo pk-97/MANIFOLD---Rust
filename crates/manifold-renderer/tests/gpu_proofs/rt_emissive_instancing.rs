@@ -193,6 +193,8 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             instances_addr: instances_buffer.gpu_address(),
             instances_buffer: Some(&instances_buffer),
             instance_slots: 2,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         },
         RtObjectGeometry {
             vertex_buffer: &receiver_buffer,
@@ -216,6 +218,8 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             instances_addr: 0,
             instances_buffer: None,
             instance_slots: 1,
+            appearance_weights: None,
+            appearance_gain: 1.0,
         },
     ];
     let materials = [
