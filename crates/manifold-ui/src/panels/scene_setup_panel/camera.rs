@@ -77,7 +77,7 @@ mod tests {
         let value_cell = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().value_text;
         let (_, actions) = panel.handle_event(
             &UIEvent::DoubleClick { node_id: value_cell, pos: Vec2::ZERO, modifiers: Modifiers::default() },
-            &tree,
+            &mut tree,
         );
         assert!(matches!(actions.as_slice(),
             [PanelAction::Root(RootAction::BeginParamTextInput { target, param_id, .. })]

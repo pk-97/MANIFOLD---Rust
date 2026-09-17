@@ -85,7 +85,7 @@ fn address(kind: TrimKind) -> ValueRef {
     )
 }
 
-fn press(panel: &mut ScenePanel, tree: &UITree, node_id: NodeId, kind: TrimKind) {
+fn press(panel: &mut ScenePanel, tree: &mut UITree, node_id: NodeId, kind: TrimKind) {
     let bounds = tree.get_bounds(node_id);
     let pos = Vec2::new(
         bounds.x + bounds.width * 0.5,
@@ -124,7 +124,7 @@ fn press(panel: &mut ScenePanel, tree: &UITree, node_id: NodeId, kind: TrimKind)
 
 fn move_to(
     panel: &mut ScenePanel,
-    tree: &UITree,
+    tree: &mut UITree,
     row: usize,
     norm: f32,
     kind: TrimKind,
@@ -153,7 +153,7 @@ fn move_to(
     }
 }
 
-fn release(panel: &mut ScenePanel, tree: &UITree, kind: TrimKind, drag_end: bool) {
+fn release(panel: &mut ScenePanel, tree: &mut UITree, kind: TrimKind, drag_end: bool) {
     let event = if drag_end {
         UIEvent::DragEnd {
             node_id: None,
@@ -185,11 +185,11 @@ fn release(panel: &mut ScenePanel, tree: &UITree, kind: TrimKind, drag_end: bool
 fn scene_trim_both_edges_dispatch_clamp_and_commit_for_every_kind() {
     for kind in [TrimKind::Driver, TrimKind::Audio, TrimKind::Ableton] {
         for is_min in [true, false] {
-            let (mut panel, tree, _) = fixture(kind);
+            let (mut panel, mut tree, _) = fixture(kind);
             let trim = handles(&panel, kind, 0);
             press(
                 &mut panel,
-                &tree,
+                &mut tree,
                 if is_min {
                     trim.min_bar_id
                 } else {
@@ -197,18 +197,18 @@ fn scene_trim_both_edges_dispatch_clamp_and_commit_for_every_kind() {
                 },
                 kind,
             );
-            let (min, max) = move_to(&mut panel, &tree, 0, if is_min { 0.4 } else { 0.6 }, kind);
+            let (min, max) = move_to(&mut panel, &mut tree, 0, if is_min { 0.4 } else { 0.6 }, kind);
             let expected = if is_min { (0.4, 0.8) } else { (0.2, 0.6) };
             assert!((min - expected.0).abs() < 0.02 && (max - expected.1).abs() < 0.02);
             assert_eq!(
-                move_to(&mut panel, &tree, 0, if is_min { 2.0 } else { -1.0 }, kind),
+                move_to(&mut panel, &mut tree, 0, if is_min { 2.0 } else { -1.0 }, kind),
                 if is_min { (0.8, 0.8) } else { (0.2, 0.2) }
             );
             assert_eq!(
-                move_to(&mut panel, &tree, 0, if is_min { -1.0 } else { 2.0 }, kind),
+                move_to(&mut panel, &mut tree, 0, if is_min { -1.0 } else { 2.0 }, kind),
                 if is_min { (0.0, 0.8) } else { (0.2, 1.0) }
             );
-            release(&mut panel, &tree, kind, is_min);
+            release(&mut panel, &mut tree, kind, is_min);
         }
     }
 }
@@ -231,30 +231,30 @@ fn scene_trim_driver_proximity_uses_live_track_after_scroll() {
             pos: Vec2::new(bar.x + bar.width * 0.5 + 5.0, bar.y),
             modifiers: Modifiers::NONE,
         },
-        &tree,
+        &mut tree,
     );
     assert!(
         matches!(actions.as_slice(), [PanelAction::Scrub(value, ScrubPhase::Begin)] if *value == address(kind)),
         "{actions:?}"
     );
-    let (min, max) = move_to(&mut panel, &tree, 0, 0.45, kind);
+    let (min, max) = move_to(&mut panel, &mut tree, 0, 0.45, kind);
     assert!((min - 0.45).abs() < 0.02 && max == 0.8);
-    release(&mut panel, &tree, kind, true);
+    release(&mut panel, &mut tree, kind, true);
 }
 
 #[test]
 fn scene_trim_rebuild_preserves_parameter_identity_and_range() {
     let kind = TrimKind::Driver;
-    let (mut panel, tree, mut surface) = fixture(kind);
+    let (mut panel, mut tree, mut surface) = fixture(kind);
     let trim = handles(&panel, kind, 0);
-    press(&mut panel, &tree, trim.min_bar_id, kind);
-    move_to(&mut panel, &tree, 0, 0.4, kind);
+    press(&mut panel, &mut tree, trim.min_bar_id, kind);
+    move_to(&mut panel, &mut tree, 0, 0.4, kind);
     let mut another = surface.rows[0].clone();
     another.id = "translate_y".into();
     another.modulation.trim_max = 0.95;
     surface.rows.insert(0, another);
     panel.configure_params(Some(surface));
-    let tree = rebuild(&mut panel);
+    let mut tree = rebuild(&mut panel);
     assert_eq!(panel.properties_card.rows[1].id.as_ref(), "translate_x");
     let bar = tree.get_bounds(handles(&panel, kind, 1).min_bar_id);
     let track = tree.get_bounds(panel.properties_card.row_host.slider_ids[1].unwrap().track);
@@ -263,17 +263,17 @@ fn scene_trim_rebuild_preserves_parameter_identity_and_range() {
         (drawn_min - 0.4).abs() < 0.02,
         "rebuild must retain the live trim range"
     );
-    let (min, max) = move_to(&mut panel, &tree, 1, 0.5, kind);
+    let (min, max) = move_to(&mut panel, &mut tree, 1, 0.5, kind);
     assert!((min - 0.5).abs() < 0.02 && max == 0.8);
-    release(&mut panel, &tree, kind, true);
+    release(&mut panel, &mut tree, kind, true);
 }
 
 #[test]
 fn scene_trim_release_after_layer_change_commits_original_address() {
     let kind = TrimKind::Audio;
-    let (mut panel, tree, surface) = fixture(kind);
+    let (mut panel, mut tree, surface) = fixture(kind);
     let trim = handles(&panel, kind, 0);
-    press(&mut panel, &tree, trim.min_bar_id, kind);
+    press(&mut panel, &mut tree, trim.min_bar_id, kind);
     let (mut vm, _) = tests::world_transform_vm();
     vm.layer_id = LayerId::new("layer-2");
     panel.configure(SceneSetupState::Live(Box::new(vm)));
@@ -281,7 +281,7 @@ fn scene_trim_release_after_layer_change_commits_original_address() {
     panel
         .selection
         .insert(LayerId::new("layer-2"), SceneSelection::World);
-    let tree = rebuild(&mut panel);
+    let mut tree = rebuild(&mut panel);
     let (_, actions) = panel.handle_event(
         &UIEvent::Drag {
             node_id: None,
@@ -289,11 +289,11 @@ fn scene_trim_release_after_layer_change_commits_original_address() {
             delta: Vec2::ZERO,
             modifiers: Modifiers::NONE,
         },
-        &tree,
+        &mut tree,
     );
     assert!(
         actions.is_empty(),
         "a replacement layer must not supply drag geometry"
     );
-    release(&mut panel, &tree, kind, false);
+    release(&mut panel, &mut tree, kind, false);
 }

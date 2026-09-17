@@ -151,6 +151,13 @@ Phasing-completeness check: every section 2 commitment lands in exactly one phas
 
 **P-S — RE-HEADLINED at execution (2026-07-22, census + Peter rulings):** the original "migration into param_surface machinery" thesis was STALE (WIDGET_TREE completed that migration before P-S ran). As executed: split-by-layer directory modules (param_slider_shared, param_card, panels/inspector) + ONE real dedup — shared `RowHost` extracted from ParamCardPanel, SceneCardState collapsed onto it (the scene panel's hand-copied twin deleted, net −292 lines) + the D9 `--catalog` enumeration (structural BUG-239 kill; found BUG-302 (E/A arm buttons nameless to the flow harness…) on first run). D10 macros/settings: resolved per D-39 — deferred to the CHROME_PARAMS designed unification (register); the chrome category is an accident of history, guarded meanwhile by `no_bespoke_row_infra`.
 
+The September 2026 control audit found that P-S shared ids and click routing but
+left hosts installing row bundles and implementing drags separately. The follow-up
+moves exhaustive `ParamRowIds` installation and all parameter-row gestures into
+`RowHost`. Scene Setup and inspector cards now delegate both operations. Audio
+Setup and clip-trigger controls retain their domain layouts and use the same
+captured-address `ScrubGesture` lifecycle.
+
 ## 5. Decided — do not reopen
 
 1. Matrix: layers primary, domains secondary; vocabulary per D2, fixed campaign-wide.

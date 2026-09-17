@@ -157,31 +157,9 @@ impl ParamCardPanel {
             .map(|r| r.mapping.osc_address.clone())
             .collect();
         self.copied_flash.clear();
-        self.row_host.slider_ids = vec![None; n];
-        self.row_host.slider_resets = vec![None; n];
+        self.row_host.resize(0);
+        self.row_host.resize(n);
         self.base_values = vec![0.0; n];
-        self.row_host.row_catcher_ids = vec![None; n];
-        self.row_host.driver_btn_ids = vec![None; n];
-        self.row_host.envelope_btn_ids = vec![None; n];
-        self.row_host.driver_config_ids = Vec::new();
-        self.row_host.driver_config_ids.resize_with(n, || None);
-        self.row_host.audio_btn_ids = vec![None; n];
-        self.row_host.automation_btn_ids = vec![None; n];
-        self.row_host.audio_configs = Vec::new();
-        self.row_host.audio_configs.resize_with(n, || None);
-        self.row_host.audio_trigger_mode_badge_ids = vec![None; n];
-        self.row_host.target_ids = Vec::new();
-        self.row_host.target_ids.resize_with(n, || None);
-        self.row_host.envelope_config_ids = Vec::new();
-        self.row_host.envelope_config_ids.resize_with(n, || None);
-        self.row_host.trim_ids = Vec::new();
-        self.row_host.trim_ids.resize_with(n, || None);
-        self.row_host.ableton_trim_ids = Vec::new();
-        self.row_host.ableton_trim_ids.resize_with(n, || None);
-        self.row_host.audio_trim_ids = Vec::new();
-        self.row_host.audio_trim_ids.resize_with(n, || None);
-        self.row_host.ableton_config_ids = Vec::new();
-        self.row_host.ableton_config_ids.resize_with(n, || None);
         // Preserve the per-param tab choice across rebuilds (UI state); only grow
         // for new params. resolve_active_tab clamps stale choices at build time.
         self.mod_active_tab.resize(n, ModTab::Driver);
@@ -212,15 +190,11 @@ impl ParamCardPanel {
                 self.drawer_height_anim[i].snap(target);
             }
         }
-        self.row_host.mod_tab_ids = vec![Vec::new(); n];
         // Ink x-position targets are only knowable once the tab strip is laid
         // out (build time, not here) — resize only; `sync_mod_tab_ink` sets
         // targets per-row after `build_param_row` returns.
         self.mod_tab_ink.resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
         self.mod_tab_ink.truncate(n);
-        self.row_host.toggle_ids = Vec::new();
-        self.row_host.toggle_ids.resize_with(n, || None);
-        self.row_host.mapping_chevron_ids = vec![None; n];
         self.string_param_btn_ids = vec![None; config.string_params.len()];
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
@@ -231,6 +205,18 @@ impl ParamCardPanel {
         self.value_snapback
             .resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS).with_curve(crate::anim::Curve::Snap));
         self.value_snapback.truncate(n);
+
+        // Reapply any row gesture that survived this structural snapshot.
+        // RowHost resolves the captured ParamId against the rebuilt rows and
+        // refuses to move it when the captured card target no longer matches.
+        let target = self.param_target();
+        self.row_host.restore_live(RowInteraction {
+            target: &target,
+            rows: &mut self.rows,
+            modulation: &mut self.state.mod_state,
+            values: &mut self.param_cache,
+            row_indices: &self.row_id_index,
+        });
     }
 
     pub fn compute_height(&self) -> f32 {
@@ -1331,22 +1317,7 @@ impl ParamCardPanel {
                 // so rows build showing the default as before.
                 None,
             );
-            self.row_host.slider_ids[i] = row.slider;
-            self.row_host.slider_resets[i] = Some(row.slider_reset);
-            self.row_host.row_catcher_ids[i] = Some(row.row_catcher);
-            self.row_host.trim_ids[i] = row.trim;
-            self.row_host.target_ids[i] = row.target;
-            self.row_host.envelope_config_ids[i] = row.envelope_config;
-            self.row_host.ableton_trim_ids[i] = row.ableton_trim;
-            self.row_host.audio_trim_ids[i] = row.audio_trim;
-            self.row_host.envelope_btn_ids[i] = row.envelope_btn;
-            self.row_host.driver_btn_ids[i] = Some(row.driver_btn);
-            self.row_host.driver_config_ids[i] = row.driver_config;
-            self.row_host.ableton_config_ids[i] = row.ableton_config;
-            self.row_host.audio_btn_ids[i] = Some(row.audio_btn);
-            self.row_host.automation_btn_ids[i] = row.automation_btn;
-            self.row_host.audio_configs[i] = row.audio_config;
-            self.row_host.mod_tab_ids[i] = row.mod_tabs;
+            let new_cy = self.row_host.install_row(tree, i, row);
             self.sync_mod_tab_ink(tree, i);
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
             // A subtle ">" that opens the sideways range/scale/offset/invert/
@@ -1385,7 +1356,7 @@ impl ParamCardPanel {
                 }
             }
             self.row_host.reindex_row(tree, i);
-            cy = row.new_cy;
+            cy = new_cy;
         }
         }
 
@@ -1813,22 +1784,7 @@ impl ParamCardPanel {
                         // unconditionally, so rows build showing the default.
                         None,
                     );
-                    self.row_host.slider_ids[i] = row.slider;
-                    self.row_host.slider_resets[i] = Some(row.slider_reset);
-                    self.row_host.row_catcher_ids[i] = Some(row.row_catcher);
-                    self.row_host.trim_ids[i] = row.trim;
-                    self.row_host.target_ids[i] = row.target;
-                    self.row_host.envelope_config_ids[i] = row.envelope_config;
-                    self.row_host.ableton_trim_ids[i] = row.ableton_trim;
-                    self.row_host.audio_trim_ids[i] = row.audio_trim;
-                    self.row_host.envelope_btn_ids[i] = row.envelope_btn;
-                    self.row_host.driver_btn_ids[i] = Some(row.driver_btn);
-                    self.row_host.driver_config_ids[i] = row.driver_config;
-                    self.row_host.ableton_config_ids[i] = row.ableton_config;
-                    self.row_host.audio_btn_ids[i] = Some(row.audio_btn);
-                    self.row_host.automation_btn_ids[i] = row.automation_btn;
-                    self.row_host.audio_configs[i] = row.audio_config;
-                    self.row_host.mod_tab_ids[i] = row.mod_tabs;
+                    let new_cy = self.row_host.install_row(tree, i, row);
                     self.sync_mod_tab_ink(tree, i);
                     // Mapping-drawer chevron at the row's right edge (Author +
                     // mappable) — identical to the effect card. Opens the same
@@ -1858,7 +1814,7 @@ impl ParamCardPanel {
                         ));
                     }
                     self.row_host.reindex_row(tree, i);
-                    cy = row.new_cy;
+                    cy = new_cy;
                 }
             }
             }
@@ -2099,6 +2055,11 @@ impl ParamCardPanel {
     /// rendering did (section 8.4 P3b Task A).
     fn sync_param_value(&mut self, tree: &mut UITree, i: usize, val: f32) {
         let info = &self.rows[i];
+        if self.row_host.is_dragging()
+            && self.row_host.active_param_index(&self.param_target(), &self.rows) == Some(i)
+        {
+            return;
+        }
 
         // Label dirty-check (slider rows only — toggle/trigger rows have
         // their label baked into the row at build time).
@@ -2131,7 +2092,6 @@ impl ParamCardPanel {
             // post-configure NaN resync) and only while this card's slider
             // isn't being dragged (the drag is its own feedback).
             if !self.param_cache[i].is_nan()
-                && !self.drag.is_dragging()
                 && let Some(flash) = self.value_flash.get_mut(i)
             {
                 flash.fire(color::MOTION_SLOW_MS);

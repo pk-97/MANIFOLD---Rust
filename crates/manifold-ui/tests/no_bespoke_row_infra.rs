@@ -88,7 +88,10 @@ fn panels_dir() -> PathBuf {
 /// `"mod.rs"` entry would blanket-allowlist every OTHER directory module's
 /// `mod.rs` too, which defeats the point of the allowlist).
 fn is_allowlisted(path: &Path, allowlist: &[&str]) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
     if allowlist.contains(&name) {
         return true;
     }
@@ -161,4 +164,41 @@ fn no_bespoke_node_id_row_hoard_outside_the_allowlist() {
          route through `RowIndex` + `row_action` instead. Violating files: \
          {violations:?}"
     );
+}
+
+#[test]
+fn parameter_hosts_delegate_registration_and_gestures_to_row_host() {
+    for relative in [
+        "scene_setup_panel.rs",
+        "param_card/render.rs",
+        "param_card/routing.rs",
+    ] {
+        let source = fs::read_to_string(panels_dir().join(relative)).expect("read host source");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for retired in [
+            "SceneTrimDrag",
+            "slider_drag_value",
+            "ParamDragTarget::Trim",
+            "ParamDragTarget::EnvDecay",
+            "ParamDragTarget::AudioShape",
+            "ParamDragTarget::StepAmount",
+        ] {
+            assert!(
+                !production.contains(retired),
+                "{relative} restores host-specific row gesture {retired}; use RowHost"
+            );
+        }
+        for bundle in [
+            "built.slider",
+            "built.trim",
+            "built.envelope_config",
+            "built.ableton_config",
+            "built.audio_config",
+        ] {
+            assert!(
+                !production.contains(bundle),
+                "{relative} manually installs {bundle}; use exhaustive RowHost::install_row"
+            );
+        }
+    }
 }

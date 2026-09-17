@@ -21,10 +21,13 @@ use crate::{ParamsAction, RootAction};
 use crate::panels::AudioDrawerClick;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
+use super::scrub::ScrubGesture;
 use super::{
-    AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, TrimKind,
+    GraphParamTarget, PanelAction, ScrubPhase, ScrubValue,
     UiRelightField, UiRelightHeightFrom, ValueRef,
 };
+#[cfg(test)]
+use super::{AudioShapeParam, TrimKind};
 use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
@@ -62,26 +65,6 @@ const KEY_MODIFIER_OBJECTS: u64 = 90_015;
 /// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
 /// a crisp accent line, not a filled bar).
 const MOD_TAB_INK_H: f32 = 2.0;
-
-/// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
-/// per-control full-scale constants. The single conversion shared by the audio
-/// shaping sliders' mouse-down and drag paths.
-fn audio_shape_value_from_norm(which: AudioShapeParam, norm: f32) -> f32 {
-    let n = norm.clamp(0.0, 1.0);
-    match which {
-        AudioShapeParam::Sensitivity => n * AUDIO_SENS_MAX,
-        AudioShapeParam::Attack => n * AUDIO_ATTACK_MAX_MS,
-        AudioShapeParam::Release => n * AUDIO_RELEASE_MAX_MS,
-    }
-}
-
-/// Display text for an audio shaping slider's value field.
-fn audio_shape_value_text(which: AudioShapeParam, value: f32) -> String {
-    match which {
-        AudioShapeParam::Sensitivity => format!("{value:.2}"),
-        AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
-    }
-}
 
 // ── Layout constants ─────────────────────────────────────────────
 //
@@ -412,8 +395,8 @@ pub struct ParamCardPanel {
 
     copied_flash: CopyToClipboardLabelState,
 
-    // Drag state
-    drag: ParamDragState,
+    // Relight has no row identity, so it keeps its own captured scrub address.
+    relight_drag: ScrubGesture<UiRelightField>,
 
     // Caches (NaN = needs sync)
     param_cache: Vec<f32>,
@@ -556,7 +539,7 @@ impl ParamCardPanel {
             osc_addresses: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             copied_flash: CopyToClipboardLabelState::default(),
-            drag: ParamDragState::new(),
+            relight_drag: ScrubGesture::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
@@ -833,7 +816,7 @@ impl ParamCardPanel {
     }
 
     pub fn is_dragging(&self) -> bool {
-        self.drag.is_dragging()
+        self.row_host.is_dragging() || self.relight_drag.is_active()
     }
 
     /// The header collapse-chevron node id, resolved during `build` (`None`
@@ -2208,7 +2191,9 @@ mod tests {
         use crate::view::UiParamSlot as ParamSlot;
         panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
 
-        panel.drag.begin(ParamDragTarget::Param { index: 0 }, Vec2::ZERO);
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let rect = tree.get_bounds(track);
+        let _ = panel.handle_pointer_down(track, Vec2::new(rect.x + rect.width * 0.5, rect.y), &tree);
         panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
         assert!(
             panel.value_flash[0].progress().is_none(),
@@ -2216,11 +2201,7 @@ mod tests {
         );
     }
 
-    // ── P7.1 pinning tests — one per `ParamDragTarget` category, written
-    // against the CURRENT six-slot `ParamDragState` before the
-    // `DragController<ParamDragTarget>` fold (docs/UI_WIDGET_UNIFICATION_
-    // DESIGN.md P7.1). Re-run green post-switch to prove the fold is a
-    // lifecycle-only swap with byte-identical command emission.
+    // ── P7.1 pinning tests — public pointer entry for every row gesture.
 
     #[test]
     fn pinning_param_drag_begin_track_end() {
