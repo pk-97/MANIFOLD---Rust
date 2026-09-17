@@ -1547,6 +1547,7 @@ mod tests {
                 section: None,
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+            audio: crate::panels::param_slider_shared::AudioRowState::default(),
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1588,21 +1589,21 @@ mod tests {
             has_graph_mod: false,
             layer_id: None,
             modifier: None,
-            audio: Default::default(),
+            audio_sends: Vec::new(),
             relight: RelightCardConfig::default(),
         }
     }
 
     #[test]
     fn drawer_audio_click_uses_clicked_card_when_indices_match() {
-        use crate::panels::param_slider_shared::{AudioCardState, AudioRowState};
+        use crate::panels::param_slider_shared::AudioRowState;
         use crate::panels::param_card::ParamCardKind;
         use crate::intent::{IntentRegistry, Gesture};
         let mut inspector = InspectorCompositePanel::new();
         let mut tree = UITree::new();
         for (scope, name) in [(0, "Master"), (1, "Layer")] {
             let mut config = mk_config(ParamCardKind::Effect, name, 1);
-            config.audio = AudioCardState { rows: vec![AudioRowState { active: true, ..Default::default() }], ..Default::default() };
+            config.rows[0].audio = AudioRowState { active: true, ..Default::default() };
             let mut card = ParamCardPanel::new();
             card.configure(&config);
             card.build(&mut tree, Rect::new(scope as f32 * 350.0, 0.0, 340.0, 600.0));
@@ -2342,7 +2343,7 @@ mod tests {
     #[test]
     fn layer_column_height_matches_settled_heights_with_armed_audio_drawers_on_first_configure() {
         use super::super::param_card::ParamCardKind;
-        use super::super::param_slider_shared::{AudioCardState, AudioRowState};
+        use super::super::param_slider_shared::AudioRowState;
 
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
@@ -2359,15 +2360,7 @@ mod tests {
             .map(|i| {
                 let mut c = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4);
                 if i % 2 == 0 {
-                    c.audio = AudioCardState {
-                        rows: vec![
-                            AudioRowState { active: true, ..Default::default() },
-                            AudioRowState::default(),
-                            AudioRowState::default(),
-                            AudioRowState::default(),
-                        ],
-                        ..Default::default()
-                    };
+                    c.rows[0].audio = AudioRowState { active: true, ..Default::default() };
                 }
                 c
             })

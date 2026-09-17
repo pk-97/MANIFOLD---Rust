@@ -144,10 +144,13 @@ impl ParamCardPanel {
         self.state.has_graph_mod = config.has_graph_mod;
         let rows_mod: Vec<RowMod> = config.rows.iter().map(|r| r.modulation.clone()).collect();
         self.state.mod_state.sync_from_config(n, &rows_mod);
-        self.state.mod_state.sync_audio(n, &config.audio);
+        self.state.mod_state.sync_audio(
+            config.rows.iter().map(|row| row.audio.clone()),
+            &config.audio_sends,
+        );
         // AUD badge aggregate: any param has an armed audio modulation (parallels
-        // has_drv / has_env). Derived after sync_audio populates audio_active.
-        self.state.has_audio = self.state.mod_state.audio_active.iter().any(|&a| a);
+        // has_drv / has_env). Derived from the retained audio rows.
+        self.state.has_audio = self.state.mod_state.audio_rows.iter().any(|row| row.active);
         self.osc_addresses = config
             .rows
             .iter()
