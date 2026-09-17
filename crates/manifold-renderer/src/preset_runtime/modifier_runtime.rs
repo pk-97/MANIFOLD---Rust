@@ -56,7 +56,7 @@ impl PresetRuntime {
         render_fused: bool,
     ) -> Result<Self, JsonGeneratorLoadError> {
         if !doc.scene_modifiers.iter().any(|modifier|
-            manifold_core::scene_modifier_math_view::has_math_view_controls(&modifier.graph)) {
+            manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph)) {
             return Self::from_def_for_render_view(doc, registry, manifest, render_fused, None);
         }
         let mut runtime = Self::from_def_for_render_view(doc.clone(), registry, manifest, render_fused, None)?;
@@ -69,14 +69,14 @@ impl PresetRuntime {
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
         render_fused: bool,
-        math_view: Option<(&manifold_core::NodeId, crate::node_graph::scene_modifier_expand::MathViewScope)>,
+        math_view: Option<&manifold_core::NodeId>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let (render_def, authoring) =
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
                 || crate::node_graph::scene_modifier_expand::contains_fragments(&doc)
             {
                 let prepared = match math_view {
-                    Some((modifier_id, scope)) => crate::node_graph::scene_modifier_expand::prepare_scene_modifier_math_view(&doc, registry, modifier_id, scope)?,
+                    Some(modifier_id) => crate::node_graph::scene_modifier_expand::prepare_scene_modifier_math_view(&doc, registry, modifier_id)?,
                     None => crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(&doc, registry)?,
                 };
                 // The generator resolver drops Composite bindings. Keep provenance
@@ -201,14 +201,12 @@ impl PresetRuntime {
                     path: "mathViewBuffers".into(), detail: "prepared byte count overflow".into(),
                 }));
         for view in &self.math_views {
-            for variant in &view.variants {
-                if let Some(extra) = variant.prepared_modifier_buffer_usage(canvas)? {
-                    usage.candidate_bytes = add(usage.candidate_bytes, extra.candidate_bytes)?;
-                    usage.baseline_bytes = add(usage.baseline_bytes, extra.baseline_bytes)?;
-                    for (scene, bytes) in extra.modifier_bytes {
-                        let entry = usage.modifier_bytes.entry(scene).or_default();
-                        *entry = add(*entry, bytes)?;
-                    }
+            if let Some(extra) = view.variant.prepared_modifier_buffer_usage(canvas)? {
+                usage.candidate_bytes = add(usage.candidate_bytes, extra.candidate_bytes)?;
+                usage.baseline_bytes = add(usage.baseline_bytes, extra.baseline_bytes)?;
+                for (scene, bytes) in extra.modifier_bytes {
+                    let entry = usage.modifier_bytes.entry(scene).or_default();
+                    *entry = add(*entry, bytes)?;
                 }
             }
         }
@@ -243,7 +241,7 @@ impl PresetRuntime {
     #[cfg(test)]
     pub(crate) fn note_modifier_audio_event(&mut self, param: &str) -> bool {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.note_modifier_audio_event(param); }
+            view.variant.note_modifier_audio_event(param);
         }
         self.modifier_events
             .as_mut()
@@ -252,7 +250,7 @@ impl PresetRuntime {
 
     pub(crate) fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.note_modifier_audio_key(param_key); }
+            view.variant.note_modifier_audio_key(param_key);
         }
         self.modifier_events
             .as_mut()
@@ -261,7 +259,7 @@ impl PresetRuntime {
 
     pub(crate) fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.note_modifier_clip_event(host); }
+            view.variant.note_modifier_clip_event(host);
         }
         if let Some(events) = &mut self.modifier_events {
             events.note_clip(|param| {
@@ -284,7 +282,7 @@ impl PresetRuntime {
     pub fn note_trigger_event(&mut self, previous_count: u32) {
         self.pending_trigger_baseline.get_or_insert(previous_count);
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.note_trigger_event(previous_count); }
+            view.variant.note_trigger_event(previous_count);
         }
     }
 
@@ -296,9 +294,7 @@ impl PresetRuntime {
         for view in &mut self.math_views {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
                 view.events.carry_from(&previous.events);
-                for (variant, previous) in view.variants.iter_mut().zip(&mut previous.variants) {
-                    variant.carry_modifier_control_state_from(previous);
-                }
+                view.variant.carry_modifier_control_state_from(&mut previous.variant);
             }
         }
         self.carry_pending_trigger_from(prior);

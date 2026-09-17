@@ -1836,7 +1836,7 @@ impl PresetRuntime {
     /// their decode, so they report `false` and can't wedge the loop.
     pub fn io_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.io_pending())
-            || self.math_views.iter().any(|view| view.variants.iter().any(Self::io_pending))
+            || self.math_views.iter().any(|view| Self::io_pending(&view.variant))
     }
 
     /// Any node in this graph still has load-time warmup work pending
@@ -1844,7 +1844,7 @@ impl PresetRuntime {
     /// until this returns `false` for every generator layer.
     pub fn warmup_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.warmup_pending())
-            || self.math_views.iter().any(|view| view.variants.iter().any(Self::warmup_pending))
+            || self.math_views.iter().any(|view| Self::warmup_pending(&view.variant))
     }
 
     /// Push a value/position editor edit's inner-node values into the running
@@ -1855,7 +1855,7 @@ impl PresetRuntime {
         def: &manifold_core::effect_graph_def::EffectGraphDef,
     ) {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.apply_inner_param_overrides(def); }
+            view.variant.apply_inner_param_overrides(def);
         }
         if let Some(seg) = self.effect_nodes.first_mut() {
             // Disjoint borrows (same pattern as the chain's `run`):
@@ -1883,7 +1883,7 @@ impl PresetRuntime {
         def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     ) {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.apply_manifest_reshape(manifest, def); }
+            view.variant.apply_manifest_reshape(manifest, def);
         }
         if let Some(seg) = self.effect_nodes.first_mut() {
             seg.bound.rebake_reshapes(manifest, def);
@@ -1920,7 +1920,7 @@ impl PresetRuntime {
     /// like [`Self::awaiting_segment_swap`].
     pub fn awaiting_forced_outputs_rebuild(&self) -> bool {
         self.forced_outputs_stale
-            || self.math_views.iter().any(|view| view.variants.iter().any(Self::awaiting_forced_outputs_rebuild))
+            || self.math_views.iter().any(|view| Self::awaiting_forced_outputs_rebuild(&view.variant))
     }
 
     fn refresh_prepared_parameter_error(&mut self) -> bool {
@@ -2048,7 +2048,7 @@ impl PresetRuntime {
     pub fn reset_state(&mut self, _device: &GpuDevice) {
         for view in &mut self.math_views {
             view.events.clear();
-            for variant in &mut view.variants { variant.reset_state(_device); }
+            view.variant.reset_state(_device);
         }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events { events.clear(); }
@@ -2083,7 +2083,7 @@ impl PresetRuntime {
     pub fn clear_trigger_state(&mut self) {
         for view in &mut self.math_views {
             view.events.clear();
-            for variant in &mut view.variants { variant.clear_trigger_state(); }
+            view.variant.clear_trigger_state();
         }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events { events.clear(); }
