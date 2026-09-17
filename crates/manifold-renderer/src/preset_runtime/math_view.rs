@@ -16,7 +16,7 @@ pub(super) struct MathViewRuntime {
     pub variant: PresetRuntime,
     presentation: Option<Presentation>,
     pub(super) events: super::math_view_events::MathEvents,
-    shared_resources: Vec<(ResourceId, ResourceId)>,
+    pub(super) shared_resources: Vec<(ResourceId, ResourceId)>,
     pub(super) shared_depth: Vec<(ResourceId, ResourceId)>,
 }
 

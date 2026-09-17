@@ -51,47 +51,46 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
         set(&owner, &mut params, "orbit", 0.73);
         runtime.apply_param_values(&params);
         assert_eq!(runtime.math_views[0].mode(&runtime.graph), 1);
-        for variant in &mut runtime.math_views[0].variants {
-            variant.apply_param_values(&params);
-            let local = manifold_core::scene_modifier_preset::SceneNodeRef {
-                scope: vec![NodeId::new("vortex_stage")],
-                node: NodeId::new("patch"),
-            };
-            let copies = variant
-                .modifier_node_copies(&NodeId::new("vortex_math_view"), &local)
-                .unwrap();
-            for copy in copies {
-                let (target, param) = variant.effect_nodes[0]
-                    .bound
-                    .fused_retarget
-                    .get(&(copy.node_id.to_string(), "orbit".into()))
-                    .cloned()
-                    .unwrap_or_else(|| (copy.node_id.clone(), "orbit".into()));
-                let node = variant.graph.instance_by_node_id(&target).unwrap();
-                let value = variant.graph.get_node(node).unwrap().params[param.as_str()]
-                    .as_scalar()
-                    .unwrap();
-                assert!(
-                    (value - 0.73).abs() < 1e-6,
-                    "scoped Orbit binding diverged: {value}"
-                );
-            }
-            let usage = variant
-                .prepared_modifier_buffer_usage((320, 180))
-                .unwrap()
+        let variant = &mut runtime.math_views[0].variant;
+        variant.apply_param_values(&params);
+        let local = manifold_core::scene_modifier_preset::SceneNodeRef {
+            scope: vec![NodeId::new("vortex_stage")],
+            node: NodeId::new("patch"),
+        };
+        let copies = variant
+            .modifier_node_copies(&NodeId::new("vortex_a"), &local)
+            .unwrap();
+        for copy in copies {
+            let (target, param) = variant.effect_nodes[0]
+                .bound
+                .fused_retarget
+                .get(&(copy.node_id.to_string(), "orbit".into()))
+                .cloned()
+                .unwrap_or_else(|| (copy.node_id.clone(), "orbit".into()));
+            let node = variant.graph.instance_by_node_id(&target).unwrap();
+            let value = variant.graph.get_node(node).unwrap().params[param.as_str()]
+                .as_scalar()
                 .unwrap();
             assert!(
-                usage.candidate_bytes > 0 && usage.candidate_bytes < 4 * 1024 * 1024,
-                "{usage:?}"
+                (value - 0.73).abs() < 1e-6,
+                "scoped Orbit binding diverged: {value}"
             );
-            assert!(variant.plan.steps().iter().all(|step| {
-                let node = variant.graph.get_node(step.node).unwrap();
-                !matches!(
-                    node.node.type_id().as_str(),
-                    "node.render_scene" | "node.cube_mesh" | "node.gltf_mesh_source"
-                )
-            }));
         }
+        let usage = variant
+            .prepared_modifier_buffer_usage((320, 180))
+            .unwrap()
+            .unwrap();
+        assert!(
+            usage.candidate_bytes > 0 && usage.candidate_bytes < 4 * 1024 * 1024,
+            "{usage:?}"
+        );
+        assert!(variant.plan.steps().iter().all(|step| {
+            let node = variant.graph.get_node(step.node).unwrap();
+            !matches!(
+                node.node.type_id().as_str(),
+                "node.render_scene" | "node.cube_mesh" | "node.gltf_mesh_source"
+            )
+        }));
         set(&owner, &mut params, "math_view_mode", 0.0);
     }
     let restored: EffectGraphDef =
@@ -138,46 +137,42 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
                 encoder.commit_and_wait_completed();
                 crate::headless_readback::readback_raw_halves(&device, &target.texture, w, h)
             };
-            for scope in [0.0, 1.0] {
-                set(&owner, &mut params, "math_view_scope", scope);
-                set(&owner, &mut params, "math_view_mode", 1.0);
-                set(&owner, &mut params, "math_view_occlusion", 0.0);
-                let xray = render(&mut runtime, &params);
-                set(&owner, &mut params, "math_view_occlusion", 1.0);
-                let depth = render(&mut runtime, &params);
-                assert!(energy(&depth) > 1.0, "Depth must not blank Math view");
-                assert!(energy(&depth) < energy(&xray), "Depth must hide rear marks: fused={fused} scope={scope}");
-                set(&owner, &mut params, "math_view_occlusion", 0.0);
-                assert_eq!(xray, render(&mut runtime, &params), "X-ray must restore the original image");
-                set(&owner, &mut params, "math_view_mode", 2.0);
-                let overlay_xray = render(&mut runtime, &params);
-                set(&owner, &mut params, "math_view_occlusion", 1.0);
-                let overlay_depth = render(&mut runtime, &params);
-                assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
-                let view = &runtime.math_views[0];
-                for (variant, resources) in view.variants.iter().zip(&view.shared_depth) {
-                    for &(source, destination) in resources {
-                        let parent = runtime.executor.backend();
-                        let child = variant.executor.backend();
-                        let original = parent.texture_2d(parent.slot_for(source).unwrap()).unwrap();
-                        let borrowed = child.texture_2d(child.slot_for(destination).unwrap()).unwrap();
-                        assert!(original.ptr_eq(borrowed), "view must borrow the retained scene depth");
-                        assert_eq!((borrowed.width, borrowed.height), (w, h));
-                        assert_eq!(borrowed.format, GpuTextureFormat::R32Float);
-                    }
-                }
-                if w == 320 && scope == 1.0 {
-                    if fused {
-                        assert!(crate::headless_readback::mean_abs_half_diff(
-                            standalone.as_ref().unwrap(), &overlay_depth,
-                        ) < 0.002, "fused Depth diverged");
-                    } else {
-                        standalone = Some(overlay_depth);
-                        if let Ok(path) = std::env::var("MANIFOLD_MATH_DEPTH_PREVIEW") {
-                            std::fs::write(path, crate::headless_readback::readback_to_srgb_png_linear(
-                                &device, &target.texture, w, h,
-                            )).unwrap();
-                        }
+            set(&owner, &mut params, "math_view_mode", 1.0);
+            set(&owner, &mut params, "math_view_occlusion", 0.0);
+            let xray = render(&mut runtime, &params);
+            set(&owner, &mut params, "math_view_occlusion", 1.0);
+            let depth = render(&mut runtime, &params);
+            assert!(energy(&depth) > 1.0, "Depth must not blank Math view");
+            assert!(energy(&depth) < energy(&xray), "Depth must hide rear marks: fused={fused}");
+            set(&owner, &mut params, "math_view_occlusion", 0.0);
+            assert_eq!(xray, render(&mut runtime, &params), "X-ray must restore the original image");
+            set(&owner, &mut params, "math_view_mode", 2.0);
+            let overlay_xray = render(&mut runtime, &params);
+            set(&owner, &mut params, "math_view_occlusion", 1.0);
+            let overlay_depth = render(&mut runtime, &params);
+            assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
+            let view = &runtime.math_views[0];
+            let variant = &view.variant;
+            for &(source, destination) in &view.shared_depth {
+                let parent = runtime.executor.backend();
+                let child = variant.executor.backend();
+                let original = parent.texture_2d(parent.slot_for(source).unwrap()).unwrap();
+                let borrowed = child.texture_2d(child.slot_for(destination).unwrap()).unwrap();
+                assert!(original.ptr_eq(borrowed), "view must borrow the retained scene depth");
+                assert_eq!((borrowed.width, borrowed.height), (w, h));
+                assert_eq!(borrowed.format, GpuTextureFormat::R32Float);
+            }
+            if w == 320 {
+                if fused {
+                    assert!(crate::headless_readback::mean_abs_half_diff(
+                        standalone.as_ref().unwrap(), &overlay_depth,
+                    ) < 0.002, "fused Depth diverged");
+                } else {
+                    standalone = Some(overlay_depth);
+                    if let Ok(path) = std::env::var("MANIFOLD_MATH_DEPTH_PREVIEW") {
+                        std::fs::write(path, crate::headless_readback::readback_to_srgb_png_linear(
+                            &device, &target.texture, w, h,
+                        )).unwrap();
                     }
                 }
             }
@@ -210,15 +205,9 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             .unwrap()
             .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
             .unwrap();
-    let standalone_shared = &runtime.math_views[0].variants[0].shared_arrays;
-    let chained_shared = &runtime.math_views[0].variants[1].shared_arrays;
-    assert_eq!(standalone_shared.len(), chained_shared.len());
-    assert!(!standalone_shared.is_empty());
-    for ((_, standalone), (_, chained)) in standalone_shared.iter().zip(chained_shared) {
-        assert!(
-            standalone.ptr_eq(chained),
-            "Math View variants must retain parent export buffer identity"
-        );
+    let view_shared = &runtime.math_views[0].variant.shared_arrays;
+    assert!(!view_shared.is_empty());
+    for (_, retained) in view_shared.iter() {
         assert!(
             runtime
                 .plan
@@ -230,7 +219,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
                     .backend()
                     .slot_for(*resource)
                     .and_then(|slot| runtime.executor.backend().array_buffer(slot))
-                    .is_some_and(|parent| parent.ptr_eq(standalone))),
+                    .is_some_and(|parent| parent.ptr_eq(retained))),
             "borrowed storage must be the parent's buffer"
         );
     }
@@ -364,7 +353,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     }
     set(&owner, &mut params, "math_view_scan_progress", 0.5);
     render(&mut runtime, &params, 12);
-    for resources in runtime.math_views[0].variants[0]
+    for resources in runtime.math_views[0].variant
         .shared_arrays
         .chunks_exact(2)
     {
@@ -416,7 +405,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     );
     set(&owner, &mut params, "math_view_pulse_trigger", 0.0);
 
-    // The parent's scan clock continues through presentation and scope cuts.
+    // The parent's scan clock continues through presentation cuts.
     set(&owner, &mut params, "math_view_connect_mesh", 1.0);
     set(&owner, &mut params, "math_view_scan_trigger", 1.0);
     set(&owner, &mut params, "math_view_scan_beats", 4.0);
@@ -426,15 +415,14 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     assert!(black(&render(&mut runtime, &params, 60)));
     set(&owner, &mut params, "math_view_mode", 1.0);
     render(&mut runtime, &params, 90);
-    set(&owner, &mut params, "math_view_scope", 0.0);
     set(&owner, &mut params, "math_view_mode", 2.0);
     render(&mut runtime, &params, 120);
     let event_mask = runtime
         .graph
         .instance_by_node_id(
             &crate::node_graph::scene_modifier_expand::math_resource_node_id(
-                &owner.scene_modifiers[0].id,
-                &owner.scene_modifiers[0].mesh_frames[0].target,
+                &owner.scene_modifiers[1].id,
+                &owner.scene_modifiers[1].mesh_frames[0].target,
                 "weights",
             ),
         )
@@ -452,7 +440,6 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         "clip edge must restart the connected scan"
     );
     set(&owner, &mut params, "math_view_scan_trigger", 0.0);
-    set(&owner, &mut params, "math_view_scope", 1.0);
 
     // Restore the original moved-frame controls before the pre-existing
     // standalone/fused parity proof below.
@@ -557,7 +544,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     // Exercise the full macro -> compiled multi-object graph -> primitive
     // path. Only the first diagram has a Grid wire; the second has Bool(false).
     // The final image has opaque alpha, so blankness concerns RGB only.
-    assert_eq!(owner.scene_modifiers[0].mesh_frames.len(), 2);
+    assert_eq!(owner.scene_modifiers[1].mesh_frames.len(), 2);
     set(&owner, &mut params, "math_view_mode", 1.0);
     for control in ["grid", "fragments", "ghosts", "vectors", "trails"] {
         set(&owner, &mut params, &format!("math_view_{control}"), 0.0);
@@ -620,13 +607,12 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     assert_eq!((runtime.width, runtime.height), (48, 64));
     let backend = runtime.executor.backend();
     for view in &runtime.math_views {
-        for (variant, links) in view.variants.iter().zip(&view.shared_resources) {
-            for (parent, child) in links {
-                let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
-                let child_backend = variant.executor.backend();
-                let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
-                assert!(parent.ptr_eq(child));
-            }
+        let variant = &view.variant;
+        for (parent, child) in &view.shared_resources {
+            let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
+            let child_backend = variant.executor.backend();
+            let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
+            assert!(parent.ptr_eq(child));
         }
     }
 }
