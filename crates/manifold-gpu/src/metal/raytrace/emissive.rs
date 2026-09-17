@@ -222,7 +222,17 @@ pub(crate) fn encode_emissive_table(
 
     // CPU metadata compaction: one row per emissive object (luma > 0), with
     // running candidate/slot bases — the SAME object-major slot addressing
-    // the descriptor kernel and `write_instance_obj_params` use.
+    // the descriptor kernel and `write_instance_obj_params` use. An EMPTY
+    // materials slice means "no emissive anywhere" (the deleted CPU path's
+    // `gi_materials.is_empty() → None`); a non-empty slice must name one
+    // row per object, same contract as before.
+    if !materials.is_empty() {
+        assert_eq!(
+            objects.len(),
+            materials.len(),
+            "RT emissive table requires one material row per RT object"
+        );
+    }
     let mut active_count = 0u32;
     let mut slot_base = 0u32;
     let mut rows: Vec<EmissiveObjParams> = Vec::new();
@@ -232,7 +242,7 @@ pub(crate) fn encode_emissive_table(
         slot_base = slot_base
             .checked_add(obj_slots)
             .ok_or(RtAccelError::Encode("RT emissive slot base overflow"))?;
-        let obj_luma = luma(materials[oi].emissive);
+        let obj_luma = if materials.is_empty() { 0.0 } else { luma(materials[oi].emissive) };
         if obj_luma <= 0.0 {
             continue;
         }

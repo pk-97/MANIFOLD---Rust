@@ -1308,6 +1308,10 @@ impl MetalShadowRayTracer {
         depth: &[f32; 9],
         gain: f32,
         floor: f32,
+        // P4a (§5.1): the mean power riding the GPU stats buffer — the
+        // kernel's floor is max(floor, mean_power); 0.0 reduces to the
+        // fixed minimum, the pre-P4a behavior with a black scene.
+        mean_power: f32,
     ) -> [f32; 3] {
         let color_tex = device.create_texture(&GpuTextureDesc {
             width: 3,
@@ -1349,6 +1353,23 @@ impl MetalShadowRayTracer {
         let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
         out_buffer.zero_fill();
 
+        // P4a: hand-written stats row for the kernel's buffer(2) — same
+        // EmissiveTableStats layout the production table's stats buffer
+        // carries.
+        let stats = super::EmissiveTableStats {
+            entry_count: if mean_power > 0.0 { 1 } else { 0 },
+            entries_are_local: 0,
+            mean_power,
+            total_area: 0.0,
+        };
+        let stats_buffer = device.create_buffer_shared(16);
+        let stats_ptr = stats_buffer
+            .mapped_ptr()
+            .expect("debug firefly stats buffer must be CPU-mapped");
+        unsafe {
+            std::ptr::write_unaligned(stats_ptr as *mut super::EmissiveTableStats, stats);
+        }
+
         let cb = device
             .raw_queue()
             .commandBuffer()
@@ -1363,6 +1384,7 @@ impl MetalShadowRayTracer {
             enc.setTexture_atIndex(Some(&depth_tex.raw), 0);
             enc.setTexture_atIndex(Some(&color_tex.raw), 1);
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(stats_buffer.raw()), 0, 2);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
                 MTLSize { width: 1, height: 1, depth: 1 },
                 MTLSize { width: 1, height: 1, depth: 1 },
