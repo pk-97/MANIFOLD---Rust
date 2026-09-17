@@ -1,7 +1,8 @@
 //! On-disk MSL shader cache — skips WGSL → naga → SPIR-V → spirv-opt → SPIRV-Cross
 //! on cache hit.
 //!
-//! Cache key: hash of WGSL source + entry point(s).
+//! Cache key: shader source + entry point(s) + translation options (half
+//! compute or render point-size rewrite), supplied by `archive` key helpers.
 //! Cache value: compiled MSL source + SlotMap + workgroup size.
 //! Stored as one plain-text file per shader in the cache directory.
 //! Invalidation is automatic — if WGSL content changes, the hash changes.

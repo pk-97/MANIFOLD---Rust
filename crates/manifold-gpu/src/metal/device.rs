@@ -138,7 +138,8 @@ pub struct GpuDevice {
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
     /// Only locked during pipeline creation (startup), never on the hot path.
     archive: std::sync::Mutex<Option<archive::GpuPipelineArchive>>,
-    /// In-memory pipeline cache keyed by shader hash.
+    /// Compute cache keyed by shader translation identity. Render cache keys
+    /// include the complete pipeline descriptor (see archive::RenderPipelineKey).
     /// Eliminates repeated WGSL→MSL→Metal compilation for the same shader.
     compute_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuComputePipeline>>,
     render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
@@ -764,16 +765,17 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuRenderPipeline {
-        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
-        let hash = if sample_count <= 1 {
-            base_hash
-        } else {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            base_hash.hash(&mut h);
-            sample_count.hash(&mut h);
-            h.finish()
-        };
+        let base_hash = archive::render_shader_hash(wgsl_source, vs_entry, fs_entry, None);
+        let hash = archive::RenderPipelineKey {
+            shader: base_hash,
+            color_format: Some(color_format),
+            depth_format: None,
+            blend,
+            sample_count: sample_count.max(1),
+            alpha_to_coverage: false,
+            aux_color_formats: &[],
+            vertex_layout: None,
+        }.hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -946,14 +948,17 @@ impl GpuDevice {
         vertex_layout: &GpuVertexLayout,
         label: &str,
     ) -> GpuRenderPipeline {
-        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
-        let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            base_hash.hash(&mut hasher);
-            vertex_layout.stride.hash(&mut hasher);
-            hasher.finish()
-        };
+        let base_hash = archive::render_shader_hash(wgsl_source, vs_entry, fs_entry, None);
+        let hash = archive::RenderPipelineKey {
+            shader: base_hash,
+            color_format: Some(color_format),
+            depth_format: None,
+            blend,
+            sample_count: 1,
+            alpha_to_coverage: false,
+            aux_color_formats: &[],
+            vertex_layout: Some(vertex_layout),
+        }.hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -1398,19 +1403,17 @@ impl GpuDevice {
         point_size_location: Option<u32>,
         label: &str,
     ) -> GpuRenderPipeline {
-        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
-        let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            base_hash.hash(&mut h);
-            sample_count.hash(&mut h);
-            depth_format.hash(&mut h);
-            alpha_to_coverage.hash(&mut h);
-            aux_color_formats.hash(&mut h);
-            point_size_location.hash(&mut h);
-            "depth".hash(&mut h);
-            h.finish()
-        };
+        let base_hash = archive::render_shader_hash(wgsl_source, vs_entry, fs_entry, point_size_location);
+        let hash = archive::RenderPipelineKey {
+            shader: base_hash,
+            color_format: Some(color_format),
+            depth_format: Some(depth_format),
+            blend,
+            sample_count: sample_count.max(1),
+            alpha_to_coverage,
+            aux_color_formats,
+            vertex_layout: None,
+        }.hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -1609,15 +1612,17 @@ impl GpuDevice {
         depth_format: GpuTextureFormat,
         label: &str,
     ) -> GpuRenderPipeline {
-        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
-        let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            base_hash.hash(&mut h);
-            depth_format.hash(&mut h);
-            "depth_only".hash(&mut h);
-            h.finish()
-        };
+        let base_hash = archive::render_shader_hash(wgsl_source, vs_entry, fs_entry, None);
+        let hash = archive::RenderPipelineKey {
+            shader: base_hash,
+            color_format: None,
+            depth_format: Some(depth_format),
+            blend: None,
+            sample_count: 1,
+            alpha_to_coverage: false,
+            aux_color_formats: &[],
+            vertex_layout: None,
+        }.hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
