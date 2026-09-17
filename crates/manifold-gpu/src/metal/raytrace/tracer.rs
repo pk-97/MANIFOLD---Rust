@@ -2627,9 +2627,14 @@ mod tests {
         assert!(reflection.contains("out_refl.write(float4(0, 0, 0, -1.0), tid);"));
         for forbidden in ["out_n.write", "out_irr.write", "out_sv.write"] { assert!(!reflection.contains(forbidden)); }
         assert!(msl_block(kernel, "else if (clears_reflection)").contains("out_refl.write"));
-        for forbidden in ["runtime_pass", "active_pass", "fused_lighting", "[[buffer(9)]]"] {
+        for forbidden in ["runtime_pass", "active_pass", "fused_lighting"] {
             assert!(!SHADOW_RAYS_MSL.contains(forbidden));
         }
+        // P4a: [[buffer(9)]] is now legitimately the emissive-stats binding —
+        // assert the kernel signature and its Rust slot map stay paired
+        // (the R1 slot-map incident class: the compile asserts the MSL
+        // declaration, and RtPipelines::compile maps the same index).
+        assert!(SHADOW_RAYS_MSL.contains("device const EmissiveTableStats* emissive_stats [[buffer(9)]],"));
     }
 
 
