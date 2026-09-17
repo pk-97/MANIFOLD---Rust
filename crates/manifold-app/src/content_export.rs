@@ -759,6 +759,19 @@ impl ContentThread {
         // the frame is encoded.
         self.content_pipeline.flush_all_background_work();
 
+        // SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the frame must be
+        // Complete before its texture is selected and encoded. Pending at
+        // this boundary is an error, never permission to tick again — the
+        // export loop must not rerun the graph to settle RT.
+        let frame_status = self.content_pipeline.frame_render_status();
+        if frame_status != manifold_renderer::frame_status::FrameRenderStatus::Complete {
+            let message = format!(
+                "Export frame {frame_idx} is not complete ({frame_status:?}); refusing to encode"
+            );
+            log::error!("[Export] {message}");
+            return Some(ExportFrameFailure { message, gpu: false });
+        }
+
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;

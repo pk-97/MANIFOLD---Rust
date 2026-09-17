@@ -1937,6 +1937,11 @@ impl RenderScene {
             // accel fresh through the one-frame defer — never a refit of
             // the garbage state.
             if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
+                // §5.4 (P5): the skip stays (never draw/trace unlanded
+                // bytes), but the frame is no longer silently complete —
+                // warmup keeps pumping and export rejects it.
+                ctx.gpu_encoder()
+                    .merge_frame_status(crate::frame_status::FrameRenderStatus::PendingGeometry);
                 continue;
             }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
@@ -1954,6 +1959,9 @@ impl RenderScene {
             let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
             let weights_slot = object.weights;
             if weights_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
+                // §5.4 (P5): same pending contract as the mesh slot above.
+                ctx.gpu_encoder()
+                    .merge_frame_status(crate::frame_status::FrameRenderStatus::PendingGeometry);
                 continue;
             }
             let weights = weights_slot.and_then(|s| ctx.inputs.array_slot(s));

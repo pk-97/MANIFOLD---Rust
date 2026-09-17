@@ -1485,6 +1485,7 @@ impl ClipRenderer for GeneratorRenderer {
             cap: manifold_core::WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
         };
+        let mut warmup_frame_status: crate::frame_status::FrameRenderStatus;
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
@@ -1537,6 +1538,9 @@ impl ClipRenderer for GeneratorRenderer {
                     gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
                     ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
                 }
+                // §5.4: pending geometry is incomplete preparation — the
+                // wrapper's status gates quiescence below.
+                warmup_frame_status = gpu.frame_status();
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
                 log::error!("Generator warmup failed for layer {layer_id}: {err}");
@@ -1546,6 +1550,7 @@ impl ClipRenderer for GeneratorRenderer {
 
             if let Some(ls) = self.layer_generators.get(&layer_id)
                 && !ls.generator.warmup_pending()
+                && warmup_frame_status == crate::frame_status::FrameRenderStatus::Complete
             {
                 outcome = manifold_core::WarmupOutcome::Quiescent;
                 break;
@@ -1554,8 +1559,11 @@ impl ClipRenderer for GeneratorRenderer {
             // Paced wait: if async work is still in flight, yield so the
             // background threads (GLB parse, accel build) can land without
             // burning a whole frame budget on spin-rendered no-ops.
-            if let Some(ls) = self.layer_generators.get(&layer_id)
-                && ls.generator.warmup_pending()
+            if warmup_frame_status != crate::frame_status::FrameRenderStatus::Complete
+                || self
+                    .layer_generators
+                    .get(&layer_id)
+                    .is_some_and(|ls| ls.generator.warmup_pending())
             {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }

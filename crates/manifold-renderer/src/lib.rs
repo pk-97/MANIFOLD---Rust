@@ -7,6 +7,7 @@ pub mod clip_thumb_gpu;
 pub mod compositor;
 pub mod effect;
 pub mod effects;
+pub mod frame_status;
 pub mod fsr1;
 pub mod generator_renderer;
 pub mod generators;
