@@ -21,10 +21,13 @@ use crate::{ParamsAction, RootAction};
 use crate::panels::AudioDrawerClick;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
+use super::scrub::ScrubGesture;
 use super::{
-    AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, TrimKind,
+    GraphParamTarget, PanelAction, ScrubPhase, ScrubValue,
     UiRelightField, UiRelightHeightFrom, ValueRef,
 };
+#[cfg(test)]
+use super::{AudioShapeParam, TrimKind};
 use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
@@ -62,26 +65,6 @@ const KEY_MODIFIER_OBJECTS: u64 = 90_015;
 /// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
 /// a crisp accent line, not a filled bar).
 const MOD_TAB_INK_H: f32 = 2.0;
-
-/// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
-/// per-control full-scale constants. The single conversion shared by the audio
-/// shaping sliders' mouse-down and drag paths.
-fn audio_shape_value_from_norm(which: AudioShapeParam, norm: f32) -> f32 {
-    let n = norm.clamp(0.0, 1.0);
-    match which {
-        AudioShapeParam::Sensitivity => n * AUDIO_SENS_MAX,
-        AudioShapeParam::Attack => n * AUDIO_ATTACK_MAX_MS,
-        AudioShapeParam::Release => n * AUDIO_RELEASE_MAX_MS,
-    }
-}
-
-/// Display text for an audio shaping slider's value field.
-fn audio_shape_value_text(which: AudioShapeParam, value: f32) -> String {
-    match which {
-        AudioShapeParam::Sensitivity => format!("{value:.2}"),
-        AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
-    }
-}
 
 // ── Layout constants ─────────────────────────────────────────────
 //
@@ -412,8 +395,8 @@ pub struct ParamCardPanel {
 
     copied_flash: CopyToClipboardLabelState,
 
-    // Drag state
-    drag: ParamDragState,
+    // Relight has no row identity, so it keeps its own captured scrub address.
+    relight_drag: ScrubGesture<UiRelightField>,
 
     // Caches (NaN = needs sync)
     param_cache: Vec<f32>,
@@ -556,7 +539,7 @@ impl ParamCardPanel {
             osc_addresses: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             copied_flash: CopyToClipboardLabelState::default(),
-            drag: ParamDragState::new(),
+            relight_drag: ScrubGesture::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
@@ -742,17 +725,17 @@ impl ParamCardPanel {
     /// The send the currently-open fire-mode drawer is reading, if any.
     pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
         let pi = self.open_fire_mode_drawer_row()?;
-        let idx = self.state.mod_state.audio_send_idx.get(pi).copied().unwrap_or(-1);
+        let idx = self.state.mod_state.audio_send_index(pi);
         if idx < 0 {
             return None;
         }
-        self.state.mod_state.audio_send_ids.get(idx as usize).cloned()
+        self.state.mod_state.audio_sends.get(idx as usize).map(|send| send.id.clone())
     }
 
     /// The band the currently-open fire-mode drawer is reading, if any.
     pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
         let pi = self.open_fire_mode_drawer_row()?;
-        let idx = self.state.mod_state.audio_band_idx.get(pi).copied().unwrap_or(0);
+        let idx = self.state.mod_state.audio_rows.get(pi).map_or(0, |row| row.band_idx);
         crate::types::AudioBand::ALL.get(idx as usize).copied()
     }
 
@@ -833,7 +816,7 @@ impl ParamCardPanel {
     }
 
     pub fn is_dragging(&self) -> bool {
-        self.drag.is_dragging()
+        self.row_host.is_dragging() || self.relight_drag.is_active()
     }
 
     /// The header collapse-chevron node id, resolved during `build` (`None`
@@ -1232,6 +1215,7 @@ mod tests {
                         section: None,
                     },
                     value: RowValue { base: 10.0, effective: 10.0, exposed: true, driven: false },
+                    audio: AudioRowState::default(),
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -1257,6 +1241,7 @@ mod tests {
                         section: None,
                     },
                     value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+                    audio: AudioRowState::default(),
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -1268,7 +1253,7 @@ mod tests {
                 },
             ],
             has_graph_mod: false,
-            audio: Default::default(),
+            audio_sends: Vec::new(),
             relight: RelightCardConfig::default(),
         }
     }
@@ -1295,6 +1280,7 @@ mod tests {
                 section: None,
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            audio: AudioRowState::default(),
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1320,6 +1306,7 @@ mod tests {
                 section: None,
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            audio: AudioRowState::default(),
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1558,6 +1545,7 @@ mod tests {
                 section: None,
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            audio: AudioRowState::default(),
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1569,15 +1557,13 @@ mod tests {
         });
         let n = c.rows.len();
 
-        c.audio.send_labels = vec!["Kick".into()];
-        c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
-        c.audio.rows = vec![AudioRowState::default(); n];
+        c.audio_sends = vec![AudioSendChoice { label: "Kick".into(), id: manifold_foundation::AudioSendId::new("send-kick") }];
         let gi = n - 1; // the clip_trigger row's index
-        c.audio.rows[gi].active = true;
-        c.audio.rows[gi].send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
-        c.audio.rows[gi].band_idx = 1; // Low
-        c.audio.rows[gi].sensitivity = 0.65;
-        c.audio.rows[gi].trigger_mode_idx = 2; // Both
+        c.rows[gi].audio.active = true;
+        c.rows[gi].audio.send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
+        c.rows[gi].audio.band_idx = 1; // Low
+        c.rows[gi].audio.sensitivity = 0.65;
+        c.rows[gi].audio.trigger_mode_idx = 2; // Both
         c
     }
 
@@ -1624,7 +1610,7 @@ mod tests {
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_trigger_gate();
         let gi = cfg.rows.len() - 1;
-        cfg.audio.rows[gi].active = false; // disarmed — drawer never builds
+        cfg.rows[gi].audio.active = false; // disarmed — drawer never builds
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
@@ -1702,8 +1688,8 @@ mod tests {
         // closed by default.
         let ms = &panel.state.mod_state;
         let current = crate::types::AudioFeature::new(
-            audio_kind_from_index(ms.audio_kind_idx.get(gi).copied().unwrap_or(0) as usize),
-            audio_band_from_index(ms.audio_band_idx.get(gi).copied().unwrap_or(0) as usize),
+            audio_kind_from_index(ms.audio_rows.get(gi).map_or(0, |row| row.kind_idx) as usize),
+            audio_band_from_index(ms.audio_rows.get(gi).map_or(0, |row| row.band_idx) as usize),
         );
         let chip_count = trigger_source_chips(current).len();
         let mode_both_btn = button_ids[1 + chip_count + 1 + 2];
@@ -1729,7 +1715,7 @@ mod tests {
         // settles` above, but for the toggle/trigger row path specifically.
         let mut closed = effect_config_with_trigger_gate();
         let gi = closed.rows.len() - 1;
-        closed.audio.rows[gi].active = false; // start disarmed — drawer closed
+        closed.rows[gi].audio.active = false; // start disarmed — drawer closed
         let mut panel = ParamCardPanel::new();
         panel.configure(&closed);
         let closed_h = panel.compute_height();
@@ -2205,7 +2191,9 @@ mod tests {
         use crate::view::UiParamSlot as ParamSlot;
         panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
 
-        panel.drag.begin(ParamDragTarget::Param { index: 0 }, Vec2::ZERO);
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let rect = tree.get_bounds(track);
+        let _ = panel.handle_pointer_down(track, Vec2::new(rect.x + rect.width * 0.5, rect.y), &tree);
         panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
         assert!(
             panel.value_flash[0].progress().is_none(),
@@ -2213,11 +2201,7 @@ mod tests {
         );
     }
 
-    // ── P7.1 pinning tests — one per `ParamDragTarget` category, written
-    // against the CURRENT six-slot `ParamDragState` before the
-    // `DragController<ParamDragTarget>` fold (docs/UI_WIDGET_UNIFICATION_
-    // DESIGN.md P7.1). Re-run green post-switch to prove the fold is a
-    // lifecycle-only swap with byte-identical command emission.
+    // ── P7.1 pinning tests — public pointer entry for every row gesture.
 
     #[test]
     fn pinning_param_drag_begin_track_end() {
@@ -2536,12 +2520,9 @@ mod tests {
     /// shaping sliders (Sensitivity/Attack/Release, `DrawerIds.sliders[0..3]`).
     fn effect_config_with_audio_shape_armed() -> ParamSurface {
         let mut c = effect_config();
-        let n = c.rows.len();
-        c.audio.send_labels = vec!["Kick".into()];
-        c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
-        c.audio.rows = vec![AudioRowState::default(); n];
-        c.audio.rows[0].active = true;
-        c.audio.rows[0].send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
+        c.audio_sends = vec![AudioSendChoice { label: "Kick".into(), id: manifold_foundation::AudioSendId::new("send-kick") }];
+        c.rows[0].audio.active = true;
+        c.rows[0].audio.send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
         c
     }
 
@@ -2598,8 +2579,8 @@ mod tests {
             let (dids, send_count) = panel.row_host.audio_configs[0].as_ref().unwrap();
             let ms = &panel.state.mod_state;
             let current = crate::types::AudioFeature::new(
-                audio_kind_from_index(ms.audio_kind_idx.first().copied().unwrap_or(0) as usize),
-                audio_band_from_index(ms.audio_band_idx.first().copied().unwrap_or(0) as usize),
+                audio_kind_from_index(ms.audio_rows.first().map_or(0, |row| row.kind_idx) as usize),
+                audio_band_from_index(ms.audio_rows.first().map_or(0, |row| row.band_idx) as usize),
             );
             let chip_count = trigger_source_chips(current).len();
             (dids.button_ids()[*send_count + chip_count], dids.button_count())
@@ -2665,7 +2646,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_audio_shape_armed();
-        cfg.audio.rows[0].action_idx = 1; // Step — the 4th drawer slider appears
+        cfg.rows[0].audio.action_idx = 1; // Step — the 4th drawer slider appears
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
@@ -3446,6 +3427,7 @@ mod tests {
                         section: None,
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
+                    audio: AudioRowState::default(),
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -3471,6 +3453,7 @@ mod tests {
                         section: None,
                     },
                     value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+                    audio: AudioRowState::default(),
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -3496,6 +3479,7 @@ mod tests {
                         section: None,
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
+                    audio: AudioRowState::default(),
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -3507,7 +3491,7 @@ mod tests {
                 },
             ],
             string_params: vec![],
-            audio: Default::default(),
+            audio_sends: Vec::new(),
             relight: RelightCardConfig::default(),
         }
     }
@@ -3704,7 +3688,7 @@ mod tests {
         panel.configure(&gen_config());
 
         let base_h = panel.compute_height();
-        panel.state.mod_state.audio_active[0] = true;
+        panel.state.mod_state.audio_rows[0].active = true;
         let expanded_h = panel.compute_height();
 
         assert!(expanded_h > base_h);
@@ -3747,7 +3731,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         panel.configure(&effect_config());
-        panel.state.mod_state.audio_active[0] = true;
+        panel.state.mod_state.audio_rows[0].active = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         let mut reg = crate::intent::IntentRegistry::new();

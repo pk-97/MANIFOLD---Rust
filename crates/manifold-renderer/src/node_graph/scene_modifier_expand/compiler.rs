@@ -796,6 +796,7 @@ impl Builder<'_> {
             .map(|node| node.id)
             .ok_or_else(|| invalid("mathView", "Math View requires system.final_output"))?;
         let mut diagrams = Vec::with_capacity(self.math_captures.len());
+        let mut surfaces = Vec::with_capacity(self.math_captures.len());
         let captures: Vec<_> = self
             .math_captures
             .iter()
@@ -834,7 +835,7 @@ impl Builder<'_> {
                 (Some(capture.reference.clone()), "reference"),
                 (Some(capture.incoming.clone()), "incoming"),
                 (Some(camera.clone()), "camera"),
-                (transform, "transform"),
+                (transform.clone(), "transform"),
             ] {
                 let Some(from) = from else { continue; };
                 self.derived.wires.push(EffectGraphWire {
@@ -845,7 +846,74 @@ impl Builder<'_> {
                 });
             }
             self.wire_math_controls(diagram_id, &controls, diagram_index == 0)?;
+
+            // The surface pass has the same sampled geometry and appearance
+            // inputs as the colour pass, but only its depth output is live.
+            // Keeping the colour output unwired is what prevents this pass
+            // from allocating or advancing trail history.
+            let mut surface_parts =
+                vec!["math_view", request.modifier_id.as_str(), "surface"];
+            surface_parts.extend(target.scope.iter().map(NodeId::as_str));
+            surface_parts.push(target.node.as_str());
+            let surface_id = self.add_math_node(
+                &surface_parts,
+                "node.render_mesh_diagram",
+                "Math View Surface Depth",
+                BTreeMap::from([
+                    (
+                        "grid".into(),
+                        SerializedParamValue::Bool { value: false },
+                    ),
+                    (
+                        "radius".into(),
+                        SerializedParamValue::Float {
+                            value: capture.radius as f32,
+                        },
+                    ),
+                ]),
+            )?;
+            for (from, to_port) in [
+                (Some(capture.current), "current"),
+                (Some(capture.reference), "reference"),
+                (Some(capture.incoming), "incoming"),
+                (Some(camera.clone()), "camera"),
+                (transform, "transform"),
+            ] {
+                let Some(from) = from else { continue; };
+                self.derived.wires.push(EffectGraphWire {
+                    from_node: from.0,
+                    from_port: from.1,
+                    to_node: surface_id,
+                    to_port: to_port.into(),
+                });
+            }
+            self.wire_math_controls(surface_id, &controls, false)?;
+            surfaces.push((surface_id, "depth".to_string()));
             diagrams.push(diagram);
+        }
+
+        // Surface depth is accumulated in object order, then shared by all
+        // colour diagrams. This keeps every colour pass on the same occlusion
+        // result while preserving the stable diagram identities above.
+        for pair in surfaces.windows(2) {
+            self.derived.wires.push(EffectGraphWire {
+                from_node: pair[0].0,
+                from_port: pair[0].1.clone(),
+                to_node: pair[1].0,
+                to_port: "surface_depth".into(),
+            });
+        }
+        let final_surface = surfaces
+            .last()
+            .cloned()
+            .ok_or_else(|| invalid("mathView", "no surface depth outputs were generated"))?;
+        for diagram in &diagrams {
+            self.derived.wires.push(EffectGraphWire {
+                from_node: final_surface.0,
+                from_port: final_surface.1.clone(),
+                to_node: diagram.0,
+                to_port: "surface_depth".into(),
+            });
         }
         let composed = self.compose_math_diagrams(request.modifier_id, &diagrams)?;
         let opaque = self.add_math_node(
@@ -925,7 +993,29 @@ impl Builder<'_> {
         include_grid: bool,
     ) -> Result<(), SceneModifierExpandError> {
         for (suffix, _, _, _, _) in manifold_core::scene_modifier_math_view::CONTROLS {
-            if !matches!(*suffix, "grid" | "fragments" | "ghosts" | "vectors" | "trails" | "density" | "line_width" | "geometry_hue" | "path_hue" | "grid_brightness" | "fragments_brightness" | "ghosts_brightness" | "vectors_brightness" | "trails_brightness" | "pulse_target" | "scan_target" | "connect_mesh") || (*suffix == "grid" && !include_grid) {
+            if !matches!(
+                *suffix,
+                "mode"
+                    | "occlusion"
+                    | "grid"
+                    | "fragments"
+                    | "ghosts"
+                    | "vectors"
+                    | "trails"
+                    | "density"
+                    | "line_width"
+                    | "geometry_hue"
+                    | "path_hue"
+                    | "grid_brightness"
+                    | "fragments_brightness"
+                    | "ghosts_brightness"
+                    | "vectors_brightness"
+                    | "trails_brightness"
+                    | "pulse_target"
+                    | "scan_target"
+                    | "connect_mesh"
+            ) || (*suffix == "grid" && !include_grid)
+            {
                 continue;
             }
             let source = controls.get(*suffix).ok_or_else(|| {

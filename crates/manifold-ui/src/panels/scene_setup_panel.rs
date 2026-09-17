@@ -20,6 +20,12 @@
 //! shared-lock wrapper types appear anywhere in this file (section 4 negative gate).
 
 mod camera;
+#[cfg(test)]
+mod trim_tests;
+#[cfg(test)]
+mod host_parity_tests;
+#[cfg(test)]
+mod row_gesture_tests;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -30,11 +36,13 @@ use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
 use manifold_foundation::{AudioSendId, LayerId};
 
-use super::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef, ParamsAction};
+use super::{GraphParamTarget, PanelAction, ParamsAction};
+#[cfg(test)]
+use super::{ScrubPhase, ScrubValue, ValueRef};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
-    AudioCardState, ModTab, ParamModState, RowHost, build_param_row,
+    AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
     ROW_ROLE_SECTION_HEADER, param_row_key_base,
 };
 use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
@@ -219,10 +227,10 @@ enum EyeSlot {
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): the driver/envelope/
 /// audio-mod facts for one Environment/Fog row, flattened by the app layer's
 /// `row_modulation_for_id` from `lookup_param_mod_for_id`'s
-/// `(CardModulation, AudioCardState)` (both sized to 1) — this crate has no
+/// `(RowMod, AudioRowState)` scalar result — this crate has no
 /// `PresetInstance`, so the app computes this and hands it across the VM
 /// boundary like every other field here. Field-for-field the same facts
-/// `ParamModState`/`AudioCardState` carry per-row; a plain idle default
+/// `ParamModState`/`AudioRowState` carry per-row; a plain idle default
 /// (`Default::default()`) means "no modulation," never an error.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RowModulation {
@@ -532,12 +540,6 @@ pub struct SceneSetupVm {
     pub scene_root_node_id: u32,
     pub environment: EnvironmentRowVm,
     pub atmosphere: AtmosphereRowVm,
-    /// C-P1a: every project audio send, card-level (same for every
-    /// converted row on this layer) — the `AudioCardState.send_labels`/
-    /// `send_ids` pair the shared `build_audio_mod_drawer`'s Source row
-    /// needs. Mirrors `ParamSurface.audio.send_labels`/`send_ids`.
-    pub audio_send_labels: Vec<String>,
-    pub audio_send_ids: Vec<AudioSendId>,
     /// P2: the Objects section's rows, in `mesh_k` order.
     pub objects: Vec<ObjectRowVm>,
     /// P3: the Lights section's rows, in `light_k` order. Never capped —
@@ -662,11 +664,6 @@ struct SceneCardState {
     /// `RowHost::row_action`, which reads it to gate the label-copy path.
     osc_addresses: Vec<Option<String>>,
     mod_active_tab: Vec<ModTab>,
-    /// One `SliderDragState` per row — the card drag protocol (D4): a
-    /// track pointer-down snapshots + starts an absolute-position drag
-    /// (mirrors `ScenePanel::metallic_slider`/`roughness_slider`, generalized
-    /// to N rows), motion writes live, release commits ONE undo unit.
-    drag_sliders: Vec<crate::slider::SliderDragState>,
     /// The shared per-row id-bundle machinery + reverse `WidgetId → (row,
     /// role)` index + click→`PanelAction` routing — the SAME [`RowHost`]
     /// `ParamCardPanel` embeds (P-S3 host unification). Scene rows get their
@@ -690,7 +687,6 @@ impl SceneCardState {
             row_value_synced: Vec::new(),
             osc_addresses: Vec::new(),
             mod_active_tab: Vec::new(),
-            drag_sliders: Vec::new(),
             row_host: RowHost::new(),
         }
     }
@@ -699,15 +695,9 @@ impl SceneCardState {
     /// build pass re-syncs every row's modulation facts from the VM's
     /// `RowModulation` every frame — same "no rotting" contract the rest of
     /// this panel already has, so nothing here needs to survive the
-    /// resize). `mod_active_tab` and `drag_sliders` DO need to survive a
-    /// mid-gesture rebuild (which mod tab is shown, an in-flight drag) — so
-    /// unlike the display vectors above, these two are only ever GROWN, never
-    /// truncated, even when `n` temporarily drops to 0 (a frame where World
-    /// doesn't build at all, e.g. no selection) — truncating a `SliderDragState`
-    /// mid-drag would silently drop the gesture the next time this panel
-    /// re-opens. Same intent as `ParamCardPanel::configure`'s
-    /// `mod_active_tab.resize(n, ..)`, adapted for this fixed-index family
-    /// where `n` isn't monotonic across frames.
+    /// `mod_active_tab` survives a mid-gesture rebuild; the gesture itself is
+    /// owned by `RowHost`, which captures the wire address rather than a row
+    /// index and therefore remains valid across structural snapshots.
     fn resize(&mut self, n: usize) {
         self.rows.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
@@ -721,38 +711,8 @@ impl SceneCardState {
         while self.mod_active_tab.len() < n {
             self.mod_active_tab.push(ModTab::Driver);
         }
-        while self.drag_sliders.len() < n {
-            self.drag_sliders.push(crate::slider::SliderDragState::default());
-        }
-        // Size EVERY embedded `RowHost` id-bundle vector to `n` — including the
-        // roles scene rows never populate (toggle, ableton/audio trim, mapping
-        // chevron, mode badges), which stay all-`None` — so `RowHost::reindex_row`'s
-        // per-row `[i]` indexing is always in bounds. Mirrors
-        // `ParamCardPanel::configure`'s RowHost sizing; the machinery vecs are
-        // rebuilt fresh every frame, so plain `resize` (grow AND truncate) is
-        // correct here even though `n` isn't monotonic across frames.
-        let rh = &mut self.row_host;
-        rh.slider_ids.resize(n, None);
-        rh.slider_resets.resize_with(n, || None);
-        rh.row_catcher_ids.resize(n, None);
-        rh.driver_btn_ids.resize(n, None);
-        rh.envelope_btn_ids.resize(n, None);
-        rh.driver_config_ids.resize_with(n, || None);
-        rh.ableton_config_ids.resize_with(n, || None);
-        rh.audio_btn_ids.resize(n, None);
-        rh.automation_btn_ids.resize(n, None);
-        rh.audio_configs.resize_with(n, || None);
-        rh.audio_trigger_mode_badge_ids.resize(n, None);
-        rh.trim_ids.resize_with(n, || None);
-        rh.ableton_trim_ids.resize_with(n, || None);
-        rh.audio_trim_ids.resize_with(n, || None);
-        rh.target_ids.resize_with(n, || None);
-        rh.envelope_config_ids.resize_with(n, || None);
-        rh.mod_tab_ids.resize_with(n, Vec::new);
-        rh.toggle_ids.resize_with(n, || None);
-        rh.mapping_chevron_ids.resize(n, None);
-        rh.section_header_ids.clear();
-        rh.row_index.clear();
+        self.row_host.resize(n);
+        self.row_host.row_index.clear();
     }
 
     /// P2 slice 2a: populate this card from a FILTERED slice of the layer's
@@ -796,18 +756,57 @@ impl SceneCardState {
         let mods: Vec<RowMod> = retained.iter().map(|&i| config.rows[i].modulation.clone()).collect();
         self.mod_state.sync_from_config(n, &mods);
 
-        // `AudioCardState` bundles per-row state + the card-level send
-        // list — filter its per-row vec the same way, keep the send list
-        // whole (it's not per-row).
-        let filtered_audio = AudioCardState {
-            rows: retained
-                .iter()
-                .map(|&i| config.audio.rows.get(i).cloned().unwrap_or_default())
-                .collect(),
-            send_labels: config.audio.send_labels.clone(),
-            send_ids: config.audio.send_ids.clone(),
+        // Retain audio facts with their rows so filtering cannot drift the
+        // audio state away from the visible parameter.
+        self.mod_state.sync_audio(
+            self.rows.iter().map(|row| row.audio.clone()),
+            &config.audio_sends,
+        );
+    }
+
+    fn restore_live(&mut self, target: &GraphParamTarget) {
+        let ctx = RowInteraction {
+            target,
+            rows: &mut self.rows,
+            modulation: &mut self.mod_state,
+            values: &mut self.current_values,
+            row_indices: &self.row_id_index,
         };
-        self.mod_state.sync_audio(n, &filtered_audio);
+        self.row_host.restore_live(ctx);
+    }
+
+    fn handle_pointer_down(
+        &mut self,
+        node: NodeId,
+        pos: Vec2,
+        tree: &mut UITree,
+        target: &GraphParamTarget,
+    ) -> Vec<PanelAction> {
+        let ctx = RowInteraction {
+            target,
+            rows: &mut self.rows,
+            modulation: &mut self.mod_state,
+            values: &mut self.current_values,
+            row_indices: &self.row_id_index,
+        };
+        self.row_host.handle_pointer_down(node, pos, tree, ctx)
+    }
+
+    fn handle_drag(
+        &mut self,
+        pos: Vec2,
+        tree: &mut UITree,
+        fine: bool,
+        target: &GraphParamTarget,
+    ) -> Vec<PanelAction> {
+        let ctx = RowInteraction {
+            target,
+            rows: &mut self.rows,
+            modulation: &mut self.mod_state,
+            values: &mut self.current_values,
+            row_indices: &self.row_id_index,
+        };
+        self.row_host.handle_drag(pos, tree, fine, ctx)
     }
 }
 
@@ -832,6 +831,7 @@ fn placeholder_param_info() -> ParamRow {
             section: None,
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
+        audio: AudioRowState::default(),
         modulation: RowMod::default(),
         mapping: RowMapping {
             osc_address: None,
@@ -964,11 +964,6 @@ pub struct ScenePanel {
     /// `light_name_rect`.
     light_name_ids: Vec<(u32, NodeId, String)>,
     panel_rect: Rect,
-    /// The layer_id a drag targets — captured at PointerDown so `on_event`
-    /// doesn't need to re-read `self.state` (which may rebuild mid-drag on
-    /// an unrelated `configure`, per D1 "no staleness": the drag itself
-    /// still targets the layer it started on).
-    drag_layer_id: Option<LayerId>,
 }
 
 impl Default for ScenePanel {
@@ -1010,7 +1005,6 @@ impl Default for ScenePanel {
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
-            drag_layer_id: None,
         }
     }
 }
@@ -1097,6 +1091,10 @@ impl ScenePanel {
         if !self.open {
             return;
         }
+        let target = self
+            .live_layer_id()
+            .cloned()
+            .map(GraphParamTarget::GeneratorOf);
         let card = &mut self.properties_card;
         card.row_value_synced.clear();
         card.row_value_synced.resize(card.rows.len(), false);
@@ -1111,12 +1109,16 @@ impl ScenePanel {
             // key is `last_pushed_values` (single-writer, this sync only) —
             // NOT `current_values`, which the drag/type-in paths write
             // mid-gesture; gating on that skipped the post-commit push.
+            let value = target
+                .as_ref()
+                .and_then(|target| card.row_host.active_param_value(target, &card.rows[i].id))
+                .unwrap_or(slot.value);
             let prev = card.last_pushed_values[i];
-            card.current_values[i] = slot.value;
-            if slot.value != prev || prev.is_nan() {
-                card.last_pushed_values[i] = slot.value;
+            card.current_values[i] = value;
+            if value != prev || prev.is_nan() {
+                card.last_pushed_values[i] = value;
                 card.row_host
-                    .push_slider_value(tree, i, slot.value, &card.rows[i].spec, None);
+                    .push_slider_value(tree, i, value, &card.rows[i].spec, None);
             }
             if let Some(c) = card.row_value_synced.get_mut(i) {
                 *c = true;
@@ -1796,6 +1798,7 @@ impl ScenePanel {
             }
         }
         self.properties_card.configure_from_filtered(&config, &retained);
+        self.properties_card.restore_live(&target);
 
         if retained.is_empty() {
             return cy;
@@ -1899,14 +1902,12 @@ impl ScenePanel {
         slider_w: f32,
         target: GraphParamTarget,
     ) -> f32 {
-        let mut info = self.properties_card.rows[slot].clone();
-
         // Scene-relative range substitution for translate params (SCENE_PANEL_UX_DESIGN.md).
         // When bounds are available, substitute the derived range (center ± 2×extent per axis)
         // so both slider drag clamp and type-in clamp see the same widened range.
         if let Some((bounds_min, bounds_max)) = self.state.as_live().and_then(|vm| vm.scene_bounds) {
             // Extract param ID string from the ParamRow's id field (Cow<'static, str>)
-            let param_id = info.id.as_ref();
+            let param_id = self.properties_card.rows[slot].id.as_ref();
 
             // Match transform_3d position params: pos_x, pos_y, pos_z
             if let Some(axis) = param_id.strip_prefix("pos_").and_then(|suffix| match suffix {
@@ -1926,10 +1927,11 @@ impl ScenePanel {
                 let range_min = center - 2.0 * extent;
                 let range_max = center + 2.0 * extent;
 
-                info.spec.min = range_min;
-                info.spec.max = range_max;
+                self.properties_card.rows[slot].spec.min = range_min;
+                self.properties_card.rows[slot].spec.max = range_max;
             }
         }
+        let info = self.properties_card.rows[slot].clone();
 
         // The value this row must SHOW: the sync's last-pushed value (the tree
         // is minted fresh every frame — a row the dirty-check skipped must
@@ -1945,6 +1947,11 @@ impl ScenePanel {
                 .copied()
                 .unwrap_or(info.spec.default),
         };
+        let display_value = self
+            .properties_card
+            .row_host
+            .active_param_value(&target, &info.id)
+            .unwrap_or(display_value);
 
         let built = build_param_row(
             tree,
@@ -1963,31 +1970,11 @@ impl ScenePanel {
             false,
             self.properties_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
             true,
-            Some((slot as u64) << 8),
+            Some(param_row_key_base(info.id.as_ref())),
             None,
             Some(display_value),
         );
-        let card = &mut self.properties_card;
-        let rh = &mut card.row_host;
-        rh.row_catcher_ids[slot] = Some(built.row_catcher);
-        rh.trim_ids[slot] = built.trim;
-        rh.target_ids[slot] = built.target;
-        rh.envelope_config_ids[slot] = built.envelope_config;
-        rh.envelope_btn_ids[slot] = built.envelope_btn;
-        rh.driver_btn_ids[slot] = Some(built.driver_btn);
-        rh.driver_config_ids[slot] = built.driver_config;
-        rh.audio_btn_ids[slot] = Some(built.audio_btn);
-        rh.automation_btn_ids[slot] = built.automation_btn;
-        rh.audio_configs[slot] = built.audio_config;
-        rh.mod_tab_ids[slot] = built.mod_tabs;
-        rh.slider_ids[slot] = built.slider;
-        rh.slider_resets[slot] = Some(built.slider_reset.clone());
-        if let Some(ids) = built.slider {
-            card.drag_sliders[slot].set_ids(ids);
-            card.drag_sliders[slot].set_range(info.spec.min, info.spec.max, false);
-        }
-        card.row_host.reindex_row(tree, slot);
-        built.new_cy
+        self.properties_card.row_host.install_row(tree, slot, built)
     }
 
     fn build_properties(
@@ -2481,7 +2468,7 @@ impl ScenePanel {
     // is deleted in the same commit.
 
     /// Handle one input event. Returns `(consumed, actions)`.
-    pub fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> (bool, Vec<PanelAction>) {
+    pub fn handle_event(&mut self, event: &UIEvent, tree: &mut UITree) -> (bool, Vec<PanelAction>) {
         if !self.open {
             return (false, Vec::new());
         }
@@ -2726,94 +2713,44 @@ impl ScenePanel {
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
-                    // P2 slice 2a: the unified properties card's slider
-                    // tracks — absolute-position track-hit (a click anywhere
-                    // on the track jumps straight to that value; drag
-                    // continues absolute-position), dispatching the card
-                    // drag protocol (`ParamSnapshot` + `ParamChanged`)
-                    // instead of a bespoke per-tick command, so a whole
-                    // scrub gesture is ONE undo unit (`ParamCommit` on
-                    // release, in the `DragEnd`/`PointerUp` arm below).
-                    // Replaces the five near-duplicate per-family blocks
-                    // this slice deleted.
-                    if let Some((pi, new_value)) = self
-                        .properties_card
-                        .drag_sliders
-                        .iter_mut()
-                        .enumerate()
-                        .find_map(|(pi, sl)| sl.try_start_drag(*node_id, pos.x).map(|v| (pi, v)))
+                    let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
+                    let was_dragging = self.properties_card.row_host.is_dragging();
+                    let actions = self.properties_card.handle_pointer_down(
+                        *node_id,
+                        *pos,
+                        tree,
+                        &target,
+                    );
+                    if was_dragging
+                        || self.properties_card.row_host.is_dragging()
+                        || !actions.is_empty()
                     {
-                        self.drag_layer_id = Some(vm.layer_id.clone());
-                        // BUG-292: the panel's own bound layer, not the
-                        // active-layer-resolved plain `Generator`.
-                        let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        let pid = self.properties_card.rows[pi].id.clone();
-                        return (
-                            true,
-                            vec![
-                                PanelAction::Scrub(ValueRef::Param(target.clone(), pid.clone()), ScrubPhase::Begin),
-                                PanelAction::Scrub(
-                                    ValueRef::Param(target, pid),
-                                    ScrubPhase::Move(ScrubValue::Scalar(new_value)),
-                                ),
-                            ],
-                        );
+                        return (true, actions);
                     }
                 }
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
-            UIEvent::DragBegin { .. } => (
-                self.properties_card.drag_sliders.iter().any(|s| s.is_dragging()),
-                Vec::new(),
-            ),
+            UIEvent::DragBegin { .. } => (self.properties_card.row_host.is_dragging(), Vec::new()),
             UIEvent::Drag { pos, modifiers, .. } => {
-                // P2 slice 2a: continue an active slider drag. Live
-                // `ParamChanged` only, no undo unit (the card cadence: one
-                // `ParamCommit` fires on release, below).
-                // BUG-292: the layer captured at drag-start (`vm.layer_id`
-                // via `PointerDown` above), not the active-layer-resolved
-                // plain `Generator`. D8 fine mode: Shift scales the pointer
-                // sensitivity by 0.1, sampled per move so it toggles mid-drag.
-                if let Some(lid) = self.drag_layer_id.clone()
-                    && let Some((pi, new_value)) = self
-                        .properties_card
-                        .drag_sliders
-                        .iter()
-                        .enumerate()
-                        .find_map(|(pi, sl)| slider_drag_value(sl, pos.x, modifiers.shift).map(|v| (pi, v)))
-                {
-                    let target = GraphParamTarget::GeneratorOf(lid);
-                    let pid = self.properties_card.rows[pi].id.clone();
-                    return (
-                        true,
-                        vec![PanelAction::Scrub(
-                            ValueRef::Param(target, pid),
-                            ScrubPhase::Move(ScrubValue::Scalar(new_value)),
-                        )],
+                if let SceneSetupState::Live(vm) = &self.state {
+                    let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
+                    let was_dragging = self.properties_card.row_host.is_dragging();
+                    let actions = self.properties_card.handle_drag(
+                        *pos,
+                        tree,
+                        modifiers.shift,
+                        &target,
                     );
+                    if was_dragging || !actions.is_empty() {
+                        return (true, actions);
+                    }
                 }
                 (false, Vec::new())
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
-                // P2 slice 2a (D4): release commits ONE undo unit for
-                // whichever row was mid-drag, if any — the card protocol's
-                // Commit step. BUG-292: the layer captured at drag-start
-                // (read before it's cleared below), not `Generator`.
-                let lid = self.drag_layer_id.clone();
-                let mut actions = Vec::new();
-                for pi in 0..self.properties_card.drag_sliders.len() {
-                    if self.properties_card.drag_sliders[pi].end_drag()
-                        && let Some(lid) = lid.clone()
-                    {
-                        let pid = self.properties_card.rows[pi].id.clone();
-                        actions.push(PanelAction::Scrub(
-                            ValueRef::Param(GraphParamTarget::GeneratorOf(lid), pid),
-                            ScrubPhase::Commit,
-                        ));
-                    }
-                }
-                self.drag_layer_id = None;
-                (!actions.is_empty(), actions)
+                let was_dragging = self.properties_card.row_host.is_dragging();
+                let actions = self.properties_card.row_host.handle_drag_end();
+                (was_dragging || !actions.is_empty(), actions)
             }
             // BUG-199: mouse-wheel scroll over the docked body, routed here by
             // `window_input.rs`'s `primary_mouse_wheel` through the generic
@@ -2879,44 +2816,6 @@ impl ScenePanel {
         let (_, node_id, _) = self.light_name_ids.iter().find(|(id, _, _)| *id == light_node_id)?;
         Some(tree.get_bounds(*node_id))
     }
-}
-
-/// UX-P2 (D2): the value an active object slider drag resolves to at
-/// `pos_x`, computed from its OWN cached `track_span` (x-only, so the
-/// build-time cache is scroll-safe by contract, BUG-259) — the exact math
-/// [`crate::slider::SliderDragState::apply_drag`] uses, minus that method's
-/// tree-mutating visual update. `handle_event` has no `&mut UITree` (the
-/// panel's whole event surface is tree-free by design), so the slider's
-/// fill/thumb/value-box don't update mid-drag locally; they update on the
-/// SAME cadence the triplet cells' drag-scrub already does — the next
-/// `build_nodes` pass after the round trip lands (D1: no per-frame
-/// rebuild). D8 fine mode scales the delta off the grab by 0.1 when Shift
-/// is held (the shared [`fine_scrub_value`], so this and the card's
-/// `handle_drag` are one implementation). Returns `None` when the slider
-/// isn't currently dragging.
-fn slider_drag_value(
-    slider: &crate::slider::SliderDragState,
-    pos_x: f32,
-    fine: bool,
-) -> Option<f32> {
-    if !slider.is_dragging() {
-        return None;
-    }
-    let ids = slider.ids()?;
-    let start_x = slider.drag_start_x().unwrap_or(pos_x);
-    let base = crate::slider::BitmapSlider::normalized_to_value(
-        crate::slider::BitmapSlider::x_to_normalized(ids.track_span, start_x),
-        slider.min,
-        slider.max,
-    );
-    Some(crate::panels::param_slider_shared::fine_scrub_value(
-        base,
-        pos_x - start_x,
-        ids.track_span.width,
-        slider.min,
-        slider.max,
-        fine,
-    ))
 }
 
 /// Stable outliner-row key, derived from the selection identity itself
@@ -3118,8 +3017,6 @@ mod tests {
             scene_root_node_id: 0,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
             objects: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
@@ -3152,8 +3049,6 @@ mod tests {
             scene_root_node_id: 99,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
                     index: 0,
@@ -3274,7 +3169,7 @@ mod tests {
             node_id: eye_id,
             pos: Vec2::ZERO,
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed, "the eye toggle must be clickable");
         assert!(matches!(
             actions.as_slice(),
@@ -3300,7 +3195,7 @@ mod tests {
             node_id: eye_id_2,
             pos: Vec2::ZERO,
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed_2);
         assert!(matches!(
             actions_2.as_slice(),
@@ -3352,7 +3247,7 @@ mod tests {
             node_id: button_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3385,7 +3280,7 @@ mod tests {
             node_id: panel.close_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert!(
             matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenSceneSetup)]),
@@ -3414,7 +3309,7 @@ mod tests {
             node_id: remove_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3468,7 +3363,7 @@ mod tests {
             node_id: move_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3501,7 +3396,7 @@ mod tests {
             node_id: add_object_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3513,7 +3408,7 @@ mod tests {
             node_id: add_light_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3538,7 +3433,7 @@ mod tests {
             node_id: add_plane_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3570,7 +3465,7 @@ mod tests {
             node_id: remove_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3596,7 +3491,7 @@ mod tests {
             node_id: dup_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3637,7 +3532,7 @@ mod tests {
 
         // C-P1b: the value-cell offsets (`OBJ_OFF_POS_X`/`ROT_X`/`SCALE_X`/
         // `COLOR_R`/`METALLIC`/`ROUGHNESS`) are gone — those rows' widgets
-        // now key off `build_param_row`'s own `row_key_base` (`slot << 8`),
+        // now key off `build_param_row`'s own ParamId-derived `row_key_base`,
         // a disjoint key space from `obj_key`'s. Only NAME/REMOVE (header
         // chrome) still key through `obj_key` (the exposure-lane mod
         // buttons were removed with the ∿ column).
@@ -3654,7 +3549,7 @@ mod tests {
         // `INTENSITY_MINUS`/`POS_X`/`AIM_X`/`CAST_SHADOWS_MINUS`/
         // `SHADOW_SOFTNESS_MINUS`/`LIGHT_SIZE_MINUS`) are gone — those rows'
         // widgets now key off `build_param_row`'s own `row_key_base`
-        // (`slot << 8`), same disjoint key space C-P1b established for
+        // (derived from the stable ParamId), same disjoint key space C-P1b established for
         // Object. Only NAME/REMOVE (header chrome) still key through
         // `light_key`.
         assert_no_dupes_and_fits_stride(
@@ -3668,7 +3563,7 @@ mod tests {
 
         // C-P1c: Camera's value-cell offsets are gone, and the exposure-lane
         // mod buttons went with the ∿ column — Camera keys nothing through
-        // an explicit-key scheme anymore (`build_param_row`'s `slot << 8`
+        // an explicit-key scheme anymore (`build_param_row`'s ParamId-derived key
         // covers all its rows), so there is nothing left to audit here.
 
         // Modifier: per-slot offsets (up to 4 param slots) must fit inside
@@ -3677,7 +3572,7 @@ mod tests {
         // stepper offsets are gone (deleted with the pre-convergence bespoke
         // numeric/enum stepper builders) — a Numeric/Axis row's own value
         // cell, track, and steppers now key through `build_param_row`'s internal
-        // `(slot << 8)` scheme, not `modifier_row_key`; only the reorder/
+        // ParamId-derived scheme, not `modifier_row_key`; only the reorder/
         // remove chrome and the mod-button offset still use it.
         assert_no_dupes_and_fits_stride(
             "MODIFIER (per-row)",
@@ -3705,7 +3600,7 @@ mod tests {
             node_id: remove_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3730,7 +3625,7 @@ mod tests {
             node_id: import_model_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3752,7 +3647,7 @@ mod tests {
             node_id: name_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3789,7 +3684,7 @@ mod tests {
             node_id: world_row_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        }, &tree);
+        }, &mut tree);
         assert!(consumed);
         assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::World));
 
@@ -3870,6 +3765,7 @@ mod tests {
                     exposed: true,
                     driven: false,
                 },
+                audio: AudioRowState::default(),
                 modulation: RowMod::default(),
                 mapping: RowMapping {
                     osc_address: None,
@@ -3881,7 +3777,7 @@ mod tests {
             }],
             string_params: Vec::new(),
             modifier: None,
-            audio: AudioCardState::default(),
+            audio_sends: Vec::new(),
             relight: crate::panels::param_card::RelightCardConfig::default(),
         };
         (vm, surface)
@@ -3909,8 +3805,8 @@ mod tests {
                 node_id: world_row_id,
                 pos: Vec2::ZERO,
                 modifiers: Modifiers::default(),
-            },
-            &tree,
+        },
+            &mut tree,
         );
         assert!(consumed, "World outliner row click must consume");
 
@@ -3927,7 +3823,7 @@ mod tests {
     /// (`GeneratorOf`) and the row's real param id + clamp range.
     #[test]
     fn scene_properties_double_click_opens_the_shared_typein() {
-        let (mut panel, tree) = scene_with_world_transform_selected();
+        let (mut panel, mut tree) = scene_with_world_transform_selected();
         let value_cell = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().value_text;
 
         let (consumed, actions) = panel.handle_event(
@@ -3936,7 +3832,7 @@ mod tests {
                 pos: Vec2::ZERO,
                 modifiers: Modifiers::default(),
             },
-            &tree,
+            &mut tree,
         );
         assert!(consumed, "double-click on a scene value cell must consume");
         assert!(matches!(
@@ -3952,7 +3848,7 @@ mod tests {
     /// nothing — type-in is the value cell's gesture only.
     #[test]
     fn scene_properties_double_click_on_track_is_a_no_op() {
-        let (mut panel, tree) = scene_with_world_transform_selected();
+        let (mut panel, mut tree) = scene_with_world_transform_selected();
         let track = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().track;
 
         let (consumed, actions) = panel.handle_event(
@@ -3961,7 +3857,7 @@ mod tests {
                 pos: Vec2::ZERO,
                 modifiers: Modifiers::default(),
             },
-            &tree,
+            &mut tree,
         );
         assert!(!consumed, "track double-click is not a type-in");
         assert!(actions.is_empty());
@@ -3969,10 +3865,10 @@ mod tests {
 
     /// D8 fine mode on the scene properties track: Shift during a drag scales
     /// the pointer sensitivity by 0.1, through the same shared helper the card
-    /// uses (`slider_drag_value` → `fine_scrub_value`).
+    /// uses the shared `RowHost` drag lifecycle and fine-scrub math.
     #[test]
     fn scene_properties_drag_shift_fine_scales_sensitivity() {
-        let (mut panel, tree) = scene_with_world_transform_selected();
+        let (mut panel, mut tree) = scene_with_world_transform_selected();
         let track = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().track;
         let track_rect = tree.get_bounds(track);
         let mid_x = track_rect.x + track_rect.width * 0.5;
@@ -3983,7 +3879,7 @@ mod tests {
                 pos: Vec2::new(mid_x, track_rect.y),
                 modifiers: Modifiers::default(),
             },
-            &tree,
+            &mut tree,
         );
         assert!(consumed, "track pointer-down must start the scene drag");
         assert!(matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(..))]));
@@ -3996,7 +3892,7 @@ mod tests {
                     delta: Vec2::new(20.0, 0.0),
                     modifiers: Modifiers::NONE,
                 },
-                &tree,
+                &mut tree,
             );
             match actions.as_slice() {
                 [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
@@ -4011,7 +3907,7 @@ mod tests {
                     delta: Vec2::new(20.0, 0.0),
                     modifiers: Modifiers { shift: true, ..Modifiers::NONE },
                 },
-                &tree,
+                &mut tree,
             );
             match actions.as_slice() {
                 [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,

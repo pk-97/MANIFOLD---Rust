@@ -184,8 +184,23 @@ pub(super) fn prepare(
                     .find(|n| n.node_id == diagram_id)
                     .ok_or_else(|| invalid("mathView", "diagram missing"))?
                     .id;
+                let surface_id = resource_node_id(&modifier.id, &frame.target, "surface");
+                let surface = def
+                    .nodes
+                    .iter()
+                    .find(|n| n.node_id == surface_id)
+                    .ok_or_else(|| invalid("mathView", "surface missing"))?
+                    .id;
                 wire(def, (sample, "weights".into()), diagram, "mesh_weights");
                 wire(def, (mask, "weights".into()), diagram, "scan_weights");
+                wire(def, (sample, "weights".into()), surface, "mesh_weights");
+                wire(def, (mask, "weights".into()), surface, "scan_weights");
+                // The view's boundary input borrows the parent render_scene
+                // depth at runtime. Every presentation node consumes that
+                // same borrowed texture, so the derived plan never revives
+                // the original scene producer.
+                wire(def, (sample, "depth".into()), diagram, "scene_depth");
+                wire(def, (sample, "depth".into()), surface, "scene_depth");
             } else {
                 let source = *index
                     .by_ref
@@ -240,6 +255,14 @@ pub(super) fn prepare(
                     BTreeMap::new(),
                 )?;
                 wire(def, (sample, "vertices".into()), output, "vertices");
+                // Preserve the parent scene's single resolved depth surface
+                // on the export boundary. Math View variants borrow this
+                // resource through their `system.mesh_input` depth output.
+                let scene = *index
+                    .by_ref
+                    .get(&modifier.scene)
+                    .ok_or_else(|| invalid("mathView", "scene target missing"))?;
+                wire(def, (scene, "depth".into()), output, "depth");
                 for (kind, port) in [("count", "trigger_count"), ("baseline", "trigger_baseline")] {
                     let key = serde_json::to_string(&(modifier.id.as_str(), "events", kind))
                         .map_err(|e| invalid("mathView", e.to_string()))?;

@@ -2054,7 +2054,7 @@ mod automation_clipboard_host_tests {
                     title: "Mirror".into(), collapsed: false, enabled: true,
                     effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
                     has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
-                    rows: Vec::new(), string_params: Vec::new(), audio: Default::default(),
+                    rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
                     relight: Default::default(),
                 }
             }).collect::<Vec<_>>();
@@ -2164,7 +2164,7 @@ mod automation_clipboard_host_tests {
             title: "ClipboardTest".into(), collapsed: false, enabled: true,
             effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
             has_graph_mod: false, layer_id: None, modifier: None,
-            rows: Vec::new(), string_params: Vec::new(), audio: Default::default(),
+            rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
             relight: Default::default(),
         };
         h.project.timeline.find_layer_by_id_mut(&destination_id).unwrap().1.effects = Some(vec![effect]);
@@ -2191,7 +2191,7 @@ mod automation_clipboard_host_tests {
             title: "ClipboardTest".into(), collapsed: false, enabled: true,
             effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
             has_graph_mod: false, layer_id: None, modifier: None,
-            rows: Vec::new(), string_params: Vec::new(), audio: Default::default(),
+            rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
             relight: Default::default(),
         };
         let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
@@ -2237,7 +2237,7 @@ mod automation_clipboard_host_tests {
             title: "SceneFog".into(),
             rows: Vec::new(),
             string_params: Vec::new(),
-            audio: Default::default(),
+            audio_sends: Vec::new(),
             modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
                 instance_id: modifier_id.clone(),
                 layer_id: gen_layer_id.clone(),

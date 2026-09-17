@@ -45,6 +45,7 @@ fn row(id: &'static str, name: &str, min: f32, max: f32, base: f32, whole: bool)
         },
         value: RowValue { base, effective: base, exposed: true, driven: false },
         modulation: RowMod::default(),
+        audio: Default::default(),
         mapping: RowMapping {
             osc_address: None,
             ableton_display: None,
@@ -69,7 +70,7 @@ fn effect_surface() -> ParamSurface {
         modifier: None,
         rows: vec![row("amount", "Amount", 0.0, 5.0, 1.2, false)],
         string_params: vec![],
-        audio: Default::default(),
+        audio_sends: Vec::new(),
         relight: Default::default(),
     }
 }
@@ -100,7 +101,7 @@ fn modifier_surface() -> ParamSurface {
             row("spacing", "Spacing", 0.25, 16.0, 4.0, false),
         ],
         string_params: vec![],
-        audio: Default::default(),
+        audio_sends: Vec::new(),
         relight: Default::default(),
     }
 }

@@ -4,6 +4,8 @@
 **Prerequisites:** all satisfied — design closed. Groundwork: W2-B (BUG-265 (inspector-card-drag-indicator-stale-geometry) root fix), SCENE_PANEL_EXPOSURE_CONVERGENCE P2, UI_WIDGET_UNIFICATION, INPUT_IDENTITY_UNIFICATION.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
+**Audio ownership correction (2026-09-17, BUG-tena / BUG-u8x8):** P1b left audio rows on the surface as a separate positional list. That exception is removed: `ParamRow.audio` owns `AudioRowState`; `ParamSurface.audio_sends` contains paired send IDs and labels. Filtering or reordering a row carries its audio facts. The shared UI cache stores audio row structs, not one vector per audio field.
+
 **The governing insight: "what a param row is" already exists exactly once in the engine — the param manifest (`inst.params`, one id-keyed walk, authority resolved at instantiation) — but between that manifest and the pixels sit four hand-written transcriptions that each re-state it: a parallel-vec DTO (~15 position-indexed arrays), an imperative 1,300-line tree build, an id-hoard click gauntlet duplicated per card kind, and per-family dispatch in the bridge. Every card fact lives in 5+ places; a forgotten mirror compiles and silently defaults.** That is the disease that produced the scene panel's imitation layer (BUG-237 (scene-setup-camera-world-light-param-scrub-does-…)/249/250/260), the dead-click class, and "fixed for Master, forgot Layer." This design replaces the four transcriptions with one queryable model: a projection the engine writes once and the renderer, the gesture router, the tests, and the automation selector all read.
 
 The stage translation: this layer is why the next card affordance ships by editing one function instead of five files, why a dead click or a lying display becomes a test that fails in seconds instead of a bug Peter finds mid-set, and why a lane briefed with card work physically cannot rebuild a parallel system — the queryable model is the path of least resistance. Peter's frame for the scene panel generalizes to the whole boundary: *"all one unified system"* (2026-07-19). The testing doctrine this serves, verbatim from the plan: *"Pixels are for looking, not asserting"* (2026-07-20). And Peter's goal directive for the layer itself, verbatim (2026-07-20, at adversarial review): *"The goal is a simple, safe, fast, efficient, and easy to implement UI and UX infrastructure layer for agents to work with. Agents must never create their own infra for basic things like rows, sliders, drawers, etc ever again during implementation."* The second sentence is a standing rule, not an aspiration — section 5b turns it into machine enforcement.
@@ -47,7 +49,7 @@ Negative claims, checked: no existing generic row model in `manifold-ui` (`rg 's
 
 **D2 — Row identity is `(GraphParamTarget, ParamId)`, carried on every action; positional indexes die.** `id_to_index`, `pid_at(pi)`, and every `pi`-shaped positional coupling are deleted. Position survives only as render order, defined by the manifest walk. Rationale: positional coupling is how a forgotten mirror silently misroutes (the BUG-249 (scene-panel-modulation-is-decorative-synth-pids-…)/250 shape). Rejected: *a new opaque row-id scheme* — the zero-new-systems test (DESIGN_AUTHORING section 3); `ParamId` + `GraphParamTarget` already address every param on the wire, and the scene panel's synthesized-id universe is the reference corpse.
 
-**D3 — One row struct replaces fifteen parallel vecs.** `ParamRow { id, spec, value, modulation, mapping }` — descriptor (`spec`) verbatim from the manifest's `ParamSpecDef` fields, state grouped per-row. A new card fact is one field in one struct, projected in one function, rendered in one place. Rejected: *keeping `ParamCardConfig` and building `ParamSurface` beside it* — the parallel-old-path forbidden move; the DTO carries no information the manifest lacks (DESIGN_AUTHORING section 4's accidental-duplication test → extract the seam, delete the copy).
+**D3 — One row struct replaces fifteen parallel vecs.** `ParamRow { id, spec, value, modulation, audio, mapping }` — descriptor (`spec`) verbatim from the manifest's `ParamSpecDef` fields, state grouped per-row. A new card fact is one field in one struct, projected in one function, rendered in one place. Rejected: *keeping `ParamCardConfig` and building `ParamSurface` beside it* — the parallel-old-path forbidden move; the DTO carries no information the manifest lacks (DESIGN_AUTHORING section 4's accidental-duplication test → extract the seam, delete the copy).
 
 **D4 — Row widgets are WidgetId-keyed by row identity.** Each row's interactive nodes are minted via the keyed builders with a salt derived from the row's `ParamId` (hash) + role discriminant, so identity survives reorder, section fold, and insertion (the `tree.rs:1747` reorder-stability contract, now at card scale). Precedent: INPUT_IDENTITY_UNIFICATION's explicit-key escape hatch, built for exactly this ("arming a modulator on one row must not renumber another row's controls"). Rejected: *auto sibling-index salts* — row insertion renumbers every later row's widgets, which is the stale-interaction class the keyed builders exist to prevent.
 
@@ -84,7 +86,7 @@ pub struct ParamSurface {
     pub rows: Vec<ParamRow>,        // manifest order == render order
     pub string_rows: Vec<ParamCardStringInfo>,   // existing type, unchanged
     pub relight: RelightCardConfig,              // existing type, unchanged
-    pub audio_sends: Vec<UiAudioSendChoice>,     // card-level send list (from AudioCardState)
+    pub audio_sends: Vec<AudioSendChoice>,     // card-level paired IDs and labels
 }
 
 pub struct ParamRow {
@@ -92,6 +94,7 @@ pub struct ParamRow {
     pub spec: RowSpec,      // descriptor, verbatim from the manifest ParamSpecDef
     pub value: RowValue,
     pub modulation: RowMod,
+    pub audio: AudioRowState,
     pub mapping: RowMapping,
 }
 
@@ -108,10 +111,11 @@ pub struct RowValue {
     pub driven: bool,       // wire-fed (read-only presentation, scene D2 answer)
 }
 
-/// Driver + envelope + audio + automation state for ONE row — today's ~15
-/// parallel vecs (`driver_active` … `automation_overridden`) plus the per-row
-/// slice of AudioCardState, as one struct. Interior partitioning free.
+/// Driver + envelope + automation state for one row.
+/// AudioRowState is owned by the same ParamRow, never a parallel surface list.
 pub struct RowMod { /* interior free */ }
+
+pub struct AudioSendChoice { pub id: AudioSendId, pub label: String }
 
 /// Ableton display + range, OSC address, mappable flag. Interior free.
 pub struct RowMapping { /* interior free */ }
@@ -169,7 +173,7 @@ fn row_action(surface: &ParamSurface, row: usize, role: RowRole, gesture: RowGes
 Build populates `RowIndex` as it mints keyed widgets. Event handling becomes:
 
 1. `handle_click(node_id)` → `tree.widget_of(node_id)` → `row_index.get(widget)` → `row_action(...)`. The relight/section/header specials become roles, not field matches.
-2. `handle_pointer_down`/`handle_drag`: same lookup to identify `(row, role)`; the existing drag machinery (`SliderDragState`, trim handles, drawer state in `ParamCardState`) keeps its state — only *identification* changes source.
+2. `RowHost::install_row` exhaustively consumes every `ParamRowIds` field and registers it. Both inspector and Scene Setup delegate pointer-down, drag, release and live-preview restoration to `RowHost`; hosts never copy row bundles or implement individual row gesture kinds. The shared gesture captures `GraphParamTarget` + `ParamId`, resolves the current row and track bounds on movement, and commits once to the captured address. Trim, envelope and audio drawer controls use this same path. `ScrubGesture` also owns the captured-address lifecycle for Audio Setup and clip-trigger controls, whose domain layouts remain separate.
 3. Card-level chrome (toggle/chevron/cog/drag-handle) stays on `register_intents`/existing paths — those are per-card, not per-row, and are not part of the disease.
 4. `register_intents` (:4668–4760 — the right-click contract layer) is re-pointed at rows in P2: today it reads the id-hoards being deleted. Right-click reset/mapping stays on the widget-contract path (widget-unification D5); `RowIndex` never absorbs it.
 
@@ -229,10 +233,13 @@ Peter's rule (quoted in the intro) is standing: **agents never build their own i
 | INV-6 Per-frame values JOIN rows by id, never by position (BUG-313 (scene-panel-filtered-vs-unfiltered-index-mismatc…)) | The per-frame value channel is id-keyed (`ui_translate::with_param_slots` → `(&str id, UiParamSlot)`); each sync resolves each slot to its row through the panel's `row_id_index` map (built at structural `configure`), and a manifest id with no row is simply skipped — there is NO positional stream and NO second visibility filter that could drift (the class the old length-match guarded against no longer exists). Map build `debug_assert!`s on a duplicate id; the per-frame coverage check `debug_assert!`s (dev) / `warn_join_gap_once` logs loudly once (release) for a built row that has no live manifest entry — never a silent freeze (`no-silent-fallbacks`) |
 | INV-8 No bespoke row infra anywhere, ever (Peter's standing rule, section 5b) | `no_bespoke_row_infra` repo-wide allowlist test (P2 deliverable) + the section 5b hook deny-pattern |
 | INV-7 One display-value read path | BUG-260-shaped conviction test binds the projection's `RowValue` to the binding-slot read for bound params (P1 deliverable, pattern: `bound_row_display_reads_the_binding_slot_not_the_def`) |
+| INV-9 Audio facts travel with row identity | `ParamRow.audio` is copied with every filtered/reordered row; no `AudioCardState` or `audio.rows` DTO remains. Modifier projection and filtered scene-card tests cover unrelated host audio, real modifier bindings and reorder. Send choices pair label and ID. |
 
 ---
 
 ## 7. Phasing
+
+The P1a/P1b steps below describe the original migration. Their separate audio-list layout was superseded by the audio ownership correction above.
 
 Phased by **layer**, never by family (DESIGN_AUTHORING section 7): P1 swaps the data, P2 the routing, P3 the geometry, P4 the bridge, P5 flows the remaining surfaces through. Every phase ends committable with the old code it replaces deleted. Test scope per phase: focused nextest + `-p` clippy; single full sweep at each landing in the main checkout. No GPU tests anywhere (nothing touches kernels); headless PNGs are look-oracles only.
 

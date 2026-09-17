@@ -1767,6 +1767,7 @@ mod tick_parity_tests {
                     mappable: false,
                 },
                 scene_addr: None,
+                audio: Default::default(),
             }],
             string_params: Vec::new(),
             collapsed,
@@ -1777,7 +1778,7 @@ mod tick_parity_tests {
             has_graph_mod: false,
             layer_id: None,
             modifier: None,
-            audio: Default::default(),
+            audio_sends: Vec::new(),
             relight: manifold_ui::RelightCardConfig::default(),
         }
     }
@@ -1850,4 +1851,3 @@ mod tick_parity_tests {
         );
     }
 }
-

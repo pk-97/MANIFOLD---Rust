@@ -20,8 +20,10 @@
 //! guard) lives app-side in `ui_bridge::scrub::ScrubState`, not here.
 
 use manifold_foundation::{AudioSendId, LayerId, ParamId};
+use crate::drag::DragController;
+use crate::node::Vec2;
 
-use super::{AudioShapeParam, BandDivider, GraphParamTarget, TrimKind, UiRelightField};
+use super::{AudioShapeParam, BandDivider, GraphParamTarget, PanelAction, TrimKind, UiRelightField};
 
 /// One edge of a scrub gesture — maps 1:1 onto the retired
 /// `*Snapshot`/`*Changed`/`*Commit` trio (D4). The scrubbed value rides
@@ -156,4 +158,94 @@ pub enum ValueRef {
     /// `ableton_mapping`. Distinct from the graph-param `Trim(TrimKind::Ableton,
     /// …)` family: this addresses a macro-bank slot, not a `GraphParamTarget`.
     AbletonMacroTrim(usize),
+}
+
+/// Captured-address lifecycle for a value scrub. The payload is host-owned
+/// gesture context (for example a band divider or a grab-time gain offset);
+/// the wire address is captured once at Begin and reused for every Move and
+/// the single Commit, even if the host's current selection changes.
+pub(crate) struct ScrubGesture<T> {
+    drag: DragController<ScrubSession<T>>,
+}
+
+struct ScrubSession<T> {
+    address: ValueRef,
+    payload: T,
+}
+
+impl<T> ScrubGesture<T> {
+    pub(crate) fn new() -> Self {
+        Self { drag: DragController::new() }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.drag.is_active()
+    }
+
+    pub(crate) fn address(&self) -> Option<&ValueRef> {
+        self.drag.payload().map(|session| &session.address)
+    }
+
+    pub(crate) fn payload(&self) -> Option<&T> {
+        self.drag.payload().map(|session| &session.payload)
+    }
+
+    pub(crate) fn payload_mut(&mut self) -> Option<&mut T> {
+        self.drag.payload_mut().map(|session| &mut session.payload)
+    }
+
+    pub(crate) fn start(&self) -> Option<Vec2> {
+        self.drag.session().map(|session| session.start)
+    }
+
+    pub(crate) fn begin(&mut self, address: ValueRef, payload: T, pos: Vec2) -> PanelAction {
+        self.drag.start(ScrubSession { address: address.clone(), payload }, pos);
+        PanelAction::Scrub(address, ScrubPhase::Begin)
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        pos: Vec2,
+        value: ScrubValue,
+    ) -> Option<PanelAction> {
+        self.drag.track(pos)?;
+        let address = self.drag.payload()?.address.clone();
+        Some(PanelAction::Scrub(address, ScrubPhase::Move(value)))
+    }
+
+    pub(crate) fn end(&mut self) -> Option<PanelAction> {
+        let session = self.drag.release()?;
+        Some(PanelAction::Scrub(session.address, ScrubPhase::Commit))
+    }
+
+    pub(crate) fn cancel(&mut self) {
+        self.drag.cancel();
+    }
+}
+
+#[cfg(test)]
+mod gesture_tests {
+    use super::*;
+
+    #[test]
+    fn captures_address_for_move_and_single_commit() {
+        let address = ValueRef::AudioSendGain(AudioSendId::new("send-1"));
+        let mut gesture = ScrubGesture::new();
+        assert!(matches!(
+            gesture.begin(address.clone(), 7u8, Vec2::new(2.0, 3.0)),
+            PanelAction::Scrub(_, ScrubPhase::Begin)
+        ));
+        assert_eq!(gesture.address(), Some(&address));
+        assert_eq!(gesture.payload(), Some(&7));
+        assert!(matches!(
+            gesture.update(Vec2::new(8.0, 3.0), ScrubValue::Scalar(0.5)),
+            Some(PanelAction::Scrub(ref actual, ScrubPhase::Move(ScrubValue::Scalar(0.5)))) if actual == &address
+        ));
+        assert!(matches!(
+            gesture.end(),
+            Some(PanelAction::Scrub(ref actual, ScrubPhase::Commit)) if actual == &address
+        ));
+        assert!(!gesture.is_active());
+        assert!(gesture.end().is_none());
+    }
 }

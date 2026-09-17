@@ -63,3 +63,19 @@ pub(crate) fn reposition_trim_bars(
     tree.set_bounds(ids.max_bar_id, r.max_bar);
 }
 
+/// Move one edge of a normalized trim range while keeping the two edges
+/// ordered. All trim consumers use this same clamp so driver, Ableton, and
+/// audio ranges cannot diverge at the crossing point or at track edges.
+#[inline]
+pub(crate) fn clamp_trim_range(
+    (current_min, current_max): (f32, f32),
+    pointer_norm: f32,
+    is_min: bool,
+) -> (f32, f32) {
+    let norm = pointer_norm.clamp(0.0, 1.0);
+    if is_min {
+        (norm.min(current_max), current_max)
+    } else {
+        (current_min, norm.max(current_min))
+    }
+}

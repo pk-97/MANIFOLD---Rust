@@ -8,11 +8,11 @@ use manifold_core::project::Project;
 use manifold_ui::panels::param_card::{
     ParamCardKind, ParamCardStringChoice, ParamCardStringInfo, RowMod,
 };
-use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
+use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioSendChoice};
 use manifold_ui::param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec, RowValue};
 use crate::ui_root::UIRoot;
 
-use super::inspector::{build_audio_card_state, build_card_modulation};
+use super::inspector::{audio_row_state, build_card_modulation};
 
 /// OSC address scope for effect param configs.
 /// Master effects use `/master/`, layer effects use `/layer/{id}/`, clips have no OSC.
@@ -120,11 +120,9 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
 /// config, from the project's `AudioSetup`. One pass after the configs are
 /// built, so the per-instance builders stay project-agnostic.
 pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_core::audio_setup::AudioSetup) {
-    let labels: Vec<String> = setup.sends.iter().map(|s| s.label.clone()).collect();
-    let ids: Vec<manifold_core::AudioSendId> = setup.sends.iter().map(|s| s.id.clone()).collect();
+    let sends = audio_send_choices(setup);
     for c in configs.iter_mut() {
-        c.audio.send_labels = labels.clone();
-        c.audio.send_ids = ids.clone();
+        c.audio_sends = sends.clone();
         for sp in &mut c.string_params {
             if sp.key != "audioSend" || !sp.use_dropdown {
                 continue;
@@ -134,6 +132,19 @@ pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_
             sp.display_value = Some(display);
         }
     }
+}
+
+pub(crate) fn audio_send_choices(
+    setup: &manifold_core::audio_setup::AudioSetup,
+) -> Vec<AudioSendChoice> {
+    setup
+        .sends
+        .iter()
+        .map(|send| AudioSendChoice {
+            id: send.id.clone(),
+            label: send.label.clone(),
+        })
+        .collect()
 }
 
 fn audio_send_string_state(
@@ -273,7 +284,7 @@ fn empty_generator_surface(inst: &PresetInstance) -> ParamSurface {
         modifier: None,
         rows: vec![],
         string_params: vec![],
-        audio: Default::default(),
+        audio_sends: Vec::new(),
         relight: crate::ui_translate::relight_card_config_from(inst),
     }
 }
@@ -445,6 +456,7 @@ fn param_surface(
                 modulation: RowMod::default(),
                 mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
                 scene_addr: None,
+                audio: Default::default(),
             }
         })
         .collect();
@@ -460,7 +472,15 @@ fn param_surface(
     for (row, rm) in rows.iter_mut().zip(mod_rows) {
         row.modulation = rm;
     }
-    let audio = build_audio_card_state(inst, n, |id| row_index_of.get(id).copied());
+    for am in inst.audio_mods.iter().flatten() {
+        if !am.enabled {
+            continue;
+        }
+        let Some(pi) = row_index_of.get(am.param_id.as_ref()).copied() else {
+            continue;
+        };
+        rows[pi].audio = audio_row_state(am);
+    }
 
     // String params are sourced from the registry def. Graph-backed audio-send
     // selectors use the instance graph for both effects and generators; other
@@ -571,7 +591,7 @@ fn param_surface(
         modifier: None,
         rows,
         has_graph_mod,
-        audio,
+        audio_sends: Vec::new(),
         relight: crate::ui_translate::relight_card_config_from(inst),
     })
 }
@@ -669,7 +689,7 @@ pub(crate) fn modifier_surfaces(
             title: metadata.display_name.clone(),
             rows,
             string_params: vec![],
-            audio: full.audio.clone(),
+            audio_sends: Vec::new(),
             modifier: Some(ModifierCardInfo {
                 instance_id: instance.id.clone(),
                 layer_id: manifold_core::LayerId::new(layer_id),
@@ -929,6 +949,141 @@ mod audio_send_projection_tests {
         assert_eq!(audio_send.value, selected_id);
         assert_eq!(audio_send.display_value.as_deref(), Some("2 · Music"));
         assert_eq!(audio_send.dropdown_choices[2].value, audio_send.value);
+    }
+}
+
+#[cfg(test)]
+mod modifier_audio_projection_tests {
+    use super::*;
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_renderer::node_graph::{scene_modifier_authoring::prepare_new_scene_modifier, scene_vm::SceneVm};
+
+    #[test]
+    fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reorder() {
+        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+        ))).unwrap();
+        for preset in ["RenderMode", "SceneFog"] {
+            let recipe = manifold_renderer::node_graph::bundled_preset_def(
+                &manifold_core::PresetTypeId::new(preset),
+            ).unwrap();
+            let modifier = prepare_new_scene_modifier(
+                &graph, recipe, preset.into(),
+                SceneNodeRef { scope: vec![], node: "scan_render".into() },
+                SceneTargetSelection::AllObjects,
+            ).unwrap();
+            graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+                &graph, graph.scene_modifiers.len(), modifier,
+            ).unwrap().graph;
+        }
+        let mut gp = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        gp.graph = Some(graph.clone());
+        gp.refresh_manifest_from_graph();
+        // Match the reported collision: generator audio at full row 4,
+        // while Render Mode's local row 4 is Line Color R.
+        let prefix = (0..5).map(|i| {
+            let mut spec = gp.params.iter().next().unwrap().spec.clone();
+            spec.id = format!("host_{i}");
+            Param::user_added(spec)
+        });
+        gp.params = ParamManifest::from_params(prefix.chain(gp.params.iter().cloned()).collect());
+        let make_mod = |id: &str| ParameterAudioMod::new(
+            id.to_string().into(), "host".into(),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        let mut host_mod = make_mod("host_4");
+        host_mod.shape.release_ms = 63.616074;
+        gp.audio_mods = Some(vec![host_mod]);
+        // Hidden enable rows can have bindings too; their audio must never
+        // leak into a visible parameter when the card drops them.
+        for binding in &graph.preset_metadata.as_ref().unwrap().bindings {
+            if let manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } = &binding.target
+                && param_id == "enabled"
+            {
+                gp.audio_mods.as_mut().unwrap().push(make_mod(&binding.id));
+            }
+        }
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let surfaces = modifier_surfaces(&gp, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        assert_eq!(surfaces.len(), 2);
+        assert_eq!(surfaces[0].rows[4].spec.name, "Line Color R");
+        for surface in &surfaces {
+            assert!(surface.rows.iter().all(|row| !row.audio.active),
+                "generator audio must not appear on {}", surface.title);
+        }
+        let render_param = surfaces[0].rows[4].id.clone();
+        let fog_param = surfaces[1].rows[0].id.clone();
+        let mut disabled_mod = make_mod(&surfaces[0].rows[0].id);
+        disabled_mod.enabled = false;
+        gp.audio_mods.as_mut().unwrap().push(disabled_mod);
+        let mut render_mod = make_mod(&render_param);
+        render_mod.shape.release_ms = 250.0;
+        render_mod.source.send_id = "render".into();
+        render_mod.shape.range_min = 0.2;
+        render_mod.shape.range_max = 0.8;
+        let mut fog_mod = make_mod(&fog_param);
+        fog_mod.source.send_id = "fog".into();
+        fog_mod.shape.range_min = 0.35;
+        fog_mod.shape.range_max = 0.65;
+        gp.audio_mods.as_mut().unwrap().extend([render_mod, fog_mod]);
+        let mut setup = manifold_core::audio_setup::AudioSetup::default();
+        let mut host_send = manifold_core::audio_setup::AudioSend::new("Host");
+        host_send.id = "host".into();
+        let mut render_send = manifold_core::audio_setup::AudioSend::new("Render");
+        render_send.id = "render".into();
+        let mut fog_send = manifold_core::audio_setup::AudioSend::new("Fog");
+        fog_send.id = "fog".into();
+        setup.sends = vec![host_send, render_send, fog_send];
+        for pass in 0..2 {
+            let mut surfaces = modifier_surfaces(&gp, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+            attach_audio_sends(&mut surfaces, &setup);
+            for (index, surface) in surfaces.iter().enumerate() {
+                assert_eq!(surface.audio_sends.len(), 3);
+                let send_order: Vec<&str> = surface.audio_sends.iter().map(|send| send.id.as_str()).collect();
+                assert_eq!(send_order, if pass == 0 {
+                    vec!["host", "render", "fog"]
+                } else {
+                    vec!["fog", "render", "host"]
+                });
+                let recipe = graph.scene_modifiers[index]
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .unwrap()
+                    .scene_modifier
+                    .as_ref()
+                    .unwrap();
+                assert!(surface.rows.iter().all(|row| {
+                    let binding = graph.preset_metadata.as_ref().unwrap().bindings.iter()
+                        .find(|binding| binding.id == row.id.as_ref()).unwrap();
+                    let manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } = &binding.target
+                        else { panic!("modifier row must have a modifier binding") };
+                    param_id != &recipe.enabled_param
+                        && !recipe.preparation_params.contains(param_id)
+                }));
+                for row in &surface.rows {
+                    let audio = &row.audio;
+                    assert_eq!(audio.active, row.id == render_param || row.id == fog_param);
+                    if row.id == render_param {
+                        assert_eq!(audio.release_ms, 250.0);
+                        assert_eq!(audio.send_id.as_ref().map(|id| id.as_str()), Some("render"));
+                        assert_eq!((audio.range_min, audio.range_max), (0.2, 0.8));
+                    } else if row.id == fog_param {
+                        assert_eq!(audio.send_id.as_ref().map(|id| id.as_str()), Some("fog"));
+                        assert_eq!((audio.range_min, audio.range_max), (0.35, 0.65));
+                    }
+                }
+            }
+            if pass == 0 {
+                setup.sends.reverse();
+            }
+            graph.scene_modifiers.reverse();
+            gp.graph = Some(graph.clone());
+        }
     }
 }
 

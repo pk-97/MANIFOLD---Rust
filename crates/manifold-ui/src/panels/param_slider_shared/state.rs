@@ -94,59 +94,14 @@ pub struct ParamModState {
     pub driver_frame_aligned: Vec<bool>,
     pub driver_frame_rate: Vec<Option<(u32, f32)>>,
 
-    // ── Audio modulation (per-param + card-level send list) ──
-    /// Per-param: an audio modulation exists and is enabled (button highlight +
-    /// drawer auto-expands, mirroring the driver).
-    pub audio_active: Vec<bool>,
-    /// Per-param: index of the selected send in [`Self::audio_send_labels`], or
-    /// -1 if the mod's send no longer resolves.
-    pub audio_send_idx: Vec<i32>,
-    /// Per-param: selected feature `kind` index (into `AudioFeatureKind::ALL`)
-    /// and `band` index (into `AudioBand::ALL`) — the two-axis feature matrix.
-    pub audio_kind_idx: Vec<i32>,
-    pub audio_band_idx: Vec<i32>,
-    /// Per-param: audio-mod output sub-range (the green trim handles), 0..1 of the
-    /// slider's travel. Mirrors `trim_min`/`trim_max` for drivers — the audio
-    /// drives only this slice of the param's range.
-    pub audio_range_min: Vec<f32>,
-    pub audio_range_max: Vec<f32>,
-    /// Per-param: audio-mod invert (`AudioModShape::invert`) — drives the "Inv"
-    /// toggle in the drawer (loud → low).
-    pub audio_invert: Vec<bool>,
-    /// Per-param: audio-mod rate-of-change (`AudioModShape::rate_of_change`) —
-    /// drives the "d/dt" toggle.
-    pub audio_rate: Vec<bool>,
-    /// Per-param: audio-mod shaping values, shown on the drawer sliders.
-    /// Sensitivity (Amount), and attack/release in ms.
-    pub audio_sensitivity: Vec<f32>,
-    pub audio_attack_ms: Vec<f32>,
-    pub audio_release_ms: Vec<f32>,
-    /// Card-level: available send labels (same for every row on the card).
-    pub audio_send_labels: Vec<String>,
-    /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
-    /// drawer index into the id an `AudioModSetSource` command needs.
-    pub audio_send_ids: Vec<manifold_foundation::AudioSendId>,
+    // ── Audio modulation (per-row + card-level send list) ──
+    /// Per-row audio facts. Keeping the send id with the other row facts makes
+    /// filtering/reordering safe by construction.
+    pub audio_rows: Vec<AudioRowState>,
+    /// Card-level available sends, with labels and ids kept paired.
+    pub audio_sends: Vec<AudioSendChoice>,
 
-    /// Per-param: fire-mode index into `[ClipEdge, Transient, Both]` (section 9 U3),
-    /// read off `ParameterAudioMod.trigger_mode`. Only meaningful on an
-    /// `is_trigger_gate` row's mod; harmless elsewhere (never read). Unlike
-    /// the pre-section 9 `audio_trigger_*` arrays this rides the SAME per-param
-    /// `audio_*` state above — a trigger-gate card's config is a normal
-    /// `ParameterAudioMod`, not a separate per-instance field.
-    pub audio_mode_idx: Vec<i32>,
-
-    /// Per-param: fire ACTION index into `[Continuous, Step, Random]` (D2),
-    /// read off `ParameterAudioMod.action`. Drives the drawer's Action row,
-    /// the collapsed "A"→"S"/"R" glyph (D8's "silent mode trap" badge), and
-    /// gates whether the Amount/Wrap/Mode rows show at all.
-    pub audio_action_idx: Vec<i32>,
-    /// Per-param: the Step action's `amount` (signed, param units) — the
-    /// drawer's Amount slider. Meaningful only while `audio_action_idx == 1`.
-    pub audio_step_amount: Vec<f32>,
-    /// Per-param: the Step action's wrap-mode index into
-    /// `[Wrap, Bounce, Clamp]` (D2) — the drawer's Wrap row. Meaningful only
-    /// while `audio_action_idx == 1`.
-    pub audio_wrap_idx: Vec<i32>,
+    // Trigger mode, action, amount, and wrap now live in `audio_rows`.
 
     /// Per-param: the drawer's full Feature×Band matrix is open (the "Custom"
     /// cell trailing the Listen chips). SESSION-ONLY UI state — `sync_audio`
@@ -194,6 +149,19 @@ pub(crate) fn audio_kind_labels() -> [&'static str; AUDIO_KIND_COUNT] {
 #[cfg(test)]
 mod audio_row_tests {
     use super::*;
+
+    #[test]
+    fn selected_send_index_follows_id_when_choices_reorder() {
+        let mut state = ParamModState::allocate(1);
+        state.audio_rows[0].send_id = Some(manifold_foundation::AudioSendId::new("second"));
+        let first = AudioSendChoice { id: manifold_foundation::AudioSendId::new("first"), label: "First".into() };
+        let second = AudioSendChoice { id: manifold_foundation::AudioSendId::new("second"), label: "Second".into() };
+        state.sync_audio(std::iter::once(state.audio_rows[0].clone()), &[first.clone(), second.clone()]);
+        assert_eq!(state.audio_send_index(0), 1);
+        state.sync_audio(std::iter::once(state.audio_rows[0].clone()), &[second, first]);
+        assert_eq!(state.audio_send_index(0), 0);
+        assert_eq!(state.audio_sends[0].id.as_str(), "second");
+    }
 
     /// P4 regression (2026-07-06, found by Peter on a live build): the UI
     /// crate holds a MIRROR of core's `AudioFeatureKind` behind the
@@ -302,16 +270,15 @@ pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<S
 }
 
 
-/// One param row's audio-modulation display state — the per-row facts
-/// [`AudioCardState::rows`] carries. Collapses the former fifteen parallel
+/// One param row's audio-modulation display state. Collapses the former fifteen parallel
 /// per-param vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per
 /// row.
 #[derive(Debug, Clone)]
 pub struct AudioRowState {
     /// Mod exists and is enabled.
     pub active: bool,
-    /// The mod's send id, if any. Resolved to an index into `send_ids` by
-    /// [`ParamModState::sync_audio`].
+    /// The mod's send id, if any. Resolved against paired send choices by
+    /// [`ParamModState::audio_send_index`].
     pub send_id: Option<manifold_foundation::AudioSendId>,
     /// Selected feature `kind` and `band` indices (the matrix axes).
     pub kind_idx: i32,
@@ -342,6 +309,14 @@ pub struct AudioRowState {
     pub wrap_idx: i32,
 }
 
+/// One available audio send. Labels and ids travel together so send reorder
+/// cannot route a click to a different id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioSendChoice {
+    pub id: manifold_foundation::AudioSendId,
+    pub label: String,
+}
+
 
 impl Default for AudioRowState {
     fn default() -> Self {
@@ -366,21 +341,6 @@ impl Default for AudioRowState {
 }
 
 
-/// Audio-modulation display state for one card, assembled in `state_sync` and
-/// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
-/// the card config gains one field, not five.
-#[derive(Debug, Default, Clone)]
-pub struct AudioCardState {
-    /// Per-param audio-mod facts, one [`AudioRowState`] per card row (D3).
-    pub rows: Vec<AudioRowState>,
-    /// Card-level: available send labels.
-    pub send_labels: Vec<String>,
-    /// Card-level: send ids parallel to `send_labels` — what the click handler
-    /// turns a selected index into for the `AudioModSetSource` command.
-    pub send_ids: Vec<manifold_foundation::AudioSendId>,
-}
-
-
 impl ParamModState {
     pub fn allocate(param_count: usize) -> Self {
         Self {
@@ -401,23 +361,8 @@ impl ParamModState {
             driver_free_period: vec![None; param_count],
             driver_frame_aligned: vec![false; param_count],
             driver_frame_rate: vec![None; param_count],
-            audio_active: vec![false; param_count],
-            audio_send_idx: vec![-1; param_count],
-            audio_kind_idx: vec![0; param_count],
-            audio_band_idx: vec![0; param_count],
-            audio_range_min: vec![0.0; param_count],
-            audio_range_max: vec![1.0; param_count],
-            audio_invert: vec![false; param_count],
-            audio_rate: vec![false; param_count],
-            audio_sensitivity: vec![1.0; param_count],
-            audio_attack_ms: vec![5.0; param_count],
-            audio_release_ms: vec![120.0; param_count],
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
-            audio_mode_idx: vec![0; param_count],
-            audio_action_idx: vec![0; param_count],
-            audio_step_amount: vec![1.0; param_count],
-            audio_wrap_idx: vec![0; param_count],
+            audio_rows: vec![AudioRowState::default(); param_count],
+            audio_sends: Vec::new(),
             audio_matrix_open: vec![false; param_count],
             automation_active: vec![false; param_count],
             automation_overridden: vec![false; param_count],
@@ -425,38 +370,31 @@ impl ParamModState {
         }
     }
 
-    /// Sync audio-modulation display state from the card config.
-    pub fn sync_audio(&mut self, n: usize, audio: &AudioCardState) {
+    /// Sync audio-modulation display state from the retained row stream.
+    pub fn sync_audio(
+        &mut self,
+        rows: impl ExactSizeIterator<Item = AudioRowState>,
+        sends: &[AudioSendChoice],
+    ) {
         // Session-only UI state: sized here so a card whose param list grew
         // since `allocate` never has a dead "Custom" toggle. Never overwritten
         // from the model — it's not a mirrored field.
+        let n = rows.len();
+        assert_eq!(n, self.driver_expanded.len(), "audio row count must match allocated parameter state");
+        self.audio_rows.clear();
+        self.audio_rows.extend(rows);
+        self.audio_sends.clear();
+        self.audio_sends.extend_from_slice(sends);
         self.audio_matrix_open.resize(n, false);
-        let default_row = AudioRowState::default();
-        for i in 0..n {
-            let row = audio.rows.get(i).unwrap_or(&default_row);
-            self.audio_active[i] = row.active;
-            self.audio_kind_idx[i] = row.kind_idx;
-            self.audio_band_idx[i] = row.band_idx;
-            self.audio_range_min[i] = row.range_min;
-            self.audio_range_max[i] = row.range_max;
-            self.audio_invert[i] = row.invert;
-            self.audio_rate[i] = row.rate;
-            self.audio_sensitivity[i] = row.sensitivity;
-            self.audio_attack_ms[i] = row.attack_ms;
-            self.audio_release_ms[i] = row.release_ms;
-            self.audio_mode_idx[i] = row.trigger_mode_idx;
-            self.audio_action_idx[i] = row.action_idx;
-            self.audio_step_amount[i] = row.step_amount;
-            self.audio_wrap_idx[i] = row.wrap_idx;
-            self.audio_send_idx[i] = row
-                .send_id
-                .as_ref()
-                .and_then(|sid| audio.send_ids.iter().position(|s| s == sid))
-                .map(|p| p as i32)
-                .unwrap_or(-1);
-        }
-        self.audio_send_labels = audio.send_labels.clone();
-        self.audio_send_ids = audio.send_ids.clone();
+    }
+
+    /// Index of the selected send for a row, or -1 when it no longer resolves.
+    pub fn audio_send_index(&self, index: usize) -> i32 {
+        self.audio_rows
+            .get(index)
+            .and_then(|row| row.send_id.as_ref())
+            .and_then(|id| self.audio_sends.iter().position(|send| &send.id == id))
+            .map_or(-1, |index| index as i32)
     }
 
     /// Sync driver/envelope/trim/target/decay state from the config's per-row
@@ -508,142 +446,6 @@ impl ParamModState {
 }
 
 
-// ── Shared drag state ───────────────────────────────────────────
-// P7.1 (docs/UI_WIDGET_UNIFICATION_DESIGN.md, D8/D10): the six formerly
-// parallel `Option`/sentinel slots below fold into one `DragController`
-// payload enum. Single-active is enforced at the type level — a fresh grab
-// always wins (drag.rs) — which only forbids states that were already bugs
-// (two slots armed at once was never a feature, D8).
-
-/// What a `ParamDragState` drag is targeting, captured at grab time.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum ParamDragTarget {
-    /// A plain param-slider drag. Was `dragging_param: i32` (−1 idle).
-    Param { index: usize },
-    /// The active modulator trim-range drag: which modulator
-    /// ([`TrimKind`] — driver/Ableton/audio share one path), the param
-    /// index, and which edge. Was `dragging_trim`.
-    Trim {
-        kind: TrimKind,
-        index: usize,
-        is_min: bool,
-    },
-    /// The envelope target (orange handle / `target_normalized`) on the
-    /// track. Was `dragging_target_param: i32`.
-    EnvTarget { index: usize },
-    /// The envelope decay slider (`decay_beats`) in the drawer. Was
-    /// `dragging_decay_param: i32`.
-    EnvDecay { index: usize },
-    /// An audio shaping slider drag in the drawer. A trigger-gate row's
-    /// Amount/Attack/Release sliders ride this SAME path (section 9 unified the
-    /// drawer) — no separate trigger-mod drag target. Was
-    /// `dragging_audio_shape: Option<(usize, AudioShapeParam)>`.
-    AudioShape {
-        index: usize,
-        param: crate::panels::AudioShapeParam,
-    },
-    /// The Step-Amount slider drag, only ever built while Action=Step
-    /// (PARAM_STEP_ACTIONS D8) — `amount` lives on `TriggerAction::Step`,
-    /// not `AudioModShape`, so `AudioShapeParam` doesn't apply here. Was
-    /// `dragging_step_amount: Option<usize>`.
-    StepAmount { index: usize },
-    /// A D3 "3D Shading" relight-knob drag (`docs/DEPTH_RELIGHT_DESIGN.md`
-    /// P5b) — the six always-visible rows below the normal params, not
-    /// indexed into `rows`/`ParamId` at all.
-    Relight { field: crate::panels::UiRelightField },
-}
-
-
-/// Drag tracking state for the unified `ParamCardPanel` (both kinds). A thin
-/// wrapper over [`DragController`] — the six accessors below let the ~49
-/// call sites convert from the old sentinel fields one-for-one.
-pub(crate) struct ParamDragState {
-    drag: DragController<ParamDragTarget>,
-}
-
-
-impl ParamDragState {
-    pub(crate) fn new() -> Self {
-        Self {
-            drag: DragController::new(),
-        }
-    }
-
-    pub(crate) fn is_dragging(&self) -> bool {
-        self.drag.is_active()
-    }
-
-    /// Begin a drag. `pos` is the real pointer position already in scope at
-    /// the `handle_pointer_down` call site — never a synthesized geometry.
-    pub(crate) fn begin(&mut self, target: ParamDragTarget, pos: Vec2) {
-        self.drag.start(target, pos);
-    }
-
-    /// Release — hands back the target that was active, if any, as the
-    /// signal to emit a commit.
-    pub(crate) fn end(&mut self) -> Option<ParamDragTarget> {
-        self.drag.release()
-    }
-
-    pub(crate) fn param_index(&self) -> Option<usize> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::Param { index }) => Some(*index),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn trim(&self) -> Option<(TrimKind, usize, bool)> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::Trim { kind, index, is_min }) => Some((*kind, *index, *is_min)),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn env_target_index(&self) -> Option<usize> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::EnvTarget { index }) => Some(*index),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn env_decay_index(&self) -> Option<usize> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::EnvDecay { index }) => Some(*index),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn audio_shape(&self) -> Option<(usize, crate::panels::AudioShapeParam)> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::AudioShape { index, param }) => Some((*index, *param)),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn step_amount(&self) -> Option<usize> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::StepAmount { index }) => Some(*index),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn relight_field(&self) -> Option<crate::panels::UiRelightField> {
-        match self.drag.payload() {
-            Some(ParamDragTarget::Relight { field }) => Some(*field),
-            _ => None,
-        }
-    }
-
-    /// Grab x for the in-flight drag — the anchor a fine-mode scrub scales its
-    /// pointer delta around (D8). `None` when idle; `handle_drag` reads it to
-    /// recover the grab value without storing a second copy.
-    pub(crate) fn start_x(&self) -> Option<f32> {
-        self.drag.session().map(|s| s.start.x)
-    }
-}
-
-
-
 pub(crate) fn format_param_value(
     val: f32,
     min: f32,
@@ -668,7 +470,7 @@ pub(crate) fn format_param_value(
 /// Shared Shift-fine scaling for a param value scrub (the D8 fine-drag
 /// contract): holding Shift multiplies the pointer-to-value sensitivity by
 /// 0.1. One function so the effect/generator card's `handle_drag` and the
-/// scene panel's track scrub (`slider_drag_value`) can't drift apart — the
+/// scene panel's track scrub share the same sensitivity — the
 /// "one implementation" the param surface is for.
 ///
 /// `base` is the value at drag-start (the grab), `dx` the pointer travel in
