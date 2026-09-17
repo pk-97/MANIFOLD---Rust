@@ -1757,6 +1757,7 @@ mod tick_parity_tests {
                     is_trigger_gate: false,
                     value_labels: None,
                     section: None,
+                    disabled: None,
                 },
                 value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
                 modulation: manifold_ui::RowMod::default(),

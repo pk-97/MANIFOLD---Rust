@@ -1213,6 +1213,7 @@ mod tests {
                         is_trigger_gate: false,
                         value_labels: None,
                         section: None,
+                        disabled: None,
                     },
                     value: RowValue { base: 10.0, effective: 10.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -1239,6 +1240,7 @@ mod tests {
                         is_trigger_gate: false,
                         value_labels: None,
                         section: None,
+                        disabled: None,
                     },
                     value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -1278,6 +1280,7 @@ mod tests {
                 is_trigger_gate: false,
                 value_labels: None,
                 section: None,
+                disabled: None,
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
@@ -1304,6 +1307,7 @@ mod tests {
                 is_trigger_gate: false,
                 value_labels: None,
                 section: None,
+                disabled: None,
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
@@ -1543,6 +1547,7 @@ mod tests {
                 is_trigger_gate: true,
                 value_labels: None,
                 section: None,
+                disabled: None,
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
@@ -3425,6 +3430,7 @@ mod tests {
                         is_trigger_gate: false,
                         value_labels: None,
                         section: None,
+                        disabled: None,
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -3451,6 +3457,7 @@ mod tests {
                         is_trigger_gate: false,
                         value_labels: None,
                         section: None,
+                        disabled: None,
                     },
                     value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -3477,6 +3484,7 @@ mod tests {
                         is_trigger_gate: false,
                         value_labels: None,
                         section: None,
+                        disabled: None,
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -4013,5 +4021,35 @@ mod tests {
             PanelAction::Root(RootAction::CopyOscAddress(addr)) => assert_eq!(addr, "/fx/0/invert"),
             other => panic!("expected CopyOscAddress, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn disabled_row_click_dispatches_nothing() {
+        // `RowSpec.disabled` — the projection's unsupported reason (Math
+        // View's Connect to Mesh on an unsupported chain is the shipped
+        // case): the greyed row is a dead click. Neither the toggle button
+        // nor the label (OSC copy) may emit anything.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut cfg = effect_config_with_toggle_and_trigger();
+        let toggle_row = cfg.rows.len() - 2; // "invert", the is_toggle row
+        cfg.rows[toggle_row].spec.disabled = Some("needs a patch-based modifier earlier".into());
+        cfg.rows[toggle_row].mapping.osc_address = Some("/fx/0/invert".into());
+        panel.configure(&cfg);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let ids = panel.row_host.toggle_ids[toggle_row]
+            .as_ref()
+            .expect("toggle row built");
+        let (button_id, label_id) = (ids.button_id, ids.label_id);
+        assert!(
+            panel.handle_click(button_id, &tree).is_empty(),
+            "a disabled toggle button must not dispatch ParamToggle"
+        );
+        let label = label_id.expect("toggle row always builds a label");
+        assert!(
+            panel.handle_click(label, &tree).is_empty(),
+            "a disabled row label must not dispatch the OSC copy"
+        );
     }
 }

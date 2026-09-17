@@ -35,7 +35,6 @@ pub use compiler::{
     expand_scene_modifiers, prepare_scene_modifier_math_view, prepare_scene_modifiers,
     validate_modifier_attachment, validate_modifier_runtime,
 };
-pub use math_view::MathViewScope;
 #[cfg(test)]
 pub(crate) use math_view::test_owner as math_view_test_owner;
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};

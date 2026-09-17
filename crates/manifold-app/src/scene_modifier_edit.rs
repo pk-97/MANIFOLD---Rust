@@ -211,6 +211,43 @@ pub(crate) fn build_action(
     }
 }
 
+/// Rejection reason when a Connect to Mesh ENABLE lands on an unsupported
+/// Math View chain. The card's disabled row is the primary gate; this is
+/// the defensive backstop for the same write arriving from any other
+/// surface (automation, headless scripts). The host param is resolved
+/// through the graph's bindings, never by parsing its id string.
+pub(crate) fn math_view_connect_mesh_enable_lock_reason(
+    project: &Project,
+    target: &GraphTarget,
+    host_param_id: &str,
+) -> Option<String> {
+    if matches!(target, GraphTarget::SceneModifier { .. }) {
+        return None;
+    }
+    let graph = crate::graph_target::resolve(project, target)?;
+    let binding = graph
+        .preset_metadata
+        .as_ref()?
+        .bindings
+        .iter()
+        .find(|binding| binding.id == host_param_id)?;
+    let BindingTarget::SceneModifier { modifier_id, param_id } = &binding.target else {
+        return None;
+    };
+    let connect_mesh_id = format!(
+        "{}connect_mesh",
+        manifold_core::scene_modifier_math_view::CONTROL_PREFIX
+    );
+    if param_id != &connect_mesh_id {
+        return None;
+    }
+    let instance = graph.scene_modifiers.iter().find(|m| &m.id == modifier_id)?;
+    if !manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
+        return None;
+    }
+    manifold_core::scene_modifier_math_view::math_view_connect_support(graph, modifier_id).err()
+}
+
 /// Source selectors and render mode cannot change under captured geometry.
 /// This cheap authored-identity check also guards live UI writes before they
 /// reach the ordinary scalar path.

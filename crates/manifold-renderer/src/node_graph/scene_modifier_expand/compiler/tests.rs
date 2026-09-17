@@ -762,8 +762,7 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
     let prepared = prepare_scene_modifier_math_view(
         &owner,
         &registry,
-        &NodeId::new("vortex_math_view"),
-        MathViewScope::ThisModifier,
+        &NodeId::new("math_view"),
     )
     .unwrap();
 
@@ -786,7 +785,7 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
         4,
         "each captured object has a colour diagram and a depth surface"
     );
-    let modifier = &owner.scene_modifiers[0];
+    let modifier = &owner.scene_modifiers[1];
     for role in ["diagram", "surface"] {
         let expected: std::collections::HashSet<_> = modifier
             .mesh_frames
@@ -854,52 +853,49 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
 
 #[test]
 fn scene_modifier_math_view_routes_one_shared_grid_control() {
-    for scope in [MathViewScope::ThisModifier, MathViewScope::WithinChain] {
-        let prepared = prepare_scene_modifier_math_view(
-            &math_view_fixture(),
-            &PrimitiveRegistry::with_builtin(),
-            &NodeId::new("vortex_math_view"),
-            scope,
-        )
-        .unwrap();
-        let owner = math_view_fixture();
-        let modifier = &owner.scene_modifiers[0];
-        let diagram_ids: std::collections::HashSet<_> = modifier
-            .mesh_frames
-            .iter()
-            .map(|frame| {
-                super::math_events::resource_node_id(&modifier.id, &frame.target, "diagram")
-            })
-            .collect();
-        let diagrams: Vec<_> = prepared
-            .def
-            .nodes
-            .iter()
-            .filter(|node| diagram_ids.contains(&node.node_id))
-            .collect();
-        assert_eq!(diagrams.len(), 2);
+    let prepared = prepare_scene_modifier_math_view(
+        &math_view_fixture(),
+        &PrimitiveRegistry::with_builtin(),
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let owner = math_view_fixture();
+    let modifier = &owner.scene_modifiers[1];
+    let diagram_ids: std::collections::HashSet<_> = modifier
+        .mesh_frames
+        .iter()
+        .map(|frame| {
+            super::math_events::resource_node_id(&modifier.id, &frame.target, "diagram")
+        })
+        .collect();
+    let diagrams: Vec<_> = prepared
+        .def
+        .nodes
+        .iter()
+        .filter(|node| diagram_ids.contains(&node.node_id))
+        .collect();
+    assert_eq!(diagrams.len(), 2);
 
-        assert!(diagrams.iter().all(|diagram| matches!(
-            diagram.params.get("grid"),
-            Some(SerializedParamValue::Bool { value: false })
-        )));
-        let grid_wires: Vec<_> = prepared
-            .def
-            .wires
-            .iter()
-            .filter(|wire| {
-                diagrams.iter().any(|diagram| diagram.id == wire.to_node)
-                    && wire.to_port == "grid"
-            })
-            .collect();
-        assert_eq!(grid_wires.len(), 1);
-    }
+    assert!(diagrams.iter().all(|diagram| matches!(
+        diagram.params.get("grid"),
+        Some(SerializedParamValue::Bool { value: false })
+    )));
+    let grid_wires: Vec<_> = prepared
+        .def
+        .wires
+        .iter()
+        .filter(|wire| {
+            diagrams.iter().any(|diagram| diagram.id == wire.to_node)
+                && wire.to_port == "grid"
+        })
+        .collect();
+    assert_eq!(grid_wires.len(), 1);
 }
 
 #[test]
 fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
     let owner = math_view_fixture();
-    let modifier = &owner.scene_modifiers[0];
+    let modifier = &owner.scene_modifiers[1];
     let parent = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
     let scene_id = parent
         .def
@@ -938,8 +934,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
     let prepared = prepare_scene_modifier_math_view(
         &owner,
         &PrimitiveRegistry::with_builtin(),
-        &NodeId::new("vortex_math_view"),
-        MathViewScope::ThisModifier,
+        &NodeId::new("math_view"),
     )
     .unwrap();
 
@@ -1050,26 +1045,24 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
 }
 
 #[test]
-fn scene_modifier_math_view_scope_changes_the_captured_incoming_route() {
+fn scene_modifier_math_view_captures_the_combined_chain_at_its_position() {
+    // vortex_a -> vortex_b -> math_view: the capture's "current" producer is
+    // vortex_b's stage output, not the seed samples and not vortex_a's output.
     let mut owner = math_view_fixture();
-    let mut earlier = owner.scene_modifiers[0].clone();
-    earlier.id = NodeId::new("earlier_vortex");
-    owner.scene_modifiers.insert(0, earlier);
-    let requested = NodeId::new("vortex_math_view");
+    let mut vortex_b = owner.scene_modifiers[0].clone();
+    vortex_b.id = NodeId::new("vortex_b");
+    owner.scene_modifiers.insert(1, vortex_b);
     let registry = PrimitiveRegistry::with_builtin();
-
-    let isolated = prepare_scene_modifier_math_view(
-        &owner,
+    let chained =
+        prepare_scene_modifier_math_view(&owner, &registry, &NodeId::new("math_view")).unwrap();
+    let single = prepare_scene_modifier_math_view(
+        &math_view_fixture(),
         &registry,
-        &requested,
-        MathViewScope::ThisModifier,
+        &NodeId::new("math_view"),
     )
     .unwrap();
-    let chain =
-        prepare_scene_modifier_math_view(&owner, &registry, &requested, MathViewScope::WithinChain)
-            .unwrap();
 
-    fn incoming_source(prepared: &PreparedSceneModifierGraph) -> (u32, String) {
+    fn diagram_source(prepared: &PreparedSceneModifierGraph, port: &str) -> (u32, String) {
         let diagram = prepared
             .def
             .nodes
@@ -1080,7 +1073,7 @@ fn scene_modifier_math_view_scope_changes_the_captured_incoming_route() {
             .def
             .wires
             .iter()
-            .find(|wire| wire.to_node == diagram.id && wire.to_port == "incoming")
+            .find(|wire| wire.to_node == diagram.id && wire.to_port == port)
             .unwrap();
         (
             wire.from_node,
@@ -1095,14 +1088,91 @@ fn scene_modifier_math_view_scope_changes_the_captured_incoming_route() {
         )
     }
 
-    let isolated_incoming = incoming_source(&isolated);
-    let chain_incoming = incoming_source(&chain);
+    let (current, current_type) = diagram_source(&chained, "current");
+    let (reference, _) = diagram_source(&chained, "reference");
+    let (incoming, _) = diagram_source(&chained, "incoming");
+    let (single_current, single_type) = diagram_source(&single, "current");
     assert_eq!(
-        isolated_incoming.1, "system.mesh_input",
-        "ThisModifier starts its incoming route at the sparse source"
+        current_type, single_type,
+        "the chain producer is the same stage output shape as one modifier"
     );
     assert_ne!(
-        chain_incoming.0, isolated_incoming.0,
-        "WithinChain includes the earlier modifier's vertex output"
+        current, single_current,
+        "a second preceding modifier changes the captured producer"
+    );
+    assert_ne!(
+        current, reference,
+        "the capture is not the undeformed seed samples"
+    );
+    assert_eq!(
+        incoming, reference,
+        "incoming arrows read the undeformed reference samples"
+    );
+}
+
+#[test]
+fn scene_modifier_math_view_first_in_chain_captures_the_seed_samples() {
+    // math_view with an empty preceding chain captures the seed samples as
+    // both reference and current.
+    let fixture = math_view_fixture();
+    let mut owner = fixture.clone();
+    owner.scene_modifiers = vec![owner.scene_modifiers[1].clone()];
+    let metadata = owner.preset_metadata.as_mut().unwrap();
+    metadata
+        .bindings
+        .retain(|binding| !matches!(
+            &binding.target,
+            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "vortex_a"
+        ));
+    let binding_ids: std::collections::HashSet<_> = metadata
+        .bindings
+        .iter()
+        .map(|binding| binding.id.clone())
+        .collect();
+    metadata.params.retain(|param| binding_ids.contains(&param.id));
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &PrimitiveRegistry::with_builtin(),
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let diagram = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_mesh_diagram")
+        .unwrap();
+    // The seed sample keeps its stable identity but becomes the view's
+    // boundary mesh input, so the empty-chain capture reads that node for
+    // every geometry port.
+    let mut sources = Vec::new();
+    for port in ["current", "reference", "incoming"] {
+        let wire = prepared
+            .def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == diagram.id && wire.to_port == port)
+            .unwrap();
+        let source = prepared
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.id == wire.from_node)
+            .unwrap();
+        assert_eq!(
+            source.type_id,
+            "system.mesh_input",
+            "empty chain: {port} reads the seed boundary"
+        );
+        assert_eq!(
+            source.title.as_deref(),
+            Some("Math View Samples"),
+            "empty chain: {port} reads the seed samples"
+        );
+        sources.push(wire.from_node);
+    }
+    assert!(
+        sources.windows(2).all(|pair| pair[0] == pair[1]),
+        "empty chain: every geometry port reads the same seed node"
     );
 }

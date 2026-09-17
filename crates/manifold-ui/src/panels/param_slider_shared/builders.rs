@@ -1562,6 +1562,20 @@ pub(crate) fn build_toggle_trigger_row(
     } else {
         (slider_w - TOGGLE_BTN_W - GAP).max(0.0)
     };
+    // A disabled row (RowSpec.disabled — the projection's unsupported-reason)
+    // follows the modifier-picker convention: the label greys out with the
+    // reason appended, the button shows a neutral OFF, and dispatch drops the
+    // gesture (param_card routing), so the row reads as locked, not broken.
+    let disabled_reason = info.spec.disabled.as_deref();
+    let label_text = match disabled_reason {
+        Some(reason) => format!("{} — {}", info.spec.name, reason),
+        None => info.spec.name.clone(),
+    };
+    let label_color = if disabled_reason.is_some() {
+        color::TEXT_DIMMED_C32
+    } else {
+        color::SLIDER_TEXT_C32
+    };
     let label_id = add_row_label(
         tree,
         parent,
@@ -1569,9 +1583,9 @@ pub(crate) fn build_toggle_trigger_row(
         cy,
         name_label_w,
         ROW_HEIGHT,
-        &info.spec.name,
+        &label_text,
         UIStyle {
-            text_color: color::SLIDER_TEXT_C32,
+            text_color: label_color,
             font_size: FONT_SIZE,
             text_align: TextAlign::Left,
             ..UIStyle::default()
@@ -1579,17 +1593,20 @@ pub(crate) fn build_toggle_trigger_row(
         row_key_base,
         ROW_ROLE_TOGGLE_LABEL,
     );
-    if has_osc {
+    if has_osc && disabled_reason.is_none() {
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
     }
 
     let on = info.spec.default > 0.5;
-    let (button_text, button_style) = if info.spec.is_trigger {
+    let (button_text, mut button_style) = if info.spec.is_trigger {
         // Trigger renders as a momentary button — always neutral.
         ("▶", toggle_btn_style(false))
     } else {
         (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
     };
+    if disabled_reason.is_some() {
+        button_style.text_color = color::TEXT_DIMMED_C32;
+    }
     let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;
     let button_id = add_row_button(
         tree,

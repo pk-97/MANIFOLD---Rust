@@ -18,7 +18,7 @@ use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 use super::{
     SceneModifierExpandError, bindings, frames,
     index::FlatSceneIndex,
-    math_view::{MathViewRequest, MathViewScope},
+    math_view::MathViewRequest,
     namespace,
     routes::{self, PreparedSceneModifierGraph},
 };
@@ -145,17 +145,15 @@ pub fn prepare_scene_modifiers(
 }
 
 /// Prepare the sparse Math View graph through the canonical modifier compiler.
+/// The requested modifier is the standalone Math View instance; the derived
+/// graph evaluates every preceding modifier of the same scene on the sampled
+/// reference faces, so the diagram shows the combined chain deformation.
 pub fn prepare_scene_modifier_math_view(
     owner: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     modifier_id: &NodeId,
-    scope: MathViewScope,
 ) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
-    prepare_scene_modifiers_impl(
-        owner,
-        registry,
-        Some(MathViewRequest { modifier_id, scope }),
-    )
+    prepare_scene_modifiers_impl(owner, registry, Some(MathViewRequest { modifier_id }))
 }
 
 fn prepare_scene_modifiers_impl(
@@ -279,16 +277,14 @@ fn prepare_scene_modifiers_impl(
         frames::validate_saved_frames(owner, &index, instance)?;
         let targets = frames::selected_objects(&index, instance)?;
         if let Some(request) = builder.math_view {
-            let should_seed = match request.scope {
-                MathViewScope::ThisModifier => instance.id == *request.modifier_id,
-                MathViewScope::WithinChain => {
-                    !builder.math_seeded
-                        && builder
-                            .math_targets
-                            .as_ref()
-                            .is_some_and(|(scene, _)| scene == &instance.scene)
-                }
-            };
+            // Seed once, at the head of the view's scene chain: the sampled
+            // reference faces then flow through every preceding modifier, so
+            // the capture at the view's position carries the combined effect.
+            let should_seed = !builder.math_seeded
+                && builder
+                    .math_targets
+                    .as_ref()
+                    .is_some_and(|(scene, _)| scene == &instance.scene);
             if should_seed {
                 let requested_targets = builder
                     .math_targets
@@ -302,7 +298,10 @@ fn prepare_scene_modifiers_impl(
                 builder.math_seeded = true;
             }
         }
-        let capture_before = if builder
+        // Capture at the view's own position: the chain producer here is the
+        // combined output of every preceding modifier. The view is stage-less,
+        // so its append does not disturb the chain.
+        let capture = if builder
             .math_view
             .is_some_and(|request| instance.id == *request.modifier_id)
         {
@@ -311,13 +310,13 @@ fn prepare_scene_modifiers_impl(
             None
         };
         let leaves = builder.append_instance(owner, instance, &targets)?;
-        if math_view.is_none() && manifold_core::scene_modifier_math_view::has_math_view_controls(&instance.graph) {
+        if math_view.is_none() && manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
             for value in [SceneContextValue::TriggerCount, SceneContextValue::TriggerBaseline] {
                 builder.context(owner, instance, None, &targets, value)?;
             }
         }
-        if let Some(before) = capture_before {
-            builder.capture_math_view_result(instance, &targets, before)?;
+        if let Some(capture) = capture {
+            builder.math_captures = capture;
         }
         leaf_maps.insert(instance.id.to_string(), leaves);
         target_maps.insert(instance.id.to_string(), targets);
@@ -487,7 +486,6 @@ struct Builder<'a> {
 #[derive(Debug, Clone)]
 struct MathViewCapture {
     reference: PortAddress,
-    incoming: PortAddress,
     current: PortAddress,
     radius: f64,
 }
@@ -672,7 +670,9 @@ impl Builder<'_> {
                 continue;
             }
             let key = self.attachment_key(instance, Some(target), SceneEndpoint::Vertices)?;
-            let incoming = self
+            // The chain's producer at the view's position is the combined
+            // output of every preceding modifier.
+            let current = self
                 .current
                 .get(&key)
                 .and_then(|address| address.clone())
@@ -700,8 +700,7 @@ impl Builder<'_> {
                 target.clone(),
                 MathViewCapture {
                     reference,
-                    incoming: incoming.clone(),
-                    current: incoming,
+                    current,
                     radius: frame.scene_radius,
                 },
             );
@@ -713,33 +712,6 @@ impl Builder<'_> {
             });
         }
         Ok(captures)
-    }
-
-    fn capture_math_view_result(
-        &mut self,
-        instance: &SceneModifierInstanceDef,
-        targets: &[SceneNodeRef],
-        mut captures: BTreeMap<SceneNodeRef, MathViewCapture>,
-    ) -> Result<(), SceneModifierExpandError> {
-        for (target, capture) in &mut captures {
-            if !targets.contains(target) {
-                return Err(SceneModifierExpandError::MissingTarget {
-                    path: instance.id.to_string(),
-                    detail: format!("requested Math View target {target:?} is not selected"),
-                });
-            }
-            let key = self.attachment_key(instance, Some(target), SceneEndpoint::Vertices)?;
-            capture.current = self
-                .current
-                .get(&key)
-                .and_then(|address| address.clone())
-                .ok_or_else(|| SceneModifierExpandError::MissingInput {
-                    path: format!("{:?}.vertices", target),
-                    detail: "Math View modifier did not produce current vertices".into(),
-                })?;
-        }
-        self.math_captures = captures;
-        Ok(())
     }
 
     fn finish_math_view(
@@ -830,10 +802,13 @@ impl Builder<'_> {
                 ]),
             )?;
             let diagram = (diagram_id, "color".to_string());
+            // Ghosts and arrow tails read the undeformed reference samples, so
+            // arrows show the total reference→current displacement of the whole
+            // preceding chain, not one modifier's local step.
             for (from, to_port) in [
                 (Some(capture.current.clone()), "current"),
                 (Some(capture.reference.clone()), "reference"),
-                (Some(capture.incoming.clone()), "incoming"),
+                (Some(capture.reference.clone()), "incoming"),
                 (Some(camera.clone()), "camera"),
                 (transform.clone(), "transform"),
             ] {
@@ -874,8 +849,8 @@ impl Builder<'_> {
             )?;
             for (from, to_port) in [
                 (Some(capture.current), "current"),
-                (Some(capture.reference), "reference"),
-                (Some(capture.incoming), "incoming"),
+                (Some(capture.reference.clone()), "reference"),
+                (Some(capture.reference), "incoming"),
                 (Some(camera.clone()), "camera"),
                 (transform, "transform"),
             ] {

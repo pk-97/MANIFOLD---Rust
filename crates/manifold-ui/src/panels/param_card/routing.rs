@@ -156,6 +156,11 @@ impl ParamCardPanel {
         // element.
         let widget = tree.widget_of(id);
         if let Some((row, role)) = self.row_host.row_index.get(widget) {
+            // A projection-disabled row (`RowSpec.disabled`) is a dead click:
+            // no toggle, no drawer, no OSC copy. The greyed label says why.
+            if self.rows.get(row).is_some_and(|r| r.spec.disabled.is_some()) {
+                return Vec::new();
+            }
             // SCENE_MODIFIER_FRAMEWORK D4: a modifier card's toggle row is a
             // REAL scene write — one undoable param write through
             // `SceneSetupParamChanged` (INV-M7), addressed by the row's

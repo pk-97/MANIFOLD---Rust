@@ -27,7 +27,7 @@ fn consolidated_modifier_native_toggle_journey() {
     let output = PathBuf::from("target/journey-proofs/modifier-consolidation");
     std::fs::create_dir_all(&output).unwrap();
     let layer = LayerId::new("math-grid");
-    let modifier = NodeId::new("vortex_math_view");
+    let modifier = NodeId::new("vortex_a");
     for recipe in ["SurfacePeel", "OrderedRecon"] {
         // Reuse the established saved two-object frame fixture in Scene mode.
         let mut project = math_view_project();

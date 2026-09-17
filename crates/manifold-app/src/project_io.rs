@@ -193,6 +193,150 @@ pub struct ProjectIOAction {
     pub notice: Option<String>,
 }
 
+/// Load-time compatibility for the pre-standalone Math View: each scene with
+/// legacy embedded carrier controls gains one appended Math View instance, the
+/// first carrier donates its host bindings (values, animation and modulation
+/// survive — host param ids are unchanged), and the rest are dropped.
+fn migrate_legacy_math_views(
+    host: &mut manifold_core::effects::PresetInstance,
+    notices: &mut Vec<String>,
+) {
+    use manifold_core::scene_modifier_math_view as mv;
+    let carriers = {
+        let Some(graph) = host.graph.as_ref() else { return; };
+        mv::legacy_math_view_carriers(graph)
+    };
+    if carriers.is_empty() {
+        return;
+    }
+    let scenes = {
+        let graph = host.graph.as_ref().expect("graph checked above");
+        mv::legacy_math_view_scenes(graph)
+    };
+    let recipe = manifold_renderer::node_graph::bundled_preset_def(
+        &manifold_core::PresetTypeId::new("MathView"),
+    );
+    let graph = host.graph.as_mut().expect("graph checked above");
+    for scene in scenes {
+        let scene_carriers: Vec<_> = graph
+            .scene_modifiers
+            .iter()
+            .filter(|m| m.scene == scene && carriers.contains(&m.id))
+            .map(|m| m.id.clone())
+            .collect();
+        let existing = graph
+            .scene_modifiers
+            .iter()
+            .find(|m| m.scene == scene && mv::is_math_view_recipe(&m.graph))
+            .map(|m| m.id.clone());
+        let view_id = match (existing, &recipe) {
+            (Some(id), _) => Some(id),
+            (None, Some(recipe)) => {
+                let donor = graph
+                    .scene_modifiers
+                    .iter()
+                    .find(|m| m.id == scene_carriers[0]);
+                let (targets, frames) = donor
+                    .map(|m| (m.targets.clone(), m.mesh_frames.clone()))
+                    .unwrap_or((
+                        manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
+                        Vec::new(),
+                    ));
+                if frames.is_empty() {
+                    notices.push(
+                        "Math View migration skipped: the legacy modifier had no mesh frames".into(),
+                    );
+                    None
+                } else {
+                    // The donor's calibrated frames carry the exact sample
+                    // correspondence the project's visuals were authored with;
+                    // a fresh capture would also reject non-glTF sources.
+                    let created = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
+                        graph,
+                        recipe,
+                    )
+                    .map(|view_graph| manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
+                        id: manifold_core::NodeId::new(manifold_core::short_id()),
+                        scene: scene.clone(),
+                        targets,
+                        mesh_frames: frames,
+                        graph: Box::new(view_graph),
+                    });
+                    match created {
+                        Ok(instance) => {
+                            let id = instance.id.clone();
+                            graph.scene_modifiers.push(instance);
+                            Some(id)
+                        }
+                        Err(reason) => {
+                            notices.push(format!(
+                                "Math View migration skipped for this scene: {reason}"
+                            ));
+                            None
+                        }
+                    }
+                }
+            }
+            (None, None) => {
+                notices.push("Math View recipe unavailable; legacy Math View controls were removed".into());
+                None
+            }
+        };
+        if scene_carriers.len() > 1 && view_id.is_some() {
+            notices.push(
+                "Multiple Math View sections merged into one Math View modifier; kept the first modifier's settings".into(),
+            );
+        }
+        for (index, carrier_id) in scene_carriers.iter().enumerate() {
+            if let Some(instance) = graph
+                .scene_modifiers
+                .iter_mut()
+                .find(|m| &m.id == carrier_id)
+            {
+                mv::strip_legacy_math_view_controls(&mut instance.graph);
+            }
+            if index == 0
+                && let Some(view_id) = &view_id
+            {
+                mv::retarget_math_view_bindings(graph, carrier_id, view_id);
+            }
+            let dropped = mv::drop_math_view_bindings(graph, carrier_id);
+            if !dropped.is_empty() {
+                let ids: std::collections::BTreeSet<&str> =
+                    dropped.iter().map(String::as_str).collect();
+                for id in &ids {
+                    host.params.remove(id);
+                }
+                macro_rules! prune_entries {
+                    ($field:ident) => {
+                        if let Some(entries) = host.$field.as_mut() {
+                            entries.retain(|entry| !ids.contains(entry.param_id.as_ref()));
+                        }
+                    };
+                }
+                prune_entries!(drivers);
+                prune_entries!(envelopes);
+                prune_entries!(ableton_mappings);
+                prune_entries!(audio_mods);
+                prune_entries!(automation_lanes);
+            }
+        }
+        // Mint host bindings the donor never had (enabled, controls added
+        // after the project was saved). Existing retargeted bindings are
+        // matched by target and left alone.
+        if let Some(view_id) = &view_id {
+            match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+                graph, view_id,
+            ) {
+                Ok(reconciled) => *graph = reconciled.graph,
+                Err(reason) => notices.push(format!(
+                    "Math View metadata reconciliation failed for {view_id}: {reason}"
+                )),
+            }
+        }
+    }
+}
+
 /// One load-time migration path for editable scene graphs and acceptance
 /// fixtures. Unsupported legacy ownership remains intact with a visible notice.
 pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
@@ -200,26 +344,20 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
     let mut notices = Vec::new();
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue; };
-        let Some(graph) = host.graph.as_mut() else { continue; };
-        manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
-        let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
-        notices.extend(report.diagnostics);
-        let mut enriched = Vec::new();
-        for instance in &mut graph.scene_modifiers {
-            match manifold_core::scene_modifier_math_view::enrich_math_view_controls(&mut instance.graph) {
-                Ok(true) => enriched.push(instance.id.clone()),
-                Ok(false) => {}
-                Err(reason) => notices.push(format!("Math View controls unavailable for {}: {reason}", instance.id)),
-            }
+        if host.graph.is_none() { continue; }
+        {
+            let graph = host.graph.as_mut().expect("graph checked above");
+            manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+            manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
+            let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
+            notices.extend(report.diagnostics);
         }
-        for id in enriched {
-            match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(graph, &id) {
-                Ok(reconciled) => *graph = reconciled.graph,
-                Err(reason) => notices.push(format!("Math View metadata reconciliation failed for {id}: {reason}")),
-            }
+        // Borrows host.graph internally; the legacy-migration borrow above
+        // must end first.
+        migrate_legacy_math_views(host, &mut notices);
+        if let Some(graph) = host.graph.as_mut() {
+            manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         }
-        manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         host.refresh_manifest_from_graph();
     }
     notices

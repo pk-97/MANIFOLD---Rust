@@ -30,7 +30,7 @@ fn scene_modifier_angular_wrap_journey() {
     let output = PathBuf::from("target/journey-proofs/modifier-angular-wrap");
     std::fs::create_dir_all(&output).unwrap();
     let layer = LayerId::new("math-grid");
-    let modifier = NodeId::new("vortex_math_view");
+    let modifier = NodeId::new("vortex_a");
     let target = GraphTarget::Generator(layer.clone());
     for (recipe, angle) in [
         ("VortexFragments", "orbit"),

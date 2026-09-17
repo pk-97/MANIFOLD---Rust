@@ -103,6 +103,11 @@ fn math_view_project() -> Project {
         "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
     )))
     .expect("Vortex Fragments recipe parses");
+    let view_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/scene-modifier-presets/MathView.json"
+    )))
+    .expect("Math View recipe parses");
     let mut frames = Vec::new();
     for container in &graph.nodes {
         let Some(group) = &container.group else {
@@ -145,7 +150,8 @@ fn math_view_project() -> Project {
             scene_radius: 3.0,
         });
     }
-    let modifier_id = NodeId::new("vortex_math_view");
+    let modifier_id = NodeId::new("vortex_a");
+    let view_id = NodeId::new("math_view");
     graph.scene_modifiers.push(SceneModifierInstanceDef {
         id: modifier_id.clone(),
         scene: SceneNodeRef {
@@ -153,14 +159,30 @@ fn math_view_project() -> Project {
             node: NodeId::new("scan_render"),
         },
         targets: SceneTargetSelection::AllObjects,
-        mesh_frames: frames,
+        mesh_frames: frames.clone(),
         graph: Box::new(recipe),
+    });
+    graph.scene_modifiers.push(SceneModifierInstanceDef {
+        id: view_id.clone(),
+        scene: SceneNodeRef {
+            scope: vec![],
+            node: NodeId::new("scan_render"),
+        },
+        targets: SceneTargetSelection::AllObjects,
+        mesh_frames: frames,
+        graph: Box::new(view_recipe),
     });
     graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
         &graph,
         &modifier_id,
     )
     .expect("reconcile Vortex Fragments controls")
+    .graph;
+    graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &graph,
+        &view_id,
+    )
+    .expect("reconcile Math View controls")
     .graph;
     let mut project = Project::default();
     project.settings.bpm = Bpm(120.0);
@@ -597,8 +619,8 @@ fn math_view_grid_app_control_journey() {
         ct.engine.project().expect("math journey project"),
         &layer_id,
     );
-    assert_eq!(ids.len(), 1, "one Vortex Fragments modifier is playing");
-    let modifier_id = ids[0].clone();
+    assert_eq!(ids.len(), 2, "Vortex plus the standalone Math View are playing");
+    let modifier_id = NodeId::new("math_view");
     let modifier = generator_graph(
         ct.engine.project().expect("math journey project"),
         &layer_id,
@@ -606,7 +628,7 @@ fn math_view_grid_app_control_journey() {
     .scene_modifiers
     .iter()
     .find(|modifier| modifier.id == modifier_id)
-    .expect("Vortex Fragments modifier");
+    .expect("Math View modifier");
     assert_eq!(
         modifier.mesh_frames.len(),
         2,
@@ -683,6 +705,34 @@ fn math_view_grid_app_control_journey() {
         capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-redo.png"));
     assert_eq!(redo_nonzero, 0, "redo restores Grid off");
 
+    // The view reflects the combined preceding chain: editing the Vortex's
+    // Orbit changes the diagram without touching any Math View control.
+    set_generator_param(&mut ct, &layer_id, control_id("fragments"), 1.0);
+    ct.tick_frame(&state_tx);
+    let (before_pixels, before_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-chain-before.png"));
+    assert!(before_nonzero > 0, "fragments render the deformed samples");
+    let orbit_id = host_binding(
+        ct.engine.project().expect("math journey project"),
+        &layer_id,
+        &NodeId::new("vortex_a"),
+        "orbit",
+    );
+    set_generator_param(&mut ct, &layer_id, &orbit_id, 4.4);
+    ct.tick_frame(&state_tx);
+    let (after_pixels, _) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-chain-after.png"));
+    assert_ne!(
+        before_pixels, after_pixels,
+        "changing the preceding modifier changes the combined Math View output"
+    );
+    set_generator_param(&mut ct, &layer_id, &orbit_id, 2.2);
+    set_generator_param(&mut ct, &layer_id, control_id("fragments"), 0.0);
+    ct.tick_frame(&state_tx);
+    let (_, restored_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("math-chain-restored.png"));
+    assert_eq!(restored_nonzero, 0, "restored defaults return to black");
+
     let saved_path = output_dir.join("math-grid.manifold");
     manifold_io::saver::save_project_v1(
         ct.engine.project().expect("math journey project"),
@@ -709,4 +759,221 @@ fn math_view_grid_app_control_journey() {
     let (_, loaded_nonzero) =
         capture_output_allow_uniform(&ct, &output_dir.join("math-mode-grid-off-after-load.png"));
     assert_eq!(loaded_nonzero, 0, "loaded Grid off output remains black");
+}
+
+/// Legacy projects embedded Math View controls in the Vortex recipe. Loading
+/// moves them onto one appended standalone Math View modifier: host binding
+/// ids (and therefore values, animation and modulation) survive, the retired
+/// Scope control is dropped, and a second migration pass is a no-op.
+#[test]
+fn legacy_math_view_migration_journey() {
+    let output_dir = PathBuf::from("target/journey-proofs/math-view-migration");
+    std::fs::create_dir_all(&output_dir).expect("migration artifact directory");
+    let layer_id = LayerId::new("math-grid");
+    let carrier_id = NodeId::new("legacy_vortex");
+
+    // Build the pre-standalone shape: the current (stripped) Vortex recipe
+    // plus the legacy embedded control section, including retired Scope.
+    let mut carrier = serde_json::from_str::<serde_json::Value>(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
+    )))
+    .expect("Vortex recipe parses");
+    let mut next_node_id = 100u32;
+    let mut controls: Vec<(String, f64, f64, f64)> =
+        manifold_core::scene_modifier_math_view::CONTROLS
+            .iter()
+            .map(|(suffix, _, default, min, max)| {
+                ((*suffix).to_string(), *default as f64, *min as f64, *max as f64)
+            })
+            .collect();
+    controls.push(("scope".into(), 1.0, 0.0, 1.0));
+    for (suffix, default, min, max) in &controls {
+        let local = format!("math_view_{suffix}");
+        carrier["presetMetadata"]["params"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": local, "name": suffix, "min": min, "max": max,
+                "defaultValue": default, "section": "Math View", "cardVisible": true,
+            }));
+        carrier["presetMetadata"]["bindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": local, "label": suffix, "defaultValue": default,
+                "target": {"kind": "node", "nodeId": format!("__math_view_{suffix}"), "param": "value"},
+            }));
+        carrier["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": next_node_id, "nodeId": format!("__math_view_{suffix}"),
+            "typeId": "node.value", "handle": local,
+            "params": {"value": {"type": "Float", "value": default}},
+        }));
+        next_node_id += 1;
+    }
+    let carrier_graph: EffectGraphDef =
+        serde_json::from_value(carrier).expect("legacy carrier graph parses");
+    assert!(
+        manifold_core::scene_modifier_math_view::has_legacy_math_view_controls(&carrier_graph),
+        "fixture reproduces the legacy embedded section"
+    );
+
+    let mut project = math_view_project();
+    {
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let owner = project.graph_target_owner_mut(&target).unwrap();
+        let graph = owner.graph.as_mut().unwrap();
+        // Replace the post-migration pair with the single legacy carrier.
+        let frames = graph.scene_modifiers[0].mesh_frames.clone();
+        graph.scene_modifiers.clear();
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: carrier_id.clone(),
+            scene: SceneNodeRef {
+                scope: vec![],
+                node: NodeId::new("scan_render"),
+            },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames,
+            graph: Box::new(carrier_graph),
+        });
+        // Drop the now-dangling host bindings of the old fixture pair, then
+        // mint the carrier's (including every math_view_* control).
+        let metadata = graph.preset_metadata.as_mut().unwrap();
+        metadata.bindings.retain(|binding| !matches!(
+            &binding.target,
+            BindingTarget::SceneModifier { .. }
+        ));
+        metadata.params.retain(|param| !param.id.starts_with("sceneModifier:"));
+        *graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            graph,
+            &carrier_id,
+        )
+        .expect("reconcile legacy carrier")
+        .graph;
+        owner.refresh_manifest_from_graph();
+        // A non-default Mode proves value preservation; Scope proves removal.
+        let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
+        owner.set_base_param(mode_macro.as_str(), 1.0);
+        let scope_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_scope\"]");
+        owner.set_base_param(scope_macro.as_str(), 0.0);
+        owner.refresh_manifest_from_graph();
+    }
+    let pre_save = output_dir.join("legacy-math-view.manifold");
+    manifold_io::saver::save_project_v1(&project, &pre_save).expect("save legacy project");
+    let mut reopened = manifold_io::loader::load_project(&pre_save).expect("reopen legacy project");
+
+    let notices = crate::project_io::migrate_project_scene_graphs(&mut reopened);
+    assert!(notices.is_empty(), "clean migration, got: {notices:?}");
+
+    let graph = generator_graph(&reopened, &layer_id);
+    let ids: Vec<_> = graph.scene_modifiers.iter().map(|m| m.id.clone()).collect();
+    assert_eq!(ids.len(), 2, "carrier plus one appended Math View: {ids:?}");
+    assert_eq!(ids[0], carrier_id);
+    let carrier = &graph.scene_modifiers[0];
+    assert!(
+        !manifold_core::scene_modifier_math_view::has_legacy_math_view_controls(&carrier.graph),
+        "carrier section stripped"
+    );
+    assert!(
+        carrier
+            .graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .any(|binding| binding.id == "orbit"),
+        "authored deformation survives the strip"
+    );
+    let view = &graph.scene_modifiers[1];
+    assert!(
+        manifold_core::scene_modifier_math_view::is_math_view_recipe(&view.graph),
+        "appended instance is the standalone Math View"
+    );
+    assert_eq!(view.mesh_frames.len(), 2, "view captures both mesh objects");
+
+    // The donor's host binding keeps its id and value, retargeted to the view.
+    let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
+    let binding = graph
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| binding.id == mode_macro)
+        .expect("mode binding survives");
+    assert!(
+        matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id }
+            if modifier_id == &view.id && param_id == "math_view_mode"),
+        "mode binding retargeted to the standalone view"
+    );
+    let owner = reopened
+        .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+        .unwrap();
+    assert_eq!(
+        owner.get_base_param(mode_macro.as_str()),
+        1.0,
+        "saved Mode value survives migration"
+    );
+    // Retired Scope is gone from metadata and manifest.
+    let scope_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_scope\"]");
+    assert!(
+        !graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .any(|binding| binding.id == scope_macro),
+        "scope binding dropped"
+    );
+    assert!(
+        !owner.params.contains(scope_macro.as_str()),
+        "scope host param pruned"
+    );
+    // The view's enabled param got a fresh host binding.
+    let _ = host_binding(&reopened, &layer_id, &view.id, "enabled");
+
+    // Idempotent: a second pass changes nothing.
+    let once = serde_json::to_string(
+        &reopened
+            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+            .unwrap()
+            .graph,
+    )
+    .unwrap();
+    let mut twice = reopened.clone();
+    let notices = crate::project_io::migrate_project_scene_graphs(&mut twice);
+    assert!(notices.is_empty(), "second pass adds no notices: {notices:?}");
+    let twice_graph = serde_json::to_string(
+        &twice
+            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+            .unwrap()
+            .graph,
+    )
+    .unwrap();
+    assert_eq!(once, twice_graph, "migration is idempotent");
+
+    // The migrated project drives the runtime: Math mode renders the diagram.
+    let mut ct = headless_content_thread(Project::default(), 320, 180);
+    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    ct.handle_command(ContentCommand::LoadProject(Box::new(reopened)));
+    assert!(
+        ct.graph_edit_diagnostic.is_none(),
+        "migrated project rejected: {:?}",
+        ct.graph_edit_diagnostic
+    );
+    ct.timer.set_frame_clocked(true);
+    warm_project(&mut ct, &state_tx);
+    ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
+    // Two ticks: the first Math-mode frame can precede the derived runtime's
+    // borrowed resources going ready (the grid journey shows the same shape).
+    ct.tick_frame(&state_tx);
+    ct.tick_frame(&state_tx);
+    let (_, migrated_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("migrated-math-mode.png"));
+    assert!(
+        migrated_nonzero > 0,
+        "migrated Math View renders in Math mode (Mode value survived)"
+    );
 }
