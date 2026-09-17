@@ -18795,6 +18795,11 @@
           "type": "f32"
         },
         {
+          "name": "axes",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "fragments",
           "required": false,
           "type": "f32"
@@ -19060,6 +19065,12 @@
           "default": "true",
           "label": "Grid",
           "name": "grid",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "Axes",
+          "name": "axes",
           "type": "bool"
         },
         {

@@ -3,7 +3,7 @@ struct U {
     radius: f32, line_width: f32, geometry_hue: f32, path_hue: f32,
     grid: u32, fragments: u32, ghosts: u32, vectors: u32, trails: u32,
     tri_count: u32, vertex_count: u32, history_head: u32, history_len: u32,
-    history_capacity: u32, history_stride: u32, _pad: u32,
+    history_capacity: u32, history_stride: u32, axes: u32,
     depth_pass: u32, occlusion: u32, mode: u32, _depth_pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
@@ -123,6 +123,14 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
     return incoming[idx].position;
 }
 
+fn fragment_frame_count() -> u32 { return min(u.tri_count, 3u); }
+
+fn fragment_frame_triangle(frame: u32) -> u32 {
+    // Midpoints of up to three equal ranges of the existing face sample.
+    // Avoid anchoring every object's frame to its arbitrary first face.
+    return (2u * frame + 1u) * u.tri_count / (2u * max(fragment_frame_count(), 1u));
+}
+
 fn vertex_body(vi: u32, instance: u32) -> O {
     if u.depth_pass != 0u { return depth_surface_vertex(vi, instance); }
     // Draw the world grid first, behind the diagram marks. A fullscreen
@@ -140,7 +148,7 @@ fn vertex_body(vi: u32, instance: u32) -> O {
     let arrow_base = tri_end;
     let grid_base = arrow_base + tri;
     let axes_base = grid_base;
-    let trails_base = axes_base + 6u;
+    let trails_base = axes_base + 3u + fragment_frame_count() * 3u;
 
     if (ii < tri) {
         if (u.fragments == 0u) { return hidden(); }
@@ -175,9 +183,8 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         return hidden();
     }
     if (ii < trails_base) {
-        if (vi >= 6u) { return hidden(); }
+        if (vi >= 6u || u.axes == 0u) { return hidden(); }
         let a = ii - axes_base;
-        let pivot = (current[0].position + current[1].position + current[2].position) / 3.0;
         if (a < 3u) {
             if (u.grid == 0u) { return hidden(); }
             if (a == 0u) { return world_line(vec3<f32>(0.0), vec3<f32>(1.0, 0.0, 0.0), vec4<f32>(1.0, 0.2, 0.2, 0.9), vi); }
@@ -185,14 +192,16 @@ fn vertex_body(vi: u32, instance: u32) -> O {
             return world_line(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), vec4<f32>(0.2, 0.4, 1.0, 0.9), vi);
         }
         if (u.fragments == 0u) { return hidden(); }
-        let edge_x = current[1].position - current[0].position;
-        let edge_y = current[2].position - current[0].position;
+        let b = fragment_frame_triangle((a - 3u) / 3u) * 3u;
+        let pivot = (current[b].position + current[b + 1u].position + current[b + 2u].position) / 3.0;
+        let edge_x = current[b + 1u].position - current[b].position;
+        let edge_y = current[b + 2u].position - current[b].position;
         let normal = cross(edge_x, edge_y);
         if (length(edge_x) < 0.000001 || length(normal) < 0.000001) { return hidden(); }
         let local_x = normalize(edge_x);
         let local_z = normalize(normal);
         let local_y = cross(local_z, local_x);
-        let p = a - 3u;
+        let p = (a - 3u) % 3u;
         if (p == 0u) { return line(pivot, pivot + local_x * u.radius * 0.12, vec4<f32>(1.0, 0.2, 0.2, 0.7), vi); }
         if (p == 1u) { return line(pivot, pivot + local_y * u.radius * 0.12, vec4<f32>(0.2, 1.0, 0.2, 0.7), vi); }
         return line(pivot, pivot + local_z * u.radius * 0.12, vec4<f32>(0.2, 0.4, 1.0, 0.7), vi);
@@ -226,7 +235,8 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u3
     else if ii < 3u*u.tri_count { element=3u; triangle=ii-2u*u.tri_count; }
     else if ii < 4u*u.tri_count { element=4u; triangle=ii-3u*u.tri_count; }
     else if ii < 4u*u.tri_count+3u { element=1u; }
-    else if ii >= 4u*u.tri_count+6u { element=5u; triangle=((ii-4u*u.tri_count-6u)%u.vertex_count)/3u; }
+    else if ii < 4u*u.tri_count+3u+fragment_frame_count()*3u { triangle=fragment_frame_triangle((ii-4u*u.tri_count-3u)/3u); }
+    else { element=5u; triangle=((ii-4u*u.tri_count-3u-fragment_frame_count()*3u)%u.vertex_count)/3u; }
     o.color=tone(o.color,appearance(element,triangle));
     return o;
 }

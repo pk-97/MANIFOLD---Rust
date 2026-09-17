@@ -158,6 +158,7 @@
       {"id":"math_view_fragments","name":"Fragments","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
       {"id":"math_view_ghosts","name":"Ghosts","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
       {"id":"math_view_vectors","name":"Vectors","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
+      {"id":"math_view_axes","name":"Axes","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
       {"id":"math_view_trails","name":"Motion trails","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
       {"id":"math_view_grid_brightness","name":"Grid Brightness","min":0.0,"max":2.0,"defaultValue":1.0,"section":"Math View"},
       {"id":"math_view_fragments_brightness","name":"Fragments Brightness","min":0.0,"max":2.0,"defaultValue":1.0,"section":"Math View"},
@@ -374,6 +375,7 @@
       {"id":"math_view_fragments","label":"Fragments","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_fragments","param":"value"}},
       {"id":"math_view_ghosts","label":"Ghosts","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_ghosts","param":"value"}},
       {"id":"math_view_vectors","label":"Vectors","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_vectors","param":"value"}},
+      {"id":"math_view_axes","label":"Axes","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_axes","param":"value"}},
       {"id":"math_view_trails","label":"Motion trails","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_trails","param":"value"}},
       {"id":"math_view_density","label":"Density","defaultValue":3,"target":{"kind":"node","nodeId":"__math_view_density","param":"value"}},
       {"id":"math_view_line_width","label":"Line Width","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_line_width","param":"value"}},
@@ -825,7 +827,8 @@
     {"id":39,"nodeId":"__math_view_scan_beats","typeId":"node.value","handle":"math_view_scan_beats","params":{"value":{"type":"Float","value":4.0}}},
     {"id":40,"nodeId":"__math_view_scan_trigger","typeId":"node.value","handle":"math_view_scan_trigger","params":{"value":{"type":"Float","value":0.0}}},
     {"id":41,"nodeId":"__math_view_connect_mesh","typeId":"node.value","handle":"math_view_connect_mesh","params":{"value":{"type":"Float","value":0.0}}},
-    {"id":42,"nodeId":"__math_view_occlusion","typeId":"node.value","handle":"math_view_occlusion","params":{"value":{"type":"Float","value":0.0}}}
+    {"id":42,"nodeId":"__math_view_occlusion","typeId":"node.value","handle":"math_view_occlusion","params":{"value":{"type":"Float","value":0.0}}},
+    {"id":43,"nodeId":"__math_view_axes","typeId":"node.value","handle":"math_view_axes","params":{"value":{"type":"Float","value":1}}}
   ],
   "wires": []
 }

@@ -51,7 +51,7 @@ struct DiagramUniforms {
     history_len: u32,
     history_capacity: u32,
     history_stride: u32,
-    _pad: u32,
+    axes: u32,
     depth_pass: u32,
     occlusion: u32,
     mode: u32,
@@ -84,6 +84,7 @@ crate::primitive! {
         camera: Camera required,
         transform: Transform optional,
         grid: ScalarF32 optional,
+        axes: ScalarF32 optional,
         fragments: ScalarF32 optional,
         ghosts: ScalarF32 optional,
         vectors: ScalarF32 optional,
@@ -133,6 +134,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("occlusion"), label: "Occlusion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("mode"), label: "Mode", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 2.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("grid"), label: "Grid", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("axes"), label: "Axes", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragments"), label: "Fragments", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("ghosts"), label: "Ghosts", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("vectors"), label: "Vectors", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -310,6 +312,12 @@ impl Primitive for RenderMeshDiagram {
             self.history_len = 0;
             self.last_vertex_count = vertex_count;
         }
+        // Reset before publishing the draw uniforms: re-enabling trails must
+        // not display the stale ring for one frame before capture clears it.
+        if self.history_reset {
+            self.history_head = 0;
+            self.history_len = 0;
+        }
         // Toggle ports shadow the Bool params. Resolve the connected value
         // first, then accept either the typed Bool or a modulatable Float
         // from the param table before falling back to the declared default.
@@ -359,7 +367,7 @@ impl Primitive for RenderMeshDiagram {
             history_len: self.history_len,
             history_capacity: HISTORY_SAMPLES,
             history_stride: MAX_VERTICES,
-            _pad: 0,
+            axes: toggled("axes"),
             depth_pass: 0,
             occlusion: ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32,
             mode: ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32,
@@ -428,7 +436,8 @@ impl Primitive for RenderMeshDiagram {
         }
         let arrow_count = tri_count;
         let grid_count = 1;
-        let axes_count = 6;
+        // One world frame and at most three representative fragment frames.
+        let axes_count = 3 + tri_count.min(3) * 3;
         let trail_count = if uniforms.trails != 0 {
             TRAIL_RENDER_SAMPLES * vertex_count
         } else {
@@ -527,10 +536,6 @@ impl Primitive for RenderMeshDiagram {
             self.history_reset = true;
         } else if vertex_count != 0 {
             let history = self.history.as_ref().expect("history allocated for colour pass");
-            if self.history_reset {
-                self.history_head = 0;
-                self.history_len = 0;
-            }
             let slot = self.history_head;
             let capture_uniforms = HistoryCaptureUniforms {
                 vertex_count,
@@ -597,6 +602,7 @@ mod tests {
         assert_eq!(RenderMeshDiagram::TYPE_ID, "node.render_mesh_diagram");
         for name in [
             "grid",
+            "axes",
             "fragments",
             "ghosts",
             "vectors",
