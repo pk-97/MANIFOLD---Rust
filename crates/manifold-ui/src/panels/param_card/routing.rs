@@ -219,20 +219,7 @@ impl ParamCardPanel {
                 self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0),
             )),
             TrimKind::Ableton => self.rows[pi].mapping.ableton_range,
-            TrimKind::Audio => Some((
-                self.state
-                    .mod_state
-                    .audio_range_min
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(0.0),
-                self.state
-                    .mod_state
-                    .audio_range_max
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(1.0),
-            )),
+            TrimKind::Audio => self.state.mod_state.audio_rows.get(pi).map(|row| (row.range_min, row.range_max)),
         }
     }
 
@@ -252,11 +239,9 @@ impl ParamCardPanel {
                 self.rows[pi].mapping.ableton_range = Some((min, max));
             }
             TrimKind::Audio => {
-                if let Some(v) = self.state.mod_state.audio_range_min.get_mut(pi) {
-                    *v = min;
-                }
-                if let Some(v) = self.state.mod_state.audio_range_max.get_mut(pi) {
-                    *v = max;
+                if let Some(row) = self.state.mod_state.audio_rows.get_mut(pi) {
+                    row.range_min = min;
+                    row.range_max = max;
                 }
             }
         }
@@ -514,19 +499,13 @@ impl ParamCardPanel {
                 let value = audio_shape_value_from_norm(which, norm);
                 match which {
                     AudioShapeParam::Sensitivity => {
-                        if let Some(v) = self.state.mod_state.audio_sensitivity.get_mut(pi) {
-                            *v = value;
-                        }
+                        if let Some(row) = self.state.mod_state.audio_rows.get_mut(pi) { row.sensitivity = value; }
                     }
                     AudioShapeParam::Attack => {
-                        if let Some(v) = self.state.mod_state.audio_attack_ms.get_mut(pi) {
-                            *v = value;
-                        }
+                        if let Some(row) = self.state.mod_state.audio_rows.get_mut(pi) { row.attack_ms = value; }
                     }
                     AudioShapeParam::Release => {
-                        if let Some(v) = self.state.mod_state.audio_release_ms.get_mut(pi) {
-                            *v = value;
-                        }
+                        if let Some(row) = self.state.mod_state.audio_rows.get_mut(pi) { row.release_ms = value; }
                     }
                 }
                 let text = audio_shape_value_text(which, value);
@@ -563,9 +542,7 @@ impl ParamCardPanel {
                 if info.spec.whole_numbers {
                     value = value.round();
                 }
-                if let Some(v) = self.state.mod_state.audio_step_amount.get_mut(pi) {
-                    *v = value;
-                }
+                if let Some(row) = self.state.mod_state.audio_rows.get_mut(pi) { row.step_amount = value; }
                 let text =
                     if info.spec.whole_numbers { format!("{value:.0}") } else { format!("{value:.2}") };
                 let display_norm = step_amount_to_norm(value, info.spec.min, info.spec.max);

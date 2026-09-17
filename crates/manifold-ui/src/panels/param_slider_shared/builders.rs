@@ -57,6 +57,7 @@ pub(crate) fn driver_config_height() -> f32 {
 /// they act — an `is_trigger_gate` target fires on the raw sensitivity-scaled
 /// edge (BUG-242), so those three are placebo there and not built.
 pub(crate) fn audio_config_height(info: &ParamRow, mod_state: &ParamModState, i: usize) -> f32 {
+    let audio = &mod_state.audio_rows[i];
     let mut n = 3; // Source, Listen (chips + Custom), Sensitivity
     if !info.spec.is_trigger_gate {
         n += 3; // Invert, Attack, Release
@@ -65,7 +66,7 @@ pub(crate) fn audio_config_height(info: &ParamRow, mod_state: &ParamModState, i:
         n += 2; // Feature + Band (the Custom matrix)
     }
     let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
-    let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
+    let action_idx = audio.action_idx;
     if show_action {
         n += 1; // Action row
         if action_idx == 1 {
@@ -780,7 +781,7 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usi
     if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
         v.push(ModTab::Driver);
     }
-    if mod_state.audio_active.get(i).copied().unwrap_or(false) {
+    if mod_state.audio_rows.get(i).is_some_and(|row| row.active) {
         v.push(ModTab::Audio);
     }
     if info.mapping.ableton_display.is_some() {
@@ -1072,17 +1073,14 @@ fn audio_send_buttons(
     action: impl Fn(usize) -> PanelAction,
 ) -> Vec<crate::panels::drawer::DrawerButton> {
     use crate::panels::drawer::DrawerButton;
-    let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+    let send_sel = mod_state.audio_send_index(i);
     mod_state
-        .audio_send_labels
+        .audio_sends
         .iter()
         .enumerate()
-        .map(|(k, label)| {
-            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel, action(k));
-            match mod_state.audio_send_ids.get(k) {
-                Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
-                None => btn,
-            }
+        .map(|(k, send)| {
+            let btn = DrawerButton::new(send.label.clone(), k as i32 == send_sel, action(k));
+            btn.with_accent_text_only(crate::panels::audio_send_color(&send.id))
         })
         .collect()
 }
@@ -1177,10 +1175,13 @@ pub(crate) fn build_clip_trigger_drawer(
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let action = |click| PanelAction::Root(RootAction::ClipTriggerDrawerClick(layer_id.clone(), row, click));
-    let send_count = mod_state.audio_send_labels.len();
+    let send_count = mod_state.audio_sends.len();
+    let audio = &mod_state.audio_rows[i];
+    let kind_sel = audio.kind_idx;
+    let band_sel = audio.band_idx;
     let current = crate::types::AudioFeature::new(
-        audio_kind_from_index(mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize),
-        audio_band_from_index(mod_state.audio_band_idx.get(i).copied().unwrap_or(0) as usize),
+        audio_kind_from_index(audio.kind_idx as usize),
+        audio_band_from_index(audio.band_idx as usize),
     );
     // Same Listen-row shape as the param audio-mod drawer: curated chips plus
     // a trailing "Custom" cell that opens the full Feature×Band matrix
@@ -1191,7 +1192,7 @@ pub(crate) fn build_clip_trigger_drawer(
         .map(|c| DrawerButton::new(c.label, c.active, action(ClipTriggerDrawerClick::Feature(c.feature))))
         .collect();
     chip_buttons.push(DrawerButton::new("Custom", matrix_open, action(ClipTriggerDrawerClick::Custom)));
-    let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(AUDIO_SENS_DEFAULT);
+    let sens = audio.sensitivity;
     let mut rows = vec![
         DrawerRow::Buttons {
             buttons: audio_send_buttons(mod_state, i, |k| action(ClipTriggerDrawerClick::Send(k))),
@@ -1212,7 +1213,7 @@ pub(crate) fn build_clip_trigger_drawer(
                 .map(|(k, l)| {
                     DrawerButton::new(
                         *l,
-                        k as i32 == mod_state.audio_kind_idx.get(i).copied().unwrap_or(0),
+                        k as i32 == kind_sel,
                         action(ClipTriggerDrawerClick::Kind(k)),
                     )
                 })
@@ -1227,7 +1228,7 @@ pub(crate) fn build_clip_trigger_drawer(
                 .map(|(b, l)| {
                     DrawerButton::new(
                         *l,
-                        b as i32 == mod_state.audio_band_idx.get(i).copied().unwrap_or(0),
+                        b as i32 == band_sel,
                         action(ClipTriggerDrawerClick::Band(b)),
                     )
                 })
@@ -1276,10 +1277,11 @@ pub(crate) fn build_audio_mod_drawer(
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let pid = info.id.clone();
     let action = |kind| PanelAction::Root(RootAction::AudioDrawerClick(gpt.clone(), pid.clone(), kind));
-    let send_count = mod_state.audio_send_labels.len();
-    let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
-    let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
-    let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
+    let send_count = mod_state.audio_sends.len();
+    let audio = &mod_state.audio_rows[i];
+    let kind_sel = audio.kind_idx;
+    let band_sel = audio.band_idx;
+    let invert_on = audio.invert;
     // The Listen row: the curated chips (same `trigger_source_chips` the
     // clip-trigger drawer uses — pure presentation over the same
     // `AudioFeature { kind, band }` cells) plus a trailing "Custom" cell that
@@ -1313,9 +1315,9 @@ pub(crate) fn build_audio_mod_drawer(
         .collect();
     // Shaping sliders: Amount (sensitivity), Attack, Release. These become
     // `DrawerIds.sliders[0..3]` in row order — what the drag path hit-tests.
-    let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
-    let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
-    let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
+    let sens = audio.sensitivity;
+    let attack = audio.attack_ms;
+    let release = audio.release_ms;
     // D6 (P3c, BUG-082's fix; widened 2026-07-11): the Amount slider on EVERY
     // audio-mod drawer gets the live shaped-signal meter beside it. Used to
     // gate on `is_trigger_gate`/`ClipTrigger` only (U2/D6 scoped it to the
@@ -1418,7 +1420,7 @@ pub(crate) fn build_audio_mod_drawer(
     // no buttons) — retained drawer intents keep this shape in
     // lockstep with this row order.
     let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
-    let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
+    let action_idx = audio.action_idx;
     if show_action {
         let action_buttons: Vec<DrawerButton> = audio_action_labels()
             .iter()
@@ -1434,7 +1436,7 @@ pub(crate) fn build_audio_mod_drawer(
         // `DrawerIds.sliders[3]`) then the Wrap row.
         if action_idx == 1 {
             let default_amount = default_step_amount(info.spec.min, info.spec.max, info.spec.whole_numbers);
-            let amount = mod_state.audio_step_amount.get(i).copied().unwrap_or(default_amount);
+            let amount = audio.step_amount;
             let value_text = if info.spec.whole_numbers {
                 format!("{amount:.0}")
             } else {
@@ -1456,7 +1458,7 @@ pub(crate) fn build_audio_mod_drawer(
                 step_reset,
                 false,
             ));
-            let wrap_sel = mod_state.audio_wrap_idx.get(i).copied().unwrap_or(0);
+            let wrap_sel = audio.wrap_idx;
             let wrap_buttons: Vec<DrawerButton> = audio_wrap_labels()
                 .iter()
                 .enumerate()
@@ -1475,7 +1477,7 @@ pub(crate) fn build_audio_mod_drawer(
     // the T envelope drawer).
     let show_mode = info.spec.is_trigger_gate;
     if show_mode {
-        let mode_sel = mod_state.audio_mode_idx.get(i).copied().unwrap_or(0);
+        let mode_sel = audio.trigger_mode_idx;
         let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
             .iter()
             .enumerate()
@@ -1620,7 +1622,7 @@ pub(crate) fn build_toggle_trigger_row(
         let drv_btn_x = btn_x + env_arm_w;
         let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
         let btn_y = toggle_y;
-        let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
+        let audio_active = mod_state.audio_rows.get(i).is_some_and(|row| row.active);
         let btn_id = add_row_button(
             tree,
             parent,
@@ -1704,7 +1706,7 @@ pub(crate) fn build_toggle_trigger_row(
             // reserved on every `is_trigger_gate` row regardless of current
             // mode, so the badge appearing/disappearing on a mode change
             // never shifts the toggle button's column.
-            let mode_idx = mod_state.audio_mode_idx.get(i).copied().unwrap_or(0);
+            let mode_idx = mod_state.audio_rows.get(i).map_or(0, |row| row.trigger_mode_idx);
             let mode_text = if audio_active && mode_idx > 0 {
                 audio_trigger_mode_labels().get(mode_idx as usize).copied().unwrap_or("")
             } else {
@@ -2056,9 +2058,11 @@ pub(crate) fn build_param_row(
     // Green audio-mod trim handles (when an audio mod is armed) — the output
     // sub-range the audio drives. Drawn on top of any driver/Ableton handles so
     // all active modulators show their range at once, told apart by color.
-    if mod_state.audio_active.get(i).copied().unwrap_or(false) {
-        let amin = mod_state.audio_range_min.get(i).copied().unwrap_or(0.0);
-        let amax = mod_state.audio_range_max.get(i).copied().unwrap_or(1.0);
+    if let Some(audio) = mod_state.audio_rows.get(i)
+        && audio.active
+    {
+        let amin = audio.range_min;
+        let amax = audio.range_max;
         ids.audio_trim = Some(build_trim_handles_explicit(
             tree,
             slider.track,
@@ -2113,8 +2117,9 @@ pub(crate) fn build_param_row(
     // D8 "silent mode trap": when armed to Step/Random, the glyph swaps to
     // "S"/"R" so a closed drawer still shows the armed action at a glance —
     // the same idiom the driver button's waveform-icon swap uses above.
-    let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
-    let audio_label = match mod_state.audio_action_idx.get(i).copied().unwrap_or(0) {
+    let audio = &mod_state.audio_rows[i];
+    let audio_active = audio.active;
+    let audio_label = match audio.action_idx {
         1 if audio_active => "S",
         2 if audio_active => "R",
         _ => "A",

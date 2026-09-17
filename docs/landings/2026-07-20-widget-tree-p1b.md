@@ -8,6 +8,8 @@
 
 As-built deviations from the design section 3 sketch (committed code is authoritative): no stored `target` field (method), `audio` remains `AudioCardState` on the surface (rows inside it, P1a shape) rather than absorbed per-row — interior-partitioning freedom the doc grants. `driven` is `false` outside the editor for now (wired when a caller knows).
 
+**Superseded 2026-09-17 (BUG-tena / BUG-u8x8):** the separate audio-list exception caused modifier filtering to display another parameter's modulation. Audio now belongs to `ParamRow`; paired send choices remain card-level. The exception above records the original landing, not the current contract.
+
 ## Gates (run by orchestrator)
 
 - Worktree: `cargo nextest -p manifold-ui -p manifold-app` → `1173 passed, 3 skipped`; clippy `-D warnings` clean (independently re-run by orchestrator, same results).

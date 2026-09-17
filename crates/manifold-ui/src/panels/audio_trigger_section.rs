@@ -33,7 +33,7 @@ use crate::{AudioSetupAction, ScrubPhase, ScrubValue, ValueRef};
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
     AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS,
-    AUDIO_SENS_MAX, AudioCardState, AudioRowState, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS,
+    AUDIO_SENS_MAX, AudioRowState, AudioSendChoice, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS,
     ParamModState, ROW_HEIGHT,
     audio_band_from_index, audio_kind_from_index, build_clip_trigger_drawer,
     clip_trigger_drawer_height, de_btn_style, toggle_btn_style,
@@ -92,8 +92,7 @@ pub struct AudioTriggerRowConfig {
 pub struct AudioTriggerSectionConfig {
     pub rows: Vec<AudioTriggerRowConfig>,
     /// Card-level: every project audio send, for the drawer's Source row.
-    pub send_labels: Vec<String>,
-    pub send_ids: Vec<AudioSendId>,
+    pub sends: Vec<AudioSendChoice>,
 }
 
 pub struct AudioTriggerSection {
@@ -205,11 +204,7 @@ impl AudioTriggerSection {
         // (the shared audio-mod display state). The envelope fields a clip
         // trigger never shows are filled with their defaults — inert here:
         // no row displays them and no gesture writes them.
-        let audio = AudioCardState {
-            rows: config
-                .rows
-                .iter()
-                .map(|r| AudioRowState {
+        let audio_rows = config.rows.iter().map(|r| AudioRowState {
                     active: r.enabled,
                     send_id: r.send_id.clone(),
                     kind_idx: r.kind_idx,
@@ -218,11 +213,7 @@ impl AudioTriggerSection {
                     attack_ms: AUDIO_ATTACK_DEFAULT_MS,
                     release_ms: AUDIO_RELEASE_DEFAULT_MS,
                     ..Default::default()
-                })
-                .collect(),
-            send_labels: config.send_labels.clone(),
-            send_ids: config.send_ids.clone(),
-        };
+                });
         // `audio_matrix_open` is session-only (the drawer's "Custom" cell) —
         // carry it across this re-allocate (the same per-frame wipe the param
         // card's configure has) or the matrix closes a frame after every
@@ -230,7 +221,7 @@ impl AudioTriggerSection {
         let matrix_open = std::mem::take(&mut self.mod_state.audio_matrix_open);
         self.mod_state = ParamModState::allocate(n);
         self.mod_state.audio_matrix_open = matrix_open;
-        self.mod_state.sync_audio(n, &audio);
+        self.mod_state.sync_audio(audio_rows, &config.sends);
     }
 
     /// Total height this section occupies at the top of the layer column.
@@ -432,17 +423,17 @@ impl AudioTriggerSection {
     /// for clicks that change one axis and keep the other.
     fn current_feature(&self, i: usize) -> AudioFeature {
         AudioFeature::new(
-            audio_kind_from_index(self.mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize),
-            audio_band_from_index(self.mod_state.audio_band_idx.get(i).copied().unwrap_or(0) as usize),
+            audio_kind_from_index(self.mod_state.audio_rows.get(i).map_or(0, |row| row.kind_idx) as usize),
+            audio_band_from_index(self.mod_state.audio_rows.get(i).map_or(0, |row| row.band_idx) as usize),
         )
     }
 
     fn current_send_id(&self, i: usize) -> Option<AudioSendId> {
-        let idx = self.mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+        let idx = self.mod_state.audio_send_index(i);
         if idx < 0 {
             return None;
         }
-        self.mod_state.audio_send_ids.get(idx as usize).cloned()
+        self.mod_state.audio_sends.get(idx as usize).map(|send| send.id.clone())
     }
 
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
@@ -482,7 +473,7 @@ impl AudioTriggerSection {
         let feature = self.current_feature(i);
         match click {
             crate::panels::ClipTriggerDrawerClick::Send(k) => {
-                let Some(send_id) = self.mod_state.audio_send_ids.get(*k).cloned() else { return vec![] };
+                let Some(send_id) = self.mod_state.audio_sends.get(*k).map(|send| send.id.clone()) else { return vec![] };
                 vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, feature))]
             }
             crate::panels::ClipTriggerDrawerClick::Feature(f) => {
@@ -548,9 +539,7 @@ impl AudioTriggerSection {
         let Some(rect) = rect else { return Vec::new() };
         let norm = BitmapSlider::x_to_normalized(rect, pos_x).clamp(0.0, 1.0);
         let value = norm * AUDIO_SENS_MAX;
-        if let Some(v) = self.mod_state.audio_sensitivity.get_mut(i) {
-            *v = value;
-        }
+        if let Some(row) = self.mod_state.audio_rows.get_mut(i) { row.sensitivity = value; }
         let text = format!("{value:.2}");
         if let Some((d, _)) = self.audio_configs.get(i).and_then(|c| c.as_ref())
             && let Some(sl) = d.sliders.first()
@@ -612,17 +601,17 @@ impl AudioTriggerSection {
     /// The send the currently-open clip-trigger drawer is reading, if any.
     pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
         let i = self.open_fire_mode_drawer_row()?;
-        let idx = self.mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+        let idx = self.mod_state.audio_send_index(i);
         if idx < 0 {
             return None;
         }
-        self.mod_state.audio_send_ids.get(idx as usize).cloned()
+        self.mod_state.audio_sends.get(idx as usize).map(|send| send.id.clone())
     }
 
     /// The band the currently-open clip-trigger drawer is reading, if any.
     pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
         let i = self.open_fire_mode_drawer_row()?;
-        let idx = self.mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
+        let idx = self.mod_state.audio_rows.get(i).map_or(0, |row| row.band_idx);
         crate::types::AudioBand::ALL.get(idx as usize).copied()
     }
 
@@ -748,8 +737,7 @@ mod tests {
                 send_id: Some(manifold_foundation::AudioSendId::new("send-1")),
                 one_shot_beats: 1.0,
             }],
-            send_labels: vec!["Kick".into()],
-            send_ids: vec![manifold_foundation::AudioSendId::new("send-1")],
+            sends: vec![AudioSendChoice { label: "Kick".into(), id: manifold_foundation::AudioSendId::new("send-1") }],
         };
         let mut section = AudioTriggerSection::new();
         section.configure(Some(LayerId::new("layer-1")), &config);

@@ -424,10 +424,10 @@ impl RowHost {
         mod_state: &ParamModState,
     ) -> Vec<PanelAction> {
         let ms = mod_state;
-        if ms.audio_active.get(pi).copied().unwrap_or(false) {
+        if ms.audio_rows.get(pi).is_some_and(|row| row.active) {
             // Already armed → disarm (closes the drawer), regardless of sends.
             vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, rows[pi].id.clone()))]
-        } else if ms.audio_send_ids.is_empty() {
+        } else if ms.audio_sends.is_empty() {
             // Not armed, no send to point at → open Audio Setup so the user can
             // create one. Sends are defined there, never from the drawer.
             vec![PanelAction::Root(RootAction::OpenAudioSetup)]
@@ -451,19 +451,15 @@ impl RowHost {
         mod_state: &ParamModState,
     ) -> Vec<PanelAction> {
         let ms = mod_state;
-        let send_k = send_override
-            .map(|k| k as i32)
-            .unwrap_or_else(|| ms.audio_send_idx.get(pi).copied().unwrap_or(-1));
+        let send_k = send_override.map(|k| k as i32).unwrap_or_else(|| ms.audio_send_index(pi));
         let Some(send_id) = (send_k >= 0)
-            .then(|| ms.audio_send_ids.get(send_k as usize).cloned())
+            .then(|| ms.audio_sends.get(send_k as usize).map(|send| send.id.clone()))
             .flatten()
         else {
             return vec![];
         };
-        let kind_idx =
-            kind_override.unwrap_or_else(|| ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize);
-        let band_idx =
-            band_override.unwrap_or_else(|| ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize);
+        let kind_idx = kind_override.unwrap_or_else(|| ms.audio_rows.get(pi).map_or(0, |row| row.kind_idx) as usize);
+        let band_idx = band_override.unwrap_or_else(|| ms.audio_rows.get(pi).map_or(0, |row| row.band_idx) as usize);
         let feature = crate::types::AudioFeature::new(
             audio_kind_from_index(kind_idx),
             audio_band_from_index(band_idx),

@@ -21,7 +21,7 @@
 //! forbidden (WIDGET_TREE_DESIGN section 5b, Peter's standing rule, INV-8).
 
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RelightCardConfig, RowMod};
-use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState};
+use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, AudioSendChoice};
 use crate::panels::GraphParamTarget;
 use manifold_foundation::{EffectId, LayerId, ParamId};
 
@@ -151,8 +151,9 @@ pub struct ParamRow {
     pub id: ParamId,
     pub spec: RowSpec,
     pub value: RowValue,
-    /// Driver/envelope/automation facts (audio rides
-    /// [`ParamSurface::audio`]`.rows`, row-indexed — same order).
+    /// Audio modulation facts owned by this row.
+    pub audio: AudioRowState,
+    /// Driver/envelope/automation facts.
     pub modulation: RowMod,
     pub mapping: RowMapping,
     /// The scene-graph write address for a MODIFIER card row (D4) — `Some`
@@ -194,9 +195,8 @@ pub struct ParamSurface {
     pub rows: Vec<ParamRow>,
     /// Generator string params (clickable text-field rows). Empty for effects.
     pub string_params: Vec<ParamCardStringInfo>,
-    /// Audio-modulation state: `audio.rows[i]` is row `i`'s audio facts
-    /// (same order as `rows`); the card-level send list rides alongside.
-    pub audio: AudioCardState,
+    /// Card-level available audio sends.
+    pub audio_sends: Vec<AudioSendChoice>,
     /// "3D Shading" toggle + knobs.
     pub relight: RelightCardConfig,
 }

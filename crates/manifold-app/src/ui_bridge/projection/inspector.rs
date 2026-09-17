@@ -8,7 +8,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
 use manifold_ui::panels::param_card::RowMod;
-use manifold_ui::panels::param_slider_shared::{AudioCardState, AudioRowState};
+use manifold_ui::panels::param_slider_shared::AudioRowState;
 use manifold_ui::panels::inspector::RackGroupConfig;
 use manifold_ui::param_surface::ParamSurface;
 use manifold_ui::view::UiGraphTarget;
@@ -16,8 +16,8 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 use super::cards::{
-    OscScope, SurfaceVisibility, attach_audio_sends, effects_to_surfaces, gen_params_to_surface,
-    modifier_surfaces,
+    OscScope, SurfaceVisibility, attach_audio_sends, audio_send_choices, effects_to_surfaces,
+    gen_params_to_surface, modifier_surfaces,
 };
 use super::scene::sections_for_doc_ids;
 
@@ -1048,10 +1048,6 @@ pub fn sync_inspector_data(
                                     AtmosphereRowVm::None
                                 }
                             };
-                            let (audio_send_labels, audio_send_ids) = (
-                                project.audio_setup.sends.iter().map(|s| s.label.clone()).collect(),
-                                project.audio_setup.sends.iter().map(|s| s.id.clone()).collect(),
-                            );
                             // P2 slice 2a: the layer's FULL generator
                             // `ParamSurface` — the SAME `gen_params_to_surface`
                             // the main inspector's generator card uses (see
@@ -1061,14 +1057,16 @@ pub fn sync_inspector_data(
                             // see every param — including `card_visible: false`
                             // scale/material rows the curated card hides.
                             full_params = gen_inst.map(|gp| {
-                                gen_params_to_surface(
+                                let mut surface = gen_params_to_surface(
                                     gp,
                                     layer_id.as_str(),
                                     None,
                                     automation_latched,
                                     SurfaceVisibility::All,
                                     driver_timing,
-                                )
+                                );
+                                attach_audio_sends(std::slice::from_mut(&mut surface), &project.audio_setup);
+                                surface
                             });
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
@@ -1080,8 +1078,6 @@ pub fn sync_inspector_data(
                                 scene_root_node_id: vm.scene_root_node_id,
                                 environment,
                                 atmosphere,
-                                audio_send_labels,
-                                audio_send_ids,
                                 objects,
                                 lights,
                                 camera,
@@ -1202,10 +1198,7 @@ pub fn sync_inspector_data(
                 use manifold_ui::panels::audio_trigger_section::{
                     AudioTriggerRowConfig, AudioTriggerSectionConfig,
                 };
-                let send_labels: Vec<String> =
-                    project.audio_setup.sends.iter().map(|s| s.label.clone()).collect();
-                let send_ids: Vec<manifold_core::AudioSendId> =
-                    project.audio_setup.sends.iter().map(|s| s.id.clone()).collect();
+                let sends = audio_send_choices(&project.audio_setup);
                 let rows: Vec<AudioTriggerRowConfig> = layer
                     .clip_triggers
                     .iter()
@@ -1224,7 +1217,7 @@ pub fn sync_inspector_data(
                     .collect();
                 ui.inspector.audio_trigger_section_mut().configure(
                     Some(layer.layer_id.clone()),
-                    &AudioTriggerSectionConfig { rows, send_labels, send_ids },
+                    &AudioTriggerSectionConfig { rows, sends },
                 );
             }
 
@@ -1306,6 +1299,7 @@ pub fn sync_inspector_data(
                     // SAME def + VM (the UI never reads the graph).
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
                     let mut surfaces = modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing);
+                    attach_audio_sends(&mut surfaces, &project.audio_setup);
                     if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                         for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
                     }
@@ -1538,118 +1532,94 @@ pub(crate) fn build_card_modulation(
     rows
 }
 
-/// Build the per-param audio-modulation display state for a card from the
-/// instance's `audio_mods`. The card-level send list (`send_labels`/`send_ids`)
-/// is filled separately by [`attach_audio_sends`] (it needs the project's
-/// `AudioSetup`, which this per-instance builder doesn't carry).
-///
-/// section 9: a trigger-gate row's config is a normal `ParameterAudioMod` like any
-/// other, so this single walk covers it too — `trigger_mode_idx` is read off
-/// `am.trigger_mode` (defaulting to `Both`, mirroring the evaluator's
-/// `unwrap_or(TriggerFireMode::Both)` fallback) alongside the other fields.
-/// No `is_trigger_gate` awareness needed here; only the UI's collapsed-row
-/// badge and Mode row care which row it is.
-pub(crate) fn build_audio_card_state(
-    inst: &PresetInstance,
-    n: usize,
-    resolve: impl Fn(&str) -> Option<usize>,
-) -> AudioCardState {
-    let mut a = AudioCardState {
-        rows: vec![AudioRowState::default(); n],
-        send_labels: Vec::new(),
-        send_ids: Vec::new(),
+/// Translate one enabled `ParameterAudioMod` into the row-owned display state.
+/// The projection assigns this scalar by stable parameter id while it builds the
+/// manifest rows, so filtering or reordering a modifier card preserves the
+/// complete audio configuration without a second indexed vector.
+pub(crate) fn audio_row_state(am: &manifold_core::audio_mod::ParameterAudioMod) -> AudioRowState {
+    let mut row = AudioRowState {
+        active: true,
+        send_id: Some(am.source.send_id.clone()),
+        range_min: am.shape.range_min,
+        range_max: am.shape.range_max,
+        invert: am.shape.invert,
+        rate: am.shape.rate_of_change,
+        sensitivity: am.shape.sensitivity,
+        attack_ms: am.shape.attack_ms,
+        release_ms: am.shape.release_ms,
+        kind_idx: am.source.feature.kind.index() as i32,
+        band_idx: am.source.feature.band.index() as i32,
+        ..AudioRowState::default()
     };
-    for am in inst.audio_mods.iter().flatten() {
-        if !am.enabled {
-            continue;
+    // PARAM_STEP_ACTIONS D3: an unset `trigger_mode`'s effective default
+    // depends on the mod's action — Continuous defaults to Both, while
+    // Step/Random defaults to Transient, matching the evaluator.
+    let default_mode = if matches!(am.action, manifold_core::audio_mod::TriggerAction::Continuous)
+    {
+        manifold_core::audio_trigger::TriggerFireMode::Both
+    } else {
+        manifold_core::audio_trigger::TriggerFireMode::Transient
+    };
+    row.trigger_mode_idx = match am.trigger_mode.unwrap_or(default_mode) {
+        manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
+        manifold_core::audio_trigger::TriggerFireMode::Transient => 1,
+        manifold_core::audio_trigger::TriggerFireMode::Both => 2,
+    };
+    match am.action {
+        manifold_core::audio_mod::TriggerAction::Continuous => row.action_idx = 0,
+        manifold_core::audio_mod::TriggerAction::Step { amount, wrap } => {
+            row.action_idx = 1;
+            row.step_amount = amount;
+            row.wrap_idx = match wrap {
+                manifold_core::audio_mod::WrapMode::Wrap => 0,
+                manifold_core::audio_mod::WrapMode::Bounce => 1,
+                manifold_core::audio_mod::WrapMode::Clamp => 2,
+            };
         }
-        let Some(pi) = resolve(am.param_id.as_ref()).filter(|&pi| pi < n) else {
-            continue;
-        };
-        let row = &mut a.rows[pi];
-        row.active = true;
-        row.send_id = Some(am.source.send_id.clone());
-        row.range_min = am.shape.range_min;
-        row.range_max = am.shape.range_max;
-        row.invert = am.shape.invert;
-        row.rate = am.shape.rate_of_change;
-        row.sensitivity = am.shape.sensitivity;
-        row.attack_ms = am.shape.attack_ms;
-        row.release_ms = am.shape.release_ms;
-        row.kind_idx = am.source.feature.kind.index() as i32;
-        row.band_idx = am.source.feature.band.index() as i32;
-        // PARAM_STEP_ACTIONS D3: an unset `trigger_mode`'s effective default
-        // depends on the mod's action — a gate's (or a plain Continuous mod's)
-        // arm-time default is `Both` (adding audio must not silently kill clip
-        // launches, section 9 U3); a Step/Random mod's default is `Transient` (a step
-        // mod with no audio intent armed is meaningless — the user opened an
-        // audio drawer). This must track the evaluator's own default exactly,
-        // or the drawer shows a Mode selection that isn't what actually fires.
-        let default_mode = if matches!(am.action, manifold_core::audio_mod::TriggerAction::Continuous)
-        {
-            manifold_core::audio_trigger::TriggerFireMode::Both
-        } else {
-            manifold_core::audio_trigger::TriggerFireMode::Transient
-        };
-        row.trigger_mode_idx = match am.trigger_mode.unwrap_or(default_mode) {
-            manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
-            manifold_core::audio_trigger::TriggerFireMode::Transient => 1,
-            manifold_core::audio_trigger::TriggerFireMode::Both => 2,
-        };
-        match am.action {
-            manifold_core::audio_mod::TriggerAction::Continuous => {
-                row.action_idx = 0;
-            }
-            manifold_core::audio_mod::TriggerAction::Step { amount, wrap } => {
-                row.action_idx = 1;
-                row.step_amount = amount;
-                row.wrap_idx = match wrap {
-                    manifold_core::audio_mod::WrapMode::Wrap => 0,
-                    manifold_core::audio_mod::WrapMode::Bounce => 1,
-                    manifold_core::audio_mod::WrapMode::Clamp => 2,
-                };
-            }
-            manifold_core::audio_mod::TriggerAction::Random => {
-                row.action_idx = 2;
-            }
-        }
+        manifold_core::audio_mod::TriggerAction::Random => row.action_idx = 2,
     }
-    a
+    row
 }
 
 /// Reusable driver/envelope/audio-mod lookup for a SINGLE param id on a
 /// [`PresetInstance`] — the same authority chain [`preset_to_config`] walks
-/// for every card row ([`build_card_modulation`] + [`build_audio_card_state`]),
+/// for every card row ([`build_card_modulation`] + [`audio_row_state`]),
 /// scoped down from a whole card's row list to one id. SCENE_PANEL_UX_DESIGN.md's
 /// UX-P3b sizing amendment names this refactor as its own deliverable: the
 /// Scene Setup panel's exposed-param rows resolve their driver/envelope/
 /// audio-mod facts through this, instead of re-deriving the lookup a second
 /// time against the layer's generator `PresetInstance`.
 ///
-/// Returns `(Vec<RowMod>, AudioCardState)` sized to `n = 1` — index `0` is
-/// always the queried param, regardless of its real position in `inst.params`.
+/// Returns `(RowMod, AudioRowState)` for the queried param. The audio
+/// result is a scalar because row-owned state has no positional card vector.
 /// `automation_latched` is `ContentState::automation_latched_params`, same as
 /// every other caller of `build_card_modulation`.
 ///
 /// Un-suppression trigger fired (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md
 /// C-P1a): called by [`row_modulation_for_id`] below, which flattens this
-/// query's sized-to-1 output into one [`RowModulation`] scalar struct per
+/// query's output into one [`RowModulation`] scalar struct per
 /// Environment/Fog row for `sync_inspector_data`'s scene section.
 pub(crate) fn lookup_param_mod_for_id(
     inst: &PresetInstance,
     param_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     timing: (manifold_core::Bpm, f32),
-) -> (Vec<RowMod>, AudioCardState) {
+) -> (RowMod, AudioRowState) {
     let resolve = |id: &str| (id == param_id).then_some(0);
-    (
-        build_card_modulation(inst, 1, resolve, automation_latched, timing),
-        build_audio_card_state(inst, 1, resolve),
-    )
+    let audio = inst
+        .audio_mods
+        .iter()
+        .flatten()
+        .rfind(|am| am.enabled && am.param_id.as_ref() == param_id)
+        .map(audio_row_state)
+        .unwrap_or_default();
+    let modulation = build_card_modulation(inst, 1, resolve, automation_latched, timing)
+        .pop().expect("one requested modulation row");
+    (modulation, audio)
 }
 
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): flatten
-/// [`lookup_param_mod_for_id`]'s sized-to-1 `(Vec<RowMod>, AudioCardState)`
+/// [`lookup_param_mod_for_id`]'s `(RowMod, AudioRowState)`
 /// into one scalar [`manifold_ui::panels::scene_setup_panel::RowModulation`]
 /// for a single Environment/Fog row. `inst = None` (no generator on the
 /// layer yet, or the layer isn't a generator) returns the idle default —
@@ -1698,8 +1668,8 @@ pub(crate) fn row_modulation_for_id(
         return RowModulation::default();
     };
     let (m, a) = lookup_param_mod_for_id(inst, param_id, automation_latched, timing);
-    let row = &m[0];
-    let audio_row = &a.rows[0];
+    let row = &m;
+    let audio_row = &a;
     RowModulation {
         driver_active: row.driver_active,
         trim_min: row.trim_min,
@@ -1785,7 +1755,7 @@ mod param_mod_lookup_tests {
         assert!(ui.sync_driver_bpm(&project, manifold_core::Bpm(100.0)));
         let (rows, _) = lookup_param_mod_for_id(&project.settings.master_effects[0],
             "intensity", &[], (ui.driver_bpm.unwrap(), 24.0));
-        assert_eq!(rows[0].driver_frame_rate, Some((4, 6.0)));
+        assert_eq!(rows.driver_frame_rate, Some((4, 6.0)));
     }
 
     #[test]
@@ -1794,9 +1764,9 @@ mod param_mod_lookup_tests {
         inst.drivers = Some(vec![driver_for("intensity")]);
 
         let (modulation, _audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
-        assert!(modulation[0].driver_active);
-        assert_eq!(modulation[0].trim_min, 0.1);
-        assert_eq!(modulation[0].trim_max, 0.9);
+        assert!(modulation.driver_active);
+        assert_eq!(modulation.trim_min, 0.1);
+        assert_eq!(modulation.trim_max, 0.9);
     }
 
     /// A driver on a DIFFERENT param id must not leak into this param's slot
@@ -1808,8 +1778,8 @@ mod param_mod_lookup_tests {
         inst.drivers = Some(vec![driver_for("fill")]);
 
         let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
-        assert!(!modulation[0].driver_active);
-        assert!(!audio.rows[0].active);
+        assert!(!modulation.driver_active);
+        assert!(!audio.active);
     }
 
     /// No drivers/envelopes/audio-mods at all → an idle single-slot result,
@@ -1819,9 +1789,9 @@ mod param_mod_lookup_tests {
     fn lookup_on_unmodulated_param_returns_idle_slot() {
         let inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
         let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
-        assert!(!modulation[0].driver_active);
-        assert!(!modulation[0].envelope_active);
-        assert!(!audio.rows[0].active);
+        assert!(!modulation.driver_active);
+        assert!(!modulation.envelope_active);
+        assert!(!audio.active);
     }
 }
 
@@ -1844,25 +1814,14 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 }
 
 #[cfg(test)]
-mod build_audio_card_state_trigger_mode_tests {
+mod audio_row_state_trigger_mode_tests {
     use super::*;
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
     use manifold_core::audio_trigger::TriggerFireMode;
     use manifold_core::effects::PresetInstance;
     use manifold_core::id::AudioSendId;
 
-    fn resolve<'a>(params: &'a [&'a str]) -> impl Fn(&str) -> Option<usize> + 'a {
-        move |id| params.iter().position(|&p| p == id)
-    }
-
-    /// section 9: a trigger-gate row's fire mode lives on the mod itself
-    /// (`ParameterAudioMod.trigger_mode`), not a separate per-instance
-    /// config — `build_audio_card_state` reads it into `trigger_mode_idx`
-    /// in the SAME walk that populates `active`/`send_id`/`band_idx`/etc.
-    /// This is the function `param_surface` calls to populate
-    /// `ParamSurface.audio`, so a green test here is the proof the
-    /// config the card sees actually carries the project's live mode, not
-    /// just that the model round-trips in isolation.
+    /// Trigger mode shares the scalar projection used by parameter cards.
     #[test]
     fn trigger_mode_reads_off_the_mod_alongside_every_other_field() {
         let mut inst = PresetInstance::new(manifold_core::PresetTypeId::new("Strobe"));
@@ -1874,15 +1833,15 @@ mod build_audio_card_state_trigger_mode_tests {
         m.trigger_mode = Some(TriggerFireMode::Both);
         inst.audio_mods = Some(vec![m]);
 
-        let params = ["amount", "clip_trigger"];
-        let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
+        let (_, idle) = lookup_param_mod_for_id(&inst, "amount", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
 
-        assert!(!cfg.rows[0].active);
-        assert!(cfg.rows[1].active);
-        assert_eq!(cfg.rows[0].send_id, None);
-        assert_eq!(cfg.rows[1].send_id, Some(AudioSendId::new("send-kick")));
-        assert_eq!(cfg.rows[1].band_idx, AudioBand::Low.index() as i32);
-        assert_eq!(cfg.rows[1].trigger_mode_idx, 2); // Both
+        assert!(!idle.active);
+        assert!(row.active);
+        assert_eq!(idle.send_id, None);
+        assert_eq!(row.send_id, Some(AudioSendId::new("send-kick")));
+        assert_eq!(row.band_idx, AudioBand::Low.index() as i32);
+        assert_eq!(row.trigger_mode_idx, 2); // Both
     }
 
     /// A disabled mod (armed once, then disarmed via the "A" button, which
@@ -1901,9 +1860,8 @@ mod build_audio_card_state_trigger_mode_tests {
         m.trigger_mode = Some(TriggerFireMode::ClipEdge);
         inst.audio_mods = Some(vec![m]);
 
-        let params = ["clip_trigger"];
-        let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
-        assert!(!cfg.rows[0].active);
+        let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        assert!(!row.active);
     }
 
     /// No `trigger_mode` set on the mod (defensive — section 9 U3 always arms with
@@ -1922,9 +1880,8 @@ mod build_audio_card_state_trigger_mode_tests {
         assert_eq!(m.trigger_mode, None);
         inst.audio_mods = Some(vec![m]);
 
-        let params = ["clip_trigger"];
-        let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
-        assert_eq!(cfg.rows[0].trigger_mode_idx, 2); // Both
+        let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        assert_eq!(row.trigger_mode_idx, 2); // Both
     }
 }
 

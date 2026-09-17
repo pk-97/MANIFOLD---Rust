@@ -37,7 +37,7 @@ use super::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef, Par
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
-    AudioCardState, ModTab, ParamModState, RowHost, build_param_row,
+    AudioRowState, ModTab, ParamModState, RowHost, build_param_row,
     ROW_ROLE_SECTION_HEADER, param_row_key_base,
 };
 use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
@@ -223,10 +223,10 @@ enum EyeSlot {
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): the driver/envelope/
 /// audio-mod facts for one Environment/Fog row, flattened by the app layer's
 /// `row_modulation_for_id` from `lookup_param_mod_for_id`'s
-/// `(CardModulation, AudioCardState)` (both sized to 1) — this crate has no
+/// `(RowMod, AudioRowState)` scalar result — this crate has no
 /// `PresetInstance`, so the app computes this and hands it across the VM
 /// boundary like every other field here. Field-for-field the same facts
-/// `ParamModState`/`AudioCardState` carry per-row; a plain idle default
+/// `ParamModState`/`AudioRowState` carry per-row; a plain idle default
 /// (`Default::default()`) means "no modulation," never an error.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RowModulation {
@@ -536,12 +536,6 @@ pub struct SceneSetupVm {
     pub scene_root_node_id: u32,
     pub environment: EnvironmentRowVm,
     pub atmosphere: AtmosphereRowVm,
-    /// C-P1a: every project audio send, card-level (same for every
-    /// converted row on this layer) — the `AudioCardState.send_labels`/
-    /// `send_ids` pair the shared `build_audio_mod_drawer`'s Source row
-    /// needs. Mirrors `ParamSurface.audio.send_labels`/`send_ids`.
-    pub audio_send_labels: Vec<String>,
-    pub audio_send_ids: Vec<AudioSendId>,
     /// P2: the Objects section's rows, in `mesh_k` order.
     pub objects: Vec<ObjectRowVm>,
     /// P3: the Lights section's rows, in `light_k` order. Never capped —
@@ -800,18 +794,12 @@ impl SceneCardState {
         let mods: Vec<RowMod> = retained.iter().map(|&i| config.rows[i].modulation.clone()).collect();
         self.mod_state.sync_from_config(n, &mods);
 
-        // `AudioCardState` bundles per-row state + the card-level send
-        // list — filter its per-row vec the same way, keep the send list
-        // whole (it's not per-row).
-        let filtered_audio = AudioCardState {
-            rows: retained
-                .iter()
-                .map(|&i| config.audio.rows.get(i).cloned().unwrap_or_default())
-                .collect(),
-            send_labels: config.audio.send_labels.clone(),
-            send_ids: config.audio.send_ids.clone(),
-        };
-        self.mod_state.sync_audio(n, &filtered_audio);
+        // Retain audio facts with their rows so filtering cannot drift the
+        // audio state away from the visible parameter.
+        self.mod_state.sync_audio(
+            self.rows.iter().map(|row| row.audio.clone()),
+            &config.audio_sends,
+        );
     }
 }
 
@@ -836,6 +824,7 @@ fn placeholder_param_info() -> ParamRow {
             section: None,
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
+        audio: AudioRowState::default(),
         modulation: RowMod::default(),
         mapping: RowMapping {
             osc_address: None,
@@ -3140,8 +3129,6 @@ mod tests {
             scene_root_node_id: 0,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
             objects: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
@@ -3174,8 +3161,6 @@ mod tests {
             scene_root_node_id: 99,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
                     index: 0,
@@ -3892,6 +3877,7 @@ mod tests {
                     exposed: true,
                     driven: false,
                 },
+                audio: AudioRowState::default(),
                 modulation: RowMod::default(),
                 mapping: RowMapping {
                     osc_address: None,
@@ -3903,7 +3889,7 @@ mod tests {
             }],
             string_params: Vec::new(),
             modifier: None,
-            audio: AudioCardState::default(),
+            audio_sends: Vec::new(),
             relight: crate::panels::param_card::RelightCardConfig::default(),
         };
         (vm, surface)

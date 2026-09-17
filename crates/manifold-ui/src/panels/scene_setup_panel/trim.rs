@@ -40,25 +40,9 @@ impl ScenePanel {
                     )
                 }),
             card.rows.get(row).and_then(|r| r.mapping.ableton_range),
-            card.mod_state
-                .audio_active
-                .get(row)
-                .copied()
-                .unwrap_or(false)
-                .then(|| {
-                    (
-                        card.mod_state
-                            .audio_range_min
-                            .get(row)
-                            .copied()
-                            .unwrap_or(0.0),
-                        card.mod_state
-                            .audio_range_max
-                            .get(row)
-                            .copied()
-                            .unwrap_or(1.0),
-                    )
-                }),
+            card.mod_state.audio_rows.get(row).and_then(|audio| {
+                audio.active.then_some((audio.range_min, audio.range_max))
+            }),
         ]
     }
 
@@ -120,11 +104,9 @@ impl ScenePanel {
                 }
             }
             TrimKind::Audio => {
-                if let Some(value) = self.properties_card.mod_state.audio_range_min.get_mut(row) {
-                    *value = range.0;
-                }
-                if let Some(value) = self.properties_card.mod_state.audio_range_max.get_mut(row) {
-                    *value = range.1;
+                if let Some(audio) = self.properties_card.mod_state.audio_rows.get_mut(row) {
+                    audio.range_min = range.0;
+                    audio.range_max = range.1;
                 }
             }
         }

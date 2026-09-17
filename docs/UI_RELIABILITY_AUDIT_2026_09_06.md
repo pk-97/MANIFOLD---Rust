@@ -28,9 +28,10 @@ through reopening the modal, undo (64), redo (128), save and project reload
 (128). Focused checks passed: 31 UI mapping tests and 8 app mapping tests,
 including repeated parameter ids, generator ownership, stale metadata,
 cross-target gesture events, cancellation and one-entry undo. A real scene
-modifier and nested canvas scopes still need native coverage; audio-row
-alignment, editable modifier membership and cross-pane pointer capture remain
-separate unfinished repairs.
+modifier and nested canvas scopes still need native coverage; editable modifier
+membership and cross-pane pointer capture remain separate repairs. Audio-row
+alignment was corrected in BUG-0hqd, followed by row-owned audio state in
+BUG-u8x8 (2026-09-17); see finding 4.
 
 Testing also exposed launcher defects: every launch generated another app
 identity, and native macOS Quit skipped the crash-marker cleanup after
@@ -122,6 +123,11 @@ effect/generator × stock/user binding coverage, nested scopes and a real modal
 interaction. Do not change binding provenance merely to bypass the UI gate.
 
 ### 4. Modifier filtering loses audio-row alignment — BUG-tena (P2)
+
+**Resolved 2026-09-17:** the reported slot collision was confirmed in the saved
+Corrosion project. BUG-0hqd corrected projection alignment; BUG-u8x8 removes
+the separate audio list by putting `AudioRowState` on `ParamRow`, including
+filtered scene cards. The baseline finding below is retained for history.
 
 Static producer/consumer mismatch; runtime reproduction pending.
 `projection/cards.rs:554` filters parameter rows, but line 599 copies the full

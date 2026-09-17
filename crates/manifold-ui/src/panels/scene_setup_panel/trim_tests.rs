@@ -1,7 +1,7 @@
 use super::*;
 use crate::input::Modifiers;
 use crate::panels::TrimKind;
-use crate::panels::param_slider_shared::{AudioRowState, TrimHandleIds};
+use crate::panels::param_slider_shared::{AudioSendChoice, AudioRowState, TrimHandleIds};
 
 fn fixture(kind: TrimKind) -> (ScenePanel, UITree, ParamSurface) {
     let (vm, mut surface) = tests::world_transform_vm();
@@ -12,12 +12,12 @@ fn fixture(kind: TrimKind) -> (ScenePanel, UITree, ParamSurface) {
             surface.rows[0].modulation.trim_max = 0.8;
         }
         TrimKind::Ableton => surface.rows[0].mapping.ableton_range = Some((0.2, 0.8)),
-        TrimKind::Audio => surface.audio.rows.push(AudioRowState {
+        TrimKind::Audio => surface.rows[0].audio = crate::panels::param_slider_shared::AudioRowState {
             active: true,
             range_min: 0.2,
             range_max: 0.8,
             ..Default::default()
-        }),
+        },
     }
     let mut panel = ScenePanel::new();
     panel.open();
@@ -34,6 +34,37 @@ fn rebuild(panel: &mut ScenePanel) -> UITree {
     let mut tree = UITree::new();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 500.0, 1000.0));
     tree
+}
+
+#[test]
+fn filtered_scene_config_keeps_audio_with_reordered_visible_rows() {
+    let (mut vm, mut surface) = tests::world_transform_vm();
+    vm.world_sections = vec!["Transform".into()];
+    let mut hidden = surface.rows[0].clone();
+    hidden.id = manifold_foundation::ParamId::from("hidden");
+    hidden.spec.section = Some("Hidden".into());
+    hidden.audio = AudioRowState { active: true, send_id: Some(manifold_foundation::AudioSendId::new("hidden-send")), ..Default::default() };
+    let mut first = surface.rows[0].clone();
+    first.id = manifold_foundation::ParamId::from("first");
+    first.spec.section = Some("Transform".into());
+    first.audio = AudioRowState { active: true, send_id: Some(manifold_foundation::AudioSendId::new("first-send")), ..Default::default() };
+    let mut second = surface.rows[0].clone();
+    second.id = manifold_foundation::ParamId::from("second");
+    second.spec.section = Some("Transform".into());
+    second.audio = AudioRowState { active: true, send_id: Some(manifold_foundation::AudioSendId::new("second-send")), ..Default::default() };
+    surface.rows = vec![hidden, second, first];
+    surface.audio_sends = vec![
+        AudioSendChoice { id: manifold_foundation::AudioSendId::new("first-send"), label: "First".into() },
+        AudioSendChoice { id: manifold_foundation::AudioSendId::new("second-send"), label: "Second".into() },
+    ];
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    panel.configure_params(Some(surface));
+    panel.selection.insert(LayerId::new("layer-1"), SceneSelection::World);
+    let _tree = rebuild(&mut panel);
+    assert_eq!(panel.properties_card.rows.iter().map(|row| row.id.as_ref()).collect::<Vec<_>>(), ["second", "first"]);
+    assert_eq!(panel.properties_card.mod_state.audio_rows.iter().map(|row| row.send_id.as_ref().unwrap().as_str()).collect::<Vec<_>>(), ["second-send", "first-send"]);
 }
 
 fn handles(panel: &ScenePanel, kind: TrimKind, row: usize) -> TrimHandleIds {
