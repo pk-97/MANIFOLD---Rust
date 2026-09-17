@@ -137,7 +137,7 @@ fn scene_modifier_periodic_app_control_journey() {
     let output_dir = PathBuf::from(PERIODIC_OUTPUT_DIR);
     std::fs::create_dir_all(&output_dir).expect("periodic artifact directory");
     let layer_id = LayerId::new("math-grid");
-    let modifier_id = NodeId::new("vortex_math_view");
+    let modifier_id = NodeId::new("vortex_a");
 
     let mut project = math_view_project();
     let (phase_binding, mask_yaw_binding) = {
