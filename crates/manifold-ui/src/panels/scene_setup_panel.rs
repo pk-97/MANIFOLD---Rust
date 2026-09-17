@@ -20,6 +20,9 @@
 //! shared-lock wrapper types appear anywhere in this file (section 4 negative gate).
 
 mod camera;
+mod trim;
+#[cfg(test)]
+mod trim_tests;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -39,6 +42,7 @@ use super::param_slider_shared::{
 };
 use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
 use crate::slider::GAP;
+use crate::drag::DragController;
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -725,7 +729,7 @@ impl SceneCardState {
             self.drag_sliders.push(crate::slider::SliderDragState::default());
         }
         // Size EVERY embedded `RowHost` id-bundle vector to `n` — including the
-        // roles scene rows never populate (toggle, ableton/audio trim, mapping
+        // roles scene rows never populate (toggle, mapping
         // chevron, mode badges), which stay all-`None` — so `RowHost::reindex_row`'s
         // per-row `[i]` indexing is always in bounds. Mirrors
         // `ParamCardPanel::configure`'s RowHost sizing; the machinery vecs are
@@ -969,6 +973,10 @@ pub struct ScenePanel {
     /// an unrelated `configure`, per D1 "no staleness": the drag itself
     /// still targets the layer it started on).
     drag_layer_id: Option<LayerId>,
+    /// A trim drag captures its wire address and current range at press time;
+    /// the child trim module resolves only the live track geometry by stable
+    /// parameter id after a structural rebuild.
+    trim_drag: DragController<trim::SceneTrimDrag>,
 }
 
 impl Default for ScenePanel {
@@ -1011,6 +1019,7 @@ impl Default for ScenePanel {
             light_name_ids: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             drag_layer_id: None,
+            trim_drag: DragController::new(),
         }
     }
 }
@@ -1899,6 +1908,7 @@ impl ScenePanel {
         slider_w: f32,
         target: GraphParamTarget,
     ) -> f32 {
+        self.sync_trim_preview(slot);
         let mut info = self.properties_card.rows[slot].clone();
 
         // Scene-relative range substitution for translate params (SCENE_PANEL_UX_DESIGN.md).
@@ -1981,6 +1991,8 @@ impl ScenePanel {
         rh.audio_configs[slot] = built.audio_config;
         rh.mod_tab_ids[slot] = built.mod_tabs;
         rh.slider_ids[slot] = built.slider;
+        rh.ableton_trim_ids[slot] = built.ableton_trim;
+        rh.audio_trim_ids[slot] = built.audio_trim;
         rh.slider_resets[slot] = Some(built.slider_reset.clone());
         if let Some(ids) = built.slider {
             card.drag_sliders[slot].set_ids(ids);
@@ -2725,6 +2737,9 @@ impl ScenePanel {
                 (false, Vec::new())
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
+                if let Some(actions) = self.handle_trim_pointer_down(*node_id, *pos, tree) {
+                    return (true, actions);
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     // P2 slice 2a: the unified properties card's slider
                     // tracks — absolute-position track-hit (a click anywhere
@@ -2763,10 +2778,14 @@ impl ScenePanel {
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
             UIEvent::DragBegin { .. } => (
-                self.properties_card.drag_sliders.iter().any(|s| s.is_dragging()),
+                self.trim_drag.is_active()
+                    || self.properties_card.drag_sliders.iter().any(|s| s.is_dragging()),
                 Vec::new(),
             ),
             UIEvent::Drag { pos, modifiers, .. } => {
+                if self.trim_drag.is_active() {
+                    return (true, self.handle_trim_drag(*pos, tree));
+                }
                 // P2 slice 2a: continue an active slider drag. Live
                 // `ParamChanged` only, no undo unit (the card cadence: one
                 // `ParamCommit` fires on release, below).
@@ -2795,6 +2814,9 @@ impl ScenePanel {
                 (false, Vec::new())
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+                if self.trim_drag.is_active() {
+                    return (true, self.handle_trim_end());
+                }
                 // P2 slice 2a (D4): release commits ONE undo unit for
                 // whichever row was mid-drag, if any — the card protocol's
                 // Commit step. BUG-292: the layer captured at drag-start

@@ -354,19 +354,21 @@ impl ParamCardPanel {
                         self.drag.begin(ParamDragTarget::EnvTarget { index: row }, pos);
                         return vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                     }
-                    // Trim bars (exact hit) — driver, Ableton, audio, same
-                    // probe order the old three-loop scan used.
-                    for kind in [TrimKind::Driver, TrimKind::Ableton, TrimKind::Audio] {
-                        if let Some(t) = self.trim_ids_for(kind)[row].as_ref() {
-                            if node_id == t.min_bar_id {
-                                self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min: true }, pos);
-                                return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
-                            }
-                            if node_id == t.max_bar_id {
-                                self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min: false }, pos);
-                                return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
-                            }
-                        }
+                    // Trim bars (exact hit + driver proximity) share the same
+                    // RowHost resolver as scene properties. Keep this after
+                    // the envelope target exact-hit check above so the target
+                    // retains priority when overlays overlap.
+                    let driver_range = self.trim_range(TrimKind::Driver, row).filter(|_| {
+                        self.state.mod_state.driver_expanded.get(row).copied().unwrap_or(false)
+                    });
+                    if let Some((kind, is_min)) =
+                        self.row_host.trim_hit(row, node_id, pos, tree, driver_range)
+                    {
+                        self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min }, pos);
+                        return vec![PanelAction::Scrub(
+                            ValueRef::Trim(kind, target, self.rows[row].id.clone()),
+                            ScrubPhase::Begin,
+                        )];
                     }
                     // Toggle/trigger rows have no slider widget to drag.
                     if self.rows.get(row).map(|i| i.spec.is_toggle || i.spec.is_trigger).unwrap_or(false) {
@@ -385,36 +387,6 @@ impl ParamCardPanel {
                         || self.row_host.audio_trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id);
                     if node_id != ids.track && !is_overlay_fill {
                         return Vec::new();
-                    }
-                    // If driver is expanded, check proximity to trim handles
-                    // before falling through to param drag.
-                    if self.state.mod_state.driver_expanded.get(row).copied().unwrap_or(false)
-                        && self.row_host.trim_ids[row].is_some()
-                    {
-                        let tmin = self.state.mod_state.trim_min.get(row).copied().unwrap_or(0.0);
-                        let tmax = self.state.mod_state.trim_max.get(row).copied().unwrap_or(1.0);
-                        // Live bounds + the shared geometry fn: the zone can never
-                        // drift from the drawn bars (BUG-258) or a scroll (BUG-259).
-                        let bars = trim_bar_rects(tree.get_bounds(ids.track), tmin, tmax);
-                        let min_center = bars.min_bar.x + TRIM_BAR_W * 0.5;
-                        let max_center = bars.max_bar.x + TRIM_BAR_W * 0.5;
-                        let hit_zone = 8.0; // px proximity zone for trim handles
-                        let dist_min = (pos.x - min_center).abs();
-                        let dist_max = (pos.x - max_center).abs();
-                        if dist_min < hit_zone && dist_min <= dist_max {
-                            self.drag.begin(
-                                ParamDragTarget::Trim { kind: TrimKind::Driver, index: row, is_min: true },
-                                pos,
-                            );
-                            return vec![PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
-                        }
-                        if dist_max < hit_zone {
-                            self.drag.begin(
-                                ParamDragTarget::Trim { kind: TrimKind::Driver, index: row, is_min: false },
-                                pos,
-                            );
-                            return vec![PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
-                        }
                     }
                     // If the envelope is armed, the orange target handle gets
                     // an ~8px proximity catch-zone so it's grabbable by feel.
@@ -627,11 +599,7 @@ impl ParamCardPanel {
             // slider (BUG-257).
             let track_rect = tree.get_bounds(track_id);
             let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos.x);
-            let (new_min, new_max) = if is_min {
-                (norm.min(cur_max), cur_max)
-            } else {
-                (cur_min, norm.max(cur_min))
-            };
+            let (new_min, new_max) = clamp_trim_range((cur_min, cur_max), norm, is_min);
             self.set_trim_range(kind, pi, new_min, new_max);
 
             // Visual update: reposition this kind's trim bar nodes in the tree.

@@ -232,6 +232,67 @@ impl RowHost {
         }
     }
 
+    /// Resolve a trim press for one row. Exact bar hits are checked first in
+    /// driver/Ableton/audio order; when the press is on the slider track, the
+    /// driver's handles retain the existing proximity catch-zone. Callers
+    /// check higher-priority envelope target hits before calling this helper.
+    /// The driver range is only used for proximity geometry and lets scene
+    /// cards use their own live modulation state without duplicating the hit
+    /// test.
+    pub(crate) fn trim_hit(
+        &self,
+        row: usize,
+        node_id: NodeId,
+        pos: Vec2,
+        tree: &UITree,
+        driver_range: Option<(f32, f32)>,
+    ) -> Option<(TrimKind, bool)> {
+        let trim_ids = [
+            self.trim_ids.get(row).and_then(Option::as_ref),
+            self.ableton_trim_ids.get(row).and_then(Option::as_ref),
+            self.audio_trim_ids.get(row).and_then(Option::as_ref),
+        ];
+        let kinds = [TrimKind::Driver, TrimKind::Ableton, TrimKind::Audio];
+
+        // Exact hits always win over proximity, including when two overlays
+        // occupy the same x coordinate. This preserves the inspector's
+        // envelope-target-before-trim ordering at the call site and its
+        // established trim probe order here.
+        for (kind, ids) in kinds.into_iter().zip(trim_ids) {
+            let Some(ids) = ids else { continue };
+            if node_id == ids.min_bar_id {
+                return Some((kind, true));
+            }
+            if node_id == ids.max_bar_id {
+                return Some((kind, false));
+            }
+        }
+
+        // Preserve the inspector's established feel-zone semantics: driver
+        // handles are reachable by proximity on their track; Ableton/audio
+        // remain exact-bar hits so their overlapping overlays stay explicit.
+        let (driver_min, driver_max) = driver_range?;
+        trim_ids[0]?;
+        let slider = self.slider_ids.get(row).and_then(Option::as_ref)?;
+        let is_overlay_fill = trim_ids.iter().flatten().any(|ids| node_id == ids.fill_id);
+        if node_id != slider.track && !is_overlay_fill {
+            return None;
+        }
+        let bars = trim_bar_rects(tree.get_bounds(slider.track), driver_min, driver_max);
+        let min_center = bars.min_bar.x + TRIM_BAR_W * 0.5;
+        let max_center = bars.max_bar.x + TRIM_BAR_W * 0.5;
+        let hit_zone = 8.0;
+        let dist_min = (pos.x - min_center).abs();
+        let dist_max = (pos.x - max_center).abs();
+        if dist_min < hit_zone && dist_min <= dist_max {
+            return Some((TrimKind::Driver, true));
+        }
+        if dist_max < hit_zone {
+            return Some((TrimKind::Driver, false));
+        }
+        None
+    }
+
     /// section 5.6 shared per-row value push: normalize → format → update row `i`'s
     /// slider fill + readout. The ONE place both parameter cards write a
     /// slider value (`ParamCardPanel::sync_param_value` and
