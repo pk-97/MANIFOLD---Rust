@@ -15,8 +15,14 @@ pub(super) struct MathViewRuntime {
     presentation: Option<Presentation>,
     last_active_scope: Option<usize>,
     pub(super) events: super::math_view_events::MathEvents,
-    shared_resources: [Vec<(ResourceId, ResourceId)>; 2],
+    pub(super) shared_resources: [Vec<(ResourceId, ResourceId)>; 2],
     pub(super) shared_depth: [Vec<(ResourceId, ResourceId)>; 2],
+}
+
+pub(super) struct PreparedMathViewResize {
+    variants: [PreparedRuntimeResize; 2],
+    diagram: RenderTarget,
+    background: RenderTarget,
 }
 
 struct Presentation {
@@ -185,6 +191,72 @@ pub(super) fn prepare_views(
 }
 
 impl MathViewRuntime {
+    pub(super) fn prepare_resize(
+        &self,
+        parent: &dyn crate::node_graph::Backend,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<PreparedMathViewResize, JsonGeneratorLoadError> {
+        let mut prepared_variants = Vec::with_capacity(2);
+        for (variant, resources) in self.variants.iter().zip(&self.shared_resources) {
+            let overrides = resources
+                .iter()
+                .map(|&(source, destination)| {
+                    let buffer = parent
+                        .slot_for(source)
+                        .and_then(|slot| parent.array_buffer(slot))
+                        .ok_or_else(|| invalid("parent mesh export buffer is absent during resize"))?;
+                    Ok((destination, buffer.clone()))
+                })
+                .collect::<Result<Vec<_>, JsonGeneratorLoadError>>()?;
+            prepared_variants.push(variant.prepare_resize_with_overrides(
+                device, width, height, &overrides,
+            )?);
+        }
+        let [first, second] = prepared_variants.try_into().map_err(|_| {
+            invalid("Math View resize prepared an unexpected variant count")
+        })?;
+        Ok(PreparedMathViewResize {
+            variants: [first, second],
+            diagram: RenderTarget::try_new(
+                device,
+                width,
+                height,
+                GpuTextureFormat::Rgba16Float,
+                "math_view.diagram",
+            )
+            .map_err(invalid)?,
+            background: RenderTarget::try_new(
+                device,
+                width,
+                height,
+                format,
+                "math_view.background",
+            )
+            .map_err(invalid)?,
+        })
+    }
+
+    pub(super) fn commit_resize(
+        &mut self,
+        prepared: PreparedMathViewResize,
+        parent: &dyn crate::node_graph::Backend,
+    ) {
+        for (variant, prepared_variant) in self.variants.iter_mut().zip(prepared.variants) {
+            variant.commit_resize(prepared_variant);
+        }
+        if let Some(presentation) = &mut self.presentation {
+            presentation.diagram = prepared.diagram;
+            presentation.background = prepared.background;
+        }
+        self.events.clear();
+        self.last_active_scope = None;
+        self.bind_shared_resources(parent)
+            .expect("prepared Math View shared resources");
+    }
+
     fn control(graph: &Graph, node: NodeInstanceId) -> f32 {
         graph
             .get_node(node)
@@ -218,28 +290,6 @@ impl MathViewRuntime {
         self.install_depth_inputs(&device);
         self.presentation = Some(Presentation::new(&device, width, height, format)?);
         Ok(())
-    }
-
-    pub fn resize(
-        &mut self,
-        parent: &dyn crate::node_graph::Backend,
-        device: &GpuDevice,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-    ) {
-        self.bind_shared_resources(parent)
-            .expect("previously admitted shared mesh resources");
-        self.events.clear();
-        for variant in &mut self.variants {
-            variant.resize(device, width, height);
-        }
-        self.install_depth_inputs(device);
-        self.presentation = Some(
-            Presentation::new(device, width, height, format)
-                .expect("previously admitted Math View output format"),
-        );
-        self.last_active_scope = None;
     }
 
     pub fn resources_ready(&self, parent: &crate::node_graph::execution::Executor) -> bool {

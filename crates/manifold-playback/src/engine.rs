@@ -521,6 +521,14 @@ impl PlaybackEngine {
         (&mut self.renderers, self.project.as_ref())
     }
 
+    /// Split borrow for operations that must validate a project mutation while
+    /// updating renderer state atomically (for example, output resize).
+    pub fn split_renderer_project_mut(
+        &mut self,
+    ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&mut Project>) {
+        (&mut self.renderers, self.project.as_mut())
+    }
+
     /// Mutable access to renderers for re-notification (e.g. after MutateProject).
     pub fn renderers_mut(&mut self) -> &mut Vec<Box<dyn ClipRenderer>> {
         &mut self.renderers

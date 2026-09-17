@@ -8,6 +8,7 @@
 mod periodic;
 mod angular;
 mod consolidation;
+mod resize;
 
 use std::path::{Path, PathBuf};
 

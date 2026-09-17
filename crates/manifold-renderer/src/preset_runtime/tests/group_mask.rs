@@ -162,7 +162,7 @@ fn group_mask_circle_moves_over_infrared_without_rebuild() {
     let mut proof = image::RgbImage::new(128, 32);
     for (frame, centre) in [0.25, 0.75].into_iter().enumerate() {
         effects[0].set_base_param("position_x", centre);
-        assert_eq!(masked.topology_hash, compute_topology_hash(&effects, &groups, 64, 32, None));
+        assert_eq!(masked.topology_hash, compute_topology_hash(&effects, &groups, 0, 0, None));
         let mut encoder = device.create_encoder("circle-scan-proof");
         {
             let mut gpu = GpuEncoder::new(&mut encoder, &device);

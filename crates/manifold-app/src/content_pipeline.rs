@@ -3353,142 +3353,90 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ///   - 0.75 / 0.5 → render at 75% / 50%, MetalFX Spatial upscales back to output
     ///     (FSR 1.0 used as fallback if MetalFX is unavailable).
     pub fn resize(
+        &mut self, engine: &mut PlaybackEngine, width: u32, height: u32, render_scale: f32,
+    ) -> Result<(), String> {
+        self.resize_renderers(engine.renderers_mut(), width, height, render_scale)
+    }
+
+    /// Prepare every owner first. No fallible work may follow the commit boundary.
+    #[cfg(target_os = "macos")]
+    pub fn resize_renderers(
         &mut self,
-        engine: &mut PlaybackEngine,
+        renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
         width: u32,
         height: u32,
         render_scale: f32,
-    ) {
+    ) -> Result<(), String> {
+        if width == 0 || height == 0 || !render_scale.is_finite() {
+            return Err("Invalid render dimensions or scale".into());
+        }
         let scale = render_scale.clamp(0.25, 1.0);
         let render_w = ((width as f32) * scale).round().max(1.0) as u32;
         let render_h = ((height as f32) * scale).round().max(1.0) as u32;
-
-        // A same-configuration resize must be free: every chain graph is
-        // dropped on resize, so a redundant same-dims call (LoadProject's
-        // inline resize followed by the queued ResizeContent, undo/redo of
-        // an unrelated setting) wipes every warmed chain and the next clip
-        // start pays a full rebuild on stage.
-        if width == self.output_w
-            && height == self.output_h
-            && self.compositor.dimensions() == (render_w, render_h)
-        {
-            return;
+        if width == self.output_w && height == self.output_h
+            && self.compositor.dimensions() == (render_w, render_h) {
+            return Ok(());
         }
+        let device = self.native_device.as_ref().ok_or("GPU device unavailable for resize")?;
+        let compositor = self.compositor.prepare_resize(device, render_w, render_h)?;
+        let (metalfx, fsr1) = if scale < 1.0 {
+            if manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(device) {
+                (Some(manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::try_new(
+                    device, render_w, render_h, width, height,
+                )?), None)
+            } else {
+                (None, Some(manifold_renderer::fsr1::Fsr1Upscaler::try_new(
+                    device, render_w, render_h, width, height,
+                )?))
+            }
+        } else { (None, None) };
+        let mut generators = Vec::new();
+        for (index, renderer) in renderers.iter().enumerate() {
+            if let Some(generator) = renderer.as_any().downcast_ref::<GeneratorRenderer>() {
+                generators.push((index, generator.prepare_resize_gpu(render_w, render_h)?));
+            }
+        }
+        // The snapshot includes every prepared candidate and all retained old
+        // resources, including driver-owned scaler storage and pending GPU work.
+        manifold_renderer::node_graph::scene_modifier_expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(), 0,
+        ).map_err(|error| error.to_string())?;
 
+        self.compositor.commit_resize(compositor);
+        for (index, prepared) in generators {
+            renderers[index].as_any_mut().downcast_mut::<GeneratorRenderer>()
+                .expect("resize renderer owner unchanged").commit_resize_gpu(prepared);
+        }
+        self.metalfx = metalfx;
+        self.fsr1 = fsr1;
         self.output_w = width;
         self.output_h = height;
-
-        // Reclaim old-resolution pool entries immediately on a canvas change.
-        // Without this they can never be recycled (acquire keys on the new dims)
-        // and only age out via the 300-frame prune_stale — dead 4K allocations
-        // surviving up to ~10s. Keeps any entry already at the new render dims.
+        // Image resizing schedules a CPU re-fit; its old texture stays visible
+        // until the asynchronous replacement is ready.
+        for renderer in renderers {
+            if let Some(image) = renderer.as_any_mut()
+                .downcast_mut::<manifold_media::image_renderer::ImageRenderer>() {
+                use manifold_playback::renderer::ClipRenderer as _;
+                image.resize(render_w as i32, render_h as i32);
+            }
+        }
         if let Some(pool) = self.texture_pool.as_ref() {
             pool.evict_resolution_mismatch(render_w, render_h);
         }
-
-        #[cfg(target_os = "macos")]
-        let native_device = self
-            .native_device
-            .as_ref()
-            .expect("native device required for resize");
-
-        // Compositor renders at render resolution (may be smaller than output).
-        #[cfg(target_os = "macos")]
-        self.compositor.resize(native_device, render_w, render_h);
-
-        // Resize clip renderers via engine downcast (at render resolution).
-        // Generators re-allocate their GPU targets; the image renderer
-        // re-decodes each still and re-fits it to the new canvas aspect so a
-        // window/aspect change never stretches a static image.
-        let (renderers, _) = engine.split_renderer_project();
-        for renderer in renderers.iter_mut() {
-            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                gen_renderer.resize_gpu(render_w, render_h, width, height);
-                continue;
-            }
-            #[cfg(target_os = "macos")]
-            if let Some(img_renderer) = renderer
-                .as_any_mut()
-                .downcast_mut::<manifold_media::image_renderer::ImageRenderer>()
-            {
-                use manifold_playback::renderer::ClipRenderer as _;
-                img_renderer.resize(render_w as i32, render_h as i32);
-            }
-        }
-
-        // Init / resize upscaler when render_scale < 1.0.
-        // Prefer MetalFX Spatial (ML-based, faster, better quality on Apple Silicon).
-        // Fall back to FSR 1.0 if MetalFX is unavailable (older hardware).
-        #[cfg(target_os = "macos")]
-        if scale < 1.0 {
-            // Try MetalFX first.
-            if manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(
-                native_device,
-            ) {
-                if let Some(ref mut mfx) = self.metalfx {
-                    mfx.resize(native_device, render_w, render_h, width, height);
-                } else {
-                    self.metalfx =
-                        manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::new(
-                            native_device,
-                            render_w,
-                            render_h,
-                            width,
-                            height,
-                        );
-                }
-                self.fsr1 = None; // MetalFX takes over
-                eprintln!(
-                    "[Upscaler] MetalFX Spatial: {}x{} → {}x{} ({:.0}% render scale)",
-                    render_w,
-                    render_h,
-                    width,
-                    height,
-                    scale * 100.0,
-                );
-            } else {
-                // MetalFX not available — use FSR 1.0.
-                self.metalfx = None;
-                if let Some(ref mut fsr) = self.fsr1 {
-                    fsr.resize(native_device, render_w, render_h, width, height);
-                } else {
-                    self.fsr1 = Some(manifold_renderer::fsr1::Fsr1Upscaler::new(
-                        native_device,
-                        render_w,
-                        render_h,
-                        width,
-                        height,
-                    ));
-                }
-                eprintln!(
-                    "[Upscaler] FSR 1.0: {}x{} → {}x{} ({:.0}% render scale)",
-                    render_w,
-                    render_h,
-                    width,
-                    height,
-                    scale * 100.0,
-                );
-            }
-        } else {
-            if self.metalfx.is_some() || self.fsr1.is_some() {
-                eprintln!(
-                    "[Upscaler] Disabled — rendering at native {}x{}",
-                    width, height
-                );
-            }
-            self.metalfx = None;
-            self.fsr1 = None;
-        }
-
-        // Reset preview surface tracking after resolution change.
-        #[cfg(target_os = "macos")]
-        {
-            self.write_surface_index = 0;
-            self.surface_signal_values = [0; crate::shared_texture::SURFACE_COUNT];
-        }
-
-        // UI thread reads output dimensions.
+        self.write_surface_index = 0;
+        self.surface_signal_values = [0; crate::shared_texture::SURFACE_COUNT];
         self.shared_output.set_dimensions(width, height);
+        log::info!("Resolution applied: {width}x{height}, render {render_w}x{render_h}");
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn resize_renderers(
+        &mut self,
+        _renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
+        _width: u32, _height: u32, _render_scale: f32,
+    ) -> Result<(), String> {
+        Err("Transactional GPU resize is unavailable on this backend".into())
     }
 
     #[cfg(target_os = "macos")]

@@ -36,6 +36,15 @@ impl ActiveClip {
     }
 }
 
+/// Prepared replacements remain private until every pipeline owner has admitted resize.
+pub struct PreparedGeneratorResize {
+    width: u32,
+    height: u32,
+    active: Vec<(ClipId, RenderTarget)>,
+    available: Vec<RenderTarget>,
+    layers: Vec<(LayerId, crate::preset_runtime::PreparedRuntimeResize)>,
+}
+
 /// Per-layer generator state. Persists across clips to maintain
 /// temporal state (particle positions, attractors, etc.).
 struct LayerGeneratorState {
@@ -923,24 +932,43 @@ impl GeneratorRenderer {
         self.active_clips.get(clip_id).map(|a| a.output_texture())
     }
 
-    /// Resize all render targets and generators.
-    pub fn resize_gpu(&mut self, width: u32, height: u32, _output_width: u32, _output_height: u32) {
-        self.width = width;
-        self.height = height;
-        // Clone the Arc (cheap refcount bump) so `device` doesn't borrow
-        // `self` — otherwise the immutable self-borrow would conflict with
-        // the mutable active_clips/generators borrows below.
-        let device = Arc::clone(&self.device);
-        let device = &*device;
-        for active in self.active_clips.values_mut() {
-            active.render_target.resize(device, width, height);
+    /// Prepare all layers without replacing any live target or runtime.
+    pub fn prepare_resize_gpu(&self, width: u32, height: u32) -> Result<PreparedGeneratorResize, String> {
+        let device = &*self.device;
+        let target = |old: &RenderTarget| RenderTarget::try_new(
+            device, width, height, old.format, "generator-resize",
+        );
+        let active = self.active_clips.iter().map(|(id, clip)| {
+            Ok((id.clone(), target(&clip.render_target)?))
+        }).collect::<Result<_, String>>()?;
+        let available = self.available_rts.iter().map(target).collect::<Result<_, _>>()?;
+        let layers = self.layer_generators.iter().map(|(id, layer)| {
+            layer.generator.prepare_resize(device, width, height)
+                .map(|prepared| (id.clone(), prepared)).map_err(|error| error.to_string())
+        }).collect::<Result<_, _>>()?;
+        Ok(PreparedGeneratorResize { width, height, active, available, layers })
+    }
+
+    /// Called on the content thread before another frame can observe the pipeline.
+    pub fn commit_resize_gpu(&mut self, prepared: PreparedGeneratorResize) {
+        for (id, target) in prepared.active {
+            let active = self.active_clips.get_mut(&id).expect("resize owner unchanged");
+            active.render_target = target;
+            active.needs_clear = true;
         }
-        for rt in &mut self.available_rts {
-            rt.resize(device, width, height);
+        self.available_rts = prepared.available;
+        for (id, runtime) in prepared.layers {
+            self.layer_generators.get_mut(&id).expect("resize owner unchanged")
+                .generator.commit_resize(runtime);
         }
-        for layer_state in self.layer_generators.values_mut() {
-            layer_state.generator.resize(device, width, height);
-        }
+        self.width = prepared.width;
+        self.height = prepared.height;
+    }
+
+    pub fn resize_gpu(&mut self, width: u32, height: u32, _output_width: u32, _output_height: u32) -> Result<(), String> {
+        let prepared = self.prepare_resize_gpu(width, height)?;
+        self.commit_resize_gpu(prepared);
+        Ok(())
     }
 
     /// Reset all generator simulation state to initial conditions.
@@ -1672,7 +1700,9 @@ impl ClipRenderer for GeneratorRenderer {
     fn resize(&mut self, width: i32, height: i32) {
         let w = width as u32;
         let h = height as u32;
-        self.resize_gpu(w, h, w, h);
+        if let Err(error) = self.resize_gpu(w, h, w, h) {
+            log::error!("Generator resize rejected; keeping previous configuration: {error}");
+        }
     }
 
     fn as_any(&self) -> &dyn Any {

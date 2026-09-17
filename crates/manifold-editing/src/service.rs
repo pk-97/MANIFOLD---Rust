@@ -80,6 +80,33 @@ impl EditingService {
         project.timeline.debug_assert_tree_order();
     }
 
+    /// Execute a command and validate the resulting project before publishing
+    /// it to history. Validation failures roll the command back and preserve
+    /// the data version and both history stacks.
+    pub fn execute_with_validation<F>(
+        &mut self,
+        command: Box<dyn Command>,
+        project: &mut Project,
+        validate: F,
+    ) -> bool
+    where
+        F: FnMut(&Project) -> Result<(), String>,
+    {
+        if !self
+            .undo_manager
+            .execute_with_validation(command, project, validate)
+        {
+            return false;
+        }
+        self.data_version += 1;
+
+        #[cfg(debug_assertions)]
+        Self::warn_overlapping_clips(&project.timeline.layers);
+        #[cfg(debug_assertions)]
+        project.timeline.debug_assert_tree_order();
+        true
+    }
+
     /// Debug-only check: log a warning if any layer has overlapping clips.
     /// Non-fatal — projects saved before the fix may contain pre-existing overlaps.
     #[cfg(debug_assertions)]
@@ -115,10 +142,44 @@ impl EditingService {
         }
     }
 
+    /// Undo and validate the resulting project before publishing the history
+    /// move. A failed validation restores the command and leaves the service
+    /// version unchanged.
+    pub fn undo_with_validation<F>(&mut self, project: &mut Project, validate: F) -> bool
+    where
+        F: FnMut(&Project) -> Result<(), String>,
+    {
+        if self.undo_manager.undo_with_validation(project, validate) {
+            self.data_version += 1;
+            #[cfg(debug_assertions)]
+            project.timeline.debug_assert_tree_order();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Redo the most recently undone command.
     #[must_use]
     pub fn redo(&mut self, project: &mut Project) -> bool {
         if self.undo_manager.redo(project) {
+            self.data_version += 1;
+            #[cfg(debug_assertions)]
+            project.timeline.debug_assert_tree_order();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo and validate the resulting project before publishing the history
+    /// move. A failed validation restores the command and leaves the service
+    /// version unchanged.
+    pub fn redo_with_validation<F>(&mut self, project: &mut Project, validate: F) -> bool
+    where
+        F: FnMut(&Project) -> Result<(), String>,
+    {
+        if self.undo_manager.redo_with_validation(project, validate) {
             self.data_version += 1;
             #[cfg(debug_assertions)]
             project.timeline.debug_assert_tree_order();

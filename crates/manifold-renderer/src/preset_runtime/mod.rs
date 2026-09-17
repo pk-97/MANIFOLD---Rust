@@ -96,7 +96,7 @@ mod math_view_events;
 mod lifecycle;
 
 mod core;
-pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
+pub use core::{ChainBuildInputs, FrameContextInputs, PreparedRuntimeResize, PresetRuntime};
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
 use core::{EffectSlot, PresetIo};

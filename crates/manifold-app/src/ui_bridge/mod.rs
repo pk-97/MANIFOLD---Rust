@@ -44,8 +44,6 @@ use crate::ui_root::UIRoot;
 pub struct DispatchResult {
     /// True if the action changed project structure (needs sync_project_data).
     pub structural_change: bool,
-    /// True if the output resolution changed (needs compositor + generator resize).
-    pub resolution_changed: bool,
     /// Set by the `SaveToLibrary`/`SaveToProject` card-menu actions
     /// (PRESET_LIBRARY_DESIGN D4, P3): the resolved kind + current effective
     /// definition + destination, for the caller to open the shared
@@ -76,7 +74,6 @@ impl DispatchResult {
     pub(crate) fn handled() -> Self {
         Self {
             structural_change: false,
-            resolution_changed: false,
             begin_save_preset: None,
             begin_rename_preset: None,
         }
@@ -84,15 +81,6 @@ impl DispatchResult {
     pub(crate) fn structural() -> Self {
         Self {
             structural_change: true,
-            resolution_changed: false,
-            begin_save_preset: None,
-            begin_rename_preset: None,
-        }
-    }
-    pub(crate) fn resolution() -> Self {
-        Self {
-            structural_change: true,
-            resolution_changed: true,
             begin_save_preset: None,
             begin_rename_preset: None,
         }
@@ -102,7 +90,6 @@ impl DispatchResult {
     pub(crate) fn unhandled() -> Self {
         Self {
             structural_change: false,
-            resolution_changed: false,
             begin_save_preset: None,
             begin_rename_preset: None,
         }

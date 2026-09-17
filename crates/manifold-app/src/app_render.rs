@@ -1035,7 +1035,6 @@ impl Application {
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
-        let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_id.clone();
         let prev_sel_version = self.selection.selection_version;
 
@@ -1785,9 +1784,6 @@ impl Application {
             if result.structural_change {
                 needs_structural_sync = true;
             }
-            if result.resolution_changed {
-                needs_resolution_resize = true;
-            }
             if let Some((kind, def, destination)) = result.begin_save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
@@ -1854,9 +1850,6 @@ impl Application {
                     let result = crate::ui_bridge::dispatch(action, &mut dctx);
                     if result.structural_change {
                         needs_structural_sync = true;
-                    }
-                    if result.resolution_changed {
-                        needs_resolution_resize = true;
                     }
                     if result.begin_save_preset.is_some() {
                         pending_save_preset = result.begin_save_preset;
@@ -2962,21 +2955,6 @@ impl Application {
                     continue;
                 }
             }
-        }
-
-        // Resize compositor + generator when resolution preset or render scale changes.
-        if needs_resolution_resize {
-            let p = &self.local_project;
-            let w = p.settings.output_width.max(1) as u32;
-            let h = p.settings.output_height.max(1) as u32;
-            let rs = p.settings.render_scale;
-            self.send_content_cmd(ContentCommand::ResizeContent(w, h, rs));
-            log::info!(
-                "Resolution changed to {}x{} @ {:.2}x render scale",
-                w,
-                h,
-                rs
-            );
         }
 
         // Selection version change → sync inspector so it shows the newly selected clip

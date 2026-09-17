@@ -18,6 +18,7 @@ pub(super) fn generator_error_from_prealloc(
 ) -> JsonGeneratorLoadError {
     use crate::node_graph::PreAllocationError as P;
     match e {
+        P::AllocationFailed(error) => JsonGeneratorLoadError::Resize(error),
         P::ModifierAdmission(error) => JsonGeneratorLoadError::SceneModifier(error),
         P::ModifierMemoryUnavailable => JsonGeneratorLoadError::SceneModifier(
             crate::node_graph::scene_modifier_expand::SceneModifierExpandError::CapacityExceeded {

@@ -40,6 +40,7 @@ use std::sync::Arc;
 use crate::node_graph::backend::Backend;
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::execution_plan::ResourceId;
+use crate::node_graph::execution_plan::ExecutionPlan;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::render_target::RenderTarget;
@@ -174,6 +175,22 @@ pub struct MetalBackend {
     /// Same shape as `atmospheres` — drained after `node.scene_object`'s
     /// `evaluate`.
     objects: AHashMap<Slot, crate::node_graph::scene_object::SceneObject>,
+}
+
+/// A fully allocated backend candidate.  Preparation owns every replacement
+/// texture until commit, so a failed resize leaves the live backend intact.
+pub(crate) struct PreparedMetalBackendResize {
+    candidate: MetalBackend,
+}
+
+impl PreparedMetalBackendResize {
+    pub(crate) fn candidate(&self) -> &MetalBackend {
+        &self.candidate
+    }
+
+    pub(crate) fn candidate_mut(&mut self) -> &mut MetalBackend {
+        &mut self.candidate
+    }
 }
 
 // Safety: `MetalBackend` is only ever used on the content thread; the
@@ -509,6 +526,114 @@ impl MetalBackend {
         self.height = height;
     }
 
+    /// Allocate a resize candidate without changing this backend.  Existing
+    /// slot topology, array buffers, aliases, and 3D resources are copied by
+    /// retain; only size-dependent 2D targets are replaced.  The caller can
+    /// then run the canonical array/volume pre-allocation pass against the
+    /// candidate before publishing it.
+    pub(crate) fn prepare_resize(
+        &self,
+        plan: &ExecutionPlan,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+    ) -> Result<PreparedMetalBackendResize, String> {
+        let mut candidate = Self {
+            device: self.device.clone(),
+            pool: RenderTargetPool::new(),
+            width,
+            height,
+            format: self.format,
+            free_by_type: AHashMap::default(),
+            bound: self.bound.clone(),
+            next_slot: self.next_slot,
+            mipmapped_ids: self.mipmapped_ids.clone(),
+            pinned: self.pinned.clone(),
+            textures_2d: AHashMap::default(),
+            borrowed_2d: AHashMap::default(),
+            skip_aliased_slots: Vec::new(),
+            scalars: AHashMap::default(),
+            buffers_array: self.buffers_array.clone(),
+            textures_3d: self.textures_3d.clone(),
+            cameras: AHashMap::default(),
+            lights: AHashMap::default(),
+            materials: AHashMap::default(),
+            transforms: AHashMap::default(),
+            atmospheres: AHashMap::default(),
+            render_modes: AHashMap::default(),
+            objects: AHashMap::default(),
+        };
+        // An old slot can have served both a fixed-size and a canvas-sized
+        // resource when their dimensions happened to match. Split that sharing
+        // when their new dimensions differ; preserve each logical binding.
+        let allocate = |dims: (u32, u32), mipmapped: bool, format| {
+            if mipmapped {
+                RenderTarget::try_new_mipmapped(device, dims.0, dims.1, format, "resize-mipped")
+            } else {
+                RenderTarget::try_new(device, dims.0, dims.1, format, "resize-target")
+            }
+        };
+        for (slot, old) in &self.textures_2d {
+            let mut groups: AHashMap<((u32, u32), bool), Vec<ResourceId>> = AHashMap::default();
+            for (&resource, &bound_slot) in &self.bound {
+                if bound_slot == *slot && plan.resource_type(resource).is_some_and(|ty| ty.is_texture_2d()) {
+                    let dims = crate::node_graph::execution::resolve_dims(plan, resource, (width, height));
+                    groups.entry((dims, self.mipmapped_ids.contains(&resource))).or_default().push(resource);
+                }
+            }
+            let mut first = true;
+            for ((dims, mipmapped), resources) in groups {
+                let new_slot = if first { first = false; *slot } else {
+                    let new_slot = Slot(candidate.next_slot);
+                    candidate.next_slot += 1;
+                    new_slot
+                };
+                candidate.textures_2d.insert(new_slot, allocate(dims, mipmapped, old.format)?);
+                for resource in resources { candidate.bound.insert(resource, new_slot); }
+            }
+        }
+        // Free slots have no current logical binding. Derive their possible new
+        // keys from the plan, retaining enough capacity for each split key.
+        for (old_key, slots) in &self.free_by_type {
+            let (port_type, format, old_dims, mipmapped) = *old_key;
+            if !port_type.is_texture_2d() {
+                candidate.free_by_type.insert(*old_key, slots.clone());
+                continue;
+            }
+            let mut dimensions = AHashSet::default();
+            for raw in 0..plan.resource_count() {
+                let resource = ResourceId(raw as u32);
+                if plan.resource_type(resource).is_some_and(|ty| ty.is_texture_2d())
+                    && crate::node_graph::execution::resolve_dims(plan, resource, (self.width, self.height)) == old_dims
+                    && self.mipmapped_ids.contains(&resource) == mipmapped {
+                    dimensions.insert(crate::node_graph::execution::resolve_dims(plan, resource, (width, height)));
+                }
+            }
+            for slot in slots {
+                let mut first = true;
+                for &dims in &dimensions {
+                    let new_slot = if first { first = false; *slot } else {
+                        let new_slot = Slot(candidate.next_slot);
+                        candidate.next_slot += 1;
+                        new_slot
+                    };
+                    candidate.textures_2d.insert(new_slot, allocate(dims, mipmapped, format.unwrap_or(self.format))?);
+                    candidate.free_by_type.entry((port_type, format, dims, mipmapped)).or_default().push(new_slot);
+                }
+            }
+        }
+        Ok(PreparedMetalBackendResize { candidate })
+    }
+
+    pub(crate) fn commit_resize(&mut self, prepared: PreparedMetalBackendResize) {
+        *self = prepared.candidate;
+    }
+
+    pub(crate) fn prune_unbound_array_buffers(&mut self) {
+        let live: AHashSet<Slot> = self.bound.values().copied().collect();
+        self.buffers_array.retain(|slot, _| live.contains(slot));
+    }
+
     /// Texture format the backend allocates new Texture2D slots with.
     pub fn format(&self) -> GpuTextureFormat {
         self.format
@@ -516,6 +641,10 @@ impl MetalBackend {
 }
 
 impl Backend for MetalBackend {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn acquire(
         &mut self,
         id: ResourceId,

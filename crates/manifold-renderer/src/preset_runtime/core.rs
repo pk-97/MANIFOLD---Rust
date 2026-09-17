@@ -3,6 +3,7 @@
 //! this type. Extracted from preset_runtime.rs (Wave 3 P3-R, design D3).
 
 use super::*;
+use crate::node_graph::Backend;
 use super::groups::splice_card_with_canonical_fallback;
 
 pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -117,8 +118,8 @@ pub struct PresetRuntime {
     pub(super) io: PresetIo,
     pub(super) width: u32,
     pub(super) height: u32,
-    /// Hash of the topology this graph was built for. Compared
-    /// each frame to decide whether to rebuild.
+    /// Dimension-independent topology hash. Dimensions are compared separately
+    /// so a committed resource resize does not trigger a redundant rebuild.
     pub(super) topology_hash: u64,
     /// Preset catalog generation this graph was built against (step 10
     /// hot-reload). The dispatcher compares it to the live
@@ -187,6 +188,17 @@ pub struct PresetRuntime {
     /// for this frame. Set by the host before `run`/`render`. A raw pointer is
     /// used because the runtime's lifetime is independent of the registry.
     pub(super) layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
+}
+
+/// Opaque, fully prepared runtime resize.  Preparation allocates replacement
+/// GPU resources while the live executor and graph remain untouched; commit is
+/// an infallible publication step.
+pub struct PreparedRuntimeResize {
+    width: u32,
+    height: u32,
+    backend: Option<crate::node_graph::PreparedMetalBackendResize>,
+    io: Option<PresetIo>,
+    math_views: Vec<super::math_view::PreparedMathViewResize>,
 }
 
 /// Input/output model for a [`PresetRuntime`]. The one genuine difference
@@ -1249,7 +1261,7 @@ impl PresetRuntime {
             return None;
         }
 
-        let topology_hash = compute_topology_hash(effects, groups, width, height, preview_effect);
+        let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
         let mut runtime = Self {
@@ -1553,7 +1565,7 @@ impl PresetRuntime {
         self.width == width
             && self.height == height
             && self.topology_hash
-                == compute_topology_hash(effects, groups, width, height, preview_effect)
+                == compute_topology_hash(effects, groups, 0, 0, preview_effect)
     }
 
     /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
@@ -2097,78 +2109,125 @@ impl PresetRuntime {
         self.state_store.cleanup_nodes(&latch_ids);
     }
 
-    /// Resize the generator's backend + re-pre-bind the final-output
-    /// placeholder + re-run the canonical pre-allocate pass (resize wipes every
-    /// pinned binding incl. Array<T> buffers and Texture3D volumes).
-    pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
-        let Some(format) = self.target_format else {
-            // Mock-backend test path — no GPU, no resources to invalidate.
-            return;
-        };
-        let PresetIo::Generate {
-            final_output_input_resource,
-            ..
-        } = self.io
-        else {
-            return;
-        };
-        let Some(metal) = self
+    /// Prepare a resize without changing the live graph, executor, or GPU
+    /// bindings.  The returned value is safe to discard on allocation failure.
+    pub fn prepare_resize(
+        &self,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+    ) -> Result<PreparedRuntimeResize, JsonGeneratorLoadError> {
+        self.prepare_resize_with_overrides(device, width, height, &[])
+    }
+
+    pub(super) fn prepare_resize_with_overrides(
+        &self,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        array_overrides: &[(ResourceId, manifold_gpu::GpuBuffer)],
+    ) -> Result<PreparedRuntimeResize, JsonGeneratorLoadError> {
+        let backend = self
             .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|any| any.downcast_mut::<MetalBackend>())
-        else {
-            return;
+            .backend()
+            .as_any()
+            .and_then(|any| any.downcast_ref::<MetalBackend>())
+            .map(|metal| {
+                let mut prepared = metal
+                    .prepare_resize(&self.plan, device, width, height)
+                    .map_err(JsonGeneratorLoadError::Resize)?;
+                let candidate = prepared.candidate_mut();
+                for (resource, buffer) in array_overrides {
+                    candidate.pre_bind_array(*resource, buffer.clone());
+                }
+                crate::node_graph::pre_allocate_resources(
+                    &self.graph,
+                    &self.plan,
+                    device,
+                    candidate,
+                )
+                .map_err(|error| JsonGeneratorLoadError::Resize(error.to_string()))?;
+                candidate.prune_unbound_array_buffers();
+                Ok::<_, JsonGeneratorLoadError>(prepared)
+            })
+            .transpose()?;
+        let math_views = if let Some(prepared) = &backend {
+            let parent = prepared.candidate();
+            self.math_views
+                .iter()
+                .map(|view| view.prepare_resize(parent, device, width, height, self.target_format.unwrap_or(GRAPH_FORMAT)))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
         };
-        metal.resize(width, height);
-        // `resize` wiped every pinned binding (incl. the final-output
-        // placeholder), so the slot index is stale. Pre-bind a fresh 1×1
-        // placeholder; `install_target` swaps in the host's real target next
-        // frame.
-        let placeholder =
-            RenderTarget::new(device, 1, 1, format, "preset_runtime_target_owner");
-        let slot = metal.pre_bind_texture_2d(final_output_input_resource, placeholder);
-        if let PresetIo::Generate {
-            final_output_slot, ..
-        } = &mut self.io
-        {
-            *final_output_slot = Some(slot);
+        let io = backend.as_ref().map(|prepared| {
+            let candidate = prepared.candidate();
+            match self.io {
+                PresetIo::Generate { generator_input_id, final_output_input_resource, .. } => {
+                    PresetIo::Generate {
+                        generator_input_id, final_output_input_resource,
+                        final_output_slot: candidate.slot_for(final_output_input_resource),
+                    }
+                }
+                PresetIo::Transform { source_slot, .. } => {
+                    let old = self.executor.backend();
+                    let source = (0..self.plan.resource_count())
+                        .map(|id| ResourceId(id as u32))
+                        .find(|&id| old.slot_for(id) == Some(source_slot))
+                        .expect("transform source resource");
+                    let output = self.plan.steps().iter()
+                        .find(|step| self.graph.get_node(step.node)
+                            .is_some_and(|node| node.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID))
+                        .and_then(|step| step.inputs.first()).map(|(_, id)| *id)
+                        .expect("transform final output input");
+                    PresetIo::Transform {
+                        source_slot: candidate.slot_for(source).expect("prepared source"),
+                        output_slot: candidate.slot_for(output).expect("prepared output"),
+                    }
+                }
+            }
+        });
+        Ok(PreparedRuntimeResize { width, height, backend, io, math_views })
+    }
+
+    /// Publish a previously prepared resize.  All fallible work has already
+    /// completed, so this method only swaps owned state and resets simulations.
+    pub fn commit_resize(&mut self, prepared: PreparedRuntimeResize) {
+        self.width = prepared.width;
+        self.height = prepared.height;
+        if let Some(prepared_backend) = prepared.backend {
+            let metal = self
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|any| any.downcast_mut::<MetalBackend>())
+                .expect("prepared resize belongs to a MetalBackend");
+            metal.commit_resize(prepared_backend);
         }
-        // Re-run the canonical pre-allocate pass so downstream primitives don't
-        // render against an empty Array<T>/Texture3D wire after resize.
-        let Some(metal) = self
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|any| any.downcast_mut::<MetalBackend>())
-        else {
-            return;
-        };
-        for (resource,buffer) in &self.shared_arrays { metal.pre_bind_array(*resource,buffer.clone()); }
-        if let Err(e) =
-            crate::node_graph::pre_allocate_resources(&self.graph, &self.plan, device, metal)
-        {
-            log::warn!("PresetRuntime::resize re-allocation failed: {e}");
-        }
-        // Resize wiped the Array<T> wire buffers, and stateful loops whose
-        // state rides those buffers in place (`array_feedback`'s aliased
-        // in/out variant — every particle sim) came back zeroed with no
-        // re-seed: dead particles, black output, and no way for the
-        // performer to recover short of rebuilding the layer. Clear ALL
-        // graph state so every seed-bootstrap path re-arms — a resolution
-        // change reads as "the sim restarts", which is the honest contract
-        // (positions are UV-normalized but density/canvas-sized buffers
-        // aren't resolution-portable anyway).
+        if let Some(io) = prepared.io { self.io = io; }
+        self.executor.reset_after_resource_replacement();
         for inst in self.graph.nodes_mut() {
             inst.node.clear_state();
         }
         self.state_store.cleanup_all();
-        self.pin_math_view_depth(device, width, height);
-        for view in &mut self.math_views {
-            view.resize(self.executor.backend(), device, width, height, format);
+        self.pending_trigger_baseline = None;
+        let backend = self.executor.backend();
+        for (view, prepared_view) in self.math_views.iter_mut().zip(prepared.math_views) {
+            view.commit_resize(prepared_view, backend);
         }
+    }
+
+    /// Compatibility wrapper for callers that do not need to split prepare
+    /// and commit.  Allocation errors are returned before live state changes.
+    pub fn resize(
+        &mut self,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+    ) -> Result<(), JsonGeneratorLoadError> {
+        let prepared = self.prepare_resize(device, width, height)?;
+        self.commit_resize(prepared);
+        Ok(())
     }
 
 }
