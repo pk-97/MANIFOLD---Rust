@@ -588,7 +588,8 @@ kernel void emissive_gather(
     device const RtAsInstanceDescriptor* descs [[buffer(5)]],
     uint tid [[thread_position_in_grid]])
 {
-    uint entry_count = min(header->valid_count, MAX_RT_EMISSIVE_TRIANGLES);
+    uint entry_count = min(atomic_load_explicit(&header->valid_count, memory_order_relaxed),
+                           MAX_RT_EMISSIVE_TRIANGLES);
     if (tid >= entry_count) return;
     // Front of the descending sort: the top-4096 with §5.1's tie order.
     EmissiveCandidate c = sorted[tid];
@@ -636,7 +637,8 @@ kernel void emissive_stats(
     uint gid [[thread_position_in_grid]])
 {
     if (gid != 0u) return;
-    uint n = min(header->valid_count, MAX_RT_EMISSIVE_TRIANGLES);
+    uint n = min(atomic_load_explicit(&header->valid_count, memory_order_relaxed),
+                 MAX_RT_EMISSIVE_TRIANGLES);
     float total_power = 0.0f;
     float total_area = 0.0f;
     for (uint i = 0u; i < n; i++) {
@@ -663,7 +665,8 @@ kernel void emissive_alias(
     uint gid [[thread_position_in_grid]])
 {
     if (gid != 0u) return;
-    uint n = min(header->valid_count, MAX_RT_EMISSIVE_TRIANGLES);
+    uint n = min(atomic_load_explicit(&header->valid_count, memory_order_relaxed),
+                 MAX_RT_EMISSIVE_TRIANGLES);
     if (n == 0u) return;
     device uint* small = stacks;
     device uint* large = stacks + MAX_RT_EMISSIVE_TRIANGLES;

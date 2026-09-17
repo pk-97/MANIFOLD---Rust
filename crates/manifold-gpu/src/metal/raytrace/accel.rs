@@ -956,6 +956,12 @@ pub(crate) fn prepare_accel(
         geometry_buffers: plan.geometry_buffers.clone(),
     });
 
+    let emissive_table = EmissiveLightTable::new(device);
+    let emissive_scratch = EmissiveScratch::new(
+        device,
+        plan.emissive_candidate_capacity,
+        plan.topology.len(),
+    );
     *resident = Some(RtAccel {
         structure: tlas_structure,
         descriptor: plan.tlas_descriptor.clone(),
@@ -974,12 +980,8 @@ pub(crate) fn prepare_accel(
         // P4a (§5.1): the table and candidate workspace are resident from
         // preparation — a scene that never emits holds a zero-stats table,
         // and an emission zero→positive transition needs no allocation.
-        emissive_table: Some(EmissiveLightTable::new(device)),
-        emissive_scratch: Some(EmissiveScratch::new(
-            device,
-            plan.emissive_candidate_capacity,
-            0,
-        )),
+        emissive_table: Some(emissive_table),
+        emissive_scratch: Some(emissive_scratch),
         queue: device.clone_queue(),
     });
     Ok(())
