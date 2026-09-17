@@ -39,6 +39,15 @@ manifold-gpu/
 
 **Shaders:** WGSL everywhere. Pipeline: WGSL → naga → SPIR-V → spirv-opt (22 optimization passes) → SPIRV-Cross → MSL. Intermediate MSL cached on disk (`msl_cache.rs`). Compiled GPU binaries cached via MTLBinaryArchive. Compilation runs at pipeline creation (startup), not per-frame.
 
+Render cache identity separates shader translation from pipeline state. The MSL
+key includes source, entry points and the point-size output rewrite. Every render
+factory uses one complete pipeline key for memory caching and archive insertion:
+shader key, color/depth formats, all blend components, sample count,
+alpha-to-coverage, ordered auxiliary attachments and the full vertex layout.
+Labels and draw-time depth/cull/fill settings are excluded. Versioned key
+namespaces leave older ambiguous entries unused; no project migration or manual
+cache deletion is required. New descriptor options must extend this key.
+
 **Ownership model:** All Metal objects are owned as `Retained<ProtocolObject<dyn MTLFoo>>` (automatic retain/release via `objc2::rc`). No manual `objc_retain`/`objc_release`, no raw pointer fields on GPU wrappers. Command buffers and encoders are fully typed — no `*mut c_void` cmd_buf tricks.
 
 **All threads use manifold-gpu.** Content thread and UI thread both use native Metal. Zero wgpu anywhere in the codebase.

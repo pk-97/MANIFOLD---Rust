@@ -127,11 +127,149 @@ pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u6
     hasher.finish()
 }
 
-/// Compute a stable hash for a render pipeline's identity.
-pub fn render_pipeline_hash(wgsl_source: &str, vs_entry: &str, fs_entry: &str) -> u64 {
+/// Shader translation identity, shared by pipelines with different attachment
+/// and blend state. The point-size rewrite changes emitted MSL, so it belongs
+/// here too. A new namespace leaves old, ambiguous disk-cache entries unused.
+pub(crate) fn render_shader_hash(
+    wgsl_source: &str,
+    vs_entry: &str,
+    fs_entry: &str,
+    point_size_location: Option<u32>,
+) -> u64 {
     let mut hasher = DefaultHasher::new();
+    "render-shader-v2".hash(&mut hasher);
     wgsl_source.hash(&mut hasher);
     vs_entry.hash(&mut hasher);
     fs_entry.hash(&mut hasher);
+    point_size_location.hash(&mut hasher);
     hasher.finish()
+}
+
+/// All variable Metal render-pipeline descriptor state. Used for both the
+/// in-memory PSO cache and binary-archive insertion bookkeeping. Labels and
+/// draw-time state (depth comparison, culling, fill mode) are not PSO state.
+/// Keep this complete when adding descriptor options to a pipeline factory.
+#[derive(Hash)]
+pub(crate) struct RenderPipelineKey<'a> {
+    pub shader: u64,
+    pub color_format: Option<crate::GpuTextureFormat>,
+    pub depth_format: Option<crate::GpuTextureFormat>,
+    pub blend: Option<crate::GpuBlendState>,
+    pub sample_count: u32,
+    pub alpha_to_coverage: bool,
+    pub aux_color_formats: &'a [crate::GpuTextureFormat],
+    pub vertex_layout: Option<&'a crate::GpuVertexLayout>,
+}
+
+impl RenderPipelineKey<'_> {
+    pub fn hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        "render-pipeline-v2".hash(&mut hasher);
+        Hash::hash(self, &mut hasher);
+        hasher.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{GpuBlendFactor as Factor, GpuBlendOp as Op, GpuBlendState, GpuTextureFormat as Format};
+
+    fn key() -> RenderPipelineKey<'static> {
+        RenderPipelineKey {
+            shader: render_shader_hash("shader", "vs", "fs", None),
+            color_format: Some(Format::Rgba16Float),
+            depth_format: None,
+            blend: None,
+            sample_count: 1,
+            alpha_to_coverage: false,
+            aux_color_formats: &[],
+            vertex_layout: None,
+        }
+    }
+
+    #[test]
+    fn render_identity_separates_attachment_and_raster_variants() {
+        let original = key().hash();
+        let mut variants = Vec::new();
+        let mut changed = key();
+        changed.color_format = Some(Format::Rgba8Unorm);
+        variants.push(changed.hash());
+        changed.color_format = None;
+        variants.push(changed.hash());
+        let mut changed = key();
+        changed.depth_format = Some(Format::Depth32Float);
+        variants.push(changed.hash());
+        let mut changed = key();
+        changed.sample_count = 4;
+        variants.push(changed.hash());
+        let mut changed = key();
+        changed.alpha_to_coverage = true;
+        variants.push(changed.hash());
+        let mut changed = key();
+        changed.aux_color_formats = &[Format::R32Float, Format::Rgba16Float];
+        variants.push(changed.hash());
+        changed.aux_color_formats = &[Format::Rgba16Float, Format::R32Float];
+        variants.push(changed.hash());
+        variants.push(original);
+        let count = variants.len();
+        assert_eq!(variants.into_iter().collect::<std::collections::HashSet<_>>().len(), count);
+    }
+
+    #[test]
+    fn render_identity_includes_every_blend_component() {
+        let blend = GpuBlendState {
+            src_factor: Factor::One, dst_factor: Factor::Zero, operation: Op::Add,
+            src_alpha_factor: Factor::One, dst_alpha_factor: Factor::Zero, alpha_operation: Op::Add,
+        };
+        let mut variants = vec![key().hash()];
+        for b in [
+            blend,
+            GpuBlendState { src_factor: Factor::SrcAlpha, ..blend },
+            GpuBlendState { dst_factor: Factor::One, ..blend },
+            GpuBlendState { operation: Op::Max, ..blend },
+            GpuBlendState { src_alpha_factor: Factor::SrcAlpha, ..blend },
+            GpuBlendState { dst_alpha_factor: Factor::One, ..blend },
+            GpuBlendState { alpha_operation: Op::Max, ..blend },
+        ] {
+            let mut changed = key();
+            changed.blend = Some(b);
+            variants.push(changed.hash());
+        }
+        let count = variants.len();
+        assert_eq!(variants.into_iter().collect::<std::collections::HashSet<_>>().len(), count);
+    }
+
+    #[test]
+    fn render_identity_includes_complete_vertex_layout() {
+        use crate::{GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout};
+        let attr = GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 };
+        let mut variants = vec![key().hash()];
+        for (stride, attribute) in [
+            (16, attr), (24, attr),
+            (16, GpuVertexAttribute { offset: 8, ..attr }),
+            (16, GpuVertexAttribute { shader_location: 1, ..attr }),
+            (16, GpuVertexAttribute { format: GpuVertexFormat::Float32x3, ..attr }),
+        ] {
+            let layout = GpuVertexLayout { stride, attributes: vec![attribute] };
+            let mut changed = key();
+            changed.vertex_layout = Some(&layout);
+            variants.push(changed.hash());
+        }
+        let count = variants.len();
+        assert_eq!(variants.into_iter().collect::<std::collections::HashSet<_>>().len(), count);
+    }
+
+    #[test]
+    fn render_shader_identity_separates_point_size_rewrites_and_entry_points() {
+        let hashes = [
+            render_shader_hash("shader", "vs", "fs", None),
+            render_shader_hash("shader", "vs", "fs", Some(0)),
+            render_shader_hash("shader", "vs", "fs", Some(1)),
+            render_shader_hash("shader", "other_vs", "fs", None),
+            render_shader_hash("shader", "vs", "other_fs", None),
+            render_shader_hash("other_shader", "vs", "fs", None),
+        ];
+        assert_eq!(hashes.into_iter().collect::<std::collections::HashSet<_>>().len(), hashes.len());
+    }
 }
