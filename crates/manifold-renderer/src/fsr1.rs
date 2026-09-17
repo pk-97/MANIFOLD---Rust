@@ -66,6 +66,13 @@ impl Fsr1Upscaler {
         dst_w: u32,
         dst_h: u32,
     ) -> Self {
+        Self::try_new(device, src_w, src_h, dst_w, dst_h)
+            .expect("FSR1 allocation failed")
+    }
+
+    pub fn try_new(
+        device: &manifold_gpu::GpuDevice, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32,
+    ) -> Result<Self, String> {
         let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let easu_pipeline = device.create_compute_pipeline(
             include_str!("effects/shaders/fsr1_easu_compute.wgsl"),
@@ -85,10 +92,10 @@ impl Fsr1Upscaler {
             mag_filter: manifold_gpu::GpuFilterMode::Linear,
             ..Default::default()
         });
-        let easu_output = RenderTarget::new(device, dst_w, dst_h, fmt, "FSR1 EASU Output");
-        let output = RenderTarget::new(device, dst_w, dst_h, fmt, "FSR1 RCAS Output");
+        let easu_output = RenderTarget::try_new(device, dst_w, dst_h, fmt, "FSR1 EASU Output")?;
+        let output = RenderTarget::try_new(device, dst_w, dst_h, fmt, "FSR1 RCAS Output")?;
 
-        Self {
+        Ok(Self {
             easu_pipeline,
             rcas_pipeline,
             sampler,
@@ -98,7 +105,7 @@ impl Fsr1Upscaler {
             src_h,
             dst_w,
             dst_h,
-        }
+        })
     }
 
     /// Upscale `source` (at src_w × src_h) → `self.output` (at dst_w × dst_h).

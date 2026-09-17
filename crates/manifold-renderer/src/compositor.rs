@@ -164,8 +164,10 @@ pub trait Compositor: Send {
         frame: &CompositorFrame,
     ) -> &manifold_gpu::GpuTexture;
 
-    /// Resize compositor render targets.
-    fn resize(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32);
+    /// Stage replacements without changing the live compositor.
+    fn prepare_resize(&self, device: &manifold_gpu::GpuDevice, width: u32, height: u32)
+        -> Result<crate::layer_compositor::PreparedCompositorResize, String>;
+    fn commit_resize(&mut self, prepared: crate::layer_compositor::PreparedCompositorResize);
 
     /// Get current output dimensions.
     fn dimensions(&self) -> (u32, u32);

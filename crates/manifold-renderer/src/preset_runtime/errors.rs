@@ -41,6 +41,8 @@ pub enum JsonGeneratorLoadError {
         producer_port: String,
         cause: &'static str,
     },
+    /// A staged runtime resize could not be admitted or allocated.
+    Resize(String),
 }
 
 impl std::fmt::Display for JsonGeneratorLoadError {
@@ -97,6 +99,7 @@ impl std::fmt::Display for JsonGeneratorLoadError {
                      whose source resource was never pre-bound."
                 )
             }
+            Self::Resize(error) => write!(f, "runtime resize preparation failed: {error}"),
         }
     }
 }

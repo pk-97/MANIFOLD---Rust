@@ -219,7 +219,7 @@ impl From<&JsonGeneratorLoadError> for ValidationIssue {
                 port: Some(producer_port.clone()),
                 message: e.to_string(),
             },
-            SceneModifier(_) | Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
+            Resize(_) | SceneModifier(_) | Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
                 ValidationIssue {
                     node_id: None,
                     type_id: None,

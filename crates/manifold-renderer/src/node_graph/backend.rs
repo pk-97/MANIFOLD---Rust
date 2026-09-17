@@ -253,6 +253,11 @@ pub trait Backend: Send {
         None
     }
 
+    /// Shared-reference downcast hook for staged resource preparation.
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
     /// Install the texture currently bound to `src_slot` into `dst_slot`
     /// as a transient borrowed override. Used by the runtime when a node
     /// declares itself a no-op for the frame via

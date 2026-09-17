@@ -1122,7 +1122,16 @@
             }
         }
 
-        g.resize(&device, 1280, 720);
+        let old_buffers = array_resources.iter().map(|&id| {
+            let backend = g.executor.backend();
+            backend.array_buffer(backend.slot_for(id).unwrap()).unwrap().clone()
+        }).collect::<Vec<_>>();
+        g.resize(&device, 1280, 720).unwrap();
+        for (&id, before) in array_resources.iter().zip(&old_buffers) {
+            let backend = g.executor.backend();
+            let after = backend.array_buffer(backend.slot_for(id).unwrap()).unwrap();
+            assert!(before.ptr_eq(after), "resolution-independent arrays must keep physical storage");
+        }
 
         let metal = g
             .executor
@@ -1212,7 +1221,7 @@
         );
 
         let (w1, h1) = (384u32, 640u32);
-        g.resize(&device, w1, h1);
+        g.resize(&device, w1, h1).unwrap();
 
         let after = max_luma(&mut g, w1, h1, 90, 90);
         assert!(
@@ -1291,7 +1300,7 @@
 
         let before = max_luma(&mut g, w0, h0, 90, 0);
         assert!(before > 0.05, "FluidSim2D must render before resize (max luma {before})");
-        g.resize(&device, 384, 640);
+        g.resize(&device, 384, 640).unwrap();
         let after = max_luma(&mut g, 384, 640, 90, 90);
         assert!(
             after > 0.05,

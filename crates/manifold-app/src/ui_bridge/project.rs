@@ -160,47 +160,18 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SetResolution(preset_idx) => {
             use manifold_core::types::ResolutionPreset;
-            let old = project.settings.resolution_preset;
             if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
-                let cmd =
-                    manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
+                ContentCommand::send(content_tx, ContentCommand::SetResolution(new));
             }
-            DispatchResult::resolution()
+            DispatchResult::handled()
         }
         ProjectAction::SetDisplayResolution(w, h) => {
-            let old_w = project.settings.output_width;
-            let old_h = project.settings.output_height;
-            let cmd = manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
-                old_w, old_h, *w, *h,
-            );
-            {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            }
-            DispatchResult::resolution()
+            ContentCommand::send(content_tx, ContentCommand::SetDisplayResolution(*w, *h));
+            DispatchResult::handled()
         }
         ProjectAction::SetRenderScale(scale) => {
-            let old_scale = project.settings.render_scale;
-            let new_scale = scale.clamp(0.01, 1.0);
-            if (new_scale - old_scale).abs() > 0.01 {
-                let cmd = manifold_editing::commands::settings::ChangeRenderScaleCommand::new(
-                    old_scale, new_scale,
-                );
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
-            }
-            DispatchResult::resolution()
+            ContentCommand::send(content_tx, ContentCommand::SetRenderScale(*scale));
+            DispatchResult::handled()
         }
         ProjectAction::SetTonemapCurve(curve) => {
             let old_curve = project.settings.tonemap_curve;

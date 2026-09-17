@@ -50,6 +50,17 @@ cache deletion is required. New descriptor options must extend this key.
 
 **Ownership model:** All Metal objects are owned as `Retained<ProtocolObject<dyn MTLFoo>>` (automatic retain/release via `objc2::rc`). No manual `objc_retain`/`objc_release`, no raw pointer fields on GPU wrappers. Command buffers and encoders are fully typed — no `*mut c_void` cmd_buf tricks.
 
+**Resolution changes:** The content thread prepares compositor, upscaler, generator,
+effect-chain and Math View replacements before publishing new dimensions. GPU
+allocation/admission errors discard the candidate and preserve the live renderer,
+project settings and undo/redo history. Compatible non-atomic array storage is
+retained; new atomic storage is separately initialized. Math View candidates bind
+to their candidate parent's buffers. Commit resets executor readiness and
+simulation state only after every owner has prepared successfully. Texture and
+buffer admission includes the live/candidate overlap; it does not guarantee that
+later lazy primitive allocations will fit. Existing GPU retirement owns resources
+still referenced by submitted work.
+
 **All threads use manifold-gpu.** Content thread and UI thread both use native Metal. Zero wgpu anywhere in the codebase.
 
 **Dependency policy:** manifold-gpu pulls only `objc2`, `block2`, `objc2-foundation`, `objc2-metal`, `objc2-metal-fx`, `objc2-metal-performance-shaders`. No `metal` crate, no `objc 0.2`, no `block 0.1`, no `core-graphics-types`. Raw-window-handle is the only non-objc2 macOS dep (winit interop).

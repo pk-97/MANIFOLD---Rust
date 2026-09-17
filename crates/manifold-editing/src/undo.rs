@@ -22,11 +22,32 @@ impl UndoRedoManager {
     }
 
     /// Execute a command and push to undo stack.
-    pub fn execute(&mut self, mut command: Box<dyn Command>, project: &mut Project) -> bool {
+    pub fn execute(&mut self, command: Box<dyn Command>, project: &mut Project) -> bool {
+        self.execute_with_validation(command, project, |_| Ok(()))
+    }
+
+    /// Execute a command, then validate the resulting project before recording
+    /// it. A failed validation inverses the command and leaves both history
+    /// stacks untouched. The validator runs synchronously while the content
+    /// thread still owns all runtime state needed to validate the edit.
+    pub fn execute_with_validation<F>(
+        &mut self,
+        mut command: Box<dyn Command>,
+        project: &mut Project,
+        mut validate: F,
+    ) -> bool
+    where
+        F: FnMut(&Project) -> Result<(), String>,
+    {
         self.last_rejection = None;
         command.execute(project);
         if !command.was_applied() {
             self.last_rejection = command.rejection_reason().map(str::to_string);
+            return false;
+        }
+        if let Err(message) = validate(project) {
+            command.undo(project);
+            self.last_rejection = Some(message);
             return false;
         }
         self.push_undo(command);
@@ -46,8 +67,26 @@ impl UndoRedoManager {
     /// Undo the most recent command.
     #[must_use]
     pub fn undo(&mut self, project: &mut Project) -> bool {
+        self.undo_with_validation(project, |_| Ok(()))
+    }
+
+    /// Undo a command and validate the resulting project before moving it to
+    /// the redo stack. A failed validation re-applies the command and keeps
+    /// both stacks unchanged.
+    #[must_use]
+    pub fn undo_with_validation<F>(&mut self, project: &mut Project, mut validate: F) -> bool
+    where
+        F: FnMut(&Project) -> Result<(), String>,
+    {
+        self.last_rejection = None;
         if let Some(mut cmd) = self.undo_stack.pop_back() {
             cmd.undo(project);
+            if let Err(message) = validate(project) {
+                cmd.execute(project);
+                self.undo_stack.push_back(cmd);
+                self.last_rejection = Some(message);
+                return false;
+            }
             self.redo_stack.push(cmd);
             true
         } else {
@@ -58,12 +97,29 @@ impl UndoRedoManager {
     /// Redo the most recently undone command.
     #[must_use]
     pub fn redo(&mut self, project: &mut Project) -> bool {
+        self.redo_with_validation(project, |_| Ok(()))
+    }
+
+    /// Redo a command and validate the resulting project before moving it to
+    /// the undo stack. A failed validation inverses the command and leaves the
+    /// redo stack intact for a later retry.
+    #[must_use]
+    pub fn redo_with_validation<F>(&mut self, project: &mut Project, mut validate: F) -> bool
+    where
+        F: FnMut(&Project) -> Result<(), String>,
+    {
         self.last_rejection = None;
         if let Some(mut cmd) = self.redo_stack.pop() {
             cmd.execute(project);
             if !cmd.was_applied() {
                 self.last_rejection = cmd.rejection_reason().map(str::to_string);
                 self.redo_stack.push(cmd);
+                return false;
+            }
+            if let Err(message) = validate(project) {
+                cmd.undo(project);
+                self.redo_stack.push(cmd);
+                self.last_rejection = Some(message);
                 return false;
             }
             self.undo_stack.push_back(cmd);
@@ -175,6 +231,56 @@ mod tests {
         assert!(mgr.can_redo());
 
         assert!(mgr.redo(&mut project));
+        assert_eq!(project.settings.bpm, Bpm(140.0));
+    }
+
+    #[test]
+    fn rejected_validation_preserves_project_and_history_for_retry() {
+        use manifold_core::units::Bpm;
+
+        let mut mgr = UndoRedoManager::new();
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+
+        assert!(!mgr.execute_with_validation(
+            Box::new(SetBpmCommand {
+                old_bpm: Bpm(0.0),
+                new_bpm: Bpm(140.0),
+            }),
+            &mut project,
+            |_| Err("resize rejected".to_string()),
+        ));
+        assert_eq!(project.settings.bpm, Bpm(120.0));
+        assert_eq!(mgr.undo_count(), 0);
+        assert_eq!(mgr.redo_count(), 0);
+        assert_eq!(mgr.take_rejection().as_deref(), Some("resize rejected"));
+
+        assert!(mgr.execute_with_validation(
+            Box::new(SetBpmCommand {
+                old_bpm: Bpm(0.0),
+                new_bpm: Bpm(140.0),
+            }),
+            &mut project,
+            |_| Ok(()),
+        ));
+        assert_eq!(project.settings.bpm, Bpm(140.0));
+        assert_eq!(mgr.undo_count(), 1);
+
+        assert!(!mgr.undo_with_validation(&mut project, |_| Err("undo rejected".to_string())));
+        assert_eq!(project.settings.bpm, Bpm(140.0));
+        assert_eq!(mgr.undo_count(), 1);
+        assert_eq!(mgr.redo_count(), 0);
+
+        assert!(mgr.undo_with_validation(&mut project, |_| Ok(())));
+        assert_eq!(project.settings.bpm, Bpm(120.0));
+        assert_eq!(mgr.undo_count(), 0);
+        assert_eq!(mgr.redo_count(), 1);
+
+        assert!(!mgr.redo_with_validation(&mut project, |_| Err("redo rejected".to_string())));
+        assert_eq!(project.settings.bpm, Bpm(120.0));
+        assert_eq!(mgr.undo_count(), 0);
+        assert_eq!(mgr.redo_count(), 1);
+        assert!(mgr.redo_with_validation(&mut project, |_| Ok(())));
         assert_eq!(project.settings.bpm, Bpm(140.0));
     }
 }

@@ -315,7 +315,7 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
         compare_pixels(&quiet, &missing, 0.001);
         let restored = render_generator(&mut raw, &device, &target.texture, &audio, 3);
         compare_pixels(&restored, &pixels, 0.001);
-        raw.resize(&device, 640, 360);
+        raw.resize(&device, 640, 360).expect("resize audio visual proof");
         let resized = RenderTarget::new(&device, 640, 360, FMT, "audio-generator-resized");
         let pixels = render_generator(&mut raw, &device, &resized.texture, &audio, 4);
         assert!(pixels.iter().all(|v| v.is_finite()));

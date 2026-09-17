@@ -124,7 +124,7 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
             owner.clone(), &registry, Some(&params), fused,
         ).unwrap().with_generator_device(device.clone(), 320, 180, GpuTextureFormat::Rgba16Float).unwrap();
         for (w, h) in [(320, 180), (240, 160)] {
-            if w != 320 { runtime.resize(&device, w, h); }
+            if w != 320 { runtime.resize(&device, w, h).unwrap(); }
             let target = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "math-depth-runtime-proof");
             let render = |runtime: &mut PresetRuntime, params: &ParamManifest| {
                 let ctx = PresetContext {
@@ -578,4 +578,86 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             "{name}: Grid off must clear every object diagram"
         );
     }
+}
+
+#[cfg(feature = "gpu-proofs")]
+#[test]
+fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
+    let guard = crate::test_device();
+    let device = guard.arc();
+    let owner = owner();
+    let registry = PrimitiveRegistry::with_builtin();
+    let params = manifest(&owner);
+    let mut runtime = PresetRuntime::from_def_for_render(owner, &registry, Some(&params), false)
+        .unwrap().with_generator_device(device.clone(), 64, 48, GpuTextureFormat::Rgba16Float).unwrap();
+    let arrays = || {
+        let backend = runtime.executor.backend();
+        (0..runtime.plan.resource_count()).filter_map(|id| {
+            let id = ResourceId(id as u32);
+            backend.slot_for(id).and_then(|slot| backend.array_buffer(slot)).map(|buffer| (id, buffer.clone()))
+        }).collect::<Vec<_>>()
+    };
+    let original = arrays();
+    assert!(!original.is_empty());
+    let mut successes = 0;
+    let mut failures = 0;
+    for stage in 0..64 {
+        let injection = crate::render_target::fail_allocation_after(stage);
+        let result = runtime.prepare_resize(&device, 48, 64);
+        drop(injection);
+        assert_eq!((runtime.width, runtime.height), (64, 48));
+        for (id, buffer) in &original {
+            let backend = runtime.executor.backend();
+            assert!(backend.array_buffer(backend.slot_for(*id).unwrap()).unwrap().ptr_eq(buffer));
+        }
+        match result {
+            Err(error) => { assert!(error.to_string().contains("injected GPU allocation failure"), "{error}"); failures += 1; }
+            Ok(prepared) => { runtime.commit_resize(prepared); successes += 1; break; }
+        }
+    }
+    assert!(failures > 2, "must exercise parent and child allocation failures");
+    assert_eq!(successes, 1, "bounded preparation must eventually succeed");
+    assert_eq!((runtime.width, runtime.height), (48, 64));
+    let backend = runtime.executor.backend();
+    for view in &runtime.math_views {
+        for (variant, links) in view.variants.iter().zip(&view.shared_resources) {
+            for (parent, child) in links {
+                let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
+                let child_backend = variant.executor.backend();
+                let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
+                assert!(parent.ptr_eq(child));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gpu-proofs")]
+#[test]
+fn staged_transform_resize_keeps_compatible_chain_and_renders() {
+    let device = crate::test_device();
+    let primitives = PrimitiveRegistry::with_builtin();
+    let effects = vec![manifold_core::preset_definition_registry::create_default(&PresetTypeId::new("ColorGrade"))];
+    let mut runtime = PresetRuntime::try_build(ChainBuildInputs {
+        effects: &effects, groups: &[], primitives: &primitives, device: &device,
+        pool: None, width: 32, height: 24, preview_effect: None,
+    }, None).unwrap();
+    let prepared = runtime.prepare_resize(&device, 24, 32).unwrap();
+    runtime.commit_resize(prepared);
+    assert!(runtime.is_compatible(&effects, &[], 24, 32, None));
+    assert!(!runtime.is_compatible(&effects, &[], 32, 24, None));
+    let input = RenderTarget::new(&device, 24, 32, GpuTextureFormat::Rgba16Float, "resize-chain-input");
+    let ctx = PresetContext {
+        time: 0.0, beat: 0.0, dt: 0.0, width: 24, height: 32,
+        output_width: 24, output_height: 32, aspect: 0.75,
+        owner_key: 1, is_clip_level: false, frame_count: 1,
+        anim_progress: 0.0, trigger_count: 0,
+    };
+    let mut encoder = device.create_encoder("resize-chain-proof");
+    encoder.clear_texture(&input.texture, 0.4, 0.2, 0.1, 1.0);
+    let output = runtime.run(&mut GpuEncoder::new(&mut encoder, &device), &input.texture, &effects, &[], &ctx).unwrap().clone();
+    encoder.try_commit_and_wait_completed().unwrap();
+    assert_eq!((output.width, output.height), (24, 32));
+    let pixels = crate::headless_readback::readback_raw_halves(&device, &output, 24, 32);
+    assert!(pixels.chunks_exact(8).any(|pixel| pixel[..6].chunks_exact(2)
+        .any(|channel| half::f16::from_le_bytes([channel[0], channel[1]]).to_f32() > 0.01)));
 }
