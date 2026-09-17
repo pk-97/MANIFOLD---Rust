@@ -17,8 +17,9 @@
 //! replicates the draw exactly — the ported `pcg`/`rand2` below are
 //! bit-copies of the kernel's, and the alias table for four equal-power
 //! candidates has prob 1.0/self-alias, so the drawn index is
-//! `floor(u1.x * 4)` into the candidate order [(t0,s0),(t0,s1),(t1,s0),
-//! (t1,s1)].
+//! `floor(u1.x * 4)` into the candidate order — RAYTRACING_DESIGN.md §5.1
+//! identity order (object, slot, triangle) ascending, slot-major:
+//! [(t0,s0),(t1,s0),(t0,s1),(t1,s1)].
 
 use std::ffi::c_void;
 use std::slice;
@@ -383,15 +384,15 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     );
 
     // ─── CPU oracle: replicate the draw and the D8 estimator exactly ───
-    // Candidate order from build_emissive_table: per triangle, per slot:
-    // [(t0,s0),(t0,s1),(t1,s0),(t1,s1)] — all four with equal local power
-    // (same triangle area, same luma), so the alias is prob-1.0 self-alias
-    // and the drawn index is floor(u1.x * 4).
+    // Candidate order: §5.1 identity order (object, slot, triangle)
+    // ascending, slot-major — [(t0,s0),(t1,s0),(t0,s1),(t1,s1)] — all four
+    // with equal local power (same triangle area, same luma), so the alias
+    // is prob-1.0 self-alias and the drawn index is floor(u1.x * 4).
     let tid = [4u32, 0u32];
     let u1 = rand2(tid, 0, 700);
     let i = ((u1[0] * 4.0) as u32).min(3);
-    let tri = (i / 2) as usize; // triangle index (2 tris)
-    let slot = (i % 2) as usize; // slot index
+    let slot = (i / 2) as usize; // slot index (2 slots, slot-major)
+    let tri = (i % 2) as usize; // triangle index (2 tris)
     let base = tri * 3;
     let local = |k: usize| EMISSIVE_QUAD[base + k].pos;
     // Translation-only slot: world = local + slot translation.

@@ -372,8 +372,25 @@ fn emissive_table_truncates_at_cap() {
     }
     let buf = write_shared_buffer(device, &verts);
 
-    // Each "object" is one quad (2 triangles). Use the same buffer with
-    // offsets to simulate separate objects.
+    // plan_accel validates flat (non-indexed) geometry as triangle_count*3
+    // vertices per object; a real quad is 4 vertices + a 6-entry index
+    // buffer. Share one index buffer across all quad objects — indices are
+    // relative to each object's vertex_offset.
+    let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    let ib = device.create_buffer_shared(std::mem::size_of_val(&indices) as u64);
+    let ib_ptr = ib
+        .mapped_ptr()
+        .expect("shared buffer must expose a mapped pointer");
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            indices.as_ptr().cast::<u8>(),
+            ib_ptr,
+            std::mem::size_of_val(&indices),
+        );
+    }
+
+    // Each "object" is one indexed quad (2 triangles). Use the same buffers
+    // with per-object vertex offsets to simulate separate objects.
     let stride = std::mem::size_of::<PosVertex>() as u32;
     let mut objects: Vec<RtObjectGeometry> = Vec::with_capacity(n_quads);
     for i in 0..n_quads {
@@ -381,8 +398,8 @@ fn emissive_table_truncates_at_cap() {
             vertex_buffer: &buf,
             vertex_stride: stride,
             vertex_offset: (i * 4 * stride as usize) as u32,
-            index_buffer: None,
-            triangle_count: 2, // 4 verts → 2 triangles
+            index_buffer: Some(&ib),
+            triangle_count: 2, // 4 verts + 6 indices → 2 triangles
             transform: IDENTITY,
             normal_offset: 0,
             uv_offset: 0,
