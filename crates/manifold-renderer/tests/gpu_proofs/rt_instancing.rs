@@ -238,6 +238,8 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
         instances_addr: instances_buffer.gpu_address(),
         instances_buffer: Some(&instances_buffer),
         instance_slots: slots.len() as u32,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).

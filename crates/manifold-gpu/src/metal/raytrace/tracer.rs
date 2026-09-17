@@ -246,7 +246,7 @@ pub trait ShadowRayTracer {
         prefiltered_env: &GpuTexture,
         // RS-C: emissive-triangle light table + alias table buffers, built
         // CPU-side at accel registration. Empty-scene fallbacks are
-        // zero-filled and sized to the larger typed element (80-byte
+        // zero-filled and sized to the larger typed element (96-byte
         // triangle / 8-byte alias); entry_count=0 skips the kernel block.
         emissive_triangles: &GpuBuffer,
         emissive_aliases: &GpuBuffer,
@@ -514,8 +514,10 @@ pub const DEBUG_RAY_INVALID: u32 = u32::MAX;
 
 /// SCENE_MODIFIER_RT_DESIGN.md P0/A0: one committed-hit record from
 /// [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
-/// `DebugRayQueryHit` exactly; `coverage` is 1.0 on an accepted hit until
-/// P4b gives fractional appearance coverage meaning.
+/// `DebugRayQueryHit` exactly. P4b (§5.2): `coverage`/`brightness` report
+/// the accepted hit's appearance evaluation (`clamp(gain*weight, 0, 1)` /
+/// `max(gain*weight, 1)` — render_scene.wgsl:889's `apply_appearance`);
+/// both 1.0 when the object has no appearance wired, both 0 on a miss.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DebugRayQueryHit {
@@ -526,7 +528,7 @@ pub struct DebugRayQueryHit {
     pub distance: f32,
     pub bary: [f32; 2],
     pub coverage: f32,
-    pub pad0: f32,
+    pub brightness: f32,
     pub normal: [f32; 3],
     pub pad1: f32,
     pub uv: [f32; 2],
@@ -1162,6 +1164,11 @@ impl MetalShadowRayTracer {
     /// rays. `material_textures` follows `dispatch_shadow_rays`'s table
     /// order; missing slots bind the 1x1 dummy (alpha-mask fixtures supply
     /// their real texture at the same index `RtNormalSource` references).
+    /// sampler streams. `seed_base` (P4b) seeds the fractional-appearance
+    /// acceptance draws: each ray's draw is a deterministic function of
+    /// (seed_base, ray index, candidate identity), so N identical rays at
+    /// distinct indices are N independent fixed-seed samples of the
+    /// coverage acceptance test.
     pub fn debug_ray_query(
         &self,
         device: &GpuDevice,
@@ -1171,6 +1178,7 @@ impl MetalShadowRayTracer {
         rays: &[DebugRayQueryRay],
         material_textures: Option<&[&GpuTexture]>,
         slot_row_base: u32,
+        seed_base: u32,
     ) -> GpuBuffer {
         assert!(!rays.is_empty(), "debug_ray_query: at least one ray");
         let rays_buffer =
@@ -1191,7 +1199,7 @@ impl MetalShadowRayTracer {
             slot_row_base: u32,
             ray_count: u32,
             grid_x: u32,
-            pad: u32,
+            seed_base: u32,
         }
         const _: () = assert!(std::mem::size_of::<DebugRayQueryParams>() == 16);
         let wg = self.debug_ray_query_pipeline.workgroup_size;
@@ -1201,7 +1209,7 @@ impl MetalShadowRayTracer {
             slot_row_base,
             ray_count: rays.len() as u32,
             grid_x: workgroups_x * wg[0],
-            pad: 0,
+            seed_base,
         };
         let params_bytes: [u8; 16] = unsafe { std::mem::transmute(params) };
 
@@ -2638,7 +2646,7 @@ mod tests {
     }
 
 
-    use super::super::blas_geometry_opaque;
+    use super::super::{RtObjectGeometry, blas_geometry_nonopaque};
     use super::{GpuDevice, MetalShadowRayTracer, SHADOW_RAYS_MSL};
     use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
 
@@ -2751,15 +2759,87 @@ mod tests {
         assert_eq!(result, [0.0,1.0,0.0,1.0]);
     }
 
-    /// I-TL6 (RAYTRACING_DESIGN.md section 16.5): BLAS opacity tracks
-    /// translucency — the hardware fast path is kept only for objects the
-    /// kernel's candidate walks never need to see.
+    /// I-TL6 (RAYTRACING_DESIGN.md section 16.5) + SCENE_MODIFIER_RT_DESIGN.md
+    /// §5.2 (P4b): BLAS opacity tracks the descriptor-nonopaque property —
+    /// alpha mask OR translucency OR wired appearance weights OR nonunit
+    /// gain. The hardware fast path is kept only for objects the kernel's
+    /// candidate walks never need to see; a fractional-to-fractional gain
+    /// change leaves the property untouched (source-table-only update).
     #[test]
-    fn blas_opacity_tracks_alpha_mask_only() {
-        assert!(blas_geometry_opaque(false));
-        assert!(!blas_geometry_opaque(true));
-        assert_eq!(blas_geometry_opaque(false), blas_geometry_opaque(false));
+    fn blas_opacity_tracks_nonopaque_property() {
+        let device = GpuDevice::new();
+        let verts = device.create_buffer(3 * 12);
+        let base = RtObjectGeometry {
+            vertex_buffer: &verts,
+            vertex_stride: 12,
+            vertex_offset: 0,
+            index_buffer: None,
+            triangle_count: 1,
+            transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            normal_offset: 0,
+            uv_offset: 0,
+            alpha_mask: false,
+            translucent: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: None,
+            mr_texture: None,
+            normal_texture: None,
+            emissive_texture: None,
+            emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+            emissive_uv_t: [0.0, 0.0],
+            cast_shadows: true,
+            instances_addr: 0,
+            instances_buffer: None,
+            instance_slots: 0,
+            appearance_weights: None,
+            appearance_gain: 1.0,
+        };
+        assert!(!blas_geometry_nonopaque(&base), "plain object keeps the hardware fast path");
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry { alpha_mask: true, ..base }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry { translucent: true, ..base }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_weights: Some(&verts), ..base }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 0.5, ..base }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 2.0, ..base }));
+        assert!(!blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 1.0, ..base }));
         assert_eq!(SHADOW_RAYS_MSL.matches("force_opacity(forced_opacity::non_opaque)").count(), 2);
+    }
+
+    /// P4b (§5.2) source contracts: ONE shared appearance-acceptance helper
+    /// invoked by both candidate walkers (no per-walker copies), ONE shared
+    /// triangle-index resolution with no stray flat-layout corner math, and
+    /// the emissive sampler's coverage×brightness multiply at the sampled
+    /// barycentrics.
+    #[test]
+    fn p4b_appearance_source_contracts() {
+        assert_eq!(SHADOW_RAYS_MSL.matches("appearance_accepts(").count(), 3,
+            "one definition + the two walker call sites (alpha-test and transmission)");
+        assert_eq!(SHADOW_RAYS_MSL.matches("appearance_coverage_brightness(").count(), 4,
+            "one definition + acceptance helper + closest-hit brightness recompute + debug_ray_query");
+        assert_eq!(SHADOW_RAYS_MSL.matches("appearance_variate(").count(), 2,
+            "one definition + the acceptance helper's single draw");
+        // Corner resolution lives in exactly one helper; the old flat-layout
+        // `primitive_id * 3` pattern exists only inside rt_triangle_corners.
+        assert_eq!(SHADOW_RAYS_MSL.matches("primitive_id * 3").count(), 3,
+            "the three corner fetches inside rt_triangle_corners, nowhere else");
+        let corners = msl_block(SHADOW_RAYS_MSL, "static uint3 rt_triangle_corners(");
+        assert_eq!(corners.matches("rt_index_at(").count(), 3);
+        for consumer in ["static float3 fetch_interpolated_normal(", "static float2 fetch_interpolated_uv(", "static float3 perturb_normal_with_map("] {
+            assert!(msl_block(SHADOW_RAYS_MSL, consumer).contains("rt_triangle_corners("),
+                "{consumer} must resolve corners through the shared helper");
+        }
+        // Emissive generation uses the same index helper (enumerate + gather).
+        let enumerate = msl_block(SHADOW_RAYS_MSL, "kernel void emissive_enumerate(");
+        assert_eq!(enumerate.matches("rt_index_at(").count(), 3);
+        let gather = msl_block(SHADOW_RAYS_MSL, "kernel void emissive_gather(");
+        assert!(gather.matches("rt_index_at(").count() == 3 && gather.contains("appearance_weights_addr"));
+        // The explicit-emitter multiply: coverage × brightness once, at the
+        // sampled barycentrics, gain from the canonical row.
+        let trace = msl_block(SHADOW_RAYS_MSL, "kernel void trace_shadow_rays(");
+        assert!(trace.contains("em_contrib *= clamp(elevel, 0.0f, 1.0f) * max(elevel, 1.0f);"));
+        // Accepted hits multiply evaluated radiance by brightness once —
+        // GI gather and reflection hit shading.
+        assert!(trace.contains("gi += throughput * (bounce_emissive + bounce_term) * gi_brightness;"));
+        assert!(trace.contains("traced = (hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term) * refl_hit_brightness;"));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! FROM THE FIXTURE INPUTS (never from production modifier code). A4's
 //! "deliberately stale CPU mirror must not affect results" is structural
 //! now — the CPU params fields are deleted; nothing CPU-side can go stale.
-//! P4b adds `rt_dynamic_coverage_and_attributes` to this file.
+//! The P4b half is `rt_dynamic_coverage_and_attributes` below.
 
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
@@ -99,6 +99,8 @@ fn flat_object(vb: &GpuBuffer, triangle_count: u32) -> RtObjectGeometry<'_> {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }
 }
 
@@ -528,5 +530,661 @@ fn rt_dynamic_emissive_gpu_geometry() {
         let passed = tracer.debug_firefly_clamp(device, &color, &depth, 8.0, 4.0, 100.0);
         assert!((passed[0] - 100.0).abs() <= 0.5,
             "GPU-stats mean lifts the floor, got {}", passed[0]);
+    }
+}
+
+// ─── P4b: appearance coverage and indexed hit attributes (A4) ────────────
+
+use manifold_gpu::raytrace::{
+    DebugRayQueryHit, DebugRayQueryRay, RtCasterParams, ShadowRayParams,
+};
+use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+
+/// CPU mirror of the raster appearance helper (`apply_appearance`,
+/// render_scene.wgsl:889): `level = gain * weight`,
+/// `coverage = clamp(level, 0, 1)`, `brightness = max(level, 1)` — the
+/// oracle the GPU fields are compared against (≤ 1e-6).
+fn raster_appearance(gain: f32, weight: f32) -> (f32, f32) {
+    let level = gain * weight;
+    (level.clamp(0.0, 1.0), level.max(1.0))
+}
+
+/// Barycentric weight interpolation — the CPU oracle for the kernel's
+/// corner fetch + barycentric mix.
+fn weight_at(weights: [f32; 3], bary: [f32; 2]) -> f32 {
+    weights[0] * (1.0 - bary[0] - bary[1]) + weights[1] * bary[0] + weights[2] * bary[1]
+}
+
+/// A ray from z=+2 straight down at `triangle_at(0.0, 1.0)`'s point with
+/// barycentrics `(u, v)`. Vertex layout: v0 = (-0.5,-0.5), v1 = (0.5,-0.5),
+/// v2 = (0, 0.5), so p = v0 + u·(1,0) + v·(0.5,1).
+fn bary_ray(bary: [f32; 2]) -> DebugRayQueryRay {
+    let px = -0.5 + bary[0] + 0.5 * bary[1];
+    let py = -0.5 + bary[1];
+    DebugRayQueryRay {
+        origin: [px, py, 2.0],
+        direction: [0.0, 0.0, -1.0],
+        min_distance: 0.0,
+        max_distance: 10.0,
+    }
+}
+
+/// plan → prepare → encode (rebuild) → commit+wait, plus the per-frame
+/// normal-source table. Returns the accel, the table slot, and the
+/// material texture list (empty for texture-less fixtures).
+fn prepare_query_scene<'a>(
+    device: &GpuDevice,
+    tracer: &MetalShadowRayTracer,
+    objects: &[RtObjectGeometry<'a>],
+) -> (RtAccel, Option<GpuBuffer>, Vec<&'a GpuTexture>) {
+    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let mut slot = None;
+    tracer.prepare_accel(device, &mut slot, plan).expect("prepare accel");
+    let mut accel = slot.expect("prepare produces an accel");
+    let mut ns_slot = None;
+    let mut ns_capacity = 0usize;
+    let textures = manifold_gpu::raytrace::ensure_normal_sources(
+        &mut ns_slot, &mut ns_capacity, device, objects,
+    );
+    let materials =
+        vec![GiMaterial::new([0.8, 0.8, 0.8], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
+    let changes = vec![RtGeometryChange::Rebuild; objects.len()];
+    let mut enc = device.create_encoder("rt-p4b-query-prepare");
+    tracer
+        .encode_accel_update(device, &mut enc, &mut accel, objects, &changes, &materials, true, true)
+        .expect("encode accel update");
+    enc.commit_and_wait_completed();
+    (accel, ns_slot, textures)
+}
+
+/// Re-write the normal-source table after an appearance change (gain or
+/// weights buffer content/identity — the property class stays nonopaque,
+//  so the resident BLAS is untouched, per the fractional-to-fractional
+/// source-table-only rule). Production does this every RT-ready frame.
+fn refresh_normal_sources(
+    device: &GpuDevice,
+    slot: &mut Option<GpuBuffer>,
+    objects: &[RtObjectGeometry<'_>],
+) {
+    let mut capacity = 0usize;
+    manifold_gpu::raytrace::ensure_normal_sources(slot, &mut capacity, device, objects);
+}
+
+fn run_ray_query(
+    device: &GpuDevice,
+    tracer: &MetalShadowRayTracer,
+    accel: &RtAccel,
+    normal_sources: &GpuBuffer,
+    rays: &[DebugRayQueryRay],
+    material_textures: Option<&[&GpuTexture]>,
+    seed_base: u32,
+) -> Vec<DebugRayQueryHit> {
+    let mut enc = device.create_encoder("rt-p4b-ray-query");
+    let hits_buf = tracer.debug_ray_query(
+        device, &mut enc, accel, normal_sources, rays, material_textures, 0, seed_base,
+    );
+    enc.commit_and_wait_completed();
+    let ptr = hits_buf.mapped_ptr().expect("hit buffer must be CPU-mapped");
+    unsafe {
+        std::slice::from_raw_parts(ptr as *const DebugRayQueryHit, rays.len()).to_vec()
+    }
+}
+
+/// A4 `rt_dynamic_coverage_and_attributes` (P4b). Weights [0, 0.5, 1] ×
+/// gains [0, 0.5, 1, 2] at specified barycentrics: the coverage/brightness
+/// fields of accepted hits match the raster formula mirror within 1e-6;
+/// coverage 0 always misses, 1 always accepts; fractional cases run 65,536
+/// fixed-seed samples with acceptance-frequency error ≤ 0.01. All walkers
+/// share the one helper (the debug query exercises the production
+/// closest-hit walk; the machine-checked walker/source contracts live in
+/// manifold-gpu's `p4b_appearance_source_contracts`).
+#[test]
+fn rt_dynamic_coverage_and_attributes() {
+    let h = harness::shared();
+    let device = &h.device;
+    let tracer = MetalShadowRayTracer::new(device);
+
+    let weights_buf = write_shared(device, &[0.0f32, 0.5, 1.0]);
+
+    // ── Section 1: formula match and acceptance distribution. One flat
+    // triangle, weights [0, 0.5, 1], one accel for all gains (weights stay
+    // wired, so the nonopaque property never flips and the BLAS stands).
+    let verts = triangle_at(0.0, 1.0);
+    let vb = write_shared(device, &verts);
+    let centroid = [1.0f32 / 3.0, 1.0f32 / 3.0]; // weight 0.5
+    let off_a = [0.1f32, 0.1];   // weight 0.15
+    let off_b = [0.45f32, 0.45]; // weight 0.675
+    let off_c = [0.1f32, 0.7];   // weight 0.75
+    for bary in [centroid, off_a, off_b, off_c] {
+        let w0 = 1.0 - bary[0] - bary[1];
+        assert!(w0 >= 0.05 && bary[0] >= 0.05 && bary[1] >= 0.05,
+            "bary {bary:?} clears A0's 0.05 edge exclusion");
+    }
+    let objects = [RtObjectGeometry {
+        appearance_weights: Some(&weights_buf),
+        appearance_gain: 1.0,
+        ..flat_object(&vb, 1)
+    }];
+    let (accel, mut ns_slot, _) = prepare_query_scene(device, &tracer, &objects);
+    let mut report_lines: Vec<String> = Vec::new();
+
+    let mut run_case = |gain: f32, bary: [f32; 2], n: usize, seed_base: u32| {
+        let objects = [RtObjectGeometry {
+            appearance_weights: Some(&weights_buf),
+            appearance_gain: gain,
+            ..flat_object(&vb, 1)
+        }];
+        refresh_normal_sources(device, &mut ns_slot, &objects);
+        let ns = ns_slot.as_ref().expect("normal sources resident");
+        let rays = vec![bary_ray(bary); n];
+        let hits = run_ray_query(device, &tracer, &accel, ns, &rays, None, seed_base);
+        let accepted = hits.iter().filter(|h| h.hit == 1).count();
+        (accepted, hits)
+    };
+
+    // Deterministic cases (64 samples each — no distribution needed):
+    // coverage 0 always misses; coverage 1 always accepts.
+    let (accepted, _) = run_case(0.0, centroid, 64, 11);
+    assert_eq!(accepted, 0, "gain 0 (level 0, coverage 0) must always miss");
+    let (accepted, hits) = run_case(2.0, centroid, 64, 12);
+    assert_eq!(accepted, 64, "gain 2 at weight 0.5 (level 1, coverage 1) must always accept");
+    for (i, hit) in hits.iter().enumerate() {
+        let (cov, bri) = raster_appearance(2.0, weight_at([0.0, 0.5, 1.0], centroid));
+        assert!((hit.coverage - cov).abs() <= 1e-6,
+            "sample {i}: coverage {} vs raster helper {cov}", hit.coverage);
+        assert!((hit.brightness - bri).abs() <= 1e-6,
+            "sample {i}: brightness {} vs raster helper {bri}", hit.brightness);
+    }
+    // HDR brightness: level 1.5 → coverage 1 (always accept), brightness 1.5.
+    let (accepted, hits) = run_case(2.0, off_c, 64, 13);
+    assert_eq!(accepted, 64, "level 1.5 (coverage clamped to 1) must always accept");
+    for (i, hit) in hits.iter().enumerate() {
+        let (cov, bri) = raster_appearance(2.0, weight_at([0.0, 0.5, 1.0], off_c));
+        assert_eq!((cov, bri), (1.0, 1.5), "raster mirror sanity");
+        assert!((hit.coverage - cov).abs() <= 1e-6, "sample {i}: coverage {}", hit.coverage);
+        assert!((hit.brightness - bri).abs() <= 1e-6,
+            "sample {i}: brightness {} vs 1.5 (HDR gain reaches RT once)", hit.brightness);
+    }
+
+    // Fractional cases: 65,536 fixed-seed samples, frequency error ≤ 0.01.
+    // Every accepted hit's coverage/brightness fields match the raster
+    // mirror within 1e-6.
+    const SAMPLES: usize = 65_536;
+    let fractional = [
+        (0.5f32, centroid, 0.25f32),
+        (1.0, centroid, 0.5),
+        (2.0, off_a, 0.3),
+        (1.0, off_b, 0.675),
+    ];
+    for (case, &(gain, bary, expect)) in fractional.iter().enumerate() {
+        let weight = weight_at([0.0, 0.5, 1.0], bary);
+        let (cov, bri) = raster_appearance(gain, weight);
+        assert!((cov - expect).abs() <= 1e-6, "oracle sanity: gain {gain} bary {bary:?}");
+        let seed_base = 1000 + case as u32;
+        let (accepted, hits) = run_case(gain, bary, SAMPLES, seed_base);
+        let freq = accepted as f32 / SAMPLES as f32;
+        assert!((freq - cov).abs() <= 0.01,
+            "gain {gain} bary {bary:?}: acceptance frequency {freq} vs coverage {cov} (seed {seed_base})");
+        for (i, hit) in hits.iter().enumerate() {
+            if hit.hit == 0 { continue; }
+            assert!((hit.coverage - cov).abs() <= 1e-6,
+                "sample {i}: coverage {} vs raster helper {cov}", hit.coverage);
+            assert!((hit.brightness - bri).abs() <= 1e-6,
+                "sample {i}: brightness {} vs raster helper {bri}", hit.brightness);
+            assert!(hit.distance.is_finite() && hit.coverage.is_finite() && hit.brightness.is_finite(),
+                "sample {i}: nonfinite channel");
+        }
+        report_lines.push(format!(
+            "fractional gain={gain} bary={bary:?} weight={weight:.4} coverage={cov:.4} brightness={bri:.4} samples={SAMPLES} accepted={accepted} freq={freq:.5} seed_base={seed_base}"
+        ));
+    }
+
+    // ── Section 2: unwired + gain 1 is the pre-P4b behavior — every ray
+    // hits, coverage/brightness read 1.0.
+    {
+        let objects = [flat_object(&vb, 1)];
+        let (accel, ns, _) = prepare_query_scene(device, &tracer, &objects);
+        let rays = vec![bary_ray(centroid); 64];
+        let hits = run_ray_query(device, &tracer, &accel, ns.as_ref().expect("normal sources"), &rays, None, 77);
+        for (i, hit) in hits.iter().enumerate() {
+            assert_eq!(hit.hit, 1, "sample {i}: plain object accepts");
+            assert_eq!((hit.coverage, hit.brightness), (1.0, 1.0),
+                "sample {i}: no appearance wired — coverage/brightness 1.0");
+        }
+    }
+
+    // ── Section 3: the material alpha-mask cutoff test stays first.
+    // 3×1 texture, alpha [0.49, 0.5, 0.6] against cutoff 0.5 (just below /
+    // equal / just above), appearance wired at coverage 1 (weights all 1,
+    // gain 1) so alpha alone decides; then gain 0 proves the appearance
+    // rejection still applies when alpha passes.
+    {
+        let mut alpha_verts = triangle_at(0.0, 1.0);
+        // UVs: the triangle maps interior points across the 3 texels
+        // (nearest sampling; uv.y irrelevant for a 1-row texture).
+        alpha_verts[0].uv = [0.05, 0.5];
+        alpha_verts[1].uv = [0.95, 0.5];
+        alpha_verts[2].uv = [0.5, 0.5];
+        let avb = write_shared(device, &alpha_verts);
+        // texel alphas 0.49 / 0.5 / 0.6 (rgb unused = 1).
+        let tex_px: [f32; 12] = [
+            1.0, 1.0, 1.0, 0.49,
+            1.0, 1.0, 1.0, 0.5,
+            1.0, 1.0, 1.0, 0.6,
+        ];
+        let alpha_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 1,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "rt-p4b-alpha",
+            mip_levels: 1,
+        });
+        device.upload_texture(&alpha_tex, unsafe {
+            std::slice::from_raw_parts(tex_px.as_ptr().cast::<u8>(), std::mem::size_of_val(&tex_px))
+        });
+        let ones_buf = write_shared(device, &[1.0f32, 1.0, 1.0]);
+        let mk_objects = |gain: f32| [RtObjectGeometry {
+            appearance_weights: Some(&ones_buf),
+            appearance_gain: gain,
+            alpha_mask: true,
+            alpha_cutoff: 0.5,
+            base_color_texture: Some(&alpha_tex),
+            ..flat_object(&avb, 1)
+        }];
+        let objects = mk_objects(1.0);
+        let (accel, ns, textures) = prepare_query_scene(device, &tracer, &objects);
+        assert_eq!(textures.len(), 1, "the alpha texture is bound at index 0");
+        // barys landing in texels 0 / 1 / 2 (uv.x 0.185 / 0.5 / 0.815).
+        let rays = [
+            bary_ray([0.1, 0.1]), // uv.x = 0.05·0.8 + 0.95·0.1 + 0.5·0.1 = 0.185 → texel 0 (below)
+            bary_ray([0.2, 0.6]), // uv.x = 0.05·0.2 + 0.95·0.2 + 0.5·0.6 = 0.5  → texel 1 (equal)
+            bary_ray([0.8, 0.1]), // uv.x = 0.05·0.1 + 0.95·0.8 + 0.5·0.1 = 0.815 → texel 2 (above)
+        ];
+        let hits = run_ray_query(device, &tracer, &accel, ns.as_ref().expect("normal sources"), &rays, Some(&textures), 78);
+        assert_eq!(hits[0].hit, 0, "alpha 0.49 < cutoff 0.5 rejects even at coverage 1");
+        assert_eq!(hits[1].hit, 1, "alpha 0.5 == cutoff 0.5 accepts (>=)");
+        assert_eq!(hits[2].hit, 1, "alpha 0.6 > cutoff 0.5 accepts");
+        for (i, hit) in hits.iter().enumerate().skip(1) {
+            assert_eq!((hit.coverage, hit.brightness), (1.0, 1.0),
+                "sample {i}: weights [1,1,1] gain 1 — full coverage");
+        }
+        // Appearance reject after alpha accept: gain 0 misses everywhere.
+        let objects0 = mk_objects(0.0);
+        let mut ns0 = None;
+        refresh_normal_sources(device, &mut ns0, &objects0);
+        let hits = run_ray_query(device, &tracer, &accel, ns0.as_ref().unwrap(), &rays, Some(&textures), 79);
+        assert!(hits.iter().all(|h| h.hit == 0),
+            "gain 0 (coverage 0) rejects even above the alpha cutoff");
+    }
+
+    // ── Section 4: indexed UV/normal — the shared index helper resolves
+    // corners for the trace path's attribute fetches. The quad's first
+    // triangle is indexed (3, 0, 1): flat-layout corner math (0, 1, 2)
+    // would interpolate a DIFFERENT normal/UV set, so a match to the
+    // indexed oracle proves the index path.
+    {
+        let quad = [
+            PackedVertex { pos: [-1.0, -1.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0, 0.0], uv: [0.0, 0.0] },
+            PackedVertex { pos: [1.0, -1.0, 0.0, 0.0], normal: [0.0, 1.0, 0.0, 0.0], uv: [1.0, 0.0] },
+            PackedVertex { pos: [1.0, 1.0, 0.0, 0.0], normal: [0.0, 0.0, 1.0, 0.0], uv: [1.0, 1.0] },
+            PackedVertex { pos: [-1.0, 1.0, 0.0, 0.0], normal: [std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0], uv: [0.0, 1.0] },
+        ];
+        // Tri 0 = (3,0,1) — centroid (-1/3,-1/3), away from the diagonal.
+        let indices: [u32; 6] = [3, 0, 1, 1, 3, 2];
+        let qvb = write_shared(device, &quad);
+        let qib = write_shared(device, &indices);
+        let mut obj = flat_object(&qvb, 2);
+        obj.index_buffer = Some(&qib);
+        let objects = [obj];
+        let (accel, ns, _) = prepare_query_scene(device, &tracer, &objects);
+        let ray = DebugRayQueryRay {
+            origin: [-1.0 / 3.0, -1.0 / 3.0, 2.0],
+            direction: [0.0, 0.0, -1.0],
+            min_distance: 0.0,
+            max_distance: 10.0,
+        };
+        let hits = run_ray_query(device, &tracer, &accel, ns.as_ref().expect("normal sources"), &[ray], None, 80);
+        let hit = hits[0];
+        assert_eq!(hit.hit, 1, "indexed triangle must hit");
+        assert_eq!(hit.primitive_id, 0, "the committed triangle is primitive 0");
+        // Indexed oracle: corners (3,0,1), bary (1/3,1/3) →
+        // n = (n3+n0+n1)/3, uv = (uv3+uv0+uv1)/3 = ((0,1)+(0,0)+(1,0))/3.
+        let s2 = std::f32::consts::FRAC_1_SQRT_2;
+        let exp_n = [ (s2 + 1.0 + 0.0) / 3.0, (s2 + 0.0 + 1.0) / 3.0, (0.0 + 0.0 + 0.0) / 3.0 ];
+        let len = (exp_n[0] * exp_n[0] + exp_n[1] * exp_n[1]).sqrt();
+        let exp_n = [exp_n[0] / len, exp_n[1] / len, 0.0];
+        let exp_uv = [1.0f32 / 3.0, 1.0 / 3.0];
+        for (got, want, name) in [
+            (hit.normal[0], exp_n[0], "normal.x"), (hit.normal[1], exp_n[1], "normal.y"),
+            (hit.normal[2], exp_n[2], "normal.z"),
+            (hit.uv[0], exp_uv[0], "uv.x"), (hit.uv[1], exp_uv[1], "uv.y"),
+        ] {
+            assert!((got - want).abs() <= 2e-4, "indexed {name}: {got} vs oracle {want}");
+        }
+        // The flat-layout answer (corners (0,1,2)) is measurably different
+        // — the index path is what produced the match above.
+        let flat_uv_x = 2.0f32 / 3.0; // ((0,0)+(1,0)+(1,1))/3
+        assert!((hit.uv[0] - flat_uv_x).abs() > 0.1,
+            "flat corner math would give uv.x {flat_uv_x} — the indexed read is distinct");
+        assert!((hit.distance - 2.0).abs() <= 1e-4, "distance {}", hit.distance);
+        assert!((hit.bary[0] - 1.0 / 3.0).abs() <= 2e-4 && (hit.bary[1] - 1.0 / 3.0).abs() <= 2e-4,
+            "bary {:?}", hit.bary);
+        report_lines.push(format!(
+            "indexed tri (3,0,1): normal={:?} (oracle {exp_n:?}) uv={:?} (oracle {exp_uv:?}) — flat would give uv.x={:.4}",
+            hit.normal, hit.uv, flat_uv_x
+        ));
+    }
+
+    // ── Section 5: structured geometry error + nonfinite input. A wired
+    // weights buffer shorter than the mesh vertex count is
+    // InvalidGeometry at plan; a NaN weight rejects every sample (never an
+    // unchecked acceptance).
+    {
+        // write_shared rounds up to 16 bytes (4 floats) — a genuinely short
+        // weights buffer needs a mesh with more than 4 vertices.
+        let two_tris = [triangle_at(0.0, 1.0), triangle_at(4.0, 1.0)].concat();
+        let vb2 = write_shared(device, &two_tris);
+        let short_weights = write_shared(device, &[1.0f32, 1.0]); // 4 floats, mesh has 6 vertices
+        let bad = [RtObjectGeometry {
+            appearance_weights: Some(&short_weights),
+            ..flat_object(&vb2, 2)
+        }];
+        match tracer.plan_accel(device, None, &bad) {
+            Err(manifold_gpu::raytrace::RtAccelError::InvalidGeometry { object, reason }) => {
+                assert_eq!(object, 0);
+                assert!(reason.contains("appearance weights"), "reason: {reason}");
+            }
+            other => panic!("a short weights buffer must fail plan_accel with InvalidGeometry, got {:?}", other.map(|_| ())),
+        }
+        let nan_weights = write_shared(device, &[f32::NAN, 0.5, 1.0]);
+        let nan_objects = [RtObjectGeometry {
+            appearance_weights: Some(&nan_weights),
+            appearance_gain: 1.0,
+            ..flat_object(&vb, 1)
+        }];
+        let (nan_accel, nan_ns, _) = prepare_query_scene(device, &tracer, &nan_objects);
+        let rays = vec![bary_ray(centroid); 64];
+        let hits = run_ray_query(device, &tracer, &nan_accel, nan_ns.as_ref().expect("normal sources"), &rays, None, 81);
+        assert!(hits.iter().all(|h| h.hit == 0),
+            "a nonfinite weight must reject every sample, never accept garbage");
+    }
+
+    // ── Section 6: current emitter appearance — the light table's baked
+    // corner weights track the weights buffer, and a weights-content change
+    // refreshes through the Reuse + emissive-changed tier (no BLAS work).
+    {
+        let em_weights = write_shared(device, &[0.25f32, 0.5, 0.75]);
+        let evb = write_shared(device, &triangle_at(0.0, 1.0));
+        let objects = [RtObjectGeometry {
+            appearance_weights: Some(&em_weights),
+            appearance_gain: 1.0,
+            ..flat_object(&evb, 1)
+        }];
+        let materials = [emissive_material([1.0, 1.0, 1.0])];
+        let mut accel = prepare_scene(device, &tracer, &objects, &materials);
+        let tris = read_triangles(&accel, 1);
+        assert_eq!((tris[0].w0, tris[0].w1, tris[0].w2), (0.25, 0.5, 0.75),
+            "gather bakes the corner weights");
+        rewrite_shared(&em_weights, &[0.5f32, 0.75, 1.0]);
+        let update_counts_before = accel.emissive_table.is_some();
+        assert!(update_counts_before);
+        // Appearance-only refresh: Reuse changes, emissive_data_changed.
+        refresh_frame(device, &tracer, &mut accel, &objects, &materials, false, true);
+        let tris = read_triangles(&accel, 1);
+        assert_eq!((tris[0].w0, tris[0].w1, tris[0].w2), (0.5, 0.75, 1.0),
+            "weights refresh reaches the baked corners — no stale emitter appearance");
+        report_lines.push("emissive corner weights: [0.25,0.5,0.75] -> refresh -> [0.5,0.75,1.0] (Reuse tier, no BLAS work)".to_string());
+    }
+
+    // ── Sections 7-9: full-dispatch radiance multipliers. Floor (the
+    // shaded receiver at y=0, identity inv_view_proj maps texels to world
+    // (x, 0, 0.3)) + ceiling quad at y=1. Camera (0, 1.8, 2) clears the
+    // ceiling on the primary ray. All RNG streams are gain-independent, so
+    // same-seed runs differ ONLY by the appearance factor.
+    let floor_verts = [
+        vertex([-2.0, 0.0, -2.0], [0.0, 0.0]),
+        vertex([2.0, 0.0, -2.0], [1.0, 0.0]),
+        vertex([2.0, 0.0, 2.0], [1.0, 1.0]),
+        vertex([-2.0, 0.0, -2.0], [0.0, 0.0]),
+        vertex([2.0, 0.0, 2.0], [1.0, 1.0]),
+        vertex([-2.0, 0.0, 2.0], [0.0, 1.0]),
+    ]
+    .map(|v| PackedVertex { normal: [0.0, 1.0, 0.0, 0.0], ..v });
+    let ceil_verts = [
+        vertex([-1.0, 1.0, -1.0], [0.0, 0.0]),
+        vertex([1.0, 1.0, -1.0], [1.0, 0.0]),
+        vertex([1.0, 1.0, 1.0], [1.0, 1.0]),
+        vertex([-1.0, 1.0, -1.0], [0.0, 0.0]),
+        vertex([1.0, 1.0, 1.0], [1.0, 1.0]),
+        vertex([-1.0, 1.0, 1.0], [0.0, 1.0]),
+    ]
+    // Vertex normals UP (data, not geometry): the sun-bounce term needs
+    // dot(hit_n, sun_dir) = 1 on the ceiling's underside hits.
+    .map(|v| PackedVertex { normal: [0.0, 1.0, 0.0, 0.0], ..v });
+    let floor_vb = write_shared(device, &floor_verts);
+    let ceil_vb = write_shared(device, &ceil_verts);
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_full_trace(
+        device: &GpuDevice,
+        tracer: &MetalShadowRayTracer,
+        floor_vb: &GpuBuffer,
+        ceil_vb: &GpuBuffer,
+        ceil_weights: Option<&GpuBuffer>,
+        ceil_gain: f32,
+        ceil_emissive: [f32; 3],
+        sun: bool,
+        width: u32,
+        gi_spp: u32,
+        refl_spp: u32,
+        label: &str,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let objects = [
+            flat_object(floor_vb, 2),
+            RtObjectGeometry {
+                appearance_weights: ceil_weights,
+                appearance_gain: ceil_gain,
+                ..flat_object(ceil_vb, 2)
+            },
+        ];
+        let materials = [
+            GiMaterial::new([0.8, 0.8, 0.8], [0.0; 3], [0.0; 4], [0.0; 4]),
+            GiMaterial::new([0.8, 0.8, 0.8], ceil_emissive, [0.0; 4], [0.0; 4]),
+        ];
+        let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+        let mut slot = None;
+        tracer.prepare_accel(device, &mut slot, plan).expect("prepare accel");
+        let mut accel = slot.expect("prepare produces an accel");
+        let mut ns_slot = None;
+        let mut ns_cap = 0usize;
+        let textures = manifold_gpu::raytrace::ensure_normal_sources(
+            &mut ns_slot, &mut ns_cap, device, &objects,
+        );
+        assert!(textures.is_empty());
+        let normal_sources = ns_slot.expect("normal sources");
+
+        let depth_px = vec![0.3f32; width as usize];
+        let depth_tex = device.create_texture(&GpuTextureDesc {
+            width, height: 1, depth: 1,
+            format: GpuTextureFormat::Depth32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "rt-p4b-depth",
+            mip_levels: 1,
+        });
+        device.upload_texture(&depth_tex, unsafe {
+            std::slice::from_raw_parts(depth_px.as_ptr().cast::<u8>(), std::mem::size_of_val(&depth_px[..]))
+        });
+        let mk_out = |format: GpuTextureFormat, name: &str| {
+            device.create_texture(&GpuTextureDesc {
+                width, height: 1, depth: 1, format,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+                label: name,
+                mip_levels: 1,
+            })
+        };
+        let out_sv = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-sv");
+        let out_sv2 = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-sv2");
+        let out_svt = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-svt");
+        let out_irr = mk_out(GpuTextureFormat::Rgba32Float, "rt-p4b-irr");
+        let out_n = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-n");
+        let out_refl = mk_out(GpuTextureFormat::Rgba32Float, "rt-p4b-refl");
+        let prefiltered_env = device.create_texture(&GpuTextureDesc {
+            width: 1, height: 1, depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "rt-p4b-env-dummy",
+            mip_levels: 1,
+        });
+        device.upload_texture(&prefiltered_env, &[0u8; 8]);
+
+        let casters = if sun {
+            vec![RtCasterParams::new([0.0, 1.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
+        } else {
+            vec![]
+        };
+        let params = ShadowRayParams::new(
+            &casters, 0, 1, [width, 1], [width, 1], 0.0, 0, gi_spp,
+            [0.0, 1.8, 2.0], IDENTITY, refl_spp, 0.6, 0.1,
+            manifold_gpu::raytrace::SVT_SLOT_NONE,
+        );
+        let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
+        let gi_materials_buffer = write_shared(device, &materials);
+
+        let mut enc = device.create_encoder(label);
+        let changes = vec![RtGeometryChange::Rebuild; objects.len()];
+        tracer
+            .encode_accel_update(device, &mut enc, &mut accel, &objects, &changes, &materials, true, true)
+            .expect("encode accel update");
+        let table = accel.emissive_table.as_ref().expect("table resident since P4a");
+        tracer.dispatch_shadow_rays(
+            &mut enc, device, &accel, &table.stats, &params, &params_buffer,
+            &gi_materials_buffer, &normal_sources, &objects, &[],
+            &depth_tex, &out_sv, &out_sv2, &out_svt, &out_irr, &out_n, &out_refl,
+            &prefiltered_env, &table.triangles, &table.aliases, false, label,
+        );
+        enc.commit_and_wait_completed();
+
+        let row_bytes = width as usize * 4 * 4;
+        let irr_buf = device.create_buffer_shared(row_bytes as u64);
+        let refl_buf = device.create_buffer_shared(row_bytes as u64);
+        let mut enc2 = device.create_encoder("rt-p4b-readback");
+        enc2.copy_texture_to_buffer(&out_irr, &irr_buf, width, 1, row_bytes as u32);
+        enc2.copy_texture_to_buffer(&out_refl, &refl_buf, width, 1, row_bytes as u32);
+        enc2.commit_and_wait_completed();
+        let read = |buf: &GpuBuffer| -> Vec<f32> {
+            let ptr = buf.mapped_ptr().expect("readback buffer must be CPU-mapped");
+            unsafe { std::slice::from_raw_parts(ptr as *const f32, row_bytes / 4).to_vec() }
+        };
+        (read(&irr_buf), read(&refl_buf))
+    }
+
+    // ── Section 7: accepted-hit brightness multiplies the GI gather's
+    // evaluated radiance ONCE. Ceiling sun-bounce term is a constant per
+    // accepted hit (albedo 0.8/π), so the gain-2/gain-1 ratio is exactly 2
+    // (not 4 — coverage is not multiplied again). gain 0.5 (coverage 0.5)
+    // halves the texel-sum ratio within tolerance (fixed seeds, Bernoulli
+    // acceptance among the identical geometric hits of the two runs).
+    {
+        let (irr1, _) = run_full_trace(device, &tracer, &floor_vb, &ceil_vb, None, 1.0, [0.0; 3], true, 256, 4, 0, "rt-p4b-gi-gain1");
+        let (irr2, _) = run_full_trace(device, &tracer, &floor_vb, &ceil_vb, None, 2.0, [0.0; 3], true, 256, 4, 0, "rt-p4b-gi-gain2");
+        let sum = |v: &[f32]| v.chunks_exact(4).map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
+        let (s1, s2) = (sum(&irr1), sum(&irr2));
+        assert!(s1 > 0.0, "gain-1 GI gather is lit (sun bounce off the ceiling)");
+        let ratio = s2 / s1;
+        assert!((ratio - 2.0).abs() <= 2e-6 * 2.0,
+            "gain 2 doubles the accepted hit's radiance exactly once: ratio {ratio} (not 4)");
+        report_lines.push(format!("gi brightness: sum(gain1)={s1:.6} sum(gain2)={s2:.6} ratio={ratio:.6} (exactly 2 = brightness once)"));
+
+        let half_weights = write_shared(device, &[0.5f32; 6]); // one per ceiling vertex (flat 2-triangle quad)
+        let (irrh, _) = run_full_trace(device, &tracer, &floor_vb, &ceil_vb, Some(&half_weights), 1.0, [0.0; 3], true, 256, 4, 0, "rt-p4b-gi-cov-half");
+        let sh = sum(&irrh);
+        let ratio = sh / s1;
+        assert!((ratio - 0.5).abs() <= 0.06,
+            "coverage 0.5 halves the gathered radiance on average: ratio {ratio} (≈4σ tolerance, fixed seeds)");
+        report_lines.push(format!("gi coverage: sum(cov=0.5)={sh:.6} ratio={ratio:.5} vs 0.5 (256 texels × 4 spp, fixed seeds)"));
+    }
+
+    // ── Section 8: explicit emitter samples multiply coverage × brightness
+    // ONCE at the sampled barycentrics (they never passed the hit test).
+    // Pure RIS term: no sun casters, empty env, gather's own bounce-0
+    // emissive substituted out. Deterministic same-seed ratios.
+    {
+        let half_weights = write_shared(device, &[0.5f32; 6]); // one per ceiling vertex (flat 2-triangle quad)
+        let run = |weights: Option<&GpuBuffer>, gain: f32, label: &str| {
+            let (irr, _) = run_full_trace(device, &tracer, &floor_vb, &ceil_vb, weights, gain, [2.0, 2.0, 2.0], false, 2, 2, 0, label);
+            irr.chunks_exact(4).map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>()
+        };
+        let base = run(None, 1.0, "rt-p4b-ris-base");
+        assert!(base > 0.0, "the RIS sampler lights the receiver");
+        let gain2 = run(None, 2.0, "rt-p4b-ris-gain2");
+        let ratio = gain2 / base;
+        assert!((ratio - 2.0).abs() <= 1e-5,
+            "emitter gain 2: coverage×brightness = 1×2 — ratio {ratio} (exactly 2, not 4)");
+        let cov_half = run(Some(&half_weights), 1.0, "rt-p4b-ris-cov-half");
+        let ratio = cov_half / base;
+        assert!((ratio - 0.5).abs() <= 1e-5,
+            "emitter weights 0.5: coverage×brightness = 0.5×1 — ratio {ratio} (exactly 0.5)");
+        let neutral = run(Some(&half_weights), 2.0, "rt-p4b-ris-neutral");
+        let ratio = neutral / base;
+        assert!((ratio - 1.0).abs() <= 1e-5,
+            "weights 0.5 × gain 2 = level 1 — ratio {ratio} (exactly 1: coverage and brightness cancel)");
+        let zero = run(None, 0.0, "rt-p4b-ris-zero");
+        assert_eq!(zero, 0.0, "emitter gain 0 (coverage 0) zeroes the sample");
+        report_lines.push(format!(
+            "emissive RIS: base={base:.6} gain2={gain2:.6} (×{:.6}) cov0.5={cov_half:.6} (×{:.6}) level1={neutral:.6} gain0={zero}",
+            gain2 / base, cov_half / base
+        ));
+    }
+
+    // ── Section 9: reflection hit shading multiplies brightness ONCE.
+    // Mirror floor (roughness 0) reflects the emissive ceiling; env/sunset
+    // to zero, so traced radiance is the ceiling's emission × brightness.
+    {
+        let run = |gain: f32, label: &str| {
+            let (_, refl) = run_full_trace(device, &tracer, &floor_vb, &ceil_vb, None, gain, [4.0, 4.0, 4.0], false, 2, 0, 1, label);
+            refl.chunks_exact(4).map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>()
+        };
+        let r1 = run(1.0, "rt-p4b-refl-gain1");
+        let r2 = run(2.0, "rt-p4b-refl-gain2");
+        assert!(r1 > 0.0, "reflection sees the emissive ceiling (hit_dist > 0 path)");
+        let ratio = r2 / r1;
+        assert!((ratio - 2.0).abs() <= 1e-5,
+            "reflection hit brightness once: ratio {ratio} (exactly 2, not 4)");
+        report_lines.push(format!("reflection brightness: gain1={r1:.6} gain2={r2:.6} ratio={ratio:.6}"));
+    }
+
+    // Numeric report (the P4b demo artifact's text half; the PNG half is
+    // the coverage acceptance map below).
+    println!("rt_dynamic_coverage_and_attributes report:");
+    for line in &report_lines {
+        println!("  {line}");
+    }
+
+    // Diagnostic PNG: the gain-1/centroid fractional case's 65,536-sample
+    // acceptance map (256×256, white = accepted) — the stochastic coverage
+    // pattern Peter can eyeball for structure.
+    {
+        let (accepted, hits) = run_case(1.0, centroid, SAMPLES, 4242);
+        assert!(accepted > 0);
+        let side = 256usize;
+        let mut img = vec![0u8; side * side * 4];
+        for (i, hit) in hits.iter().enumerate() {
+            let v = if hit.hit == 1 { 255u8 } else { 0u8 };
+            img[i * 4] = v;
+            img[i * 4 + 1] = v;
+            img[i * 4 + 2] = v;
+            img[i * 4 + 3] = 255;
+        }
+        let path = "/tmp/manifold-rt-dynamic/p4b-coverage-map.png".to_string();
+        std::fs::create_dir_all("/tmp/manifold-rt-dynamic").expect("create artifact dir");
+        image::save_buffer(&path, &img, side as u32, side as u32, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        println!("  coverage acceptance map: {path} (freq {:.5} vs coverage 0.5)", accepted as f32 / SAMPLES as f32);
     }
 }

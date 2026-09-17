@@ -142,6 +142,8 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         instances_addr: 0,
         instances_buffer: None,
         instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
     }];
 
     let tracer = MetalShadowRayTracer::new(device);

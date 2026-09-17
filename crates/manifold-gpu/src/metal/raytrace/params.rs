@@ -369,13 +369,54 @@ pub struct RtNormalSource {
     /// 8-byte alignment at offset 112 — an earlier slot would push the
     /// struct past 120 bytes (the MSL mirror declares the same order).
     pub instance_addr: u64,
+    /// SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): bindless address of the
+    /// per-vertex appearance-weight buffer (`f32` per vertex, vertex-index
+    /// addressed), or 0 when unwired (weight = 1). The kernel evaluates
+    /// `level = gain * weight`, `coverage = clamp(level, 0, 1)`,
+    /// `brightness = max(level, 1)` at hit barycentrics — the raster's
+    /// `apply_appearance` (render_scene.wgsl:889) exactly. The buffer is
+    /// GPU-resident graph output, read bindless — never CPU-copied.
+    pub appearance_weights_addr: u64,
+    /// P4b: float count in the weights buffer — validated CPU-side to equal
+    /// the mesh vertex count (`ensure_normal_sources` computes it from
+    /// `vertex_buffer` size/stride; a short buffer is a structured
+    /// `RtAccelError::InvalidGeometry` at plan/encode). The kernel treats an
+    /// out-of-range corner index as zero coverage instead of reading
+    /// unchecked. 0 with a nonzero address is invalid; 0 with a zero
+    /// address is simply unwired.
+    pub appearance_weight_count: u32,
+    /// P4b: the object's appearance gain (`u.appearance.x` in the raster).
+    /// A fractional-to-fractional gain change rewrites THIS table row only
+    /// — no BLAS work; crossing into/out of `!= 1.0` flips the descriptor
+    /// nonopaque property and rebuilds.
+    pub appearance_gain: f32,
+    /// P4b: bindless address of the object's u32 index buffer (offset zero,
+    /// the existing backend representation), or 0 = flat triangles. One
+    /// shared MSL helper (`rt_index_at`) resolves corners for normal/UV/
+    /// appearance fetch, normal-map frame derivation and emissive
+    /// generation — the trace path previously assumed flat layout.
+    pub index_base_addr: u64,
+    /// P4b: mesh vertex count from the base address onward
+    /// (`(vertex_buffer.size - vertex_offset) / vertex_stride`) — the count
+    /// the weights check above is validated against.
+    pub vertex_count: u32,
+    /// Explicit tail pad: keeps the struct at 152 with every field's offset
+    /// asserted below (the MSL mirror declares the same order).
+    pub _pad_p4b: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 120);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 152);
 // RT_INSTANCING_DESIGN.md D3: the consumed `_pad2` words become
 // object_index (108) + instance_addr (112) — asserted, not hand-counted.
+// P4b: the appended appearance/index fields — asserted the same way.
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 108);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 112);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weights_addr) == 120);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weight_count) == 128);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_gain) == 132);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, index_base_addr) == 136);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_count) == 144);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_p4b) == 148);
 
 /// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
 /// `generators::mesh_common::InstanceTransform` (32 bytes,

@@ -183,7 +183,7 @@ pub enum GpuLoadAction {
 }
 
 /// Blend factor for render pipelines.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GpuBlendFactor {
     Zero,
     One,
@@ -198,7 +198,7 @@ pub enum GpuBlendFactor {
 }
 
 /// Blend operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GpuBlendOp {
     Add,
     Subtract,
@@ -208,7 +208,7 @@ pub enum GpuBlendOp {
 }
 
 /// Blend state for a color attachment.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash)]
 pub struct GpuBlendState {
     pub src_factor: GpuBlendFactor,
     pub dst_factor: GpuBlendFactor,
@@ -264,7 +264,7 @@ pub enum GpuPrimitiveType {
 // ─── Vertex Layout ───────────────────────────────────────────────────
 
 /// Vertex attribute format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GpuVertexFormat {
     Float32,
     Float32x2,
@@ -275,7 +275,7 @@ pub enum GpuVertexFormat {
 }
 
 /// A single vertex attribute in a vertex buffer layout.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash)]
 pub struct GpuVertexAttribute {
     /// Vertex format (e.g. Float32x2 for position).
     pub format: GpuVertexFormat,
@@ -286,7 +286,7 @@ pub struct GpuVertexAttribute {
 }
 
 /// Vertex buffer layout — describes the memory layout of vertices.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub struct GpuVertexLayout {
     /// Stride in bytes between consecutive vertices.
     pub stride: u32,
