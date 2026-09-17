@@ -41,6 +41,7 @@ use manifold_core::effect_graph_def::{
 };
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
+use crate::node_graph::mesh_change::PreparedMeshRules;
 use crate::node_graph::param_binding::{ParamBinding, ParamId, ParamTarget};
 use crate::node_graph::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
 
@@ -80,6 +81,11 @@ pub struct LoadedPresetView {
     /// Without it a user-exposed slider resolves against a node the fuse
     /// collapsed away and silently goes inert once the effect re-fuses.
     pub fused_retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// Mesh-revision rules for this view's graph, keyed by generated node id
+    /// (design §3.3). Empty on canonical/unfused views; populated on fused
+    /// views by the freeze compiler (composition lands in P2b). Not
+    /// serialized — regenerated from canonical graphs after reload.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 /// Generation-stamped cache of leaked `&'static LoadedPresetView`s. Keeps
@@ -162,6 +168,7 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
         // Unfused view — no retargeting; user bindings resolve directly
         // against the canonical inner nodes.
         fused_retarget: AHashMap::default(),
+        mesh_rules: PreparedMeshRules::default(),
     })
 }
 
@@ -350,6 +357,7 @@ mod tests {
             canonical_def: Arc::new(def),
             bindings: owned_bindings(&meta).expect("ordinary graph bindings"),
             fused_retarget: AHashMap::default(),
+            mesh_rules: PreparedMeshRules::default(),
         };
 
         let routings = outer_routings_from_view(&view);

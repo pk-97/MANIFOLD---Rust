@@ -2,7 +2,7 @@
 
 <!-- index: Implementation contract for automatic ray tracing of scene-modified meshes: geometry revisions, fusion, ordered BLAS updates, emissive sampling, export, and K3 phase briefs. -->
 
-**Status:** APPROVED for implementation · 2026-09-16 · Codex lead · P0–P8 not built. Static architecture and acceptance-definition audit only; no new runtime or performance qualification.
+**Status:** IN PROGRESS · 2026-09-17 · P0–P4a landed and gate-green (P4a: GPU emissive preparation — enumerate/sort/gather/alias/stats; trace and firefly kernels read the GPU stats buffer). Next: P4b — appearance and indexed hit attributes (section 5.2). Owed: P2–P4a demo artifacts to Peter by P5.
 **Prerequisites:** existing scene-modifier foundation and native Metal RT on main. Work item: `BUG-e3p6.4`.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md), sections 5–6 and 8; repository `AGENTS.md` takes precedence over older workflow guidance.
 
@@ -394,7 +394,7 @@ All phases: fresh K3 session, read back this phase's decisions/forbidden moves b
 
 Checks below use an absolute shell variable `RT_WORKTREE` for the acquired slot. No app implementation is performed by this design-authoring task. Each phase updates its marker and this header when actually landed. No phase may claim acceptance from its own report alone: the lead reviews code and gate output, runs the required landing gate, and owns Peter's demo handoff.
 
-### P0 — Establish failing numerical witnesses (NOT STARTED)
+### P0 — Establish failing numerical witnesses (LANDED)
 
 Entry: audit base plus current `BUG-e3p6.4`; read sections 1–2 and acceptance A0–A3. Scope: new `tests/gpu_proofs/rt_dynamic_geometry.rs`, proof module registration, minimal production-helper debug ray query in `manifold-gpu`.
 
@@ -402,25 +402,25 @@ Deliver: deterministic ray-query helper and CPU triangle-intersection oracle, sm
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_baseline`; ray oracle must distinguish the two geometry states and a deliberately wrong hit result. Negative: no alternate modifier math in production, no ignored tests. Demo: numeric report and diagnostic PNG, L1 plus Peter artifact. Gesture: alternate Surface Waves phase at a held camera. This is the one baseline reproduction; do not run broad RT experiments.
 
-### P1 — Mesh revision metadata (NOT STARTED; after P0)
+### P1 — Mesh revision metadata (LANDED)
 
 Read-back: section 3.1–3.2, `bindings.rs`, `execution.rs`, `execution_plan.rs`, `effect_node.rs`, `primitive.rs`. Deliver exact traits/types, compiled rules, revision commit helper and pending propagation, including alias, recycled slots, memo/hoist, in-place and feedback cases. Existing node declarations remain conservative until catalog declarations are added. No RT behavior change yet.
 
 Gate: renderer CPU tests filtered `mesh_change_`; focused renderer clippy. Negative: no serde fields and no new identity registry/locks. Demo: none — L1. Invariants: revision uniqueness, pending/unchanged independence, metadata conservatism.
 
-### P2 — Fusion and primitive declarations (NOT STARTED; after P1)
+### P2 — Fusion and primitive declarations (LANDED)
 
 Read-back: section 3.3 and inventory. Deliver prepared-view sidecars, shared installation helper, compiler-first accessor migration, the audited declarations needed by stock modifiers and explicit conservative defaults for other catalogued mesh writers, cache invalidation, custom-WGSL conservative behavior. Use actual shader semantics, not names or equal buffer capacity. Keep all current fusion opportunities; do not insert boundaries to dodge metadata.
 
 Gate: `mesh_change_` CPU suite; `gpu_proofs_gate.py --filter rt_dynamic_fusion`; focused renderer clippy. Negative: old def-only accessor symbols absent and no serialized mesh-rule/WGSL trust markers. Demo: fused/unfused numerical report, L1 plus PNGs for Peter. Gesture: reorder two modifiers then drive the outer phase control. Acceptance requires a fused Surface Waves path to select the same eventual update class as unfused.
 
-### P3 — Caller-ordered acceleration and resident storage (NOT STARTED; after P0)
+### P3 — Caller-ordered acceleration and resident storage (LANDED)
 
 Read-back: section 4; existing `accel.rs`, tracer trait, encoder lifetime and GPU fault code. Deliver new trait/API, retained build/refit scratch and descriptors, sizing/admission hooks, safe input snapshots and completion pins; migrate all build/refit call sites. Initially all dirty mesh updates build. Preserve the currently unsupported deformation boundary until P5; this phase does not claim modifier RT completion.
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_ordering`, existing `rt_instancing` filter as selected by checks; focused gpu/renderer clippy and tests. Negative: no private AS `commit`, `waitUntilCompleted`, or CPU geometry reads introduced. Demo: deterministic same-command-buffer moving-triangle report, L1 plus artifact. Gesture: transform a single instance. Completion faults cannot become successful readiness.
 
-### P4a — Current GPU emission (NOT STARTED; after P3)
+### P4a — Current GPU emission (LANDED)
 
 Read-back: section 5.1 and existing emissive tests. Deliver GPU candidate/sort/gather/alias/stats preparation, stats-buffer consumers including firefly clamp, and descriptor/texture/resource pins. Static emissive behavior is the reference; remove CPU geometry caches, not merely their callers. Production order is shared with P3.
 

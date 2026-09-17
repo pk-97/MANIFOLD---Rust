@@ -17,15 +17,16 @@
 //! replicates the draw exactly — the ported `pcg`/`rand2` below are
 //! bit-copies of the kernel's, and the alias table for four equal-power
 //! candidates has prob 1.0/self-alias, so the drawn index is
-//! `floor(u1.x * 4)` into the candidate order [(t0,s0),(t0,s1),(t1,s0),
-//! (t1,s1)].
+//! `floor(u1.x * 4)` into the candidate order — RAYTRACING_DESIGN.md §5.1
+//! identity order (object, slot, triangle) ascending, slot-major:
+//! [(t0,s0),(t1,s0),(t0,s1),(t1,s1)].
 
 use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources, EmissiveTableStats, GiMaterial, MetalShadowRayTracer, RtCasterParams,
+    RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
@@ -221,10 +222,31 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         GiMaterial::new([0.0; 3], EMISSIVE, [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
         GiMaterial::new([0.8, 0.8, 0.8], [0.0; 3], [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
     ];
-    let accel = tracer.build_accel(device, &objects, &materials);
+    // P3 seam: plan/prepare allocate; the encode runs the GPU emissive
+    // preparation (enumerate → sort → gather → alias → stats, P4a) on its
+    // own committed encoder so the AS and the light table are ready well
+    // before the dispatch below.
+    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
+    {
+        let mut enc_build = device.create_encoder("rt-emissive-instancing-build");
+        let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+        tracer
+            .encode_accel_update(device, &mut enc_build, &mut accel, &objects, &changes, &materials, true, true)
+            .expect("encode accel update");
+        enc_build.commit_and_wait_completed();
+    }
     let table = accel.emissive_table.as_ref().expect("emissive object must build a light table");
-    assert!(table.entries_are_local, "wired instances => local-space emissive entries (D8)");
-    assert_eq!(table.entry_count, 4, "2 triangles x 2 slots = 4 candidates (D8)");
+    // P4a: count/local-flag/mean live in the GPU-written stats buffer —
+    // mapped after commit+wait, same readback discipline as triangles.
+    let table_stats = unsafe {
+        (table.stats.mapped_ptr().expect("stats buffer must be shared") as *const EmissiveTableStats)
+            .read_unaligned()
+    };
+    assert_eq!(table_stats.entries_are_local, 1, "wired instances => local-space emissive entries (D8)");
+    assert_eq!(table_stats.entry_count, 4, "2 triangles x 2 slots = 4 candidates (D8)");
 
     // D11 tables + per-slot gi materials (N + Σ = 2 + 3 = 5 rows).
     let mut nss = None;
@@ -301,13 +323,9 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         0,
         0.6,
         0.1,
-        table.mean_power,
-        table.entry_count,
-        table.total_area,
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     )
-    .with_slot_row_base(objects.len() as u32)
-    .with_emissive_entries_local(table.entries_are_local);
+    .with_slot_row_base(objects.len() as u32);
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     let mut encoder = device.create_encoder("rt-emissive-instancing");
@@ -315,6 +333,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         &mut encoder,
         device,
         &accel,
+        &table.stats,
         &params,
         &params_buffer,
         &gi_buffer,
@@ -365,15 +384,15 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     );
 
     // ─── CPU oracle: replicate the draw and the D8 estimator exactly ───
-    // Candidate order from build_emissive_table: per triangle, per slot:
-    // [(t0,s0),(t0,s1),(t1,s0),(t1,s1)] — all four with equal local power
-    // (same triangle area, same luma), so the alias is prob-1.0 self-alias
-    // and the drawn index is floor(u1.x * 4).
+    // Candidate order: §5.1 identity order (object, slot, triangle)
+    // ascending, slot-major — [(t0,s0),(t1,s0),(t0,s1),(t1,s1)] — all four
+    // with equal local power (same triangle area, same luma), so the alias
+    // is prob-1.0 self-alias and the drawn index is floor(u1.x * 4).
     let tid = [4u32, 0u32];
     let u1 = rand2(tid, 0, 700);
     let i = ((u1[0] * 4.0) as u32).min(3);
-    let tri = (i / 2) as usize; // triangle index (2 tris)
-    let slot = (i % 2) as usize; // slot index
+    let slot = (i / 2) as usize; // slot index (2 slots, slot-major)
+    let tri = (i % 2) as usize; // triangle index (2 tris)
     let base = tri * 3;
     let local = |k: usize| EMISSIVE_QUAD[base + k].pos;
     // Translation-only slot: world = local + slot translation.

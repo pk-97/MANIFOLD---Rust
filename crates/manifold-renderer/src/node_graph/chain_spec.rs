@@ -86,6 +86,7 @@ pub fn splice_def_into_chain(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     relight: Option<&RelightParams>,
+    mesh_rules: &crate::node_graph::mesh_change::PreparedMeshRules,
 ) -> Option<SpliceResult> {
     let augmented;
     let def = if let Some(params) = relight {
@@ -112,6 +113,7 @@ pub fn splice_def_into_chain(
         BoundaryHandling::Splice {
             source_endpoint: source,
         },
+        mesh_rules,
     ) {
         Ok(i) => i,
         Err(e) => {

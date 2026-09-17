@@ -6,15 +6,20 @@
 //!    fixture with known triangle areas, emissive luma values, and powers.
 //!    Verifies per-entry area, power, alias-table validity, truncation
 //!    order, mean power, and that zero-emissive objects are excluded.
-//! 2. `emissive_table_none_when_all_zero_emissive` — fixture where every
-//!    object has black emissive; table must be `None`.
+//! 2. `emissive_table_zero_stats_when_all_zero_emissive` — fixture where
+//!    every object has black emissive; the table's GPU stats must read
+//!    entry_count 0.
 //!
-//! No GPU dispatch — `build_emissive_table` is pure CPU-side. The shared
-//! device is only needed for `create_buffer_shared`.
+//! P4a: the table is prepared by the production GPU kernels
+//! (`MetalShadowRayTracer::debug_encode_emissive_table` — enumerate →
+//! radix sort → gather → alias → stats, the same dispatches the shared AS
+//! update path runs). The CPU-side builder is deleted; count/mean/area
+//! assertions read the GPU-written `EmissiveTableStats` buffer.
 
 use manifold_gpu::raytrace::{
-    build_emissive_table, EmissiveAliasEntry, EmissiveTriangleGpu, GiMaterial,
-    RtObjectGeometry, MAX_RT_EMISSIVE_TRIANGLES,
+    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
+    MetalShadowRayTracer, RtAccel, RtObjectGeometry, ShadowRayTracer,
+    MAX_RT_EMISSIVE_TRIANGLES,
 };
 use manifold_gpu::GpuDevice;
 
@@ -68,6 +73,36 @@ fn cpu_triangle_area(v0: [f32; 3], v1: [f32; 3], v2: [f32; 3]) -> f32 {
     } else {
         0.5 * mag2.sqrt()
     }
+}
+
+/// P4a: run the production GPU emissive preparation on this fixture —
+/// plan/prepare an `RtAccel`, then `debug_encode_emissive_table` on a
+/// committed encoder. Returns the tracer, the accel (table resident), and
+/// the mapped GPU stats; callers map `table.triangles`/`table.aliases`
+/// for entry-level assertions.
+fn gpu_prepare_emissive_table(
+    device: &GpuDevice,
+    objects: &[RtObjectGeometry<'_>],
+    materials: &[GiMaterial],
+) -> (MetalShadowRayTracer, RtAccel, EmissiveTableStats) {
+    let tracer = MetalShadowRayTracer::new(device);
+    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
+    let mut encoder = device.create_encoder("rt-emissive-table-proof");
+    tracer
+        .debug_encode_emissive_table(device, &mut encoder, &mut accel, objects, materials)
+        .expect("encode emissive table");
+    encoder.commit_and_wait_completed();
+    let table = accel.emissive_table.as_ref().expect("encode ensures the table");
+    let stats_ptr = table.stats.mapped_ptr().expect("stats buffer must be shared");
+    // SAFETY: `EmissiveTableStats` is `#[repr(C)]` all-POD, 16 bytes — the
+    // buffer is exactly one struct wide.
+    let stats = unsafe { (stats_ptr as *const EmissiveTableStats).read_unaligned() };
+    (tracer, accel, stats)
 }
 
 fn rt_object_geom<'a>(
@@ -171,10 +206,10 @@ fn emissive_table_contents_match_cpu_oracle() {
         GiMaterial::new([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive blue
     ];
 
-    let table = build_emissive_table(device, &objects, &materials)
-        .expect("table should exist when some objects have emissive");
+    let (_tracer, accel, stats) = gpu_prepare_emissive_table(device, &objects, &materials);
+    let table = accel.emissive_table.as_ref().expect("table resident");
 
-    assert_eq!(table.entry_count, 4, "4 triangles from 3 emissive objects");
+    assert_eq!(stats.entry_count, 4, "4 triangles from 3 emissive objects");
 
     // Read back the GPU buffers.
     let tri_ptr = table
@@ -189,13 +224,13 @@ fn emissive_table_contents_match_cpu_oracle() {
     let triangles: &[EmissiveTriangleGpu] = unsafe {
         std::slice::from_raw_parts(
             tri_ptr as *const EmissiveTriangleGpu,
-            table.entry_count as usize,
+            stats.entry_count as usize,
         )
     };
     let aliases: &[EmissiveAliasEntry] = unsafe {
         std::slice::from_raw_parts(
             alias_ptr as *const EmissiveAliasEntry,
-            table.entry_count as usize,
+            stats.entry_count as usize,
         )
     };
 
@@ -223,10 +258,10 @@ fn emissive_table_contents_match_cpu_oracle() {
             aliases[i].prob
         );
         assert!(
-            aliases[i].alias < table.entry_count,
+            aliases[i].alias < stats.entry_count,
             "entry {i}: alias {} out of range [0, {})",
             aliases[i].alias,
-            table.entry_count
+            stats.entry_count
         );
     }
 
@@ -254,23 +289,27 @@ fn emissive_table_contents_match_cpu_oracle() {
         "total power {total_power:.4} != expected {expected_total:.4}"
     );
 
-    // Mean power verification.
+    // Mean power verification — the GPU stats buffer's value against the
+    // CPU-computed expectation (assertion semantics unchanged from the
+    // CPU-built table era).
     let expected_mean = expected_total / 4.0;
     assert!(
-        (table.mean_power - expected_mean).abs() < 0.001,
-        "mean power {:.4} != expected {:.4}", table.mean_power, expected_mean
+        (stats.mean_power - expected_mean).abs() < 0.001,
+        "mean power {:.4} != expected {:.4}", stats.mean_power, expected_mean
     );
 
     // Verify truncation: with only 4 entries, none should be truncated
     // (MAX_RT_EMISSIVE_TRIANGLES is 4096 — far above our count).
-    assert!(table.entry_count <= MAX_RT_EMISSIVE_TRIANGLES);
+    assert!(stats.entry_count <= MAX_RT_EMISSIVE_TRIANGLES);
 }
 
-/// ─── Proof 2: zero-emissive scene → None ─────────────────────────
+/// ─── Proof 2: zero-emissive scene → zero-stats table ─────────────
 ///
-/// Fixture: single object, black emissive (0,0,0). The table must be None.
+/// Fixture: single object, black emissive (0,0,0). P4a keeps a resident
+/// table for every prepared accel — the GPU stats must read entry_count 0
+/// (the old contract returned `None` instead of a table).
 #[test]
-fn emissive_table_none_when_all_zero_emissive() {
+fn emissive_table_zero_stats_when_all_zero_emissive() {
     let h = harness::shared();
     let device = &h.device;
 
@@ -289,11 +328,16 @@ fn emissive_table_none_when_all_zero_emissive() {
         [0.0, 0.0, 0.0, 0.0],
     )];
 
-    let table = build_emissive_table(device, &objects, &materials);
+    let (_tracer, accel, stats) = gpu_prepare_emissive_table(device, &objects, &materials);
     assert!(
-        table.is_none(),
-        "table should be None when no object has non-black emissive"
+        accel.emissive_table.is_some(),
+        "P4a: the table is resident from first preparation onward"
     );
+    assert_eq!(
+        stats.entry_count, 0,
+        "stats entry_count must be 0 when no object has non-black emissive"
+    );
+    assert_eq!(stats.mean_power, 0.0, "zero-emission scene has zero mean power");
 }
 
 /// ─── Proof 3: truncation boundary ─────────────────────────────────
@@ -328,8 +372,25 @@ fn emissive_table_truncates_at_cap() {
     }
     let buf = write_shared_buffer(device, &verts);
 
-    // Each "object" is one quad (2 triangles). Use the same buffer with
-    // offsets to simulate separate objects.
+    // plan_accel validates flat (non-indexed) geometry as triangle_count*3
+    // vertices per object; a real quad is 4 vertices + a 6-entry index
+    // buffer. Share one index buffer across all quad objects — indices are
+    // relative to each object's vertex_offset.
+    let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    let ib = device.create_buffer_shared(std::mem::size_of_val(&indices) as u64);
+    let ib_ptr = ib
+        .mapped_ptr()
+        .expect("shared buffer must expose a mapped pointer");
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            indices.as_ptr().cast::<u8>(),
+            ib_ptr,
+            std::mem::size_of_val(&indices),
+        );
+    }
+
+    // Each "object" is one indexed quad (2 triangles). Use the same buffers
+    // with per-object vertex offsets to simulate separate objects.
     let stride = std::mem::size_of::<PosVertex>() as u32;
     let mut objects: Vec<RtObjectGeometry> = Vec::with_capacity(n_quads);
     for i in 0..n_quads {
@@ -337,8 +398,8 @@ fn emissive_table_truncates_at_cap() {
             vertex_buffer: &buf,
             vertex_stride: stride,
             vertex_offset: (i * 4 * stride as usize) as u32,
-            index_buffer: None,
-            triangle_count: 2, // 4 verts → 2 triangles
+            index_buffer: Some(&ib),
+            triangle_count: 2, // 4 verts + 6 indices → 2 triangles
             transform: IDENTITY,
             normal_offset: 0,
             uv_offset: 0,
@@ -368,18 +429,17 @@ fn emissive_table_truncates_at_cap() {
         ));
     }
 
-    let table = build_emissive_table(device, &objects, &materials)
-        .expect("table should exist");
+    let (_tracer, _accel, stats) = gpu_prepare_emissive_table(device, &objects, &materials);
 
     assert_eq!(
-        table.entry_count, MAX_RT_EMISSIVE_TRIANGLES,
+        stats.entry_count, MAX_RT_EMISSIVE_TRIANGLES,
         "table must truncate at MAX_RT_EMISSIVE_TRIANGLES ({}), got {}",
-        MAX_RT_EMISSIVE_TRIANGLES, table.entry_count
+        MAX_RT_EMISSIVE_TRIANGLES, stats.entry_count
     );
 
     // Verify mean power is valid (>0 since all entries have positive power).
     assert!(
-        table.mean_power > 0.0,
+        stats.mean_power > 0.0,
         "mean power must be positive for emissive scene"
     );
 }

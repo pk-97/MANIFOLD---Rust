@@ -128,21 +128,17 @@ pub struct ShadowRayParams {
     pub refl_spp: u32,
     pub refl_max_roughness: f32,
     pub refl_rough_band: f32,
-    /// RS-B (RAYTRACING_DESIGN.md section 15.2 RS8): per-sample firefly cap
-    /// anchor — the emissive table's CPU-computed mean power. Must precede
-    /// `_pad_refl` to match MSL field order (emissive fields BEFORE padding).
-    pub emissive_table_mean_power: f32,
-    /// RS-C: number of valid entries in the emissive table/alias buffers.
-    /// 0 = no emissive geometry — the sampler kernel block is skipped.
-    pub emissive_table_count: u32,
-    /// RS-C: total world-space area (in world units²) of all emissive
-    /// triangles in the table. The RIS estimator's geometry weight uses
-    /// this as the PDF correction factor for uniform area sampling.
-    pub emissive_table_total_area: f32,
+    /// SCENE_MODIFIER_RT_DESIGN.md §5.1 (P4a): the CPU-authoritative emissive
+    /// stats (`emissive_table_mean_power`/`_count`/`_total_area` and
+    /// `emissive_entries_are_local`) are DELETED — the trace and firefly
+    /// kernels read the GPU-written 16-byte `EmissiveTableStats` buffer
+    /// (buffer(9)) instead. The explicit pad below keeps `inv_view_proj`
+    /// at 336 and the total at 416.
     /// RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): index of the designated
     /// sun caster whose rgb transmission tint fills `out_svt`;
     /// SVT_SLOT_NONE = no designated sun.
     pub svt_slot: u32,
+    pub _pad_emissive: [u32; 3],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
     /// RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows in
@@ -153,16 +149,10 @@ pub struct ShadowRayParams {
     /// identical copies); production sets it to the object count via
     /// [`ShadowRayParams::with_slot_row_base`].
     pub slot_row_base: u32,
-    /// RT_INSTANCING_DESIGN.md D8: non-zero when the emissive table
-    /// entries are LOCAL-space (instanced mode — the kernel composes each
-    /// entry's world triangle from the TLAS descriptor buffer and weights
-    /// by per-entry true world area). Zero = the D7 fast path (entries
-    /// world-space, the pre-instancing data path). `new()` defaults 0;
-    /// production sets it from `EmissiveLightTable::entries_are_local`.
-    pub emissive_entries_are_local: u32,
     /// Alignment pad to the 16-byte multiple the MSL mirror rounds to
-    /// (float4x4 member): 400 + 4 + 4 + 8 = 416.
-    pub _pad_slot: [u32; 2],
+    /// (float4x4 member): 400 + 4 + 12 = 416. P4a: the D8
+    /// `emissive_entries_are_local` word moved into the GPU stats buffer.
+    pub _pad_slot: [u32; 3],
 }
 
 /// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
@@ -195,9 +185,6 @@ impl ShadowRayParams {
         refl_spp: u32,
         refl_max_roughness: f32,
         refl_rough_band: f32,
-        emissive_table_mean_power: f32,
-        emissive_table_count: u32,
-        emissive_table_total_area: f32,
         svt_slot: u32,
     ) -> Self {
         let caster_count = casters.len().min(MAX_RT_CASTERS) as u32;
@@ -219,14 +206,11 @@ impl ShadowRayParams {
             refl_spp,
             refl_max_roughness,
             refl_rough_band,
-            emissive_table_mean_power,
-            emissive_table_count,
-            emissive_table_total_area,
             svt_slot,
+            _pad_emissive: [0; 3],
             inv_view_proj,
             slot_row_base: 0,
-            emissive_entries_are_local: 0,
-            _pad_slot: [0; 2],
+            _pad_slot: [0; 3],
         }
     }
 
@@ -236,15 +220,6 @@ impl ShadowRayParams {
     /// discipline as `AccumulateParams`' flag setters.
     pub fn with_slot_row_base(mut self, base: u32) -> Self {
         self.slot_row_base = base;
-        self
-    }
-
-    /// RT_INSTANCING_DESIGN.md D8: set when the emissive table entries are
-    /// local-space (instanced mode) — the kernel composes world positions
-    /// from the TLAS descriptor buffer instead of reading them from the
-    /// entries.
-    pub fn with_emissive_entries_local(mut self, local: bool) -> Self {
-        self.emissive_entries_are_local = local as u32;
         self
     }
 }
@@ -301,10 +276,10 @@ impl GiMaterial {
 // RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
 // (offset 400) with 12 bytes of pad — 416 total, a 16-byte multiple on the
 // MSL side (float4x4 member alignment) matching this side's 416 exactly.
-// D8: the first pad word became emissive_entries_are_local (offset 404).
+// P4a: the D8 emissive_entries_are_local word (was 404) moved into the GPU
+// stats buffer; the words are pad again.
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, emissive_entries_are_local) == 404);
 const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless

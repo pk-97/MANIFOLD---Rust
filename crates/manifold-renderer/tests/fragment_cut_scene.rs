@@ -140,7 +140,7 @@ fn cut_partition_controls_update_motion_and_map_without_reprepare() {
             host_metadata.bindings.push(binding);
         }
         let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
-        let mut graph = prepared.def.clone().into_graph(&registry).unwrap();
+        let mut graph = prepared.def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         let writes = PreparedGraphValueWrites::prepare(
             &owner,
             &prepared.routes,
@@ -207,7 +207,7 @@ fn mixed_fragment_wave_and_mask_stack_shares_cut_maps() {
     prepared
         .def
         .clone()
-        .into_graph(&registry)
+        .into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default())
         .expect("mixed stack has valid typed wires");
     let incoming = |id, port: &str| {
         prepared
@@ -269,7 +269,7 @@ fn legacy_cut_preparation_is_idempotent_and_keeps_inner_controls_live() {
         prepared.def, second.def,
         "derived preparation must be an exact no-op"
     );
-    let mut graph = prepared.def.clone().into_graph(&registry).unwrap();
+    let mut graph = prepared.def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     let writes =
         PreparedGraphValueWrites::prepare(&owner, &prepared.routes, &graph, &Default::default())
             .unwrap();

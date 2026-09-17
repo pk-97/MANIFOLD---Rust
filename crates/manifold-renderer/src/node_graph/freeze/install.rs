@@ -63,8 +63,12 @@ use manifold_core::effect_graph_def::{
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
 use crate::node_graph::freeze::markers::Marker;
-use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
+use crate::node_graph::freeze::region::{Region, RegionInput, RegionMember, partition_regions, region_port_is_member};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
+use crate::node_graph::mesh_change::{
+    MeshAspect, MeshDependency, MeshRevisionRule, PreparedMeshOutputRule,
+    PreparedMeshRevisionRule, PreparedMeshRules,
+};
 use crate::node_graph::ports::PortType;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::param_binding::ParamConvert;
@@ -103,7 +107,7 @@ pub fn freeze_enabled() -> bool {
 ///
 /// Note there is no `has_override` veto: an edited/created graph is no longer
 /// special-cased to unfused. Its *content* is fused on demand via
-/// [`fused_view_for`] / [`fused_generator_def_for`], keyed by the def itself —
+/// [`fused_view_for`] / [`fused_generator_view_for`], keyed by the def itself —
 /// so it fuses on editor-close exactly like a shipped shape. While the editor is
 /// open it's the watched target, which `is_watched` already keeps unfused.
 pub fn should_render_fused(is_watched: bool) -> bool {
@@ -158,6 +162,7 @@ fn fuse_view_parts(
     let FusedDef {
         def: fused_def,
         retarget,
+        mesh_rules,
         ..
     } = fused;
     Some(LoadedPresetView {
@@ -169,6 +174,7 @@ fn fuse_view_parts(
         // fuse) onto the fused node — the same retarget the static bindings
         // above already went through.
         fused_retarget: retarget,
+        mesh_rules,
     })
 }
 
@@ -190,6 +196,13 @@ fn fuse_view_parts(
 // future shared-cache upgrade rides along with the background-worker step.
 // ===========================================================================
 
+/// Mesh-rule schema revision for compiled fusion cache keys (design §3.3):
+/// cached fused views/defs/segments carry a `mesh_rules` sidecar, so the key
+/// must move when the sidecar's shape or population policy changes even
+/// though the sidecar is not serialized into the def the key hashes. 1 = P2a
+/// empty maps everywhere; 2 = fusion composes member declarations.
+const MESH_RULE_SCHEMA: u32 = 2;
+
 /// Structural content key for a def: topology + node configs + baked (non-
 /// exposed) param values. Deterministic because every map in `EffectGraphDef` is
 /// a `BTreeMap` and every list a `Vec`, so `serde_json` is a stable total
@@ -203,6 +216,7 @@ fn fuse_view_parts(
 pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
+    MESH_RULE_SCHEMA.hash(&mut h);
     // Normalize away the purely-cosmetic fields (editor canvas position, node
     // title) before hashing: neither affects the compiled kernel, so a node
     // drag or rename must not perturb the key and force a spurious re-fuse.
@@ -247,6 +261,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
 pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
+    MESH_RULE_SCHEMA.hash(&mut h);
     let mut normalized = def.clone();
     clear_cosmetic_fields(&mut normalized.nodes);
     // Normalize binding metadata for effects only
@@ -413,10 +428,7 @@ fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
 /// generator bindings would lose this metadata at runtime. Effects don't read
 /// bindings from the cached def — they flow through `ResolvedBinding::from_static`
 /// at slot-build time — so effects use `effect_def_content_key`.
-pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDef>> {
-    fused_generator_view_for(def).map(|view| Arc::clone(&view.def))
-}
-
+///
 /// The render definition and authored-leaf uniform routes are one cached
 /// result. Runtime value edits need these routes after members fuse away.
 pub struct FusedGeneratorView {
@@ -425,6 +437,10 @@ pub struct FusedGeneratorView {
     /// Every fused-away authored node, including parameterless atoms, mapped
     /// to the generated fused region node that evaluates it.
     pub node_retarget: AHashMap<NodeId, NodeId>,
+    /// Composed mesh-revision rules for the fused graph, keyed by generated
+    /// node id (design §3.3). P2a populates an empty map; rule composition
+    /// lands in P2b. Not serialized — owned by this prepared view only.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 pub fn fused_generator_view_for(def: &EffectGraphDef) -> Option<Arc<FusedGeneratorView>> {
@@ -654,6 +670,10 @@ pub struct SegmentView {
     /// user-binding repoint map. Chain build prefixes a user binding's target
     /// with its card's namespace before the lookup.
     pub retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// Composed mesh-revision rules for the fused segment, keyed by generated
+    /// node id with the cards' existing `c{i}.` prefixes (design §3.3). P2a
+    /// populates an empty map; rule composition lands in P2b. Not serialized.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 /// Lookup outcome for a segment this frame.
@@ -688,6 +708,7 @@ pub fn chain_fusion_enabled() -> bool {
 pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
+    MESH_RULE_SCHEMA.hash(&mut h);
     cards.len().hash(&mut h);
     for (def, _) in cards {
         effect_def_content_key(def).hash(&mut h);
@@ -1123,11 +1144,12 @@ pub(crate) fn compile_segment_view(
         card_bindings.push(retarget_bindings(&prefixed, &fused.retarget, &surviving)?);
     }
 
-    let FusedDef { def, retarget, .. } = fused;
+    let FusedDef { def, retarget, mesh_rules, .. } = fused;
     Some(Arc::new(SegmentView {
         def,
         card_bindings,
         retarget,
+        mesh_rules,
     }))
 }
 
@@ -1160,40 +1182,32 @@ pub(crate) fn seed_segment_cache_for_test(
 // modulating after its atom folds into a kernel.
 // ===========================================================================
 
-/// Fused generator def for a generator *type* — the canonical (shipped) shape.
-/// Thin wrapper over the content-keyed [`fused_generator_def_for`]: parse the
+/// Fused generator view for a generator *type* — the canonical (shipped) shape.
+/// Thin wrapper over the content-keyed [`fused_generator_view_for`]: parse the
 /// bundled preset and route it through the same cache edited generator defs use.
 /// `None` for any generator whose canonical graph has no fusable region, or whose
 /// modulation bindings can't be retargeted (stranded) — either way it renders
 /// unfused, always correct. Mirrors [`fused_view_by_id`].
-pub fn fused_generator_def_by_id(id: &PresetTypeId) -> Option<Arc<EffectGraphDef>> {
+pub fn fused_generator_view_by_id(id: &PresetTypeId) -> Option<Arc<FusedGeneratorView>> {
     let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
     let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
-    fused_generator_def_for(&def)
+    fused_generator_view_for(&def)
 }
 
 /// Fuse a generator's canonical def + retarget its `preset_metadata.bindings`
 /// onto the fused nodes. `None` if nothing fuses or a binding strands. The result
 /// loads through the same `from_def` path as the unfused preset — only the def
 /// changed.
-pub fn fuse_generator_def(
+pub fn fuse_generator_view(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-) -> Option<EffectGraphDef> {
-    fuse_generator_def_masked(def, registry, None)
+) -> Option<FusedGeneratorView> {
+    fuse_generator_view_masked(def, registry, None)
 }
 
-/// [`fuse_generator_def`] with the perf gate's region mask — see
+/// [`fuse_generator_view`] with the perf gate's region mask — see
 /// [`fuse_canonical_def_masked`].
-pub(crate) fn fuse_generator_def_masked(
-    def: &EffectGraphDef,
-    registry: &PrimitiveRegistry,
-    region_mask: Option<&[bool]>,
-) -> Option<EffectGraphDef> {
-    fuse_generator_view_masked(def, registry, region_mask).map(|view| Arc::unwrap_or_clone(view.def))
-}
-
-fn fuse_generator_view_masked(
+pub(crate) fn fuse_generator_view_masked(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     region_mask: Option<&[bool]>,
@@ -1222,6 +1236,7 @@ fn fuse_generator_view_masked(
         def: Arc::new(out_def),
         retarget: fused.retarget,
         node_retarget: fused.node_retarget,
+        mesh_rules: fused.mesh_rules,
     })
 }
 
@@ -1336,6 +1351,11 @@ pub(crate) struct FusedDef {
     /// of these ports to the SAME space; any drift rejects the fusion (renders
     /// unfused), so element-space preservation is an installed invariant.
     pub expected_spaces: Vec<(u32, String, ElementSpace)>,
+    /// Composed mesh-revision rules for the fused graph, keyed by generated
+    /// node id (design §3.3). P2a populates an empty map; rule composition
+    /// lands in P2b. Not serialized — owned by the prepared views built from
+    /// this def.
+    pub mesh_rules: PreparedMeshRules,
 }
 
 /// `node.array_feedback`'s stable type id — the head of a buffer in-place
@@ -1548,6 +1568,163 @@ fn resolve_dispatch_count_field(
 /// express a region's params, body, or wiring aborts the whole rewrite.
 // Live callers all pass a mask now; the unmasked form remains the proof/test
 // surface (every oracle drives fusion through it).
+/// §3.3 substitution: expand one member's declared revision rule into
+/// region-external terms for the fused node's sidecar. Internal dependencies
+/// recurse into the producing member's rule (`Written` dominates, `Fixed`
+/// contributes nothing); external leaves rename to the emitted `src_<slot>`
+/// port. Anything the substitution can't express — a dependency naming a port
+/// fusion doesn't thread, an unwired/virtual input, a multi-output producer
+/// reached without its port name — degrades the whole aspect to `Written`
+/// (D1's conservative rebuild, never a wrong refit). Recursion is acyclic:
+/// region and chain inputs only reference earlier members in topo order, the
+/// invariant the codegen's register threading already relies on.
+fn substitute_mesh_rule(
+    all_members: &[&RegionMember],
+    node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
+    is_buffer: bool,
+    idx: usize,
+    rule: &MeshRevisionRule<'_>,
+) -> PreparedMeshRevisionRule {
+    let MeshRevisionRule::Dependencies(deps) = rule else {
+        return match rule {
+            MeshRevisionRule::Written => PreparedMeshRevisionRule::Written,
+            MeshRevisionRule::Fixed => PreparedMeshRevisionRule::Fixed,
+            MeshRevisionRule::Dependencies(_) => unreachable!(),
+        };
+    };
+    // The member's region-threaded input ports, aligned with `member.inputs`
+    // by the same filter `build_region` used.
+    let ports: Vec<&str> = node_keepalive[idx]
+        .inputs()
+        .iter()
+        .filter(|p| region_port_is_member(&p.ty, is_buffer))
+        .map(|p| p.name.as_ref())
+        .collect();
+    let member = all_members[idx];
+    let mut leaves: Vec<MeshDependency> = Vec::new();
+    for dep in deps.iter() {
+        let Some(pos) = ports.iter().position(|n| *n == dep.input.as_ref()) else {
+            return PreparedMeshRevisionRule::Written;
+        };
+        match &member.inputs[pos] {
+            RegionInput::External(e) => leaves.push(MeshDependency {
+                input: std::borrow::Cow::Owned(format!("src_{e}")),
+                aspect: dep.aspect,
+            }),
+            RegionInput::Member(doc) | RegionInput::MemberPort(doc, _) => {
+                let Some(pidx) = all_members.iter().position(|m| m.doc_id == *doc) else {
+                    return PreparedMeshRevisionRule::Written;
+                };
+                let port_name: String = match &member.inputs[pos] {
+                    RegionInput::MemberPort(_, p) => p.clone(),
+                    _ => {
+                        let arr: Vec<&str> = node_keepalive[pidx]
+                            .outputs()
+                            .iter()
+                            .filter(|o| matches!(o.ty, PortType::Array(_)))
+                            .map(|o| o.name.as_ref())
+                            .collect();
+                        if arr.len() != 1 {
+                            return PreparedMeshRevisionRule::Written;
+                        }
+                        arr[0].to_string()
+                    }
+                };
+                match expand_member_aspect(all_members, node_keepalive, is_buffer, pidx, &port_name, dep.aspect) {
+                    PreparedMeshRevisionRule::Written => return PreparedMeshRevisionRule::Written,
+                    PreparedMeshRevisionRule::Fixed => {}
+                    PreparedMeshRevisionRule::Dependencies(inner) => leaves.extend(inner),
+                }
+            }
+            // Unwired can't occur in a buffer region (build_region drops it);
+            // Virtual chains are texture-only. Both degrade conservatively.
+            _ => return PreparedMeshRevisionRule::Written,
+        }
+    }
+    let aspect_ord = |a: MeshAspect| match a {
+        MeshAspect::Topology => 0u8,
+        MeshAspect::Positions => 1,
+        MeshAspect::Content => 2,
+    };
+    leaves.sort_by(|a, b| {
+        a.input
+            .cmp(&b.input)
+            .then_with(|| aspect_ord(a.aspect).cmp(&aspect_ord(b.aspect)))
+    });
+    leaves.dedup_by(|a, b| a.input == b.input && a.aspect == b.aspect);
+    // An empty list is Fixed (§3.1) — normalize so downstream never sees both.
+    if leaves.is_empty() {
+        PreparedMeshRevisionRule::Fixed
+    } else {
+        PreparedMeshRevisionRule::Dependencies(leaves)
+    }
+}
+
+/// One internal hop of §3.3 substitution: the producing member's rule for
+/// `aspect` of `port`, itself substituted into region-external terms. A
+/// content dependency on an internal value is `Written` — content revises on
+/// every actual write.
+fn expand_member_aspect(
+    all_members: &[&RegionMember],
+    node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
+    is_buffer: bool,
+    idx: usize,
+    port: &str,
+    aspect: MeshAspect,
+) -> PreparedMeshRevisionRule {
+    if matches!(aspect, MeshAspect::Content) {
+        return PreparedMeshRevisionRule::Written;
+    }
+    let declared = node_keepalive[idx].mesh_output_rule(port);
+    let rule = match aspect {
+        MeshAspect::Topology => declared.topology,
+        MeshAspect::Positions => declared.positions,
+        MeshAspect::Content => unreachable!(),
+    };
+    substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &rule)
+}
+
+/// Compose the fused node's mesh-revision sidecar for one region (design
+/// §3.3). Only `MeshVertex`-layout region outputs earn entries — no general
+/// array is assumed to be a triangle mesh. The output name matches the port
+/// the install pass emits: an in-place region's output rides its aliased
+/// `src_<k>` port, a fan-out region emits `dst_<k>`, otherwise `dst`.
+fn compose_region_mesh_rules(
+    region: &Region,
+    all_members: &[&RegionMember],
+    node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
+    in_place_alias: Option<usize>,
+) -> Vec<PreparedMeshOutputRule> {
+    let is_buffer = region.space.is_none();
+    let multi = region.outputs.len() > 1;
+    let mut rules = Vec::new();
+    for (k, (out_doc, out_port)) in region.outputs.iter().enumerate() {
+        let Some(idx) = all_members.iter().position(|m| m.doc_id == *out_doc) else {
+            continue;
+        };
+        let node = &node_keepalive[idx];
+        let Some(spec) = node.outputs().iter().find(|p| p.name == out_port.as_str()) else {
+            continue;
+        };
+        let PortType::Array(arr) = &spec.ty else { continue };
+        if arr.specs != <crate::generators::mesh_common::MeshVertex as crate::node_graph::ports::KnownItem>::SPECS {
+            continue;
+        }
+        let declared = node.mesh_output_rule(out_port);
+        let output = match in_place_alias {
+            Some(sk) => format!("src_{sk}"),
+            None if multi => format!("dst_{k}"),
+            None => "dst".to_string(),
+        };
+        rules.push(PreparedMeshOutputRule {
+            output,
+            topology: substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &declared.topology),
+            positions: substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &declared.positions),
+        });
+    }
+    rules
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
@@ -1628,6 +1805,7 @@ pub(crate) fn fuse_canonical_def_masked(
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
     let mut node_retarget: AHashMap<NodeId, NodeId> = AHashMap::default();
+    let mut mesh_rules: PreparedMeshRules = PreparedMeshRules::default();
     let mut fused_docs: Vec<u32> = Vec::with_capacity(regions.len());
     // Tier 6: per texture-region output, the element space the unfused member
     // resolved to — verified against the fused def by `fused_def_builds`.
@@ -1870,6 +2048,14 @@ pub(crate) fn fuse_canonical_def_masked(
         // region-topo-index convention. ──
         let fused_doc = max_id + 1 + i as u32;
         let fused_id = NodeId::new(format!("fused_region_{i}").as_str());
+        // §3.3: the fused node's mesh-revision sidecar, composed from member
+        // declarations into region-external terms. Only MeshVertex-layout
+        // region outputs earn entries.
+        let region_mesh_rules =
+            compose_region_mesh_rules(region, &all_members, &node_keepalive, in_place_alias);
+        if !region_mesh_rules.is_empty() {
+            mesh_rules.insert(fused_id.clone(), region_mesh_rules);
+        }
         let mut fused_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
         for (idx, member) in all_members.iter().enumerate() {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
@@ -2227,7 +2413,7 @@ pub(crate) fn fuse_canonical_def_masked(
         wires: new_wires,
     };
 
-    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces })
+    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces, mesh_rules })
 }
 
 /// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
@@ -2235,7 +2421,7 @@ pub(crate) fn fuse_canonical_def_masked(
 /// but a fused node can still be a well-formed shader the GRAPH compiler rejects
 /// — e.g. a buffer region whose `var<storage, read_write>` output introspects as
 /// a required-but-unwired aliased input port. The real entry points
-/// ([`fuse_view_parts`] / [`fuse_generator_def`]) run this on their final def and fall
+/// ([`fuse_view_parts`] / [`fuse_generator_view`]) run this on their final def and fall
 /// back to unfused on any failure, so a def that can't build never installs.
 /// (Not called from [`fuse_canonical_def`] itself — the install unit tests drive
 /// it with synthetic fixtures that intentionally don't fully compile.) Runs once
@@ -2346,6 +2532,88 @@ mod tests {
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    /// P2 (BUG-e3p6.4, design §3.3) — the fused node's mesh-rule sidecar
+    /// composed from member declarations, proven at the composition seam for
+    /// the Surface Waves core: a gathered-external `normal_wave_mesh` feeding
+    /// a coincident `morph_mesh`. This shape cannot reach the composition
+    /// through `fuse_canonical_def_masked` today — morph's `weights_len`
+    /// derived uniform has no registered recompute, so the fail-closed gate
+    /// keeps the region unfused — so the seam is exercised directly.
+    /// Composition semantics under test: an external leaf renames to
+    /// `src_<slot>`; an internal dependency recurses into the producing
+    /// member's declaration; `Written` dominates its aspect; the
+    /// sorted/deduped leaf list collapses both mesh wires onto the single
+    /// vertices external.
+    #[test]
+    fn mesh_change_compose_region_rules_wave_morph() {
+        use crate::node_graph::freeze::classify::InputAccess;
+        use crate::node_graph::freeze::region::{
+            ExternalRef, Region, RegionInput, RegionMember,
+        };
+        use crate::node_graph::mesh_change::{MeshAspect, MeshDependency};
+        use crate::node_graph::primitives::{MorphMesh, NormalWaveMesh};
+        use std::borrow::Cow;
+
+        // Buffer region (space None): scalar ports are not region ports, so
+        // wave threads only its gathered mesh `in`; morph threads `in`
+        // (external), `b` (wave's register), `weights` (external).
+        let region = Region {
+            members: vec![
+                RegionMember {
+                    doc_id: 1,
+                    inputs: vec![RegionInput::External(0)],
+                    input_access: vec![InputAccess::BufferGather],
+                    quantize_f16: false,
+                },
+                RegionMember {
+                    doc_id: 2,
+                    inputs: vec![
+                        RegionInput::External(0),
+                        RegionInput::Member(1),
+                        RegionInput::External(1),
+                    ],
+                    input_access: vec![InputAccess::Coincident; 3],
+                    quantize_f16: false,
+                },
+            ],
+            externals: vec![
+                ExternalRef { from_node: 0, from_port: "vertices".to_string() },
+                ExternalRef { from_node: 0, from_port: "weights".to_string() },
+            ],
+            outputs: vec![(2, "out".to_string())],
+            space: None,
+            sampled_externals: vec![],
+            virtual_chains: vec![],
+            output_capacity: None,
+        };
+        let keepalive: Vec<Box<dyn crate::node_graph::effect_node::EffectNode>> = vec![
+            Box::new(NormalWaveMesh::new()),
+            Box::new(MorphMesh::new()),
+        ];
+        let all_members: Vec<&RegionMember> = region.members.iter().collect();
+        let rules = compose_region_mesh_rules(&region, &all_members, &keepalive, None);
+        assert_eq!(rules.len(), 1, "exactly the region's mesh output earns a rule");
+        let rule = &rules[0];
+        assert_eq!(rule.output, "dst", "single-output region emits dst, got {:?}", rule);
+        // morph declares topology = Dependencies([in.Topology, b.Topology]).
+        // `in` is external slot 0 → src_0.Topology. `b` is wave's register;
+        // wave declares Dependencies([in.Topology]) and wave's `in` is the
+        // SAME external slot 0 → src_0.Topology again. Sort + dedup → one leaf.
+        assert_eq!(
+            rule.topology,
+            PreparedMeshRevisionRule::Dependencies(vec![MeshDependency {
+                input: Cow::Owned("src_0".to_string()),
+                aspect: MeshAspect::Topology,
+            }]),
+            "composed topology must rename + recurse + dedup to the single vertices external"
+        );
+        assert!(
+            matches!(rule.positions, PreparedMeshRevisionRule::Written),
+            "morph positions are Written and Written dominates, got {:?}",
+            rule.positions
+        );
     }
 
     /// A region mask leaves the disabled region's nodes as ordinary surviving
@@ -3079,8 +3347,7 @@ mod tests {
         let view = fused_generator_view_for(&def).expect("the generator fuses");
         let cached = fused_generator_view_for(&def).expect("cached view");
         assert!(Arc::ptr_eq(&view, &cached));
-        let fused = fused_generator_def_for(&def).expect("legacy def accessor");
-        assert!(Arc::ptr_eq(&fused, &view.def));
+        let fused = view.def.clone();
         let (target, field) = view.retarget.get(&("gain".into(), "gain".into()))
             .expect("value edit route survives caching");
         let fused_id = NodeId::new("fused_region_0");
@@ -3090,7 +3357,7 @@ mod tests {
         assert!(view.node_retarget.values().all(|id| {
             view.def.nodes.iter().any(|node| resolve_node_id(node) == *id)
         }));
-        let mut graph = (*fused).clone().into_graph(&registry()).unwrap();
+        let mut graph = (*fused).clone().into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
         let runtime_id = graph.instance_by_node_id(target).unwrap();
         graph.set_param(runtime_id, field, ParamValue::Float(0.375)).unwrap();
         assert_eq!(graph.get_node(runtime_id).unwrap().params.get(field.as_str()), Some(&ParamValue::Float(0.375)));
@@ -3142,8 +3409,9 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let reg = registry();
-        let fused = fuse_generator_def(&def, &reg)
+        let fused_view = fuse_generator_view(&def, &reg)
             .expect("an enum-binding-targeted member must fuse, not classify gate");
+        let fused = &fused_view.def;
         let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
         assert_eq!(meta.bindings.len(), 1);
         match &meta.bindings[0].target {
@@ -3163,9 +3431,9 @@ mod tests {
         // the check that originally rejected EnumRound against the fused Int
         // field. A load error here means the rewrite regressed.
         use crate::node_graph::persistence::EffectGraphDefExt;
-        fused
+        (**fused)
             .clone()
-            .into_graph(&reg)
+            .into_graph(&reg, &crate::node_graph::mesh_change::PreparedMeshRules::default())
             .expect("fused def with retargeted enum binding must load");
     }
 

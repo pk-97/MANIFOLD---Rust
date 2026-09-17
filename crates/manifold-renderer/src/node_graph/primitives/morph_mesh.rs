@@ -85,6 +85,19 @@ crate::primitive! {
     derived_uniforms: ["weights_len:u32"],
 }
 
+// Per-frame recompute for a FUSED region's derived block: `weights_len` is
+// the live element count of the wired `weights` buffer (0 when unwired — the
+// body's `idx < weights_len` gate degrades every weight to 1.0, exactly what
+// `run()` does). The marker carries the member→fused-port mapping for the
+// `weights` port (fused kernels rename inputs to `src_<k>`).
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.morph_mesh",
+        array_ports: &["weights"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
+    }
+}
+
 impl Primitive for MorphMesh {
     /// Output `out` follows the SMALLER of `in`/`b` capacities — the shader
     /// dispatch is bounded to `min(count_a, count_b, out)` in `run()`, and
@@ -106,6 +119,37 @@ impl Primitive for MorphMesh {
         match (a, b) {
             (Some(a), Some(b)) => Some(a.min(b)),
             _ => None,
+        }
+    }
+
+    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): a
+    /// coincident two-input lerp — output record `idx` mixes input
+    /// records `idx` of both meshes (`shaders/morph_mesh_body.wgsl`) and
+    /// output capacity is `min(in, b)` (see `array_output_capacity`
+    /// above) — connectivity can change when EITHER input's topology
+    /// changes, so topology depends on both and positions are Written.
+    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
+        use crate::node_graph::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
+        if port == "out" {
+            return MeshOutputRule {
+                topology: MeshRevisionRule::Dependencies(&[
+                    MeshDependency {
+                        input: Cow::Borrowed("in"),
+                        aspect: MeshAspect::Topology,
+                    },
+                    MeshDependency {
+                        input: Cow::Borrowed("b"),
+                        aspect: MeshAspect::Topology,
+                    },
+                ]),
+                positions: MeshRevisionRule::Written,
+            };
+        }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
         }
     }
 

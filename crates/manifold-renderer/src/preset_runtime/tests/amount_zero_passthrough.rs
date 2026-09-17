@@ -114,7 +114,7 @@ fn render_effect_raw(
     let registry = PrimitiveRegistry::with_builtin();
     let mut graph = def
         .clone()
-        .into_graph(&registry)
+        .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .map_err(|e| format!("graph load failed: {e}"))?;
     zero_outer_param(&mut graph, def, outer_id, value)?;
 

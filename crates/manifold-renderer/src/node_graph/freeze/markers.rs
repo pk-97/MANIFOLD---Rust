@@ -61,14 +61,24 @@ pub enum Marker {
     /// distinct wired `Camera` external the region routes (`name` is
     /// `camera_ext_N`).
     CameraExternal { name: String },
-    /// `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]`
+    /// `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>] [<member_port>=<fused_port> …]`
     /// — fused texture/buffer codegen, one per region member with non-empty
-    /// `derived_uniforms()`.
+    /// `derived_uniforms()`. Trailing `<member_port>=<fused_port>` pairs map
+    /// the array input ports the member's recompute consults
+    /// (`derived_uniform_registry::array_ports`) to the names they carry
+    /// inside the fused kernel: `src_<e>` for a wired external, or the
+    /// sentinel `count` for a region-internal register (its length IS the
+    /// kernel's element count). Absent ports (unwired optionals) map to
+    /// nothing — the recompute's lookup degrades to 0, matching `run()`.
+    /// Only ports the recompute declares are emitted, so members without
+    /// array-derived uniforms keep the pre-extension marker text
+    /// byte-identical.
     DerivedUniformMember {
         first_field: String,
         words: u32,
         type_id: String,
         camera_port: Option<String>,
+        array_ports: Vec<(String, String)>,
     },
     /// `// @fused_output_capacity: <expr>` — fused buffer codegen (BUG-orm4),
     /// own line right after the fresh `// @fused_output dst` binding, only
@@ -116,15 +126,19 @@ impl Marker {
             Marker::Pure => "// @pure".to_string(),
             Marker::Fusion { kind } => format!("// @fusion: {kind}"),
             Marker::CameraExternal { name } => format!("// @camera_external: {name}"),
-            Marker::DerivedUniformMember { first_field, words, type_id, camera_port } => {
-                match camera_port {
+            Marker::DerivedUniformMember { first_field, words, type_id, camera_port, array_ports } => {
+                let mut s = match camera_port {
                     Some(cp) => {
                         format!("// @derived_uniform_member: {first_field} words={words} {type_id} {cp}")
                     }
                     None => {
                         format!("// @derived_uniform_member: {first_field} words={words} {type_id}")
                     }
+                };
+                for (member, fused) in array_ports {
+                    s.push_str(&format!(" {member}={fused}"));
                 }
+                s
             }
             Marker::InputAccess { port, token } => format!("// @input_access: {port} {token}"),
             Marker::PrecisionCritical { port } => format!("// @precision_critical: {port}"),
@@ -202,12 +216,28 @@ impl Marker {
             let words_str = words_tok.strip_prefix("words=")?;
             let words: u32 = words_str.parse().ok()?;
             let type_id = parts.next()?;
-            let camera_port = parts.next().map(|s| s.to_string());
+            // Everything after the type_id: at most one BARE token (the
+            // camera port, pre-extension grammar) plus any number of
+            // `<member_port>=<fused_port>` pairs. A token containing '='
+            // is a pair; a bare token is the camera port.
+            let mut camera_port: Option<String> = None;
+            let mut array_ports: Vec<(String, String)> = Vec::new();
+            for tok in parts {
+                if let Some((member, fused)) = tok.split_once('=') {
+                    if member.is_empty() || fused.is_empty() {
+                        return None;
+                    }
+                    array_ports.push((member.to_string(), fused.to_string()));
+                } else {
+                    camera_port = Some(tok.to_string());
+                }
+            }
             return Some(Marker::DerivedUniformMember {
                 first_field: first_field.to_string(),
                 words,
                 type_id: type_id.to_string(),
                 camera_port,
+                array_ports,
             });
         }
         None
@@ -243,12 +273,31 @@ mod tests {
                 words: 1,
                 type_id: "euler_step_particles".to_string(),
                 camera_port: None,
+                array_ports: Vec::new(),
             },
             Marker::DerivedUniformMember {
                 first_field: "n0_cam_fwd_x".to_string(),
                 words: 3,
                 type_id: "flatten_to_camera_plane".to_string(),
                 camera_port: Some("camera_ext_0".to_string()),
+                array_ports: Vec::new(),
+            },
+            Marker::DerivedUniformMember {
+                first_field: "n1_weights_len".to_string(),
+                words: 1,
+                type_id: "node.morph_mesh".to_string(),
+                camera_port: None,
+                array_ports: vec![
+                    ("weights".to_string(), "count".to_string()),
+                    ("bias".to_string(), "src_2".to_string()),
+                ],
+            },
+            Marker::DerivedUniformMember {
+                first_field: "n0_cam_fwd_x".to_string(),
+                words: 3,
+                type_id: "flatten_to_camera_plane".to_string(),
+                camera_port: Some("camera_ext_0".to_string()),
+                array_ports: vec![("points".to_string(), "src_0".to_string())],
             },
         ];
         for m in variants {
@@ -299,7 +348,42 @@ mod tests {
                 words: 1,
                 type_id: "euler_step_particles".to_string(),
                 camera_port: None,
+                array_ports: Vec::new(),
             })
+        );
+    }
+
+    #[test]
+    fn parse_derived_uniform_member_with_array_ports() {
+        // Member→fused-port pairs round-trip, alone and after a camera port;
+        // a malformed pair (empty side) is rejected.
+        assert_eq!(
+            Marker::parse(
+                "// @derived_uniform_member: n1_weights_len words=1 node.morph_mesh weights=count"
+            ),
+            Some(Marker::DerivedUniformMember {
+                first_field: "n1_weights_len".to_string(),
+                words: 1,
+                type_id: "node.morph_mesh".to_string(),
+                camera_port: None,
+                array_ports: vec![("weights".to_string(), "count".to_string())],
+            })
+        );
+        assert_eq!(
+            Marker::parse(
+                "// @derived_uniform_member: n0_cam_fwd_x words=3 flatten_to_camera_plane camera_ext_0 points=src_0"
+            ),
+            Some(Marker::DerivedUniformMember {
+                first_field: "n0_cam_fwd_x".to_string(),
+                words: 3,
+                type_id: "flatten_to_camera_plane".to_string(),
+                camera_port: Some("camera_ext_0".to_string()),
+                array_ports: vec![("points".to_string(), "src_0".to_string())],
+            })
+        );
+        assert_eq!(
+            Marker::parse("// @derived_uniform_member: n1_weights_len words=1 node.morph_mesh =src_0"),
+            None
         );
     }
 
@@ -314,6 +398,7 @@ mod tests {
                 words: 3,
                 type_id: "flatten_to_camera_plane".to_string(),
                 camera_port: Some("camera_ext_0".to_string()),
+                array_ports: Vec::new(),
             })
         );
     }
@@ -378,7 +463,7 @@ mod tests {
     /// the text level, not "compiles" or "renders the same".
     fn capture_all_fused_wgsl() -> String {
         use crate::node_graph::PrimitiveRegistry;
-        use crate::node_graph::freeze::install::{fuse_canonical_def, fuse_generator_def};
+        use crate::node_graph::freeze::install::{fuse_canonical_def, fuse_generator_view};
         use manifold_core::effect_graph_def::EffectGraphDef;
         use manifold_core::preset_def::PresetKind;
 
@@ -418,9 +503,9 @@ mod tests {
                 continue;
             };
             let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else { continue };
-            let Some(fused_def) = fuse_generator_def(&def, &registry) else { continue };
+            let Some(fused_view) = fuse_generator_view(&def, &registry) else { continue };
             let mut nodes: Vec<_> =
-                fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").collect();
+                fused_view.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").collect();
             nodes.sort_by_key(|n| n.id);
             for node in nodes {
                 if let Some(wgsl) = &node.wgsl_source {

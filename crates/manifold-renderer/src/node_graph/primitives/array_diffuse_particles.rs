@@ -85,6 +85,7 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.spread_out",
+        array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.frame_count as f32]),
     }
 }

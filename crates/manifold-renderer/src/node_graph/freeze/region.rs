@@ -398,8 +398,15 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     // ── Build a region from each component; drop the ones v1 can't express. ──
     let mut regions: Vec<Region> = Vec::new();
     for (_, nodes) in &comp_list {
-        if let Ok(region) = build_region(def, registry, nodes, &final_reachable, spaces.as_ref()) {
-            regions.push(region);
+        match build_region(def, registry, nodes, &final_reachable, spaces.as_ref()) {
+            Ok(region) => regions.push(region),
+            // `MANIFOLD_REGION_DEBUG=1` surfaces the refusal reason a fused
+            // graph hit (partition drops it silently by design — the
+            // `explain_presets` report is the batch form of this).
+            Err(reason) if std::env::var_os("MANIFOLD_REGION_DEBUG").is_some() => {
+                eprintln!("[region-debug] component {nodes:?} refused: {reason:?}");
+            }
+            Err(_) => {}
         }
     }
     // Stable order across runs (components iterate in hash order otherwise).
@@ -1654,17 +1661,22 @@ fn build_region(
                 // No wire into this port. An OPTIONAL coincident input fuses as
                 // `Unwired` (the body's injected use flag gates the read off, the
                 // same contract run() fulfils with a dummy bind) — this is what
-                // lets pack_channels fuse with only r/g wired. Required-unwired
-                // (the node wouldn't render anyway) and gather-unwired (the body
-                // needs a real texture to sample) drop the region — unfused,
+                // lets pack_channels fuse with only r/g wired. The same admit
+                // applies in BUFFER regions: an optional coincident array input
+                // (the mesh deformers' `weights`) has no buffer when unwired,
+                // and the codegen threads a zero element the body's
+                // `idx < weights_len` gate never reads (weights_len recomputes
+                // to 0, matching run()'s degrade). Required-unwired (the node
+                // wouldn't render anyway) and gather-unwired (the body needs a
+                // real texture/array to sample) drop the region — unfused,
                 // always correct.
                 let spec = constructed
                     .inputs()
                     .iter()
                     .find(|i| i.name == *port)
                     .ok_or("port missing from member spec")?;
-                if spec.required || access.is_gather() || is_buffer {
-                    return Err("required/gather/buffer input unwired");
+                if spec.required || access.is_gather() {
+                    return Err("required/gather input unwired");
                 }
                 inputs.push(RegionInput::Unwired);
                 input_access.push(access);
@@ -1896,11 +1908,11 @@ fn build_region(
                 .find(|n| n.id == doc_id)
                 .ok_or("member id missing from def")?;
             let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
-            let arr_inputs: Vec<&str> = constructed
+            let arr_inputs: Vec<(&str, bool)> = constructed
                 .inputs()
                 .iter()
                 .filter(|i| matches!(i.ty, PortType::Array(_)))
-                .map(|i| i.name.as_ref())
+                .map(|i| (i.name.as_ref(), i.required))
                 .collect();
             let out_port = constructed
                 .outputs()
@@ -1923,8 +1935,30 @@ fn build_region(
                     // identity member inherits its producer's shape
                     // unchanged — e.g. jitter-after-reflect composes to the
                     // reflect's Mul, not Min([Mul])).
+                    //
+                    // OPTIONAL inputs contribute nothing: the optional-
+                    // weights deformer family (morph, ripple, taper, …)
+                    // dispatches on its REQUIRED inputs alone — `weights`
+                    // only modulates per-element values (`run()` bounds the
+                    // dispatch by min over the mesh inputs, never the
+                    // weights buffer; the body's `idx < weights_len` gate
+                    // degrades past it). Including an optional source would
+                    // compose a MORE conservative count than the member's
+                    // real dispatch, the honesty probe below would refuse
+                    // the region, and the wired-optional pre-read keeps the
+                    // same bounds contract the unfused wrapper has. An atom
+                    // whose capacity genuinely binds on an optional input
+                    // fails the probe on distinct synthetics — fail closed.
                     let mut children: Vec<CapacityExpr> = Vec::with_capacity(sources.len());
-                    for src in &sources {
+                    for ((_, required), src) in arr_inputs.iter().zip(sources.iter()) {
+                        if !required {
+                            match src {
+                                RegionInput::Unwired => {}
+                                RegionInput::External(_) | RegionInput::Member(_) => continue,
+                                _ => return Err("identity member with a non-register array input"),
+                            }
+                            continue;
+                        }
                         match src {
                             RegionInput::External(e) => children.push(CapacityExpr::Slot(*e)),
                             RegionInput::Member(producer) => {
@@ -1939,10 +1973,12 @@ fn build_region(
                                         .clone(),
                                 );
                             }
-                            // A BufferGather source never unions (the finder
-                            // keeps the producer external), and unwired array
-                            // inputs don't fuse — reaching either is a finder
-                            // bug; refuse rather than guess.
+                            // An OPTIONAL UNWIRED array input has no buffer —
+                            // it contributes no capacity (run() treats it as
+                            // absent). A BufferGather source never unions (the
+                            // finder keeps the producer external) — reaching
+                            // one here is a finder bug; refuse rather than guess.
+                            RegionInput::Unwired => {}
                             _ => return Err("identity member with a non-register array input"),
                         }
                     }
@@ -1954,7 +1990,7 @@ fn build_region(
                 FusedOutputCapacity::FromInput { input } => {
                     let selected = arr_inputs
                         .iter()
-                        .position(|name| *name == input)
+                        .position(|(name, _)| *name == input)
                         .ok_or("FromInput names an unknown array input")?;
                     if member.input_access.len() < arr_inputs.len() {
                         return Err("FromInput lacks array read-access declarations");
@@ -1997,7 +2033,7 @@ fn build_region(
                     // body indexes that array whole at self-computed indices
                     // (its own guards keep any dispatched idx in bounds), and
                     // the widened count is factor × the slot's live length.
-                    if arr_inputs.len() != 1 || arr_inputs.first() != Some(&input) {
+                    if arr_inputs.len() != 1 || arr_inputs.first().map(|(n, _)| *n) != Some(input) {
                         return Err("MultipleOf names a port that is not the member's only array input",
                         );
                     }
@@ -2025,7 +2061,7 @@ fn build_region(
             // refuses here.
             let port_caps: Vec<(&str, u32)> = {
                 let mut caps = Vec::with_capacity(sources.len());
-                for (name, src) in arr_inputs.iter().zip(sources.iter()) {
+                for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
                     let cap = match src {
                         RegionInput::External(e) => slot_syn_refs
                             .get(*e)
@@ -2042,6 +2078,8 @@ fn build_region(
                                 .eval(&slot_syn_refs)
                                 .ok_or("register producer capacity does not evaluate")?
                         }
+                        // Unwired optional: absent, no synthetic capacity.
+                        RegionInput::Unwired => continue,
                         _ => return Err("member has a non-register array input"),
                     };
                     caps.push((*name, cap));
@@ -2526,7 +2564,7 @@ fn is_array_wire(def: &EffectGraphDef, registry: &PrimitiveRegistry, w: &EffectG
 /// and dispatch 1D over an Array length. A region is homogeneous (texture and
 /// Array ports never wire to each other), so one flag drives every port/wire
 /// filter in [`build_region`] / [`topo_sort`].
-fn region_port_is_member(ty: &PortType, is_buffer: bool) -> bool {
+pub(crate) fn region_port_is_member(ty: &PortType, is_buffer: bool) -> bool {
     if is_buffer {
         matches!(ty, PortType::Array(_))
     } else {

@@ -84,6 +84,19 @@ crate::primitive! {
     derived_uniforms: ["weights_len:u32"],
 }
 
+// Per-frame recompute for a FUSED region's derived block: `weights_len` is
+// the live element count of the wired `weights` buffer (0 when unwired — the
+// body's `idx < weights_len` gate degrades every weight to 1.0, exactly what
+// `run()` does). The marker carries the member→fused-port mapping for the
+// `weights` port (fused kernels rename inputs to `src_<k>`).
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.mesh_stagger_envelope",
+        array_ports: &["weights"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
+    }
+}
+
 impl Primitive for MeshStaggerEnvelope {
     fn array_output_capacity(
         &self,
@@ -438,16 +451,16 @@ mod gpu_tests {
         }
     }
 
-    /// BUG-x72p: the `BufferGather` inputs no longer force Boundary — the
-    /// codegen emits the gathered kernel, and the identity probe PASSES
-    /// (`weights` capacity = the `in` capacity). What keeps the envelope
-    /// unfused is its derived uniform: `weights_len:u32` has NO registered
-    /// recompute, so install's `has_recompute` gate fails any region
-    /// containing it closed (unfused, always correct). A future recompute
-    /// registration (reading the wired `weights` length) flips this atom to
-    /// fusing with no codegen change.
+    /// BUG-x72p follow-on (BUG-e3p6.4): the `BufferGather` inputs no longer
+    /// force Boundary — the codegen emits the gathered kernel, and the
+    /// identity probe PASSES (`weights` capacity = the `in` capacity). The
+    /// recompute this test used to pin as MISSING is REGISTERED now (the
+    /// `weights_len` recompute, part of the stock deformer family sweep), and
+    /// the emitted marker must carry the member→fused-port mapping for
+    /// `weights` (`weights=src_1`) — fused kernels rename inputs to `src_<k>`,
+    /// so the recompute's `array_len("weights")` resolves through the map.
     #[test]
-    fn overnight_modifier_mesh_stagger_envelope_refuses_at_derived_uniform_recompute() {
+    fn modifier_mesh_stagger_envelope_fuses_with_weights_port_mapping() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -483,6 +496,20 @@ mod gpu_tests {
             "fused gathered envelope kernel parses:\n{}",
             g.wgsl
         );
+        use crate::node_graph::freeze::markers::Marker;
+        let expected = Marker::DerivedUniformMember {
+            first_field: "n0_weights_len".to_string(),
+            words: 1,
+            type_id: MeshStaggerEnvelope::TYPE_ID.to_string(),
+            camera_port: None,
+            array_ports: vec![("weights".to_string(), "src_1".to_string())],
+        }
+        .emit();
+        assert!(
+            g.wgsl.contains(&expected),
+            "the marker maps member port `weights` to the fused `src_1` input:\n{}",
+            g.wgsl
+        );
         let prim = MeshStaggerEnvelope::new();
         let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
         assert_eq!(
@@ -491,10 +518,10 @@ mod gpu_tests {
             "identity capacity — passes the gather identity probe"
         );
         assert!(
-            !crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+            crate::node_graph::freeze::derived_uniform_registry::has_recompute(
                 MeshStaggerEnvelope::TYPE_ID
             ),
-            "weights_len has no registered recompute — install refuses the region"
+            "weights_len has a registered recompute — install admits the region"
         );
     }
 }

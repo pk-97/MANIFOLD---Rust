@@ -109,11 +109,21 @@ impl PresetRuntime {
         } else {
             None
         };
+        // Design §3.3: the fused view's mesh-rule sidecar describes the
+        // fused def's generated node ids, so it must ride into
+        // `from_render_def` alongside `view.def`. An empty map is correct
+        // only when fusion did not occur — an unfused render_def has no
+        // sidecar by construction.
+        let mesh_rules = fused
+            .as_ref()
+            .map_or_else(crate::node_graph::mesh_change::PreparedMeshRules::default, |view| {
+                view.mesh_rules.clone()
+            });
         let render_def = match &fused {
             Some(view) => (*view.def).clone(),
             None => render_def,
         };
-        let mut runtime = Self::from_render_def(render_def, registry, manifest)?;
+        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules)?;
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }

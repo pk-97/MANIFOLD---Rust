@@ -30,7 +30,7 @@
 
 use std::borrow::Cow;
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 
 use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef, EffectGraphNode, EffectGraphWire,
@@ -145,6 +145,17 @@ pub enum GraphBuildError {
     /// A node group failed to flatten into a flat document before
     /// instantiation. See [`manifold_core::flatten::FlattenError`].
     Flatten(manifold_core::flatten::FlattenError),
+    /// A prepared mesh-rule sidecar entry (design
+    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) could not be installed:
+    /// the stable node id matched no document node (`reason` says
+    /// "unknown"), matched more than one ("duplicate"), or the live node
+    /// refused the rules ("uninstalled", carrying the node's message).
+    /// Preparation errors fail the load — never a silent canonical
+    /// fallback.
+    MeshRules {
+        node_id: manifold_core::NodeId,
+        reason: String,
+    },
 }
 
 /// Which side of a wire failed to resolve.
@@ -692,6 +703,7 @@ pub fn instantiate_def(
     registry: &PrimitiveRegistry,
     handle_scope: HandleScope,
     boundary: BoundaryHandling,
+    mesh_rules: &super::mesh_change::PreparedMeshRules,
 ) -> Result<NodeInstantiation, GraphBuildError> {
     if def.version == 0 || def.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
         return Err(GraphBuildError::UnsupportedVersion {
@@ -1166,6 +1178,14 @@ pub fn instantiate_def(
         }
     }
 
+    // Prepared mesh-rule sidecar (design §3.3): after every node exists
+    // and its params/sources are installed, forward the compiler-provided
+    // rules to the live nodes. Failures are preparation errors, not a
+    // silent revert to rebuild-everything defaults. Runs before the
+    // prepared-budget install below, which only annotates the graph and
+    // adds no nodes.
+    install_prepared_mesh_rules(graph, def, &id_map, mesh_rules)?;
+
     if let Some(prepared) = prepared {
         let budget = super::scene_modifier_expand::PreparedModifierBufferBudget::prepare(
             modifier_owner, &prepared.routes, graph, &AHashMap::default(),
@@ -1174,6 +1194,7 @@ pub fn instantiate_def(
         super::scene_modifier_expand::PreparedModifierParameterGuards::prepare(modifier_owner)
             .and_then(|guards| guards.install(graph)).map_err(GraphBuildError::SceneModifier)?;
     }
+
     Ok(NodeInstantiation {
         id_map,
         effect_local_handles,
@@ -1181,6 +1202,78 @@ pub fn instantiate_def(
         generator_input_id,
         final_output_id,
     })
+}
+
+/// Install a prepared mesh-rule sidecar (design
+/// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) onto the live nodes of a
+/// graph built from `def`. Each sidecar entry is keyed by the stable
+/// document [`manifold_core::NodeId`]; resolution uses the same
+/// `node_id`-then-handle rule as the instantiation pass above, and the
+/// numeric document id reaches the live node through `id_map`. Handle
+/// names are never used as stable node ids. Unknown (no document node
+/// resolves to the key), duplicate (more than one does), and uninstalled
+/// (the node refuses) entries are preparation errors.
+pub(crate) fn install_prepared_mesh_rules(
+    graph: &mut Graph,
+    def: &EffectGraphDef,
+    id_map: &AHashMap<u32, NodeInstanceId>,
+    rules: &super::mesh_change::PreparedMeshRules,
+) -> Result<(), GraphBuildError> {
+    if rules.is_empty() {
+        return Ok(());
+    }
+    let mut claimed: AHashSet<&manifold_core::NodeId> = AHashSet::default();
+    for node_doc in &def.nodes {
+        let resolved_node_id = if node_doc.node_id.is_empty() {
+            node_doc
+                .handle
+                .as_deref()
+                .map(manifold_core::NodeId::new)
+                .unwrap_or_default()
+        } else {
+            node_doc.node_id.clone()
+        };
+        let Some((key, rule_set)) = rules.get_key_value(&resolved_node_id) else {
+            continue;
+        };
+        if !claimed.insert(key) {
+            return Err(GraphBuildError::MeshRules {
+                node_id: resolved_node_id.clone(),
+                reason: "duplicate: more than one document node resolves to this node id"
+                    .to_string(),
+            });
+        }
+        let Some(&runtime_id) = id_map.get(&node_doc.id) else {
+            return Err(GraphBuildError::MeshRules {
+                node_id: resolved_node_id.clone(),
+                reason: format!(
+                    "document node {} was not instantiated (boundary-folded or skipped)",
+                    node_doc.id
+                ),
+            });
+        };
+        let Some(inst) = graph.get_node_mut(runtime_id) else {
+            return Err(GraphBuildError::MeshRules {
+                node_id: resolved_node_id.clone(),
+                reason: "instantiated node missing from graph".to_string(),
+            });
+        };
+        inst.node.install_mesh_output_rules(rule_set).map_err(|e| {
+            GraphBuildError::MeshRules {
+                node_id: resolved_node_id.clone(),
+                reason: format!("uninstalled: {e}"),
+            }
+        })?;
+    }
+    for node_id in rules.keys() {
+        if !claimed.contains(node_id) {
+            return Err(GraphBuildError::MeshRules {
+                node_id: node_id.clone(),
+                reason: "unknown: no document node resolves to this node id".to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,6 +1420,9 @@ pub fn log_build_error(context: &str, err: &GraphBuildError) {
         }
         GraphBuildError::Flatten(e) => {
             let _ = write!(buf, "group flatten failed: {e}");
+        }
+        GraphBuildError::MeshRules { node_id, reason } => {
+            let _ = write!(buf, "mesh rules for node {}: {reason}", node_id.as_str());
         }
     }
     eprintln!("{buf}");
@@ -1718,7 +1814,7 @@ mod tests {
         let registry = PrimitiveRegistry::new();
         let result = instantiate_def(
             &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
-        );
+        &crate::node_graph::mesh_change::PreparedMeshRules::default());
         assert!(matches!(result, Err(GraphBuildError::SceneModifier(_))));
         assert_eq!(graph.nodes().count(), 0);
 
@@ -1727,7 +1823,7 @@ mod tests {
         doc.scene_modifiers.clear();
         assert!(instantiate_def(
             &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
-        ).is_ok());
+        &crate::node_graph::mesh_change::PreparedMeshRules::default()).is_ok());
     }
     use crate::node_graph::boundary_nodes::{FinalOutput, Source};
 
@@ -1759,7 +1855,7 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .expect("standalone instantiates cleanly");
         assert!(inst.generator_input_id.is_some());
         assert!(inst.final_output_id.is_some());
@@ -1804,7 +1900,7 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .expect("splice instantiates cleanly");
 
         // The two boundary nodes were folded.
@@ -1877,7 +1973,7 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        );
+        &crate::node_graph::mesh_change::PreparedMeshRules::default());
         assert!(
             matches!(
                 result,
@@ -1923,7 +2019,7 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        );
+        &crate::node_graph::mesh_change::PreparedMeshRules::default());
         assert!(
             matches!(result, Err(GraphBuildError::ParamTypeMismatch { .. })),
             "splice should reject param type mismatch; got {result:?}",
@@ -1952,7 +2048,7 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .unwrap_err();
         match err {
             GraphBuildError::UnknownTypeId { node_id, type_id } => {
@@ -1987,7 +2083,7 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .unwrap_err();
         assert!(matches!(err, GraphBuildError::MissingBoundarySource));
     }
@@ -2571,7 +2667,7 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .expect("system.* boundary ids are unaffected by migration and always construct");
     }
 
@@ -2615,7 +2711,7 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        )
+        &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .expect("old id + stale `bias` param must still load after the D9(b) rename");
 
         let ssao_id = graph.node_id_by_handle("ssao").expect("ssao handle present");

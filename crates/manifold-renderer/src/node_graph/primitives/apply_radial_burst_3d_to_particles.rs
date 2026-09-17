@@ -106,6 +106,7 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.add_burst_3d",
+        array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32, ctx.frame.delta.0 as f32 * 60.0]),
     }
 }

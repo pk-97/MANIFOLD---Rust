@@ -238,7 +238,12 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
         instances_buffer: Some(&instances_buffer),
         instance_slots: slots.len() as u32,
     }];
-    let accel = tracer.build_accel(device, &objects, &[]);
+    // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
+    // below (built before the trace dispatch on the same command buffer).
+    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let mut accel_slot = None;
+    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    let mut accel = accel_slot.unwrap();
 
     // D11 tables: canonical row [0, N) + slot rows [N, N+Σ) — production
     // indexing via with_slot_row_base(N) below.
@@ -339,21 +344,34 @@ fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
         0,
         0.6,
         0.1,
-        0.0,
-        0,
-        0.0,
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     )
     .with_slot_row_base(objects.len() as u32);
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = harness::dummy_emissive_buffer(device);
+    // P4a: the GPU emissive preparation indexes one material row per
+    // object — this fixture has no emissive geometry, so zeroed rows
+    // (luma 0 → zero stats, the old "no emissive table" behavior).
+    let materials = vec![
+        manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
+        objects.len()
+    ];
 
     let mut encoder = device.create_encoder("rt-instancing-probe");
+    let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
+    tracer
+        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &materials, true, true)
+        .expect("encode accel update");
     tracer.dispatch_shadow_rays(
         &mut encoder,
         device,
         &accel,
+        accel
+            .emissive_table
+            .as_ref()
+            .map(|t| &t.stats)
+            .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
         &params_buffer,
         &gi_materials_buffer,
