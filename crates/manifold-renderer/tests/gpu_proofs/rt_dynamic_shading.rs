@@ -155,6 +155,36 @@ fn read_stats(accel: &RtAccel) -> EmissiveTableStats {
     unsafe { (ptr as *const EmissiveTableStats).read_unaligned() }
 }
 
+#[test]
+fn rt_dynamic_emissive_queued_frames_keep_metadata_snapshots() {
+    let h = harness::shared();
+    let device = &h.device;
+    let tracer = MetalShadowRayTracer::new(device);
+    let vertices = write_shared(device, &triangle_at(0.0, 1.0));
+    let objects = [flat_object(&vertices, 1)];
+    let mut accel = prepare_scene(device, &tracer, &objects, &[emissive_material([1.0; 3])]);
+    let mut queued = Vec::new();
+    for (index, emission) in [1.0_f32, 0.0, 3.0].into_iter().enumerate() {
+        let mut encoder = device.create_encoder("queued emissive snapshot");
+        let materials = [emissive_material([emission; 3])];
+        let update = tracer.encode_accel_update(device, &mut encoder, &mut accel, &objects,
+            &[RtGeometryChange::Reuse], &materials, false, true).unwrap();
+        assert_eq!(update.emissive_refreshes, 1);
+        let result = device.create_buffer_shared(std::mem::size_of::<EmissiveTableStats>() as u64);
+        encoder.copy_buffer_to_buffer(&accel.emissive_table.as_ref().unwrap().stats, &result, result.size);
+        queued.push((index, emission, encoder, result));
+    }
+    // All metadata writes have happened before any of these commands commit.
+    for (index, emission, encoder, result) in queued {
+        encoder.try_commit_and_wait_completed().unwrap();
+        let stats = unsafe { result.mapped_ptr().unwrap().cast::<EmissiveTableStats>().read_unaligned() };
+        assert_eq!(stats.entry_count, u32::from(emission > 0.0), "queued frame {index}");
+        if emission > 0.0 {
+            assert!((stats.mean_power - 0.5 * emission).abs() < 1e-5, "queued frame {index}: {stats:?}");
+        }
+    }
+}
+
 fn read_triangles(accel: &RtAccel, n: usize) -> Vec<EmissiveTriangleGpu> {
     let table = accel.emissive_table.as_ref().expect("table resident since prepare");
     let ptr = table.triangles.mapped_ptr().expect("triangles is shared");
@@ -576,7 +606,7 @@ fn prepare_query_scene<'a>(
     device: &GpuDevice,
     tracer: &MetalShadowRayTracer,
     objects: &[RtObjectGeometry<'a>],
-) -> (RtAccel, Option<GpuBuffer>, Vec<&'a GpuTexture>) {
+) -> (RtAccel, Option<GpuBuffer>, manifold_gpu::raytrace::RtMaterialTextures<'a>) {
     let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
     let mut slot = None;
     tracer.prepare_accel(device, &mut slot, plan).expect("prepare accel");

@@ -1077,6 +1077,21 @@ pub trait EffectNode: Send {
         false
     }
 
+    #[cfg(feature = "gpu-proofs")]
+    fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
+        None
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    fn rt_probe_rays(
+        &self,
+        _device: &manifold_gpu::GpuDevice,
+        _encoder: &mut manifold_gpu::GpuEncoder,
+        _rays: &[manifold_gpu::raytrace::DebugRayQueryRay],
+    ) -> Option<manifold_gpu::GpuBuffer> {
+        None
+    }
+
     /// The sampler ADDRESS MODE a fused region must bind so this atom's
     /// `Gather` inputs sample identically whether fused or standalone. The
     /// freeze compiler folds a gather atom into a `node.wgsl_compute` kernel

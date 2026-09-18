@@ -4055,3 +4055,18 @@ kernel void build_instance_descriptors(
     out->intersection_function_table_offset = 0u;
     out->acceleration_structure_index = tid.y;
 }
+
+// SCENE_MODIFIER_RT_DESIGN.md §4.3 (P5): CPU-authored RT inputs are never
+// written into mapped tables at encode time — a write can land while an
+// earlier frame's dispatch still reads the same storage (observed on
+// hardware as last-write-wins tearing). The bytes ride the command buffer
+// inline (setBytes snapshots them at encode) and this kernel lands them in
+// the GPU-private destination, ordered after everything encoded before it.
+kernel void rt_copy_inline(
+    constant uchar*  src        [[buffer(0)]],
+    device uchar*    dst        [[buffer(1)]],
+    constant uint&   byte_count [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < byte_count) { dst[gid] = src[gid]; }
+}

@@ -1,0 +1,428 @@
+{
+  "version": 2,
+  "name": "RtDynamicPerfProduction",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.grid_mesh",
+      "nodeId": "grid",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 33153
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 257
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 129
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 4.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.make_triangles",
+      "nodeId": "triangles",
+      "params": {
+        "src_cols": {
+          "type": "Int",
+          "value": 257
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 129
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.normal_wave_mesh",
+      "nodeId": "wave",
+      "params": {
+        "amplitude": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "frequency": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "phase": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "enabled": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.grid_mesh",
+      "nodeId": "emitter_grid",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 4
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 2
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 2
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 0.1
+        }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.make_triangles",
+      "nodeId": "emitter_triangles",
+      "params": {
+        "src_cols": {
+          "type": "Int",
+          "value": 2
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.pbr_material",
+      "nodeId": "grid_material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.45
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.02
+        }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.pbr_material",
+      "nodeId": "emitter_material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.02
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.02
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.02
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "emission_r": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "emission_g": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "emission_b": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "emission_intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.transform_3d",
+      "nodeId": "emitter_transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 3.1415927
+        }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.orbit_camera",
+      "nodeId": "camera",
+      "params": {
+        "orbit": {
+          "type": "Float",
+          "value": 0.7
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.95
+        },
+        "distance": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.light",
+      "nodeId": "sun",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 10.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.bake_environment",
+      "nodeId": "environment",
+      "params": {
+        "width": {
+          "type": "Int",
+          "value": 16
+        },
+        "height": {
+          "type": "Int",
+          "value": 8
+        },
+        "uniform": {
+          "type": "Bool",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.scene_object",
+      "nodeId": "grid_object"
+    },
+    {
+      "id": 13,
+      "typeId": "node.scene_object",
+      "nodeId": "emitter_object"
+    },
+    {
+      "id": 20,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "params": {
+        "objects": {
+          "type": "Int",
+          "value": 2
+        },
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "rt_enabled": {
+          "type": "Bool",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": 99,
+      "typeId": "system.final_output",
+      "nodeId": "out"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "vertices",
+      "toNode": 5,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "transform",
+      "toNode": 13,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "object",
+      "toNode": 20,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "object",
+      "toNode": 20,
+      "toPort": "object_1"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "envmap",
+      "toNode": 20,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    }
+  ]
+}

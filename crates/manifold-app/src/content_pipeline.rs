@@ -892,6 +892,14 @@ pub struct ContentPipeline {
     /// Non-zero means the GPU was still working when the content thread woke up.
     /// Exposed unconditionally for the performance overlay.
     last_fence_wait_ms: f64,
+    /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
+    /// the last rendered frame — reset at the top of `render_content`, then
+    /// merged from the generator wrapper before it drops and the compositor
+    /// wrapper after rendering. Export rejects anything except Complete.
+    last_frame_status: manifold_renderer::frame_status::FrameRenderStatus,
+    last_rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
+    last_rt_dispatches: u32,
+    last_rt_history_resets: u32,
     /// Duration of the last GPU poll (wait for completion) in milliseconds.
     /// Captured inside render_content(), read by the profiler.
     #[cfg(feature = "profiling")]
@@ -1146,6 +1154,10 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
+            last_frame_status: manifold_renderer::frame_status::FrameRenderStatus::Complete,
+            last_rt_updates: Default::default(),
+            last_rt_dispatches: 0,
+            last_rt_history_resets: 0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
             #[cfg(target_os = "macos")]
@@ -1544,6 +1556,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// 2 frames ago when the content thread woke up — a sign of GPU saturation.
     pub fn last_fence_wait_ms(&self) -> f64 {
         self.last_fence_wait_ms
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
+    /// the last `render_content` frame. Export rejects anything except
+    /// `Complete`; warmup treats `PendingGeometry` as incomplete preparation.
+    pub fn frame_render_status(&self) -> manifold_renderer::frame_status::FrameRenderStatus {
+        self.last_frame_status
+    }
+
+    #[cfg(all(test, feature = "journey-proofs"))]
+    pub(crate) fn frame_rt_observation(&self) -> (manifold_gpu::raytrace::RtAccelUpdate, u32, u32) {
+        (self.last_rt_updates, self.last_rt_dispatches, self.last_rt_history_resets)
     }
 
     // ── Surface readiness (GPU fence notification) ──────────────────────
@@ -1954,6 +1978,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ) {
         let _t_frame = std::time::Instant::now();
 
+        // §5.4: one reset per frame; the generator and compositor wrappers
+        // merge into this before their respective drops below.
+        self.last_frame_status = manifold_renderer::frame_status::FrameRenderStatus::Complete;
+        self.last_rt_updates = Default::default();
+        self.last_rt_dispatches = 0;
+        self.last_rt_history_resets = 0;
+
         // Surface wait is now handled by the content thread main loop
         // (wait_for_surface_draining_commands) which keeps processing commands
         // instead of busy-spinning. Export mode waits via wait_for_gpu_idle().
@@ -2268,6 +2299,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         break;
                     }
                 }
+                // §5.4: fold the generator frame's validity into the
+                // pipeline's owned status before the wrapper drops.
+                let status = gpu_gen.frame_status();
+                self.last_frame_status.merge(status);
+                self.last_rt_updates = gpu_gen.rt_updates;
+                self.last_rt_dispatches = gpu_gen.rt_dispatches;
+                self.last_rt_history_resets = gpu_gen.rt_history_resets;
             }
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
@@ -2578,6 +2616,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.compositor.set_dump_request(dump_request);
 
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
+            // §5.4: fold the compositor frame's validity into the pipeline's
+            // owned status before the wrapper drops.
+            let status = gpu_comp.frame_status();
+            self.last_frame_status.merge(status);
+            self.last_rt_updates.blas_builds += gpu_comp.rt_updates.blas_builds;
+            self.last_rt_updates.blas_refits += gpu_comp.rt_updates.blas_refits;
+            self.last_rt_updates.tlas_builds += gpu_comp.rt_updates.tlas_builds;
+            self.last_rt_updates.tlas_refits += gpu_comp.rt_updates.tlas_refits;
+            self.last_rt_updates.emissive_refreshes += gpu_comp.rt_updates.emissive_refreshes;
+            self.last_rt_dispatches += gpu_comp.rt_dispatches;
+            self.last_rt_history_resets += gpu_comp.rt_history_resets;
         }
 
         rtrace.mark("compositor_encode");

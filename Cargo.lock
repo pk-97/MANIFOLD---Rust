@@ -2295,6 +2295,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
  "smallvec",
  "winit",
 ]
@@ -2356,6 +2357,7 @@ dependencies = [
 name = "manifold-gpu"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "ash",
  "block2 0.6.2",
  "log",
@@ -2468,6 +2470,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arc-swap",
+ "arrayvec",
  "bytemuck",
  "core-foundation 0.9.4",
  "core-graphics",

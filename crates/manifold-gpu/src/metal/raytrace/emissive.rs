@@ -150,16 +150,22 @@ impl EmissiveLightTable {
     /// Allocate the fixed-size table (preparation-time). Triangles/aliases/
     /// stats are SHARED buffers — the gpu_proofs readback path maps them
     /// after commit+wait (same discipline the deleted CPU-built table had).
-    pub(crate) fn new(device: &GpuDevice) -> Self {
+    pub(crate) fn new(device: &GpuDevice) -> Result<Self, RtAccelError> {
         let cap = u64::from(MAX_RT_EMISSIVE_TRIANGLES);
-        Self {
-            triangles: device.create_buffer_shared(cap * 96),
-            aliases: device.create_buffer_shared(cap * 8),
-            stats: device.create_buffer_shared(16),
-            entry_power: device.create_buffer(cap * 8),
-            alias_stacks: device.create_buffer(cap * 2 * 4),
-        }
+        Ok(Self {
+            triangles: prepare_buffer(device, cap * 96, true)?,
+            aliases: prepare_buffer(device, cap * 8, true)?,
+            stats: prepare_buffer(device, 16, true)?,
+            entry_power: prepare_buffer(device, cap * 8, false)?,
+            alias_stacks: prepare_buffer(device, cap * 2 * 4, false)?,
+        })
     }
+}
+
+fn prepare_buffer(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, RtAccelError> {
+    let result = if shared { device.try_create_buffer_shared(bytes) }
+        else { device.try_create_buffer(bytes) };
+    result.map_err(|_| RtAccelError::Allocation { bytes, resource: "emissive preparation" })
 }
 
 /// §5.1 candidate/sort workspace, sized at preparation over ALL objects
@@ -170,23 +176,24 @@ pub(crate) struct EmissiveScratch {
     pub(crate) candidates: [GpuBuffer; 2],
     /// Radix per-tile digit histograms / scanned offsets: tiles × 256 u32.
     pub(crate) hist: GpuBuffer,
-    /// Shared CPU-written header + object table (16 + max_objects × 48 B).
+    /// Ordered GPU snapshot of the header + object table.
     pub(crate) obj_params: GpuBuffer,
+    obj_params_scratch: GpuBuffer,
     capacity: u32,
 }
 
 impl EmissiveScratch {
-    pub(crate) fn new(device: &GpuDevice, capacity: u32, max_objects: usize) -> Self {
+    pub(crate) fn new(device: &GpuDevice, capacity: u32, max_objects: usize) -> Result<Self, RtAccelError> {
         let cap = u64::from(capacity.max(1));
         let tiles = u64::from(capacity.div_ceil(EM_TILE).max(1));
-        Self {
-            candidates: [device.create_buffer(cap * 16), device.create_buffer(cap * 16)],
-            hist: device.create_buffer(tiles * 256 * 4),
-            obj_params: device.create_buffer_shared(
-                16 + (max_objects.max(1) * std::mem::size_of::<EmissiveObjParams>()) as u64,
-            ),
+        let params_bytes = 16 + (max_objects.max(1) * std::mem::size_of::<EmissiveObjParams>()) as u64;
+        Ok(Self {
+            candidates: [prepare_buffer(device, cap * 16, false)?, prepare_buffer(device, cap * 16, false)?],
+            hist: prepare_buffer(device, tiles * 256 * 4, false)?,
+            obj_params: prepare_buffer(device, params_bytes, false)?,
+            obj_params_scratch: prepare_buffer(device, params_bytes, true)?,
             capacity,
-        }
+        })
     }
 
     /// Byte size of the candidate/sort workspace for the plan's admission
@@ -220,6 +227,39 @@ pub(crate) enum EmissiveRefresh {
 /// and threading them keeps the kernels independent of the gi_materials
 /// table layout (the same class of omission as §4.1's `device`, recorded
 /// in 4e949fc45).
+pub(crate) fn validate_emissive_inputs(
+    accel: &RtAccel,
+    objects: &[RtObjectGeometry<'_>],
+    materials: &[GiMaterial],
+) -> Result<(), RtAccelError> {
+    if !materials.is_empty() && materials.len() != objects.len() {
+        return Err(RtAccelError::Encode("RT emissive material count mismatch"));
+    }
+    let scratch = accel.emissive_scratch.as_ref().ok_or(RtAccelError::NeedsPreparation)?;
+    if accel.emissive_table.is_none()
+        || objects.len().checked_mul(std::mem::size_of::<EmissiveObjParams>())
+            .and_then(|bytes| bytes.checked_add(16))
+            .is_none_or(|bytes| bytes > scratch.obj_params_scratch.size as usize)
+    {
+        return Err(RtAccelError::NeedsPreparation);
+    }
+    let mut slots = 0u32;
+    let mut candidates = 0u32;
+    for (index, object) in objects.iter().enumerate() {
+        let count = effective_instance_slots(object);
+        slots = slots.checked_add(count).ok_or(RtAccelError::Encode("RT emissive slot base overflow"))?;
+        let emission = if materials.is_empty() { 0.0 } else { luma(materials[index].emissive) };
+        if !emission.is_finite() { return Err(RtAccelError::Encode("RT emissive luma must be finite")); }
+        if emission > 0.0 {
+            candidates = candidates.checked_add(count.checked_mul(object.triangle_count)
+                .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?)
+                .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?;
+        }
+    }
+    if candidates > scratch.capacity { return Err(RtAccelError::NeedsPreparation); }
+    Ok(())
+}
+
 pub(crate) fn encode_emissive_table(
     tracer: &MetalShadowRayTracer,
     device: &GpuDevice,
@@ -229,12 +269,11 @@ pub(crate) fn encode_emissive_table(
     materials: &[GiMaterial],
     refresh: EmissiveRefresh,
 ) -> Result<(), RtAccelError> {
+    validate_emissive_inputs(accel, objects, materials)?;
     if accel.emissive_scratch.is_none() {
         return Err(RtAccelError::NeedsPreparation);
     }
-    if accel.emissive_table.is_none() {
-        accel.emissive_table = Some(EmissiveLightTable::new(device));
-    }
+    if accel.emissive_table.is_none() { return Err(RtAccelError::NeedsPreparation); }
     let instanced = accel.instanced;
 
     // CPU metadata compaction: one row per emissive object (luma > 0), with
@@ -252,7 +291,12 @@ pub(crate) fn encode_emissive_table(
     }
     let mut active_count = 0u32;
     let mut slot_base = 0u32;
-    let mut rows: Vec<EmissiveObjParams> = Vec::new();
+    let scratch = accel.emissive_scratch.as_ref().expect("checked above");
+    if objects.len() * std::mem::size_of::<EmissiveObjParams>() + 16 > scratch.obj_params_scratch.size as usize {
+        return Err(RtAccelError::NeedsPreparation);
+    }
+    let ptr = scratch.obj_params_scratch.mapped_ptr().expect("prepared CPU snapshot");
+    let mut row_count = 0usize;
     for (oi, obj) in objects.iter().enumerate() {
         let obj_slots = effective_instance_slots(obj);
         let object_slot_base = slot_base;
@@ -271,7 +315,7 @@ pub(crate) fn encode_emissive_table(
                     .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?,
             )
             .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?;
-        rows.push(EmissiveObjParams {
+        let row = EmissiveObjParams {
             vertex_base_addr: obj.vertex_buffer.gpu_address(),
             index_base_addr: obj.index_buffer.map_or(0, GpuBuffer::gpu_address),
             vertex_stride: obj.vertex_stride,
@@ -283,23 +327,9 @@ pub(crate) fn encode_emissive_table(
             object_index: oi as u32,
             luma: obj_luma,
             appearance_weights_addr: obj.appearance_weights.map_or(0, GpuBuffer::gpu_address),
-        });
-    }
-
-    // Raw-address vertex/index/weights reads are the BUG-84fv indirect-
-    // reach class: every buffer the kernels can touch is useResource-
-    // declared on the dispatch (the accel's geometry set carries the
-    // objects' vertex/index/weights buffers; declared again here so the
-    // list names this kernel's own reads).
-    let mut indirect_reads: Vec<&GpuBuffer> = Vec::with_capacity(objects.len() * 3);
-    for obj in objects {
-        indirect_reads.push(obj.vertex_buffer);
-        if let Some(ib) = obj.index_buffer {
-            indirect_reads.push(ib);
-        }
-        if let Some(w) = obj.appearance_weights {
-            indirect_reads.push(w);
-        }
+        };
+        unsafe { (ptr.add(16) as *mut EmissiveObjParams).add(row_count).write_unaligned(row); }
+        row_count += 1;
     }
 
     {
@@ -309,32 +339,23 @@ pub(crate) fn encode_emissive_table(
             // preparation that predates this object set can be short.
             return Err(RtAccelError::NeedsPreparation);
         }
-        // Header + object table, written at encode time (shared buffer; the
-        // GPU reads it on this command buffer, after this CPU write).
-        // GatherOnly preserves the GPU-counted valid_count: no enumerate
-        // runs on that tier and the candidate set is unchanged, so the last
-        // Full refresh's count is still correct (transform-only update).
-        let ptr = scratch
-            .obj_params
-            .mapped_ptr()
-            .expect("RT emissive object-params buffer must be CPU-mapped");
-        let preserved_valid = if refresh == EmissiveRefresh::GatherOnly {
-            unsafe { (ptr.add(4) as *const u32).read_unaligned() }
-        } else {
-            0
-        };
         let header = EmissivePrepHeader {
             active_count,
-            valid_count: preserved_valid,
+            valid_count: 0,
             entries_are_local: instanced as u32,
-            object_count: rows.len() as u32,
+            object_count: row_count as u32,
         };
         unsafe {
             std::ptr::write_unaligned(ptr as *mut EmissivePrepHeader, header);
-            let row_ptr = ptr.add(16) as *mut EmissiveObjParams;
-            for (i, row) in rows.iter().enumerate() {
-                std::ptr::write_unaligned(row_ptr.add(i), *row);
-            }
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, 16 + row_count * std::mem::size_of::<EmissiveObjParams>()) };
+        // Preserve GPU-owned valid_count on a transform-only refresh. Never
+        // read it on the CPU: the preceding frame may still be unsubmitted.
+        if refresh == EmissiveRefresh::GatherOnly {
+            super::encode_inline_copy(device, encoder, &scratch.obj_params, 0, &bytes[..4]);
+            super::encode_inline_copy(device, encoder, &scratch.obj_params, 8, &bytes[8..]);
+        } else {
+            super::encode_inline_copy(device, encoder, &scratch.obj_params, 0, bytes);
         }
     }
 
@@ -354,7 +375,7 @@ pub(crate) fn encode_emissive_table(
                 GpuBinding::Buffer { binding: 1, buffer: &scratch.obj_params, offset: 16 },
                 GpuBinding::Buffer { binding: 2, buffer: &scratch.candidates[0], offset: 0 },
             ],
-            &indirect_reads,
+            objects,
             active_count,
             "RT emissive enumerate",
         );
@@ -379,7 +400,7 @@ pub(crate) fn encode_emissive_table(
                     GpuBinding::Buffer { binding: 2, buffer: &scratch.hist, offset: 0 },
                     GpuBinding::Bytes { binding: 3, data: &shift_bytes },
                 ],
-                &indirect_reads,
+                objects,
                 num_tiles,
                 "RT emissive hist",
             );
@@ -391,7 +412,7 @@ pub(crate) fn encode_emissive_table(
                     GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
                     GpuBinding::Buffer { binding: 1, buffer: &scratch.hist, offset: 0 },
                 ],
-                &indirect_reads,
+                objects,
                 1,
                 "RT emissive scan",
             );
@@ -406,7 +427,7 @@ pub(crate) fn encode_emissive_table(
                     GpuBinding::Buffer { binding: 3, buffer: &scratch.hist, offset: 0 },
                     GpuBinding::Bytes { binding: 4, data: &shift_bytes },
                 ],
-                &indirect_reads,
+                objects,
                 num_tiles,
                 "RT emissive scatter",
             );
@@ -427,7 +448,7 @@ pub(crate) fn encode_emissive_table(
                 GpuBinding::Buffer { binding: 4, buffer: &table.entry_power, offset: 0 },
                 GpuBinding::Buffer { binding: 5, buffer: &accel.instance_buffer, offset: 0 },
             ],
-            &indirect_reads,
+            objects,
             MAX_RT_EMISSIVE_TRIANGLES,
             "RT emissive gather",
         );
@@ -443,7 +464,7 @@ pub(crate) fn encode_emissive_table(
             GpuBinding::Buffer { binding: 1, buffer: &table.entry_power, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: &table.stats, offset: 0 },
         ],
-        &indirect_reads,
+        objects,
         1,
         "RT emissive stats",
     );
@@ -458,7 +479,7 @@ pub(crate) fn encode_emissive_table(
                 GpuBinding::Buffer { binding: 2, buffer: &table.aliases, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: &table.alias_stacks, offset: 0 },
             ],
-            &indirect_reads,
+            objects,
             1,
             "RT emissive alias",
         );
@@ -475,7 +496,7 @@ fn dispatch_emissive(
     pipeline: &GpuComputePipeline,
     accel: &RtAccel,
     bindings: &[GpuBinding<'_>],
-    indirect_reads: &[&GpuBuffer],
+    objects: &[RtObjectGeometry],
     threads: u32,
     label: &str,
 ) {
@@ -486,7 +507,7 @@ fn dispatch_emissive(
         u32::MAX,
         accel,
         bindings,
-        indirect_reads.iter().copied(),
+        objects.iter().flat_map(|object| [Some(object.vertex_buffer), object.index_buffer, object.appearance_weights].into_iter().flatten()),
         None,
         [threads.div_ceil(per_group), 1, 1],
         label,

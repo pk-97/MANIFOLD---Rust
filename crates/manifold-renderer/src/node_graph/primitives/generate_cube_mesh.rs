@@ -69,6 +69,8 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["cube mesh", "generate cube mesh", "box", "cube", "Box SOP"],
+    // Geometry depends only on size/capacity; no time, state or external inputs.
+    pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/generate_cube_mesh_body.wgsl"),
 }

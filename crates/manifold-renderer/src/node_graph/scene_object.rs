@@ -124,7 +124,7 @@ impl MeshTopologyHistory {
     pub(crate) fn update(
         &mut self,
         resource_epoch: u64,
-        revisions: impl Iterator<Item = Option<(Slot, u64)>>,
+        revisions: impl Iterator<Item = impl std::hash::Hash>,
     ) -> bool {
         use std::hash::{Hash, Hasher};
         let mut hash = ahash::AHasher::default();
@@ -156,8 +156,17 @@ mod tests {
         // Recycled resources, changed object order and removal also reset.
         assert!(history.update(2, [None, Some((Slot(4), 2))].into_iter()));
         assert!(history.update(2, [Some((Slot(4), 2)), None].into_iter()));
-        assert!(history.update(2, [None, None].into_iter()));
-        assert!(!history.update(2, [None, None].into_iter()));
+        assert!(history.update(2, [None::<(Slot, u64)>, None].into_iter()));
+        assert!(!history.update(2, [None::<(Slot, u64)>, None].into_iter()));
+    }
+
+    #[test]
+    fn general_topology_revision_resets_history_without_a_cut_map() {
+        let mut history = MeshTopologyHistory::default();
+        let object = (Some(Slot(4)), Some(1_u64), None::<(Slot, u64)>);
+        assert!(!history.update(1, [object].into_iter()));
+        assert!(!history.update(1, [object].into_iter()));
+        assert!(history.update(1, [(object.0, Some(2_u64), object.2)].into_iter()));
     }
 
     #[test]

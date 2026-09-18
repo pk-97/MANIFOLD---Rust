@@ -84,5 +84,8 @@ journey-proofs = ["dep:image"]
 # timing framework).
 perf-soak = ["profiling"]
 
+[dev-dependencies]
+sha2 = "0.10"
+
 [lints]
 workspace = true

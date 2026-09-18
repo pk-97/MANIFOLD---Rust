@@ -19,9 +19,25 @@ pub struct GpuEncoder<'a> {
     /// [`Self::checkpoint`]. Always false for profiled frames so per-buffer
     /// dispatch timestamps stay monolithic (UI_RESPONSIVENESS_UNDER_LOAD D5).
     pub chunking_enabled: bool,
+    /// Candidate warmup may prepare RT resources even when its saved toggle is off.
+    pub preparing: bool,
+    /// Operations actually encoded by the shared dynamic RT path this frame.
+    pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
+    pub rt_history_resets: u32,
+    pub rt_dispatches: u32,
+    #[cfg(feature = "gpu-proofs")]
+    pub capture_rt_geometry: bool,
+    #[cfg(feature = "gpu-proofs")]
+    pub force_rt_rebuild: bool,
     /// Live per-send audio histories used by audio-reactive graph sources.
     /// The registry is content-thread owned and only borrowed for this frame.
     pub audio_visuals: Option<&'a manifold_core::audio_visual::AudioVisualRegistry>,
+    /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): this frame's validity as
+    /// observed by everything encoded through this wrapper. Owned per wrapper
+    /// (never a global counter); `checkpoint`/command-buffer splits leave it
+    /// intact. Callers merge it into the pipeline's `last_frame_status`
+    /// before dropping the wrapper.
+    frame_status: crate::frame_status::FrameRenderStatus,
 }
 
 // Safety: GpuEncoder is only used within a single frame on the content thread.
@@ -38,7 +54,16 @@ impl<'a> GpuEncoder<'a> {
             pool: None,
             uniform_arena: None,
             chunking_enabled: false,
+            preparing: false,
+            rt_updates: Default::default(),
+            rt_history_resets: 0,
+            rt_dispatches: 0,
+            #[cfg(feature = "gpu-proofs")]
+            capture_rt_geometry: false,
+            #[cfg(feature = "gpu-proofs")]
+            force_rt_rebuild: false,
             audio_visuals: None,
+            frame_status: crate::frame_status::FrameRenderStatus::Complete,
         }
     }
 
@@ -54,8 +79,28 @@ impl<'a> GpuEncoder<'a> {
             pool: Some(pool),
             uniform_arena: None,
             chunking_enabled: false,
+            preparing: false,
+            rt_updates: Default::default(),
+            rt_history_resets: 0,
+            rt_dispatches: 0,
+            #[cfg(feature = "gpu-proofs")]
+            capture_rt_geometry: false,
+            #[cfg(feature = "gpu-proofs")]
+            force_rt_rebuild: false,
             audio_visuals: None,
+            frame_status: crate::frame_status::FrameRenderStatus::Complete,
         }
+    }
+
+    /// This frame's merged validity for everything encoded so far.
+    pub fn frame_status(&self) -> crate::frame_status::FrameRenderStatus {
+        self.frame_status
+    }
+
+    /// Merge a node/sub-encoder's status into this wrapper (section 5.4:
+    /// first failure wins; success never clears).
+    pub fn merge_frame_status(&mut self, status: crate::frame_status::FrameRenderStatus) {
+        self.frame_status.merge(status);
     }
 
     /// Split the underlying Metal command buffer if chunking is enabled this

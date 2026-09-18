@@ -104,6 +104,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["grid mesh", "generate grid mesh", "plane", "terrain", "Grid SOP"],
+    pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/generate_grid_mesh_body.wgsl"),
 }

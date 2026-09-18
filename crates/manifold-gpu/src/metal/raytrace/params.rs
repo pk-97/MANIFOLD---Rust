@@ -474,7 +474,7 @@ const _: () = assert!(
 /// the stride to 96 — MSL rounds the same struct to 96 (its `float2` pad
 /// requires 8-byte alignment, landing at 88). Asserted, not hand-counted.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct RtInstanceBuildObj {
     model: [[f32; 4]; 4],
     instances_addr: u64,

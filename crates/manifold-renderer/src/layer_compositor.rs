@@ -938,6 +938,7 @@ impl LayerCompositor {
             elapsed: std::time::Duration::ZERO,
         };
         let group_id = layer.layer_id.clone();
+        let mut warmup_frame_status: crate::frame_status::FrameRenderStatus;
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
@@ -992,6 +993,9 @@ impl LayerCompositor {
                     crate::node_graph::RtQuality::default(),
                     &self.layer_skin_registry,
                 );
+                // §5.4: pending geometry is incomplete preparation — the
+                // wrapper's status gates quiescence below.
+                warmup_frame_status = gpu.frame_status();
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
                 log::error!("Effect-chain warmup GPU failure: {err}");
@@ -1002,6 +1006,7 @@ impl LayerCompositor {
             if let Some(chain) = self.effect_chains.get(&group_id)
                 && let Some(cg) = chain.as_ref()
                 && !cg.warmup_pending()
+                && warmup_frame_status == crate::frame_status::FrameRenderStatus::Complete
             {
                 outcome = WarmupOutcome::Quiescent;
                 break;
@@ -1010,9 +1015,12 @@ impl LayerCompositor {
             // Paced wait: if async work is still in flight, yield so the
             // background threads can land without burning a whole frame budget
             // on spin-rendered no-ops.
-            if let Some(chain) = self.effect_chains.get(&group_id)
-                && let Some(cg) = chain.as_ref()
-                && cg.warmup_pending()
+            if (warmup_frame_status != crate::frame_status::FrameRenderStatus::Complete)
+                || self
+                    .effect_chains
+                    .get(&group_id)
+                    .and_then(|chain| chain.as_ref())
+                    .is_some_and(|cg| cg.warmup_pending())
             {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
@@ -1184,6 +1192,7 @@ impl LayerCompositor {
             cap: WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
         };
+        let mut warmup_frame_status: crate::frame_status::FrameRenderStatus;
 
         for _frame in 0..budget.per_layer_frames {
             if start.elapsed() >= budget.per_layer {
@@ -1213,6 +1222,9 @@ impl LayerCompositor {
                     crate::node_graph::RtQuality::default(),
                     layer_sources,
                 );
+                // §5.4: pending geometry is incomplete preparation — the
+                // wrapper's status gates quiescence below.
+                warmup_frame_status = gpu.frame_status();
             }
             if let Err(err) = native_enc.try_commit_and_wait_completed() {
                 log::error!("Effect-chain warmup GPU failure: {err}");
@@ -1222,13 +1234,14 @@ impl LayerCompositor {
 
             if let Some(cg) = chain.as_ref()
                 && !cg.warmup_pending()
+                && warmup_frame_status == crate::frame_status::FrameRenderStatus::Complete
             {
                 outcome = WarmupOutcome::Quiescent;
                 break;
             }
 
-            if let Some(cg) = chain.as_ref()
-                && cg.warmup_pending()
+            if warmup_frame_status != crate::frame_status::FrameRenderStatus::Complete
+                || chain.as_ref().is_some_and(|cg| cg.warmup_pending())
             {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }

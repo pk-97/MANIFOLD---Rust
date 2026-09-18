@@ -133,6 +133,7 @@ use super::shader_compiler::{
 
 /// Native Metal device + command queue for the content thread.
 pub struct GpuDevice {
+    allocation_counts: [std::sync::atomic::AtomicU64; 3],
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
@@ -194,6 +195,7 @@ impl GpuDevice {
             .newCommandQueue()
             .expect("Failed to create command queue");
         Self {
+            allocation_counts: [const { std::sync::atomic::AtomicU64::new(0) }; 3],
             device,
             queue,
             archive: std::sync::Mutex::new(None),
@@ -335,6 +337,16 @@ impl GpuDevice {
         retire_on_queue(&self.queue, obj, label);
     }
 
+    /// Successful Metal buffer, texture and RT acceleration-structure allocations.
+    /// Monotonic per-device counters for warmup/steady-state acceptance probes.
+    pub fn allocation_counts(&self) -> [u64; 3] {
+        self.allocation_counts.each_ref().map(|count| count.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub(crate) fn record_accel_allocation(&self) {
+        self.allocation_counts[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Create a GPU texture via device allocation (kernel call per texture).
     /// Prefer `TexturePool::acquire()` for transient textures.
     pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {        if alloc_log_enabled() {
@@ -349,6 +361,7 @@ impl GpuDevice {
             .device
             .newTextureWithDescriptor(&mtl_desc)
             .expect("Metal: texture allocation failed — GPU memory exhausted");
+        self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GpuTexture {
             raw,
             width: desc.width,
@@ -380,6 +393,7 @@ impl GpuDevice {
                     desc.width, desc.height, desc.depth, desc.format
                 )
             })?;
+        self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(GpuTexture {
             raw,
             width: desc.width,
@@ -401,6 +415,7 @@ impl GpuDevice {
             .unwrap_or_else(|| {
                 panic!("Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted")
             });
+        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GpuBuffer {
             raw,
             size,
@@ -418,6 +433,7 @@ impl GpuDevice {
             .device
             .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| format!("Metal: buffer allocation failed ({size} bytes)"))?;
+        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(GpuBuffer {
             raw,
             size,
@@ -442,6 +458,7 @@ impl GpuDevice {
                 )
             });
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
+        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GpuBuffer {
             raw,
             size,
@@ -463,6 +480,7 @@ impl GpuDevice {
             .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
             .ok_or_else(|| format!("Metal: shared buffer allocation failed ({size} bytes)"))?;
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
+        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(GpuBuffer {
             raw,
             size,

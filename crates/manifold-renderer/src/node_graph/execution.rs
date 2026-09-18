@@ -1013,10 +1013,19 @@ impl Executor {
     fn commit_mesh_revisions(&mut self, plan: &ExecutionPlan, step: &ExecutionStep, wrote: bool) {
         for &(_, res) in &step.outputs {
             let idx = res.0 as usize;
-            let Some(rule) = plan.mesh_rule(res) else { continue };
             if idx >= self.mesh_revisions.len() {
                 continue; // defensive: sized at the plan-shape reset
             }
+            let Some(rule) = plan.mesh_rule(res) else {
+                // Mesh topology can depend on non-mesh content (cut maps,
+                // index maps, scalar controls). Preserve the logical write
+                // token even though these outputs have no mesh aspect rules.
+                if wrote {
+                    self.mesh_revision_counter += 1;
+                    self.mesh_revisions[idx].content = self.mesh_revision_counter;
+                }
+                continue;
+            };
 
             let declared = self
                 .backend
@@ -1795,20 +1804,24 @@ impl Executor {
             // output resource is new content — bump its epoch so consumers'
             // memos see the change. Pure steps then snapshot the epochs they
             // ran with (the clean-skip compares against this next frame);
-            // non-pure steps clear any stale memo. The input-epoch Vec only
-            // allocates on dirty executes of pure steps — never on the
-            // steady-state (clean) path.
+            // non-pure steps clear any stale memo. Reuse the input-epoch
+            // storage on dirty frames as well as on steady unchanged frames.
             for &(_, res) in &step.outputs {
                 *self.resource_epoch.entry(res).or_insert(0) += 1;
             }
-            self.step_memo[idx] = executed_pure_epoch.map(|param_epoch| StepMemo {
-                param_epoch,
-                input_epochs: step
-                    .inputs
-                    .iter()
-                    .map(|&(_, res)| self.resource_epoch.get(&res).copied().unwrap_or(0))
-                    .collect(),
-            });
+            if let Some(param_epoch) = executed_pure_epoch {
+                let memo = self.step_memo[idx].get_or_insert_with(|| StepMemo {
+                    param_epoch,
+                    input_epochs: Vec::with_capacity(step.inputs.len()),
+                });
+                memo.param_epoch = param_epoch;
+                memo.input_epochs.clear();
+                memo.input_epochs.extend(step.inputs.iter().map(|&(_, res)| {
+                    self.resource_epoch.get(&res).copied().unwrap_or(0)
+                }));
+            } else {
+                self.step_memo[idx] = None;
+            }
 
             // Attribution profiling: close the step's CPU encode clock.
             if let Some(t0) = prof_start {
@@ -4077,6 +4090,43 @@ mod tests {
                 "Fixed aspects must stay retained over repeated writes, got {r1:?} then {r3:?}"
             );
             assert!(r3.content > r2.content);
+        }
+
+        #[test]
+        fn mesh_change_non_mesh_map_content_revises_topology() {
+            use crate::node_graph::mesh_change::MeshDependency;
+            static MAP_DEPENDENCY: [MeshDependency; 1] = [MeshDependency {
+                input: std::borrow::Cow::Borrowed("in"),
+                aspect: MeshAspect::Content,
+            }];
+            let map_ty = PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::Vec4Vertex>());
+            let (mut source, (unchanged, _, _)) = MeshNode::producer(None);
+            source.outputs = vec![output("out", map_ty)];
+            let (mut remap, _, _) = MeshNode::consumer(Some(MeshOutputRule {
+                topology: MeshRevisionRule::Dependencies(&MAP_DEPENDENCY),
+                positions: MeshRevisionRule::Written,
+            }));
+            remap.inputs = vec![input("in", map_ty, true)];
+            let mut graph = Graph::new();
+            let source = graph.add_node(Box::new(source));
+            let remap = graph.add_node(Box::new(remap));
+            let sink = graph.add_node(Box::new(MeshNode::sink()));
+            graph.connect((source, "out"), (remap, "in")).unwrap();
+            graph.connect((remap, "out"), (sink, "in")).unwrap();
+            let plan = compile(&graph).unwrap();
+            assert!(plan.mesh_rule(out_res(&plan, source)).is_none());
+            let result = out_res(&plan, remap);
+            let mut executor = Executor::with_mock();
+            executor.execute_frame(&mut graph, &plan, frame_time());
+            let first = executor.mesh_revision_of_res(result);
+            *unchanged.lock().unwrap() = true;
+            executor.execute_frame(&mut graph, &plan, frame_time());
+            let reused = executor.mesh_revision_of_res(result);
+            assert_eq!(first.topology, reused.topology);
+            assert!(reused.positions > first.positions);
+            *unchanged.lock().unwrap() = false;
+            executor.execute_frame(&mut graph, &plan, frame_time());
+            assert!(executor.mesh_revision_of_res(result).topology > reused.topology);
         }
 
         /// Wraps a real stock primitive so its DECLARED

@@ -265,7 +265,7 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
 }
 
 #[test]
-fn scene_modifier_expand_runtime_rejects_ray_tracing_enabled_by_live_manifest() {
+fn scene_modifier_expand_runtime_accepts_ray_tracing_enabled_by_live_manifest() {
     use manifold_core::params::{Param, ParamManifest};
     let mut owner = fixture();
     let local = owner.scene_modifiers[0]
@@ -307,15 +307,16 @@ fn scene_modifier_expand_runtime_rejects_ray_tracing_enabled_by_live_manifest() 
         prepare_scene_modifiers(&owner, &registry).is_ok(),
         "authored RT default is off"
     );
-    let result = crate::preset_runtime::PresetRuntime::from_def(owner, &registry, Some(&manifest));
-    assert!(matches!(
-        result,
-        Err(
-            crate::preset_runtime::JsonGeneratorLoadError::SceneModifier(
-                SceneModifierExpandError::UnsupportedRenderMode { .. }
-            )
-        )
-    ));
+    let runtime = crate::preset_runtime::PresetRuntime::from_def(owner, &registry, Some(&manifest))
+        .expect("live RT toggle remains admissible");
+    let scene = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("scan_render"))
+        .expect("render scene");
+    assert_eq!(
+        runtime.graph.get_node(scene).unwrap().params.get("rt_enabled"),
+        Some(&crate::node_graph::ParamValue::Bool(true))
+    );
 }
 
 #[test]
@@ -744,7 +745,7 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
 }
 
 #[test]
-fn scene_modifier_expand_compiler_rejects_invalid_endpoint_and_dynamic_rt_even_disabled() {
+fn scene_modifier_expand_compiler_accepts_authored_rt_and_rejects_invalid_endpoint() {
     let mut owner = fixture();
     owner
         .nodes
@@ -768,10 +769,7 @@ fn scene_modifier_expand_compiler_rejects_invalid_endpoint_and_dynamic_rt_even_d
         }
     }
     let canonical = owner.clone();
-    assert!(matches!(
-        expand_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()),
-        Err(SceneModifierExpandError::UnsupportedRenderMode { .. })
-    ));
+    assert!(expand_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).is_ok());
     assert_eq!(owner, canonical);
     owner
         .nodes

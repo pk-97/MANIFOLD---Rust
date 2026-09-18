@@ -710,7 +710,7 @@ fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_li
 }
 
 #[test]
-fn vertices_modifier_locks_host_rt_enabled_before_mutation() {
+fn vertices_modifier_allows_host_rt_enabled_with_undo_redo() {
     use manifold_core::NodeId;
     use manifold_core::scene_modifier_preset::{
         SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
@@ -760,7 +760,7 @@ fn vertices_modifier_locks_host_rt_enabled_before_mutation() {
     let mut service = crate::service::EditingService::new();
     service.execute(
         Box::new(SetGraphNodeParamCommand::new(
-            GraphTarget::Effect(id),
+            GraphTarget::Effect(id.clone()),
             99,
             "rt_enabled".into(),
             SerializedParamValue::Bool { value: true },
@@ -768,13 +768,17 @@ fn vertices_modifier_locks_host_rt_enabled_before_mutation() {
         )),
         &mut project,
     );
-    let rejection = service
-        .take_rejection()
-        .expect("vertices recipe locks raster mode");
-    assert!(rejection.contains("rt_enabled"));
-    assert_eq!(service.data_version(), 0);
-    assert!(!service.can_undo());
+    assert!(service.take_rejection().is_none());
+    assert_eq!(service.data_version(), 1);
+    assert!(service.can_undo());
+    let graph = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+    let scene = graph.nodes.iter().find(|node| node.id == 99).unwrap();
+    assert_eq!(scene.params.get("rt_enabled"), Some(&SerializedParamValue::Bool { value: true }));
+    let after = serde_json::to_value(&project).unwrap();
+    assert!(service.undo(&mut project));
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    assert!(service.redo(&mut project));
+    assert_eq!(serde_json::to_value(&project).unwrap(), after);
 }
 
 #[test]

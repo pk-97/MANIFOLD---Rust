@@ -349,6 +349,34 @@ fn capture_output(ct: &crate::content_thread::ContentThread, path: &Path) -> (Ve
     capture_output_impl(ct, path, true)
 }
 
+/// BUG-v47f: photoscan mesh content stages asynchronously after Play /
+/// LoadProject — a fixed tick count races it (this journey was red from its
+/// own introduction commit). Tick, bounded, until the frame carries
+/// geometry; the strict assert still fires when nothing ever shows.
+fn capture_output_when_ready(
+    ct: &mut crate::content_thread::ContentThread,
+    state_tx: &crossbeam_channel::Sender<ContentState>,
+    path: &Path,
+) -> (Vec<u8>, usize) {
+    let mut frame = Vec::new();
+    let mut nonzero = 0;
+    for _ in 0..120 {
+        ct.tick_frame(state_tx);
+        let captured = capture_output_impl(ct, path, false);
+        frame = captured.0;
+        nonzero = captured.1;
+        if nonzero > 0 {
+            break;
+        }
+    }
+    assert!(
+        nonzero > 0,
+        "output contains no geometry after bounded wait; capture {}",
+        path.display()
+    );
+    (frame, nonzero)
+}
+
 fn capture_output_allow_uniform(
     ct: &crate::content_thread::ContentThread,
     path: &Path,
@@ -464,11 +492,10 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
         ct.engine.all_active_clips_ready(),
         ct.content_pipeline.live_node_params().len()
     );
-    let (first_frame, first_nonzero) = capture_output(&ct, &output_dir.join("playing-0004.png"));
-    assert!(
-        first_nonzero > 0,
-        "playing journey output contains geometry"
-    );
+    // BUG-v47f: tick until the mesh lands rather than assuming a frame
+    // count (see capture_output_when_ready).
+    let (first_frame, _first_nonzero) =
+        capture_output_when_ready(&mut ct, &state_tx, &output_dir.join("playing-first.png"));
     let prepared_compiles = cold_touch_count(ColdTouchKind::PipelineCompile);
     for _ in 0..20 {
         ct.tick_frame(&state_tx);
@@ -478,7 +505,8 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
         prepared_compiles,
         "live LFO must not compile pipelines"
     );
-    let (later_frame, later_nonzero) = capture_output(&ct, &output_dir.join("playing-0024.png"));
+    let (later_frame, later_nonzero) =
+        capture_output(&ct, &output_dir.join("playing-later.png"));
     assert!(later_nonzero > 0, "later playing output contains geometry");
     assert_ne!(
         first_frame, later_frame,
@@ -538,9 +566,11 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
     ct.timer.set_frame_clocked(true);
     ct.handle_command(ContentCommand::Pause);
     ct.handle_command(ContentCommand::SeekToBeat(Beats(4.25)));
-    ct.tick_frame(&state_tx);
-    let (before_mapping, before_mapping_nonzero) =
-        capture_output(&ct, &output_dir.join("reopen-before-mapping.png"));
+    let (before_mapping, before_mapping_nonzero) = capture_output_when_ready(
+        &mut ct,
+        &state_tx,
+        &output_dir.join("reopen-before-mapping.png"),
+    );
     assert!(
         before_mapping_nonzero > 0,
         "reopened output contains geometry"
@@ -553,24 +583,21 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
         "lift",
     );
     let mapping_id = reopened_lift.clone();
-    let mapping_layer_id = mushroom_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
-        let owner = project
-            .graph_target_owner_mut(&manifold_core::GraphTarget::Generator(mapping_layer_id))
-            .expect("reopened mushroom owner");
-        let binding = owner
-            .graph_def_mut()
-            .as_mut()
-            .and_then(|graph| graph.preset_metadata.as_mut())
-            .and_then(|metadata| {
-                metadata
-                    .bindings
-                    .iter_mut()
-                    .find(|binding| binding.id == mapping_id)
-            })
-            .expect("reopened lift mapping");
-        binding.scale = 0.5;
-    })));
+    // BUG-v47f: a mapping edit must go through the production command — it
+    // bumps graph_version, the signal the generator sweep's reshape re-bake
+    // keys on. A raw MutateProject scale write stores the value but never
+    // reaches the live bindings.
+    ct.handle_command(ContentCommand::Execute(Box::new(
+        manifold_editing::commands::effects::EditParamMappingCommand::new(
+            manifold_core::GraphTarget::Generator(mushroom_id.clone()),
+            mapping_id.clone(),
+            manifold_editing::commands::effects::BindingMappingEdit {
+                scale: Some(0.5),
+                ..Default::default()
+            },
+            None,
+        ),
+    )));
     let remapped_scale =
         generator_graph(ct.engine.project().expect("reopened project"), &mushroom_id)
             .preset_metadata
@@ -586,9 +613,11 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
     assert_eq!(remapped_scale, 0.5, "the post-reopen mapping edit is live");
     ct.handle_command(ContentCommand::Pause);
     ct.handle_command(ContentCommand::SeekToBeat(Beats(4.25)));
-    ct.tick_frame(&state_tx);
-    let (after_mapping, after_mapping_nonzero) =
-        capture_output(&ct, &output_dir.join("reopen-after-mapping.png"));
+    let (after_mapping, after_mapping_nonzero) = capture_output_when_ready(
+        &mut ct,
+        &state_tx,
+        &output_dir.join("reopen-after-mapping.png"),
+    );
     assert!(
         after_mapping_nonzero > 0,
         "remapped output contains geometry"
