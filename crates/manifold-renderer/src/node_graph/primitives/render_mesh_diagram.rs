@@ -5,7 +5,7 @@
 //! arrows, axes, the infinite world grid, and temporal trails share one bounded
 //! instanced pass. The grid uses the scene camera without the object transform.
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -21,6 +21,10 @@ const MSAA_SAMPLE_COUNT: u32 = 4;
 const HISTORY_SAMPLES: u32 = 64;
 const TRAIL_RENDER_SAMPLES: u32 = 32;
 const MAX_VERTICES: u32 = 1536;
+// Echo/copy chains (SpatialEchoes, SceneLoop) are capped at 8 visible copies
+// per object, matching analytic_echo_instances' own echo ceiling. Total marks
+// stay bounded by 4 * MAX_VERTICES/3 * 8 diagram instances plus trails.
+const MAX_COPY_INSTANCES: u32 = 8;
 const DIAGRAM_BLEND: GpuBlendState = GpuBlendState {
     src_factor: GpuBlendFactor::SrcAlpha,
     dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
@@ -62,6 +66,9 @@ struct DiagramUniforms {
     event_values: [f32;4],
     scan_values: [f32;4],
     event_targets: [u32;4],
+    copy_count: u32,
+    instances_wired: u32,
+    _instances_pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -76,11 +83,12 @@ struct HistoryCaptureUniforms {
 crate::primitive! {
     name: RenderMeshDiagram,
     type_id: "node.render_mesh_diagram",
-    purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; this presentation node contains no modifier math.",
+    purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; an optional InstanceTransform array repeats fragments, ghosts and displacement arrows per copy so echo chains are visible. This presentation node contains no modifier math.",
     inputs: {
         current: Array(MeshVertex) required,
         reference: Array(MeshVertex) required,
         incoming: Array(MeshVertex) required,
+        instances: Array(InstanceTransform) optional,
         camera: Camera required,
         transform: Transform optional,
         grid: ScalarF32 optional,
@@ -156,6 +164,7 @@ crate::primitive! {
         depth_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         depth_sampler: Option<manifold_gpu::GpuSampler> = None,
         dummy_depth: Option<manifold_gpu::GpuTexture> = None,
+        identity_instances: Option<manifold_gpu::GpuBuffer> = None,
         capture_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         msaa: Option<manifold_gpu::GpuTexture> = None,
         width: u32 = 0,
@@ -245,6 +254,20 @@ impl RenderMeshDiagram {
             device.upload_texture(&texture, bytemuck::bytes_of(&0.0f32));
             self.dummy_depth = Some(texture);
         }
+        if self.identity_instances.is_none() {
+            // Bound at the instances slot when the port is unwired so the
+            // shared layout stays valid; the shader never reads it in that
+            // mode (instances_wired == 0 selects the identity constant).
+            let buffer = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+            let identity = [InstanceTransform {
+                pos_scale: [0.0, 0.0, 0.0, 1.0],
+                rot_pad: [0.0; 4],
+            }];
+            // SAFETY: 32 bytes into a 32-byte fresh buffer; no GPU work has
+            // touched it yet.
+            unsafe { buffer.write(0, bytemuck::bytes_of(&identity)) };
+            self.identity_instances = Some(buffer);
+        }
     }
 
     fn model_matrix(t: Transform, camera: &Camera) -> [[f32; 4]; 4] {
@@ -299,6 +322,15 @@ impl Primitive for RenderMeshDiagram {
         self.last_seconds = Some(seconds);
         self.last_frame_count = Some(ctx.time.frame_count);
         let density = ctx.scalar_or_param("density", 4.0).round().clamp(2.0, 8.0) as u32;
+        // Copy count comes from the wired InstanceTransform buffer. Producers
+        // collapse inactive slots to an all-zero transform (see
+        // generate_instance_transforms_body.wgsl), so a smaller active_count
+        // never draws garbage; the shader skips those sentinels explicitly.
+        let input_instances = ctx.inputs.array("instances");
+        let copies = input_instances.map_or(1, |buffer| {
+            ((buffer.size / std::mem::size_of::<InstanceTransform>() as u64) as u32)
+                .clamp(1, MAX_COPY_INSTANCES)
+        });
         let capacity = ((current.size.min(reference.size).min(incoming.size)
             / std::mem::size_of::<MeshVertex>() as u64) as u32)
             .min(MAX_VERTICES);
@@ -378,6 +410,9 @@ impl Primitive for RenderMeshDiagram {
             event_values: [ctx.scalar_or_param("trails_brightness",1.0).max(0.0),ctx.scalar_or_param("pulse_gain",1.0).max(0.0),ctx.scalar_or_param("scan_amount",0.0),ctx.scalar_or_param("scan_progress",0.0)],
             scan_values: [ctx.scalar_or_param("scan_width",0.2),ctx.scalar_or_param("scan_direction",2.0),ctx.scalar_or_param("scan_mode",0.0),ctx.scalar_or_param("connect_mesh",0.0)],
             event_targets: [ctx.scalar_or_param("pulse_target",0.0).round().clamp(0.0,5.0) as u32,ctx.scalar_or_param("scan_target",0.0).round().clamp(0.0,5.0) as u32,mesh_triangles,scan_weights.map_or(0,|b|(b.size/4) as u32)],
+            copy_count: copies,
+            instances_wired: u32::from(input_instances.is_some()),
+            _instances_pad: [0; 2],
         };
         let input_surface_depth = ctx.inputs.texture_2d("surface_depth");
         let input_scene_depth = ctx.inputs.texture_2d("scene_depth");
@@ -390,6 +425,11 @@ impl Primitive for RenderMeshDiagram {
         let surface_depth = input_surface_depth.unwrap_or(dummy_depth);
         let scene_depth = input_scene_depth.unwrap_or(dummy_depth);
         let depth_sampler = self.depth_sampler.as_ref().expect("depth sampler initialized");
+        let instances = input_instances.unwrap_or_else(|| {
+            self.identity_instances
+                .as_ref()
+                .expect("identity instance stub initialized")
+        });
 
         if color_out.is_some() && self.render_pipeline.is_none() {
             self.render_pipeline = Some(gpu.device.create_render_pipeline_msaa(
@@ -434,7 +474,7 @@ impl Primitive for RenderMeshDiagram {
             self.width = width;
             self.height = height;
         }
-        let arrow_count = tri_count;
+        let arrow_count = tri_count * copies;
         let grid_count = 1;
         // One world frame and at most three representative fragment frames.
         let axes_count = 3 + tri_count.min(3) * 3;
@@ -443,7 +483,10 @@ impl Primitive for RenderMeshDiagram {
         } else {
             0
         };
-        let instance_count = tri_count * 3 + arrow_count + grid_count + axes_count + trail_count;
+        // Fragments, reference, ghosts and arrows repeat per copy; a single
+        // identity copy keeps the instance budget byte-identical to the
+        // vertices-only diagram. Trails stay base-samples-only by design.
+        let instance_count = tri_count * 3 * copies + arrow_count + grid_count + axes_count + trail_count;
         if let Some(out) = color_out {
             let history = self.history.as_ref().expect("history allocated");
             let depth_tested = uniforms.occlusion != 0;
@@ -462,6 +505,7 @@ impl Primitive for RenderMeshDiagram {
                         GpuBinding::Texture { binding: 7, texture: surface_depth },
                         GpuBinding::Texture { binding: 8, texture: scene_depth },
                         GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
+                        GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
                     ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
                 );
             } else {
@@ -476,6 +520,7 @@ impl Primitive for RenderMeshDiagram {
                         GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
                         GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
                         GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
+                        GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
                     ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
                 );
             }
@@ -522,8 +567,9 @@ impl Primitive for RenderMeshDiagram {
                     GpuBinding::Texture { binding: 7, texture: surface_depth },
                     GpuBinding::Texture { binding: 8, texture: scene_depth },
                     GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
+                    GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
                 ],
-                3, if uniforms.occlusion != 0 { tri_count } else { 0 }, GpuLoadAction::Load, Self::TYPE_ID,
+                3, if uniforms.occlusion != 0 { tri_count * copies } else { 0 }, GpuLoadAction::Load, Self::TYPE_ID,
             );
         }
         // The capture follows the diagram pass in the same command stream,
@@ -618,6 +664,25 @@ mod tests {
                 "missing scalar shadow {name}"
             );
         }
+    }
+
+    #[test]
+    fn diagram_declares_optional_typed_instances_input() {
+        use crate::node_graph::ports::{ArrayType, PortType};
+        let input = RenderMeshDiagram::INPUTS
+            .iter()
+            .find(|input| input.name == "instances")
+            .expect("instances input declared");
+        assert!(!input.required);
+        assert_eq!(
+            input.ty,
+            PortType::Array(ArrayType::of_known::<InstanceTransform>())
+        );
+        assert_eq!(MAX_COPY_INSTANCES, 8);
+        assert!(
+            std::mem::size_of::<DiagramUniforms>().is_multiple_of(16),
+            "uniform block must stay 16-byte aligned"
+        );
     }
 
     #[test]

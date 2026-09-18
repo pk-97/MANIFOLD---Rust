@@ -98,6 +98,9 @@ fn uniforms(
         event_values: [1.0, 1.0, 0.0, 0.0],
         scan_values: [0.2, 2.0, 0.0, 0.0],
         event_targets: [0; 4],
+        copy_count: 1,
+        instances_wired: 0,
+        _instances_pad: [0; 2],
     }
 }
 
@@ -107,7 +110,7 @@ fn bindings<'a>(
     surface: &'a manifold_gpu::GpuTexture,
     scene: &'a manifold_gpu::GpuTexture,
     sampler: &'a manifold_gpu::GpuSampler,
-) -> [GpuBinding<'a>; 10] {
+) -> [GpuBinding<'a>; 11] {
     [
         GpuBinding::Bytes {
             binding: 0,
@@ -154,6 +157,13 @@ fn bindings<'a>(
         GpuBinding::Sampler {
             binding: 9,
             sampler,
+        },
+        // Unused unless instances_wired is set; an existing buffer keeps the
+        // shared layout valid either way.
+        GpuBinding::Buffer {
+            binding: 10,
+            buffer: current,
+            offset: 0,
         },
     ]
 }

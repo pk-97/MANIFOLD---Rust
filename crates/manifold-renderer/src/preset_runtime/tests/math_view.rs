@@ -647,3 +647,101 @@ fn staged_transform_resize_keeps_compatible_chain_and_renders() {
     assert!(pixels.chunks_exact(8).any(|pixel| pixel[..6].chunks_exact(2)
         .any(|channel| half::f16::from_le_bytes([channel[0], channel[1]]).to_f32() > 0.01)));
 }
+
+#[cfg(feature = "gpu-proofs")]
+#[test]
+fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged() {
+    // BUG-uvts GPU proof: Vortex + SpatialEchoes -> Math View must render the
+    // echo copies, and the vertices-only fixture must stay byte-identical to
+    // its pre-instances behavior (unwired instances port).
+    let guard = crate::test_device();
+    let device = guard.arc();
+    let echo_owner = crate::node_graph::scene_modifier_expand::math_view_test_owner_with_instance_echoes();
+    let plain_owner = crate::node_graph::scene_modifier_expand::math_view_test_owner();
+    let registry = PrimitiveRegistry::with_builtin();
+    let render_math = |owner: &EffectGraphDef| {
+        let mut params = manifest(owner);
+        set(owner, &mut params, "math_view_mode", 1.0);
+        set(owner, &mut params, "math_view_trails", 0.0);
+        set(owner, &mut params, "math_view_grid", 0.0);
+        let mut runtime = PresetRuntime::from_def_for_render(
+            owner.clone(),
+            &registry,
+            Some(&params),
+            false,
+        )
+        .unwrap()
+        .with_generator_device(device.clone(), 320, 180, GpuTextureFormat::Rgba16Float)
+        .unwrap();
+        let target = RenderTarget::new(
+            &device,
+            320,
+            180,
+            GpuTextureFormat::Rgba16Float,
+            "math-instance-copies-proof",
+        );
+        let ctx = PresetContext {
+            time: 1.0 / 60.0,
+            beat: 1.0 / 30.0,
+            dt: 1.0 / 60.0,
+            width: 320,
+            height: 180,
+            output_width: 320,
+            output_height: 180,
+            aspect: 320.0 / 180.0,
+            owner_key: 1,
+            is_clip_level: false,
+            frame_count: 1,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut encoder = device.create_encoder("math-instance-copies-proof");
+        runtime.render(
+            &mut GpuEncoder::new(&mut encoder, &device),
+            &target.texture,
+            &ctx,
+            &params,
+        );
+        encoder.commit_and_wait_completed();
+        let pixels = crate::headless_readback::readback_raw_halves(&device, &target.texture, 320, 180);
+        if std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").is_some() {
+            // Encode the live target before the closure drops it.
+            std::fs::write(
+                std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").unwrap(),
+                crate::headless_readback::readback_to_srgb_png_linear(
+                    &device,
+                    &target.texture,
+                    320,
+                    180,
+                ),
+            )
+            .unwrap();
+        }
+        pixels
+    };
+    let black = |pixels: &[u8]| pixels.chunks_exact(8).all(|pixel| pixel[..6] == [0; 6]);
+    let energy = |pixels: &[u8]| -> f64 {
+        pixels.chunks_exact(8).map(|pixel| {
+            pixel[..6].chunks_exact(2).map(|channel| {
+                f64::from(half::f16::from_le_bytes([channel[0], channel[1]]).to_f32())
+            }).sum::<f64>()
+        }).sum()
+    };
+
+    let plain = render_math(&plain_owner);
+    assert!(!black(&plain), "vertices-only Math view must render marks");
+    let echoes = render_math(&echo_owner);
+    assert!(!black(&echoes), "echo Math view must render marks");
+    assert_ne!(
+        plain, echoes,
+        "preceding instance echoes must change the Math view output"
+    );
+    // SpatialEchoes defaults to 3 echoes around the base object, so the copy
+    // marks add real energy rather than replacing the base diagram.
+    assert!(
+        energy(&echoes) > energy(&plain),
+        "echo copies must add visible marks: {} vs {}",
+        energy(&echoes),
+        energy(&plain)
+    );
+}

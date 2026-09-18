@@ -7,8 +7,10 @@ struct U {
     depth_pass: u32, occlusion: u32, mode: u32, _depth_pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
+    copy_count: u32, instances_wired: u32, _instances_pad: vec2<u32>,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32> };
+struct I { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
 struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @location(1) @interpolate(flat) grid: u32 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read> current: array<V>;
@@ -20,6 +22,7 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @loca
 @group(0) @binding(7) var surface_depth: texture_2d<f32>;
 @group(0) @binding(8) var scene_depth: texture_2d<f32>;
 @group(0) @binding(9) var depth_sampler: sampler;
+@group(0) @binding(10) var<storage, read> copy_instances: array<I>;
 
 fn targeted(target_element: u32, element: u32) -> bool { return target_element == 0u || target_element == element; }
 fn tone(color: vec4<f32>, gain: f32) -> vec4<f32> {
@@ -111,18 +114,82 @@ fn world_line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
     return clip_line(u.view_proj * vec4<f32>(a, 1.0), u.view_proj * vec4<f32>(b, 1.0), color, vi);
 }
 
-fn depth_surface_vertex(vi: u32, triangle: u32) -> O {
-    if u.fragments == 0u || vi >= 3u || triangle >= u.tri_count { return hidden(); }
-    let c = clip_point(current[triangle * 3u + vi].position);
+fn depth_surface_vertex(vi: u32, instance: u32) -> O {
+    // Instance slots below tri_count * copy_count are current-surface
+    // triangles, repeated per copy transform like the colour fragments.
+    if u.fragments == 0u || vi >= 3u || instance >= u.tri_count * u.copy_count { return hidden(); }
+    let c = instance / u.tri_count;
+    let triangle = instance % u.tri_count;
+    var position = current[triangle * 3u + vi].position;
+    if u.instances_wired != 0u {
+        let inst = copy_instances[c];
+        if inactive_copy(inst) { return hidden(); }
+        position = apply_copy(position, inst);
+    }
     // Let the rasterizer clip whole triangles; moving one behind-camera
     // vertex to hidden() would invent a different surface at the near plane.
-    var o: O; o.p = c; o.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); o.grid = 0u; return o;
+    let clip = clip_point(position);
+    var o: O; o.p = clip; o.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); o.grid = 0u; return o;
 }
 
 fn sample_position(which: u32, idx: u32) -> vec3<f32> {
     if (which == 0u) { return current[idx].position; }
     if (which == 1u) { return reference[idx].position; }
     return incoming[idx].position;
+}
+
+// Instance copy transform, object space: rotate (XYZ Euler, bit-for-bit the
+// render_scene.wgsl / render_instanced_3d_mesh.wgsl convention), uniform
+// scale, then translate. The diagram's clip_point applies the object model
+// matrix afterwards, matching render_scene's model * T_instance order.
+fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
+    let cx = cos(angles.x);
+    let sx = sin(angles.x);
+    let cy = cos(angles.y);
+    let sy = sin(angles.y);
+    let cz = cos(angles.z);
+    let sz = sin(angles.z);
+
+    let rx = mat3x3<f32>(
+        vec3<f32>(1.0, 0.0, 0.0),
+        vec3<f32>(0.0, cx, sx),
+        vec3<f32>(0.0, -sx, cx),
+    );
+    let ry = mat3x3<f32>(
+        vec3<f32>(cy, 0.0, -sy),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(sy, 0.0, cy),
+    );
+    let rz = mat3x3<f32>(
+        vec3<f32>(cz, sz, 0.0),
+        vec3<f32>(-sz, cz, 0.0),
+        vec3<f32>(0.0, 0.0, 1.0),
+    );
+    return rz * ry * rx;
+}
+
+fn apply_copy(p: vec3<f32>, inst: I) -> vec3<f32> {
+    return euler_xyz(inst.rot_pad.xyz) * (p * inst.pos_scale.w) + inst.pos_scale.xyz;
+}
+
+// Producers collapse inactive slots to an all-zero transform (see
+// generate_instance_transforms_body.wgsl and analytic_echo_instances'
+// "zero scale is the inactive-hole marker"), so the diagram skips them just
+// like the scene's zero-scale no-op draw.
+fn inactive_copy(inst: I) -> bool {
+    return inst.pos_scale.w == 0.0
+        && all(inst.pos_scale.xyz == vec3<f32>(0.0))
+        && all(inst.rot_pad.xyz == vec3<f32>(0.0));
+}
+
+// Copy transform for slot c. Unwired (vertices-only captures) uses an exact
+// identity: every fragment/ghost/arrow instance keeps its historical
+// positions and the output stays byte-identical.
+fn copy_transform(c: u32) -> I {
+    if u.instances_wired == 0u {
+        return I(vec4<f32>(0.0, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+    }
+    return copy_instances[c];
 }
 
 fn fragment_frame_count() -> u32 { return min(u.tri_count, 3u); }
@@ -146,32 +213,51 @@ fn vertex_body(vi: u32, instance: u32) -> O {
     let ii = instance - 1u;
     if (u.vertex_count == 0u) { return hidden(); }
     let tri = u.tri_count;
-    let tri_end = tri * 3u;
+    // Fragment, reference, ghost and arrow blocks repeat per copy transform;
+    // per == tri * copy_count, and copy_count is 1 for vertices-only captures.
+    let per = tri * u.copy_count;
+    let tri_end = per * 3u;
     let arrow_base = tri_end;
-    let grid_base = arrow_base + tri;
+    let grid_base = arrow_base + per;
     let axes_base = grid_base;
     let trails_base = axes_base + 3u + fragment_frame_count() * 3u;
 
-    if (ii < tri) {
+    if (ii < per) {
         if (u.fragments == 0u) { return hidden(); }
-        let b = ii * 3u; let e = vi / 6u;
-        return line(sample_position(0u, b + e), sample_position(0u, b + ((e + 1u) % 3u)), vec4<f32>(hsv(u.geometry_hue), 0.95), vi);
+        let t = ii % tri;
+        let inst = copy_transform(ii / tri);
+        if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
+        let b = t * 3u; let e = vi / 6u;
+        return line(apply_copy(sample_position(0u, b + e), inst), apply_copy(sample_position(0u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.geometry_hue), 0.95), vi);
     }
-    if (ii < tri * 2u) {
+    if (ii < per * 2u) {
         if (u.fragments == 0u) { return hidden(); }
-        let t = ii - tri; let b = t * 3u; let e = vi / 6u;
-        return line(sample_position(1u, b + e), sample_position(1u, b + ((e + 1u) % 3u)), vec4<f32>(hsv(u.geometry_hue), 0.28), vi);
+        let t = (ii - per) % tri;
+        let inst = copy_transform((ii - per) / tri);
+        if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
+        let b = t * 3u; let e = vi / 6u;
+        return line(apply_copy(sample_position(1u, b + e), inst), apply_copy(sample_position(1u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.geometry_hue), 0.28), vi);
     }
-    if (ii < tri_end) {
+    if (ii < per * 3u) {
         if (u.ghosts == 0u) { return hidden(); }
-        let t = ii - tri * 2u; let b = t * 3u; let e = vi / 6u;
-        return line(sample_position(2u, b + e), sample_position(2u, b + ((e + 1u) % 3u)), vec4<f32>(hsv(u.path_hue), 0.22), vi);
+        let t = (ii - per * 2u) % tri;
+        let inst = copy_transform((ii - per * 2u) / tri);
+        if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
+        let b = t * 3u; let e = vi / 6u;
+        return line(apply_copy(sample_position(2u, b + e), inst), apply_copy(sample_position(2u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.path_hue), 0.22), vi);
     }
     if (ii < grid_base) {
         if (u.vectors == 0u) { return hidden(); }
-        let idx = (ii - arrow_base) * 3u;
+        let local = ii - arrow_base;
+        let t = local % tri;
+        let inst = copy_transform(local / tri);
+        if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
+        let idx = t * 3u;
+        // The tail stays on the undeformed reference; the head is the
+        // copy-transformed current centroid, so the arrow reads as the total
+        // reference -> copy displacement of the chain.
         let a = (incoming[idx].position + incoming[idx + 1u].position + incoming[idx + 2u].position) / 3.0;
-        let b = (current[idx].position + current[idx + 1u].position + current[idx + 2u].position) / 3.0;
+        let b = apply_copy((current[idx].position + current[idx + 1u].position + current[idx + 2u].position) / 3.0, inst);
         let edge = vi / 6u;
         if (edge == 0u) { return line(a, b, vec4<f32>(hsv(u.path_hue), 0.85), vi); }
         if (length(b - a) < 0.000001) { return hidden(); }
@@ -226,19 +312,23 @@ fn vertex_body(vi: u32, instance: u32) -> O {
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
     var o=vertex_body(vi,instance);
     if u.depth_pass != 0u {
-        o.color = tone(o.color, appearance(2u, instance));
+        // Instance repeats the same triangle per copy; appearance indexing
+        // stays on the base triangle so connected weights cannot read past
+        // the sampled face range.
+        o.color = tone(o.color, appearance(2u, instance % max(u.tri_count, 1u)));
         return o;
     }
     if instance==0u || u.tri_count==0u { return o; }
     let ii=instance-1u;
+    let per = u.tri_count * u.copy_count;
     var element=2u;
     var triangle=0u;
-    if ii < 2u*u.tri_count { triangle=ii%u.tri_count; }
-    else if ii < 3u*u.tri_count { element=3u; triangle=ii-2u*u.tri_count; }
-    else if ii < 4u*u.tri_count { element=4u; triangle=ii-3u*u.tri_count; }
-    else if ii < 4u*u.tri_count+3u { element=1u; }
-    else if ii < 4u*u.tri_count+3u+fragment_frame_count()*3u { triangle=fragment_frame_triangle((ii-4u*u.tri_count-3u)/3u); }
-    else { element=5u; triangle=((ii-4u*u.tri_count-3u-fragment_frame_count()*3u)%u.vertex_count)/3u; }
+    if ii < 2u*per { triangle=ii%u.tri_count; }
+    else if ii < 3u*per { element=3u; triangle=(ii-2u*per)%u.tri_count; }
+    else if ii < 4u*per { element=4u; triangle=(ii-3u*per)%u.tri_count; }
+    else if ii < 4u*per+3u { element=1u; }
+    else if ii < 4u*per+3u+fragment_frame_count()*3u { triangle=fragment_frame_triangle((ii-4u*per-3u)/3u); }
+    else { element=5u; triangle=((ii-4u*per-3u-fragment_frame_count()*3u)%u.vertex_count)/3u; }
     o.color=tone(o.color,appearance(element,triangle));
     return o;
 }

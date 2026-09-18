@@ -125,3 +125,57 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
     .unwrap()
     .graph
 }
+
+/// The standalone fixture plus a SpatialEchoes instance (instances-only
+/// endpoint writer) between the vertex modifier and the view. Compiler and
+/// GPU proofs use it to show captures combine the vertices chain with the
+/// instances chain from their own producers.
+#[cfg(test)]
+pub(crate) fn test_owner_with_instance_echoes() -> manifold_core::effect_graph_def::EffectGraphDef {
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
+    let owner = test_owner();
+    let echo_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/SpatialEchoes.json"
+    )))
+    .unwrap();
+    let (view_scene, view_targets, view_frames) = {
+        let view = owner
+            .scene_modifiers
+            .iter()
+            .find(|instance| instance.id == NodeId::new("math_view"))
+            .expect("fixture view");
+        (
+            view.scene.clone(),
+            view.targets.clone(),
+            view.mesh_frames.clone(),
+        )
+    };
+    let mut owner = owner;
+    owner.scene_modifiers.insert(
+        1,
+        SceneModifierInstanceDef {
+            id: NodeId::new("spatial_echoes"),
+            scene: view_scene,
+            targets: view_targets,
+            mesh_frames: view_frames,
+            graph: Box::new(echo_recipe),
+        },
+    );
+    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner,
+        &NodeId::new("spatial_echoes"),
+    )
+    .unwrap()
+    .graph;
+    // Host bindings from the original fixture still target vortex_a and
+    // math_view only; reconcile the view again so its control values settle
+    // after the chain order change.
+    manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner,
+        &NodeId::new("math_view"),
+    )
+    .unwrap()
+    .graph
+}
