@@ -37,7 +37,9 @@ pub use compiler::{
 };
 #[cfg(test)]
 pub(crate) use math_view::test_owner as math_view_test_owner;
-#[cfg(test)]
+// Only the gpu-proofs scene proof uses this re-export; compiler tests call
+// math_view::test_owner_with_instance_echoes directly.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) use math_view::test_owner_with_instance_echoes as math_view_test_owner_with_instance_echoes;
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
