@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
 };
-use manifold_core::effects::{ParamId, ParameterDriver};
+use manifold_core::effects::{ParamEnvelope, ParamId, ParameterDriver};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_preset::{
@@ -761,19 +761,11 @@ fn math_view_grid_app_control_journey() {
     assert_eq!(loaded_nonzero, 0, "loaded Grid off output remains black");
 }
 
-/// Legacy projects embedded Math View controls in the Vortex recipe. Loading
-/// moves them onto one appended standalone Math View modifier: host binding
-/// ids (and therefore values, animation and modulation) survive, the retired
-/// Scope control is dropped, and a second migration pass is a no-op.
-#[test]
-fn legacy_math_view_migration_journey() {
-    let output_dir = PathBuf::from("target/journey-proofs/math-view-migration");
-    std::fs::create_dir_all(&output_dir).expect("migration artifact directory");
-    let layer_id = LayerId::new("math-grid");
-    let carrier_id = NodeId::new("legacy_vortex");
-
-    // Build the pre-standalone shape: the current (stripped) Vortex recipe
-    // plus the legacy embedded control section, including retired Scope.
+/// The pre-standalone shape of the Vortex recipe: the current (stripped)
+/// bundled recipe plus the legacy embedded Math View control section,
+/// including the retired Scope control. Detection and migration both run
+/// against this on load.
+fn legacy_vortex_carrier_graph() -> EffectGraphDef {
     let mut carrier = serde_json::from_str::<serde_json::Value>(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
@@ -817,6 +809,21 @@ fn legacy_math_view_migration_journey() {
         manifold_core::scene_modifier_math_view::has_legacy_math_view_controls(&carrier_graph),
         "fixture reproduces the legacy embedded section"
     );
+    carrier_graph
+}
+
+/// Legacy projects embedded Math View controls in the Vortex recipe. Loading
+/// moves them onto one appended standalone Math View modifier: host binding
+/// ids (and therefore values, animation and modulation) survive, the retired
+/// Scope control is dropped, and a second migration pass is a no-op.
+#[test]
+fn legacy_math_view_migration_journey() {
+    let output_dir = PathBuf::from("target/journey-proofs/math-view-migration");
+    std::fs::create_dir_all(&output_dir).expect("migration artifact directory");
+    let layer_id = LayerId::new("math-grid");
+    let carrier_id = NodeId::new("legacy_vortex");
+
+    let carrier_graph = legacy_vortex_carrier_graph();
 
     let mut project = math_view_project();
     {
@@ -976,4 +983,581 @@ fn legacy_math_view_migration_journey() {
         migrated_nonzero > 0,
         "migrated Math View renders in Math mode (Mode value survived)"
     );
+}
+
+/// Multi-carrier legacy migration (BUG-ngdf): four Vortex carriers, one per
+/// authoredness class. A is disabled with default content; D is enabled but
+/// equally untouched — neither is authored, and both strip cleanly without a
+/// view. B is enabled, in Math mode, with a beat driver on its pulse trigger
+/// and an explicit one-object selection. C is enabled, in Overlay mode, with
+/// an envelope on scan amount and all objects. B and C each gain their own
+/// view immediately after themselves; binding ids are unchanged so values
+/// and modulation survive save/reload, and a second migration pass plus a
+/// save/reload round trip change nothing.
+#[test]
+fn legacy_math_view_multi_carrier_migration_journey() {
+    use manifold_core::scene_modifier_math_view as mv;
+    let output_dir = PathBuf::from("target/journey-proofs/math-view-migration-multi");
+    std::fs::create_dir_all(&output_dir).expect("migration artifact directory");
+    let layer_id = LayerId::new("math-grid");
+    let carrier_a = NodeId::new("legacy_vortex_a");
+    let carrier_b = NodeId::new("legacy_vortex_b");
+    let carrier_c = NodeId::new("legacy_vortex_c");
+    let carrier_d = NodeId::new("legacy_vortex_d");
+
+    let mut project = math_view_project();
+    let frames = {
+        let graph = generator_graph(&project, &layer_id);
+        graph.scene_modifiers[0].mesh_frames.clone()
+    };
+    assert_eq!(frames.len(), 2, "fixture captures both mesh objects");
+    let scene = SceneNodeRef {
+        scope: vec![],
+        node: NodeId::new("scan_render"),
+    };
+    let frame_b = frames[1].clone();
+    let selection_b = SceneTargetSelection::Explicit {
+        objects: vec![frame_b.target.clone()],
+    };
+    let mode_macro = |carrier: &NodeId, suffix: &str| {
+        format!("sceneModifier:[\"{carrier}\",\"math_view_{suffix}\"]")
+    };
+    let pulse_trigger = mode_macro(&carrier_b, "pulse_trigger");
+    let scan_amount = mode_macro(&carrier_c, "scan_amount");
+    let mode_macro_b = mode_macro(&carrier_b, "mode");
+    let mode_macro_c = mode_macro(&carrier_c, "mode");
+    {
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let owner = project.graph_target_owner_mut(&target).unwrap();
+        let graph = owner.graph.as_mut().unwrap();
+        graph.scene_modifiers.clear();
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: carrier_a.clone(),
+            scene: scene.clone(),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames.clone(),
+            graph: Box::new(legacy_vortex_carrier_graph()),
+        });
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: carrier_b.clone(),
+            scene: scene.clone(),
+            targets: selection_b.clone(),
+            mesh_frames: vec![frame_b.clone()],
+            graph: Box::new(legacy_vortex_carrier_graph()),
+        });
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: carrier_c.clone(),
+            scene: scene.clone(),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames.clone(),
+            graph: Box::new(legacy_vortex_carrier_graph()),
+        });
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: carrier_d.clone(),
+            scene: scene.clone(),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames.clone(),
+            graph: Box::new(legacy_vortex_carrier_graph()),
+        });
+        // Drop the old fixture pair's bindings, then mint each carrier's
+        // (including every math_view_* control and enabled).
+        let metadata = graph.preset_metadata.as_mut().unwrap();
+        metadata.bindings.retain(|binding| {
+            !matches!(&binding.target, BindingTarget::SceneModifier { .. })
+        });
+        metadata
+            .params
+            .retain(|param| !param.id.starts_with("sceneModifier:"));
+        for id in [&carrier_a, &carrier_b, &carrier_c, &carrier_d] {
+            *graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+                graph, id,
+            )
+            .expect("reconcile legacy carrier")
+            .graph;
+        }
+        owner.refresh_manifest_from_graph();
+        // A: disabled, defaults; D: enabled but equally untouched — neither
+        // is authored. B: Math mode + driver. C: Overlay mode + envelope.
+        let enabled_a = format!("sceneModifier:[\"{carrier_a}\",\"enabled\"]");
+        owner.set_base_param(&enabled_a, 0.0);
+        // D is deliberately left exactly as reconciled: enabled at its
+        // default, every Math View control at its default.
+        owner.set_base_param(&mode_macro_b, 1.0);
+        owner.drivers_mut().push(ParameterDriver::new(
+            ParamId::from(pulse_trigger.clone()),
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+        ));
+        owner.set_base_param(&mode_macro_c, 2.0);
+        owner
+            .envelopes_mut()
+            .push(ParamEnvelope::new(ParamId::from(scan_amount.clone())));
+        owner.refresh_manifest_from_graph();
+    }
+
+    let pre_save = output_dir.join("legacy-multi-carrier.manifold");
+    manifold_io::saver::save_project_v1(&project, &pre_save).expect("save legacy project");
+    let mut reopened =
+        manifold_io::loader::load_project(&pre_save).expect("reopen legacy project");
+    let notices = crate::project_io::migrate_project_scene_graphs(&mut reopened);
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("became 2 standalone Math View modifiers")),
+        "per-carrier migration summary expected, got: {notices:?}"
+    );
+
+    let graph = generator_graph(&reopened, &layer_id);
+    let kinds: Vec<(NodeId, bool)> = graph
+        .scene_modifiers
+        .iter()
+        .map(|modifier| {
+            (
+                modifier.id.clone(),
+                mv::is_math_view_recipe(&modifier.graph),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (carrier_a.clone(), false),
+            (carrier_b.clone(), false),
+            (kinds[2].0.clone(), true),
+            (carrier_c.clone(), false),
+            (kinds[4].0.clone(), true),
+            (carrier_d.clone(), false),
+        ],
+        "chain order preserved, one view after each authored carrier: {kinds:?}"
+    );
+    let view_b = &graph.scene_modifiers[2];
+    let view_c = &graph.scene_modifiers[4];
+    assert_eq!(view_b.targets, selection_b, "B's view keeps B's selection");
+    assert_eq!(
+        view_b.mesh_frames,
+        vec![frame_b.clone()],
+        "B's view keeps B's mesh frames"
+    );
+    assert_eq!(
+        view_c.targets,
+        SceneTargetSelection::AllObjects,
+        "C's view keeps C's selection"
+    );
+    assert_eq!(view_c.mesh_frames, frames, "C's view keeps C's mesh frames");
+
+    // Every carrier is stripped; the authored deformation survives.
+    for (carrier, index) in [
+        (&carrier_a, 0),
+        (&carrier_b, 1),
+        (&carrier_c, 3),
+        (&carrier_d, 5),
+    ] {
+        let modifier = &graph.scene_modifiers[index];
+        assert_eq!(&modifier.id, carrier);
+        assert!(
+            !mv::has_legacy_math_view_controls(&modifier.graph),
+            "{carrier} section stripped"
+        );
+        assert!(
+            modifier
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings
+                .iter()
+                .any(|binding| binding.id == "orbit"),
+            "{carrier} deformation survives the strip"
+        );
+    }
+
+    // Binding ids are unchanged, so host values and modulation survive; only
+    // the retarget differs.
+    let metadata = graph.preset_metadata.as_ref().unwrap();
+    let mode_binding_b = metadata
+        .bindings
+        .iter()
+        .find(|binding| binding.id == mode_macro_b)
+        .expect("B's mode binding survives");
+    assert!(
+        matches!(
+            &mode_binding_b.target,
+            BindingTarget::SceneModifier { modifier_id, param_id }
+                if modifier_id == &view_b.id && param_id == "math_view_mode"
+        ),
+        "B's mode binding retargeted to its own view"
+    );
+    let owner = reopened
+        .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+        .unwrap();
+    assert_eq!(owner.get_base_param(&mode_macro_b), 1.0, "B's Math mode value");
+    assert_eq!(owner.get_base_param(&mode_macro_c), 2.0, "C's Overlay mode value");
+    assert!(
+        owner
+            .drivers
+            .as_ref()
+            .expect("drivers survive")
+            .iter()
+            .any(|driver| driver.param_id.as_ref() == pulse_trigger.as_str()),
+        "B's pulse driver still keyed by the unchanged binding id"
+    );
+    assert!(
+        owner
+            .envelopes
+            .as_ref()
+            .expect("envelopes survive")
+            .iter()
+            .any(|envelope| envelope.param_id.as_ref() == scan_amount.as_str()),
+        "C's scan envelope still keyed by the unchanged binding id"
+    );
+
+    // A and D carried no authored content: their minted math_view bindings
+    // and params were pruned with the strip, and neither gained a view.
+    for untouched in [&carrier_a, &carrier_d] {
+        assert!(
+            !metadata.bindings.iter().any(|binding| {
+                binding.id.contains(&format!("\"{untouched}\",\"math_view"))
+            }),
+            "{untouched}'s math_view bindings pruned"
+        );
+        assert!(
+            !owner.params.contains(&format!(
+                "sceneModifier:[\"{untouched}\",\"math_view_mode\"]"
+            )),
+            "{untouched}'s math_view host params pruned"
+        );
+    }
+
+    // Both views expose the full current control surface: every control is
+    // declared by the view recipe and host-bound.
+    for view in [view_b, view_c] {
+        let declared: std::collections::HashSet<&str> = view
+            .graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .map(|param| param.id.as_str())
+            .collect();
+        for (suffix, ..) in mv::CONTROLS {
+            let local = format!("math_view_{suffix}");
+            assert!(declared.contains(local.as_str()), "view declares {local}");
+            assert!(
+                metadata.bindings.iter().any(|binding| matches!(
+                    &binding.target,
+                    BindingTarget::SceneModifier { modifier_id, param_id }
+                        if modifier_id == &view.id && param_id == &local
+                )),
+                "view is host-bound for {local}"
+            );
+        }
+    }
+
+    // Idempotence: a second pass is a no-op, and save/reload of the migrated
+    // project is byte-stable at the graph level.
+    let once = serde_json::to_string(
+        &reopened
+            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+            .unwrap()
+            .graph,
+    )
+    .unwrap();
+    let mut twice = reopened.clone();
+    let notices = crate::project_io::migrate_project_scene_graphs(&mut twice);
+    assert!(notices.is_empty(), "second pass adds no notices: {notices:?}");
+    let twice_graph = serde_json::to_string(
+        &twice
+            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+            .unwrap()
+            .graph,
+    )
+    .unwrap();
+    assert_eq!(once, twice_graph, "migration is idempotent");
+    let post_save = output_dir.join("migrated-multi-carrier.manifold");
+    manifold_io::saver::save_project_v1(&reopened, &post_save).expect("save migrated project");
+    let mut reloaded =
+        manifold_io::loader::load_project(&post_save).expect("reload migrated project");
+    let notices = crate::project_io::migrate_project_scene_graphs(&mut reloaded);
+    assert!(
+        notices.is_empty(),
+        "migrated project reloads without new migration work: {notices:?}"
+    );
+    let reloaded_graph = serde_json::to_string(
+        &reloaded
+            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+            .unwrap()
+            .graph,
+    )
+    .unwrap();
+    assert_eq!(once, reloaded_graph, "save/reload preserves the migrated graph");
+
+    // The migrated project drives the runtime: both views render.
+    let mut ct = headless_content_thread(Project::default(), 320, 180);
+    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    ct.handle_command(ContentCommand::LoadProject(Box::new(reopened)));
+    assert!(
+        ct.graph_edit_diagnostic.is_none(),
+        "migrated multi-view project rejected: {:?}",
+        ct.graph_edit_diagnostic
+    );
+    ct.timer.set_frame_clocked(true);
+    warm_project(&mut ct, &state_tx);
+    ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
+    ct.tick_frame(&state_tx);
+    ct.tick_frame(&state_tx);
+    let (_, migrated_nonzero) =
+        capture_output_allow_uniform(&ct, &output_dir.join("migrated-multi-view.png"));
+    assert!(
+        migrated_nonzero > 0,
+        "migrated per-carrier Math Views render (mode values survived)"
+    );
+}
+
+/// Historical partial control sets (BUG-t8at): the real bundled Vortex
+/// snapshots from each legacy era detect as carriers, migrate to a standalone
+/// view with every current control declared and host-bound, carry their saved
+/// values, fill absent controls with the current defaults, and stay stable
+/// across a second migration pass and a save/reload round trip.
+#[test]
+fn legacy_math_view_historical_snapshots_migration_journey() {
+    use manifold_core::scene_modifier_math_view as mv;
+    let output_dir = PathBuf::from("target/journey-proofs/math-view-migration-historical");
+    std::fs::create_dir_all(&output_dir).expect("migration artifact directory");
+    let layer_id = LayerId::new("math-grid");
+    let carrier_id = NodeId::new("legacy_vortex");
+
+    let fixture_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-core/tests/fixtures/math-view-legacy/"
+    );
+    // (fixture, era, configure carrier host state)
+    let cases: &[(&str, &str)] = &[
+        ("vortex-fragments-initial-ce78a59d0.json", "initial"),
+        ("vortex-fragments-events-96c78f522.json", "events"),
+        ("vortex-fragments-occlusion-9f453beb0.json", "occlusion"),
+    ];
+    for (file, era) in cases {
+        let carrier_graph: EffectGraphDef =
+            serde_json::from_str(&std::fs::read_to_string(format!("{fixture_dir}{file}")).expect(
+                "historical fixture readable",
+            ))
+            .expect("historical fixture parses");
+        assert!(
+            mv::has_legacy_math_view_controls(&carrier_graph),
+            "{era} fixture detects as a legacy carrier"
+        );
+
+        let mut project = math_view_project();
+        {
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            let owner = project.graph_target_owner_mut(&target).unwrap();
+            let graph = owner.graph.as_mut().unwrap();
+            let frames = graph.scene_modifiers[0].mesh_frames.clone();
+            let scene = SceneNodeRef {
+                scope: vec![],
+                node: NodeId::new("scan_render"),
+            };
+            graph.scene_modifiers.clear();
+            graph.scene_modifiers.push(SceneModifierInstanceDef {
+                id: carrier_id.clone(),
+                scene,
+                targets: SceneTargetSelection::AllObjects,
+                mesh_frames: frames,
+                graph: Box::new(carrier_graph),
+            });
+            let metadata = graph.preset_metadata.as_mut().unwrap();
+            metadata.bindings.retain(|binding| {
+                !matches!(&binding.target, BindingTarget::SceneModifier { .. })
+            });
+            metadata
+                .params
+                .retain(|param| !param.id.starts_with("sceneModifier:"));
+            *graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+                graph,
+                &carrier_id,
+            )
+            .expect("reconcile historical carrier")
+            .graph;
+            owner.refresh_manifest_from_graph();
+            // Non-default values prove carriage; the events era also connects
+            // to its patch carrier and animates the pulse trigger.
+            let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
+            owner.set_base_param(&mode_macro, 1.0);
+            if *era == "initial" {
+                let density =
+                    format!("sceneModifier:[\"{carrier_id}\",\"math_view_density\"]");
+                owner.set_base_param(&density, 5.0);
+            }
+            if *era == "events" {
+                let connect =
+                    format!("sceneModifier:[\"{carrier_id}\",\"math_view_connect_mesh\"]");
+                owner.set_base_param(&connect, 1.0);
+                let pulse_trigger =
+                    format!("sceneModifier:[\"{carrier_id}\",\"math_view_pulse_trigger\"]");
+                owner.drivers_mut().push(ParameterDriver::new(
+                    ParamId::from(pulse_trigger.clone()),
+                    BeatDivision::Quarter,
+                    DriverWaveform::Sine,
+                ));
+            }
+            owner.refresh_manifest_from_graph();
+        }
+
+        let pre_save = output_dir.join(format!("legacy-{era}.manifold"));
+        manifold_io::saver::save_project_v1(&project, &pre_save).expect("save legacy project");
+        let mut reopened =
+            manifold_io::loader::load_project(&pre_save).expect("reopen legacy project");
+        let notices = crate::project_io::migrate_project_scene_graphs(&mut reopened);
+        assert!(
+            notices.is_empty(),
+            "{era}: clean single-carrier migration, got: {notices:?}"
+        );
+
+        let graph = generator_graph(&reopened, &layer_id);
+        assert_eq!(
+            graph.scene_modifiers.len(),
+            2,
+            "{era}: carrier plus one appended view"
+        );
+        assert!(
+            !mv::has_legacy_math_view_controls(&graph.scene_modifiers[0].graph),
+            "{era}: carrier stripped"
+        );
+        let view = &graph.scene_modifiers[1];
+        assert!(
+            mv::is_math_view_recipe(&view.graph),
+            "{era}: appended instance is the standalone Math View"
+        );
+        let owner = reopened
+            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+            .unwrap();
+        let metadata = graph.preset_metadata.as_ref().unwrap();
+        let declared: std::collections::HashSet<&str> = view
+            .graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .map(|param| param.id.as_str())
+            .collect();
+        for (suffix, _, default, ..) in mv::CONTROLS {
+            let local = format!("math_view_{suffix}");
+            assert!(
+                declared.contains(local.as_str()),
+                "{era}: view declares {local}"
+            );
+            let binding = metadata
+                .bindings
+                .iter()
+                .find(|binding| {
+                    matches!(
+                        &binding.target,
+                        BindingTarget::SceneModifier { modifier_id, param_id }
+                            if modifier_id == &view.id && param_id == &local
+                    )
+                })
+                .unwrap_or_else(|| panic!("{era}: view is host-bound for {local}"));
+            assert_eq!(
+                binding.default_value,
+                *default,
+                "{era}: absent controls fill with the current default ({local})"
+            );
+        }
+        let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
+        let mode_binding = metadata
+            .bindings
+            .iter()
+            .find(|binding| binding.id == mode_macro)
+            .expect("mode binding survives");
+        assert!(
+            matches!(
+                &mode_binding.target,
+                BindingTarget::SceneModifier { modifier_id, param_id }
+                    if modifier_id == &view.id && param_id == "math_view_mode"
+            ),
+            "{era}: mode binding retargeted"
+        );
+        assert_eq!(
+            owner.get_base_param(&mode_macro),
+            1.0,
+            "{era}: saved Mode value survives"
+        );
+        if *era == "initial" {
+            let density = format!("sceneModifier:[\"{carrier_id}\",\"math_view_density\"]");
+            assert_eq!(
+                owner.get_base_param(&density),
+                5.0,
+                "{era}: saved Density value survives"
+            );
+        }
+        if *era == "events" {
+            // The connected mask contract holds on the migrated view: exactly
+            // one preceding patch carrier covers every sampled object, and
+            // the pulse driver is still keyed by its unchanged binding id.
+            assert!(
+                mv::math_view_connect_support(graph, &view.id).is_ok(),
+                "{era}: migrated connected mask contract holds"
+            );
+            let pulse_trigger =
+                format!("sceneModifier:[\"{carrier_id}\",\"math_view_pulse_trigger\"]");
+            assert!(
+                owner
+                    .drivers
+                    .as_ref()
+                    .expect("drivers survive")
+                    .iter()
+                    .any(|driver| driver.param_id.as_ref() == pulse_trigger.as_str()),
+                "{era}: pulse driver still keyed by the unchanged binding id"
+            );
+        }
+
+        // Idempotence and save/reload stability.
+        let once = serde_json::to_string(
+            &reopened
+                .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+                .unwrap()
+            .graph,
+        )
+        .unwrap();
+        let mut twice = reopened.clone();
+        let notices = crate::project_io::migrate_project_scene_graphs(&mut twice);
+        assert!(
+            notices.is_empty(),
+            "{era}: second pass adds no notices: {notices:?}"
+        );
+        assert_eq!(
+            once,
+            serde_json::to_string(
+                &twice
+                    .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+                    .unwrap()
+            .graph,
+            )
+            .unwrap(),
+            "{era}: migration is idempotent"
+        );
+        let post_save = output_dir.join(format!("migrated-{era}.manifold"));
+        manifold_io::saver::save_project_v1(&reopened, &post_save)
+            .expect("save migrated project");
+        let mut reloaded =
+            manifold_io::loader::load_project(&post_save).expect("reload migrated project");
+        let notices = crate::project_io::migrate_project_scene_graphs(&mut reloaded);
+        assert!(
+            notices.is_empty(),
+            "{era}: migrated project reloads without new migration work: {notices:?}"
+        );
+        assert_eq!(
+            once,
+            serde_json::to_string(
+                &reloaded
+                    .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
+                    .unwrap()
+            .graph,
+            )
+            .unwrap(),
+            "{era}: save/reload preserves the migrated graph"
+        );
+    }
 }
