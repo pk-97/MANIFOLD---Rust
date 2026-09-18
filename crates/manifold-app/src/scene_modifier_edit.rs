@@ -26,6 +26,28 @@ pub(crate) enum SceneModifierAction {
     Preparation(LayerId, NodeId, String, f32),
 }
 
+/// NEW-authoring gate for singleton recipes: one instance per scene. Load
+/// migration is exempt (it legitimately creates several Math View instances
+/// per scene, one per authored legacy carrier); this guards only authoring
+/// actions. The picker projection disables the same collision UI-side.
+pub(crate) fn singleton_scene_conflict(
+    graph: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
+    recipe_id: &str,
+) -> Option<String> {
+    let conflict = graph.scene_modifiers.iter().any(|instance| {
+        instance.scene == *scene
+            && instance.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+                metadata.id.as_str() == recipe_id
+                    && metadata
+                        .scene_modifier
+                        .as_ref()
+                        .is_some_and(|recipe| recipe.singleton)
+            })
+    });
+    conflict.then(|| format!("{recipe_id} is already applied to this scene"))
+}
+
 pub(crate) fn build_action(
     project: &Project,
     action: SceneModifierAction,
@@ -59,11 +81,22 @@ pub(crate) fn build_action(
             if scenes.len() != 1 {
                 return Err("Applying a modifier requires exactly one scene".into());
             }
+            let scene = scenes.remove(0);
+            if let Some(metadata) = recipe.preset_metadata.as_ref()
+                && metadata
+                    .scene_modifier
+                    .as_ref()
+                    .is_some_and(|recipe| recipe.singleton)
+                && let Some(reason) =
+                    singleton_scene_conflict(graph, &scene, metadata.id.as_str())
+            {
+                return Err(reason);
+            }
             let instance = prepare_new_scene_modifier(
                 graph,
                 recipe,
                 NodeId::new(manifold_core::short_id()),
-                scenes.remove(0),
+                scene,
                 SceneTargetSelection::AllObjects,
             )
             .map_err(|e| e.to_string())?;
@@ -93,6 +126,24 @@ pub(crate) fn build_action(
                 .map_err(|e| e.to_string())
         }
         SceneModifierAction::Duplicate(_, selected) => {
+            for id in &selected {
+                let instance = graph
+                    .scene_modifiers
+                    .iter()
+                    .find(|modifier| &modifier.id == id)
+                    .ok_or("Modifier is no longer present")?;
+                if let Some(metadata) = instance.graph.preset_metadata.as_ref()
+                    && metadata
+                        .scene_modifier
+                        .as_ref()
+                        .is_some_and(|recipe| recipe.singleton)
+                {
+                    return Err(format!(
+                        "{} is already applied to this scene",
+                        metadata.id.as_str()
+                    ));
+                }
+            }
             DuplicateSceneModifiersCommand::new(project, target, &default, selected)
                 .map(|command| Box::new(command) as Box<dyn Command>)
                 .map_err(|e| e.to_string())

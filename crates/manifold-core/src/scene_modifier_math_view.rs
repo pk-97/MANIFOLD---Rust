@@ -122,16 +122,38 @@ fn control_present(graph: &EffectGraphDef, suffix: &str) -> bool {
             && matches!(node.params.get("value"), Some(crate::effect_graph_def::SerializedParamValue::Float { .. })))
 }
 
+/// Controls that existed in every shipped legacy snapshot, from the initial
+/// native Math View through the last pre-standalone recipe. Later controls
+/// (brightness levels, pulse, scan, connect, axes, occlusion) are optional
+/// for detection: the standalone instance carries their current defaults and
+/// `reconcile_scene_modifier_parameters` mints the missing host bindings.
+const CORE_CONTROLS: &[&str] = &[
+    "mode",
+    "scope",
+    "grid",
+    "fragments",
+    "ghosts",
+    "vectors",
+    "trails",
+    "density",
+    "line_width",
+    "geometry_hue",
+    "path_hue",
+];
+
 /// Legacy carrier detection: a qualified recipe that still embeds the
-/// per-modifier Math View section. Standalone instances never match.
+/// per-modifier Math View section. Standalone instances never match. The
+/// required core subset keeps historical projects (saved before later
+/// controls existed) recognisable; strip and retarget are prefix-based and
+/// handle any partial set.
 pub fn has_legacy_math_view_controls(graph: &EffectGraphDef) -> bool {
     if is_math_view_recipe(graph) {
         return false;
     }
     legacy_eligible(graph)
-        && CONTROLS
+        && CORE_CONTROLS
             .iter()
-            .all(|(suffix, ..)| control_present(graph, suffix))
+            .all(|suffix| control_present(graph, suffix))
 }
 
 /// Ids of modifiers whose graphs still carry legacy embedded controls.
@@ -236,6 +258,109 @@ pub fn legacy_math_view_scenes(owner: &EffectGraphDef) -> Vec<SceneNodeRef> {
     scenes
 }
 
+/// Whether a legacy carrier carries authored Math View content that merits its
+/// own standalone instance: an embedded control value off its default, host
+/// base values off their binding defaults, host-side animation or modulation
+/// (drivers, envelopes, Ableton mappings, audio mods, automation lanes)
+/// touching its `math_view_*` bindings, or an active enabled state. Carriers
+/// failing every check have default, inactive content and are stripped cleanly
+/// by load migration instead.
+pub fn carrier_has_authored_math_view_content(
+    host: &crate::effects::PresetInstance,
+    carrier_id: &NodeId,
+) -> bool {
+    let Some(graph) = host.graph.as_ref() else {
+        return false;
+    };
+    let Some(instance) = graph
+        .scene_modifiers
+        .iter()
+        .find(|modifier| &modifier.id == carrier_id)
+    else {
+        return false;
+    };
+    // Embedded node values off the control defaults (covers saves whose host
+    // bindings were never minted for every control).
+    let defaults: std::collections::HashMap<&str, f32> = CONTROLS
+        .iter()
+        .map(|(suffix, _, default, ..)| (*suffix, *default))
+        .collect();
+    let mut embedded_authored = false;
+    visit(&instance.graph.nodes, &mut |node| {
+        let Some(suffix) = node.node_id.as_str().strip_prefix("__math_view_") else {
+            return;
+        };
+        let Some(default) = defaults.get(suffix) else {
+            return;
+        };
+        if let Some(crate::effect_graph_def::SerializedParamValue::Float { value }) =
+            node.params.get("value")
+        {
+            embedded_authored |= value != default;
+        }
+    });
+    if embedded_authored {
+        return true;
+    }
+    let Some(metadata) = graph.preset_metadata.as_ref() else {
+        return false;
+    };
+    let control_ids: std::collections::HashSet<&str> = metadata
+        .bindings
+        .iter()
+        .filter(|binding| {
+            matches!(
+                &binding.target,
+                BindingTarget::SceneModifier { modifier_id, param_id }
+                    if modifier_id == carrier_id && param_id.starts_with(CONTROL_PREFIX)
+            )
+        })
+        .map(|binding| binding.id.as_str())
+        .collect();
+    // Host-side animation or modulation keyed by those binding ids.
+    macro_rules! motion_references {
+        ($field:ident) => {
+            if let Some(entries) = host.$field.as_ref() {
+                if entries
+                    .iter()
+                    .any(|entry| control_ids.contains(entry.param_id.as_ref()))
+                {
+                    return true;
+                }
+            }
+        };
+    }
+    motion_references!(drivers);
+    motion_references!(envelopes);
+    motion_references!(ableton_mappings);
+    motion_references!(audio_mods);
+    motion_references!(automation_lanes);
+    // Host base values off their binding defaults.
+    for binding in metadata
+        .bindings
+        .iter()
+        .filter(|binding| control_ids.contains(binding.id.as_str()))
+    {
+        if host.get_base_param(&binding.id) != binding.default_value {
+            return true;
+        }
+    }
+    // An active enabled state: the modifier itself is switched on.
+    let enabled = metadata.bindings.iter().find(|binding| {
+        matches!(
+            &binding.target,
+            BindingTarget::SceneModifier { modifier_id, param_id }
+                if modifier_id == carrier_id && param_id == "enabled"
+        )
+    });
+    if let Some(binding) = enabled
+        && host.get_base_param(&binding.id) != 0.0
+    {
+        return true;
+    }
+    false
+}
+
 /// Static Connect to Mesh support for a standalone Math View instance:
 /// exactly one preceding modifier in the same scene may carry a reference
 /// patch transform, and it must cover every object the view samples. The
@@ -332,15 +457,18 @@ mod tests {
     }
 
     /// A minimal legacy carrier: qualified Vortex recipe plus every control.
-    fn legacy_carrier() -> EffectGraphDef {
-        let mut graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
+    fn legacy_carrier() -> EffectGraphDef {        let mut graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version":3,
             "presetMetadata":{"id":"VortexFragments","displayName":"Vortex","category":"Geometry","oscPrefix":"vortex","params":[],"bindings":[{"id":"orbit","label":"Orbit","defaultValue":1,"target":{"kind":"node","nodeId":"patch","param":"orbit"}}]},
             "nodes":[{"id":1,"nodeId":"stage","typeId":"group","group":{"interface":{"inputs":[],"outputs":[]},"nodes":[{"id":2,"nodeId":"patch","typeId":"node.transform_mesh_patches","params":{"orbit":{"type":"Float","value":1}}}],"wires":[]}}],"wires":[]
         }))
         .unwrap();
         let mut next = 10;
-        for (suffix, ..) in CONTROLS {
+        for suffix in CONTROLS
+            .iter()
+            .map(|(suffix, ..)| *suffix)
+            .chain(["scope"])
+        {
             let (param, binding, mut node) = control_entry(suffix);
             node.id = next;
             next += 1;
@@ -594,5 +722,240 @@ mod tests {
         reordered.scene_modifiers.insert(0, view);
         let reason = math_view_connect_support(&reordered, &NodeId::new("math_view")).unwrap_err();
         assert!(reason.contains("earlier in the chain"), "{reason}");
+    }
+
+    // Real bundled snapshots from every legacy era: the initial native Math
+    // View, the connected-events era, and the depth-occlusion era. Each lacks
+    // controls that did not exist yet, so they only detect via the core
+    // subset.
+    #[test]
+    fn historical_partial_control_sets_are_detected() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/math-view-legacy/vortex-fragments-initial-ce78a59d0.json"
+                ),
+                "initial",
+                &["occlusion", "axes", "connect_mesh", "pulse", "scan_amount"],
+            ),
+            (
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/math-view-legacy/vortex-fragments-events-96c78f522.json"
+                ),
+                "events",
+                &["axes"],
+            ),
+            (
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/math-view-legacy/vortex-fragments-occlusion-9f453beb0.json"
+                ),
+                "occlusion",
+                &["axes"],
+            ),
+        ];
+        for (path, era, absent) in cases {
+            let json = std::fs::read_to_string(path).expect("historical fixture readable");
+            let graph: EffectGraphDef =
+                serde_json::from_str(&json).expect("historical fixture parses");
+            assert!(
+                has_legacy_math_view_controls(&graph),
+                "{era} snapshot must detect as a legacy carrier"
+            );
+            assert!(
+                !is_math_view_recipe(&graph),
+                "{era} snapshot is not the standalone recipe"
+            );
+            for suffix in *absent {
+                assert!(
+                    !control_present(&graph, suffix),
+                    "{era} snapshot predates math_view_{suffix}"
+                );
+            }
+            // Migration strips whatever embedded section exists, partial or not.
+            let mut stripped = graph.clone();
+            assert!(
+                strip_legacy_math_view_controls(&mut stripped),
+                "{era} snapshot strips"
+            );
+            assert!(!has_legacy_math_view_controls(&stripped));
+            assert!(
+                !strip_legacy_math_view_controls(&mut stripped),
+                "{era} strip is idempotent"
+            );
+        }
+    }
+
+    /// Carrier with embedded control nodes sitting at their defaults.
+    fn legacy_carrier_at_defaults() -> EffectGraphDef {
+        let mut graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version":3,
+            "presetMetadata":{"id":"VortexFragments","displayName":"Vortex","category":"Geometry","oscPrefix":"vortex","params":[],"bindings":[{"id":"orbit","label":"Orbit","defaultValue":1,"target":{"kind":"node","nodeId":"patch","param":"orbit"}}]},
+            "nodes":[{"id":1,"nodeId":"stage","typeId":"group","group":{"interface":{"inputs":[],"outputs":[]},"nodes":[{"id":2,"nodeId":"patch","typeId":"node.transform_mesh_patches","params":{"orbit":{"type":"Float","value":1}}}],"wires":[]}}],"wires":[]
+        }))
+        .unwrap();
+        let mut next = 10;
+        for (suffix, default) in CONTROLS
+            .iter()
+            .map(|(suffix, _, default, ..)| (*suffix, *default))
+            .chain([("scope", 1.0)])
+        {
+            let (param, binding, mut node) = control_entry(suffix);
+            node.id = next;
+            next += 1;
+            node.params.insert(
+                "value".into(),
+                SerializedParamValue::Float { value: default },
+            );
+            let metadata = graph.preset_metadata.as_mut().unwrap();
+            metadata.params.push(param);
+            metadata.bindings.push(binding);
+            graph.nodes.push(node);
+        }
+        graph
+    }
+
+    fn host_with_carrier(carrier: EffectGraphDef) -> crate::effects::PresetInstance {
+        let mut owner: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version":3,
+            "presetMetadata":{"id":"Host","displayName":"Host","category":"Geometry","oscPrefix":"host","params":[],"bindings":[]},
+            "nodes":[],"wires":[]
+        }))
+        .unwrap();
+        owner.scene_modifiers.push(SceneModifierInstanceDef {
+            id: NodeId::new("vortex_a"),
+            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            graph: Box::new(carrier),
+        });
+        let mut host = crate::effects::PresetInstance::new(crate::PresetTypeId::new("Host"));
+        host.graph = Some(owner);
+        host.refresh_manifest_from_graph();
+        host
+    }
+
+    fn push_host_binding(
+        host: &mut crate::effects::PresetInstance,
+        local: &str,
+        default: f32,
+    ) -> String {
+        let macro_id = format!(
+            "sceneModifier:{}",
+            serde_json::to_string(&("vortex_a", local)).unwrap()
+        );
+        let graph = host.graph.as_mut().unwrap();
+        let metadata = graph.preset_metadata.as_mut().unwrap();
+        metadata.params.push(ParamSpecDef {
+            id: macro_id.clone(),
+            name: local.into(),
+            default_value: default,
+            ..Default::default()
+        });
+        metadata.bindings.push(BindingDef {
+            id: macro_id.clone(),
+            label: local.into(),
+            default_value: default,
+            target: BindingTarget::SceneModifier {
+                modifier_id: NodeId::new("vortex_a"),
+                param_id: local.into(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        });
+        host.params.push(crate::params::Param::user_added(ParamSpecDef {
+            id: macro_id.clone(),
+            name: local.into(),
+            default_value: default,
+            ..Default::default()
+        }));
+        host.refresh_manifest_from_graph();
+        macro_id
+    }
+
+    #[test]
+    fn authored_content_detection() {
+        use crate::types::{BeatDivision, DriverWaveform};
+
+        // All defaults and no enabled binding: nothing authored.
+        let host = host_with_carrier(legacy_carrier_at_defaults());
+        assert!(!carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+
+        // An embedded node value off its default is authored even without any
+        // host bindings.
+        let mut carrier = legacy_carrier_at_defaults();
+        let density = carrier
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == "__math_view_density")
+            .expect("density control node");
+        density.params.insert(
+            "value".into(),
+            SerializedParamValue::Float { value: 5.0 },
+        );
+        let host = host_with_carrier(carrier);
+        assert!(carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+
+        // An active enabled state is authored; a disabled modifier with
+        // default values is not.
+        let mut host = host_with_carrier(legacy_carrier_at_defaults());
+        let enabled = push_host_binding(&mut host, "enabled", 1.0);
+        host.set_base_param(&enabled, 1.0);
+        assert!(carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+        host.set_base_param(&enabled, 0.0);
+        assert!(!carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+
+        // A host base value off its binding default is authored.
+        let mut host = host_with_carrier(legacy_carrier_at_defaults());
+        let mode = push_host_binding(&mut host, "math_view_mode", 0.0);
+        host.set_base_param(&mode, 1.0);
+        assert!(carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+        host.set_base_param(&mode, 0.0);
+        assert!(!carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+
+        // Host-side animation or modulation touching a math_view binding is
+        // authored even at the default value.
+        let mut host = host_with_carrier(legacy_carrier_at_defaults());
+        let mode = push_host_binding(&mut host, "math_view_mode", 0.0);
+        host.drivers = Some(vec![crate::effects::ParameterDriver::new(
+            crate::effects::ParamId::from(mode.clone()),
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+        )]);
+        assert!(carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
+        host.drivers = None;
+        host.envelopes = Some(vec![crate::effects::ParamEnvelope::new(
+            crate::effects::ParamId::from(mode),
+        )]);
+        assert!(carrier_has_authored_math_view_content(
+            &host,
+            &NodeId::new("vortex_a")
+        ));
     }
 }

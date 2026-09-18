@@ -327,3 +327,53 @@ fn add_cube_object_is_rejected_atomically_for_coordinate_context() {
     assert_eq!(service.data_version(), version);
     assert_eq!(service.can_undo(), had_history);
 }
+
+#[test]
+fn math_view_add_remove_undo_redo_round_trips() {
+    let (mut project, layer_id) = project_with_mushroom();
+    let mut service = EditingService::new();
+
+    let add = build_action(
+        &project,
+        SceneModifierAction::Add(layer_id.clone(), "MathView".into()),
+    )
+    .expect("math view action builds");
+    service.execute(with_admission(add), &mut project);
+    assert!(service.take_rejection().is_none());
+    let id = modifier_id(&project, &layer_id);
+    assert!(
+        host_graph(&project, &layer_id)
+            .scene_modifiers
+            .iter()
+            .find(|modifier| modifier.id == id)
+            .is_some_and(|modifier| {
+                manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph)
+            }),
+        "added modifier is the standalone Math View recipe"
+    );
+
+    // Singleton authoring gate: a second Math View in the same scene is
+    // rejected at build time (load migration is exempt from this rule).
+    assert!(
+        build_action(&project, SceneModifierAction::Add(layer_id.clone(), "MathView".into()))
+            .is_err(),
+        "second Math View add is a singleton collision"
+    );
+
+    let added_graph = serde_json::to_value(&project).expect("project serializes");
+    assert!(service.undo(&mut project));
+    assert!(host_graph(&project, &layer_id).scene_modifiers.is_empty());
+    assert!(service.redo(&mut project));
+    assert_eq!(serde_json::to_value(&project).unwrap(), added_graph);
+    assert_eq!(modifier_id(&project, &layer_id), id);
+
+    let remove = build_action(&project, SceneModifierAction::Remove(layer_id.clone(), id.clone()))
+        .expect("remove action builds");
+    service.execute(with_admission(remove), &mut project);
+    assert!(service.take_rejection().is_none());
+    assert!(host_graph(&project, &layer_id).scene_modifiers.is_empty());
+    assert!(service.undo(&mut project));
+    assert_eq!(modifier_id(&project, &layer_id), id);
+    assert!(service.redo(&mut project));
+    assert!(host_graph(&project, &layer_id).scene_modifiers.is_empty());
+}

@@ -66,6 +66,22 @@ pub(crate) fn build_paste(
         &clipboard.selected,
         false,
     )?;
+    // Singleton recipes allow one instance per scene (the same rule the picker
+    // and the add/duplicate actions enforce); reject a paste that grows any
+    // (scene, singleton recipe) count, while leaving already-migrated
+    // multi-instance scenes pasteable for everything else.
+    let before_counts = singleton_counts(before);
+    let after_counts = singleton_counts(&after);
+    for (key, after_n) in &after_counts {
+        // One instance per scene is allowed; the paste is rejected only when
+        // it pushes a scene past that.
+        if *after_n > before_counts.get(key).copied().unwrap_or(0).max(1) {
+            return Err(format!(
+                "{} is already applied to this scene",
+                key.1.as_str()
+            ));
+        }
+    }
     Ok(Box::new(
         crate::generator_change::ReplaceGeneratorStateCommand::new(
             layer,
@@ -74,6 +90,37 @@ pub(crate) fn build_paste(
             "Paste Scene Modifiers",
         ),
     ))
+}
+
+/// Per-(scene, recipe) instance counts for singleton recipes.
+fn singleton_counts(
+    host: &manifold_core::effects::PresetInstance,
+) -> std::collections::BTreeMap<
+    (
+        manifold_core::scene_modifier_preset::SceneNodeRef,
+        String,
+    ),
+    usize,
+> {
+    let mut counts: std::collections::BTreeMap<_, usize> = std::collections::BTreeMap::new();
+    let Some(graph) = host.graph.as_ref() else {
+        return counts;
+    };
+    for instance in &graph.scene_modifiers {
+        let Some(metadata) = instance.graph.preset_metadata.as_ref() else {
+            continue;
+        };
+        if metadata
+            .scene_modifier
+            .as_ref()
+            .is_some_and(|recipe| recipe.singleton)
+        {
+            *counts
+                .entry((instance.scene.clone(), metadata.id.as_str().to_string()))
+                .or_default() += 1;
+        }
+    }
+    counts
 }
 
 fn scenes(nodes: &[EffectGraphNode], scope: &mut Vec<NodeId>, out: &mut Vec<SceneNodeRef>) {

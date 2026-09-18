@@ -252,28 +252,20 @@ fn prepare_scene_modifiers_impl(
     };
     let mut leaf_maps = BTreeMap::new();
     let mut target_maps = BTreeMap::new();
-    let mut singletons = BTreeSet::new();
     for instance in &owner.scene_modifiers {
-        let recipe = instance
+        if instance
             .graph
             .preset_metadata
             .as_ref()
             .and_then(|metadata| metadata.scene_modifier.as_ref())
-            .ok_or_else(|| invalid(instance.id.to_string(), "instance has no recipe"))?;
-        if recipe.singleton {
-            let id = &instance
-                .graph
-                .preset_metadata
-                .as_ref()
-                .expect("recipe metadata exists")
-                .id;
-            if !singletons.insert((instance.scene.clone(), id.as_str().to_string())) {
-                return Err(invalid(
-                    instance.id.to_string(),
-                    "singleton recipe is already applied to this scene",
-                ));
-            }
+            .is_none()
+        {
+            return Err(invalid(instance.id.to_string(), "instance has no recipe"));
         }
+        // No per-scene singleton uniqueness check here: that rule governs NEW
+        // authoring (picker projection, action builders), while legacy load
+        // migration legitimately produces several Math View instances per
+        // scene — one per authored legacy carrier.
         frames::validate_saved_frames(owner, &index, instance)?;
         let targets = frames::selected_objects(&index, instance)?;
         if let Some(request) = builder.math_view {
