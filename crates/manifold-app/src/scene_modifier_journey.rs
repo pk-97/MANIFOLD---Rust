@@ -2106,9 +2106,11 @@ fn legacy_math_view_embedded_value_migration_journey() {
 
 /// Reusable-view guards (compatibility audit c): retargeting a carrier's
 /// bindings onto an EXISTING standalone view is allowed only when the view is
-/// default, immediately follows the carrier and holds no host Math View
-/// bindings of its own. Otherwise a fresh view is appended and the existing
-/// view, the carrier's selection and its chain position are untouched.
+/// default, immediately follows the carrier, samples the same objects
+/// (targets and mesh frames) and holds no host Math View bindings of its
+/// own; a reused view inherits the carrier association. Otherwise a fresh
+/// view is appended and the existing view, the carrier's selection and its
+/// chain position are untouched.
 #[test]
 fn legacy_math_view_reuse_guards_migration_journey() {
     use manifold_core::scene_modifier_math_view as mv;
@@ -2167,6 +2169,11 @@ fn legacy_math_view_reuse_guards_migration_journey() {
                 if modifier_id == &existing_view && param_id == "math_view_mode"
         ),
         "carrier binding retargeted onto the existing view"
+    );
+    assert_eq!(
+        graph.scene_modifiers[1].legacy_math_view_carrier,
+        Some(carrier.clone()),
+        "the reused view inherits the carrier association for Connect to Mesh"
     );
 
     // Rejected: the existing view is authored (non-default embedded value).
@@ -2352,6 +2359,61 @@ fn legacy_math_view_reuse_guards_migration_journey() {
         targets_for(&fresh_view),
         mv::CONTROLS.len(),
         "the fresh view carries the carrier's retargeted bindings"
+    );
+    // Rejected: the existing view samples different objects than the carrier
+    // — reusing it would move the carrier's bindings onto the wrong geometry
+    // and the authored connection would degrade to presentation-only.
+    let (mut project, project_layer, frames, project_scene) = legacy_carrier_project();
+    assert_eq!(project_layer, layer_id);
+    let carrier = NodeId::new("legacy_vortex_reuse_frames_mismatch");
+    push_modifier(
+        &mut project,
+        &layer_id,
+        &carrier,
+        &project_scene,
+        frames.clone(),
+        legacy_vortex_carrier_graph(),
+        true,
+    );
+    {
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let owner = project.graph_target_owner_mut(&target).unwrap();
+        owner.set_base_param(&carrier_macro(&carrier, "mode"), 1.0);
+        owner.refresh_manifest_from_graph();
+    }
+    let mismatched_view = NodeId::new("existing_view_frames_mismatch");
+    push_modifier(
+        &mut project,
+        &layer_id,
+        &mismatched_view,
+        &scene,
+        vec![frames[0].clone()],
+        math_view_recipe(),
+        false,
+    );
+    let mut migrated = project.clone();
+    let _ = crate::project_io::migrate_project_scene_graphs(&mut migrated);
+    let graph = generator_graph(&migrated, &layer_id);
+    assert_eq!(
+        graph.scene_modifiers.len(),
+        3,
+        "a view sampling different objects is not reused; a fresh view is appended"
+    );
+    assert_eq!(graph.scene_modifiers[0].id, carrier, "carrier keeps its chain position");
+    assert!(
+        mv::is_math_view_recipe(&graph.scene_modifiers[1].graph)
+            && graph.scene_modifiers[1].id != mismatched_view,
+        "fresh view appended immediately after the carrier"
+    );
+    assert_eq!(
+        graph.scene_modifiers[1].mesh_frames, frames,
+        "the fresh view samples the carrier's objects"
+    );
+    assert_eq!(graph.scene_modifiers[2].id, mismatched_view);
+    assert_eq!(
+        graph.scene_modifiers[2].mesh_frames,
+        vec![frames[0].clone()],
+        "the existing view's own sampling is untouched"
     );
 }
 

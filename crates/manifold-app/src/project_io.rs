@@ -340,7 +340,15 @@ fn migrate_legacy_math_views(
                     mv::reusable_math_view_for_carrier(graph, carrier_id, view)
                 });
                 if reusable_fits {
-                    reusable.take()
+                    let view_id = reusable.take().expect("reuse checked above");
+                    // The reused view inherits the carrier association so
+                    // its Connect to Mesh disambiguates to this carrier too.
+                    if let Some(instance) =
+                        graph.scene_modifiers.iter_mut().find(|m| m.id == view_id)
+                    {
+                        instance.legacy_math_view_carrier = Some(carrier_id.clone());
+                    }
+                    Some(view_id)
                 } else if graph
                     .scene_modifiers
                     .iter()

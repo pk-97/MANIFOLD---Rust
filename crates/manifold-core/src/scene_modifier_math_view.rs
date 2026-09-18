@@ -450,12 +450,12 @@ pub fn legacy_scope_value(
 /// Whether an existing standalone view may absorb a legacy carrier's section
 /// instead of the migration appending a fresh view: the view must be the
 /// Math View recipe, sit immediately after the carrier in the same-scene
-/// chain, carry only default Math View content, and hold no host `math_view_*`
-/// bindings of its own (retargeted carrier bindings would otherwise target
-/// the same params twice; with no bindings, no animation or modulation can
-/// reference the view either). Anything else appends a fresh view so an
-/// authored view is never clobbered and the carrier's chain position is
-/// never changed.
+/// chain, sample the same objects (targets and mesh frames), carry only
+/// default Math View content, and hold no host `math_view_*` bindings of its
+/// own (retargeted carrier bindings would otherwise target the same params
+/// twice; with no bindings, no animation or modulation can reference the view
+/// either). Anything else appends a fresh view so an authored view is never
+/// clobbered and the carrier's chain position is never changed.
 pub fn reusable_math_view_for_carrier(
     owner: &EffectGraphDef,
     carrier: &NodeId,
@@ -476,6 +476,18 @@ pub fn reusable_math_view_for_carrier(
         .collect();
     let carrier_at = chain.iter().position(|id| *id == carrier);
     if !matches!(carrier_at, Some(at) if chain.get(at + 1) == Some(&view)) {
+        return false;
+    }
+    // The view must sample the same objects the carrier deforms: a default
+    // view over different frames would absorb the carrier's bindings while
+    // its connected coverage fails on the wrong geometry — the silent
+    // connection loss this migration exists to prevent.
+    let Some(carrier_instance) = owner.scene_modifiers.iter().find(|m| &m.id == carrier) else {
+        return false;
+    };
+    if view_instance.mesh_frames != carrier_instance.mesh_frames
+        || view_instance.targets != carrier_instance.targets
+    {
         return false;
     }
     // Only default content: every embedded control node at its default.
