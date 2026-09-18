@@ -670,6 +670,7 @@ fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_li
             source_offset: [0.0; 3],
             scene_radius: 1.0,
         }],
+        legacy_math_view_carrier: None,
         graph: Box::new(mirror_catalog_default()),
     });
     let (mut project, id) = project_with_graph(def.clone());
@@ -751,6 +752,7 @@ fn vertices_modifier_locks_host_rt_enabled_before_mutation() {
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![],
+        legacy_math_view_carrier: None,
         graph: Box::new(recipe),
     });
     let (mut project, id) = project_with_graph(def.clone());

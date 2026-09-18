@@ -725,6 +725,7 @@ mod tests {
             },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: frames,
+            legacy_math_view_carrier: None,
             graph: Box::new(EffectGraphDef {
                 version: 3,
                 name: None,

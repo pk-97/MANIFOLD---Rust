@@ -50,6 +50,7 @@ fn instance(scene: &str) -> SceneModifierInstanceDef {
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
         graph: Box::new(owner(Vec::new(), Vec::new())),
     }
 }

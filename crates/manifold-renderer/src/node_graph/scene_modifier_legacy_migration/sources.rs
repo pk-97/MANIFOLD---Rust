@@ -363,6 +363,7 @@ fn adopt_fog(owner: &mut EffectGraphDef, owned: &[EffectGraphNode]) -> Result<()
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
         graph: Box::new(EffectGraphDef {
             version: 3,
             name: Some("Scene Fog".into()),
@@ -598,6 +599,7 @@ fn adopt_loop(owner: &mut EffectGraphDef, owned: &[EffectGraphNode]) -> Result<(
             },
             targets: SceneTargetSelection::Explicit { objects: targets },
             mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
             graph: Box::new(EffectGraphDef {
                 version: 3,
                 name: Some("Scene Loop".into()),

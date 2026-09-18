@@ -403,6 +403,7 @@ mod tests {
             },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
             graph: Box::new(local("recipe-a", 0.2)),
         };
         let b = SceneModifierInstanceDef {
@@ -410,6 +411,7 @@ mod tests {
             scene: a.scene.clone(),
             targets: a.targets.clone(),
             mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
             graph: Box::new(local("recipe-b", 0.7)),
         };
         serde_json::from_value(serde_json::json!({
