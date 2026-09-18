@@ -193,6 +193,319 @@ pub struct ProjectIOAction {
     pub notice: Option<String>,
 }
 
+/// Load-time compatibility for the pre-standalone Math View. Each legacy
+/// carrier with authored content — non-default control values or host-side
+/// animation or modulation touching them — gains its own Math View instance
+/// immediately after it in the chain, keeping the carrier's target selection
+/// and mesh frames, and the carrier's host bindings move onto it (binding ids
+/// are unchanged, so values, animation and modulation survive). The view
+/// records the carrier in `legacy_math_view_carrier` so its authored Connect
+/// to Mesh keeps pointing at that carrier's patch transform even when other
+/// patch carriers precede it. Embedded control values without host bindings
+/// are copied onto the view. Legacy Scope remains a hidden compatibility
+/// macro, including its automation; new standalone views have no Scope.
+/// Carriers with only default, inactive content — including
+/// enabled-but-untouched ones — are stripped cleanly. When an authored
+/// carrier's view cannot be created (recipe unavailable, no mesh frames, or
+/// the view cap is reached) its embedded controls are preserved untouched
+/// and the skip is reported. Returns the host base values the caller must
+/// seed once the manifest is refreshed.
+fn migrate_legacy_math_views(
+    host: &mut manifold_core::effects::PresetInstance,
+    notices: &mut Vec<String>,
+) -> Vec<(String, f32)> {
+    use manifold_core::scene_modifier_math_view as mv;
+    // Immutable pass first: authoredness reads host bindings, base values and
+    // the animation/modulation collections, none of which may be borrowed
+    // while the graph is mutated below.
+    struct CarrierSurvey {
+        authored: bool,
+        embedded: std::collections::BTreeMap<String, f32>,
+        bound: std::collections::HashSet<String>,
+    }
+    let (scenes, carriers, survey): (
+        Vec<manifold_core::scene_modifier_preset::SceneNodeRef>,
+        Vec<manifold_core::NodeId>,
+        std::collections::HashMap<manifold_core::NodeId, CarrierSurvey>,
+    ) = {
+        let Some(graph) = host.graph.as_ref() else { return Vec::new() };
+        let carriers = mv::legacy_math_view_carriers(graph);
+        if carriers.is_empty() {
+            return Vec::new();
+        }
+        let scenes = mv::legacy_math_view_scenes(graph);
+        let mut survey = std::collections::HashMap::new();
+        for scene in &scenes {
+            for instance in graph
+                .scene_modifiers
+                .iter()
+                .filter(|m| m.scene == *scene)
+            {
+                if carriers.contains(&instance.id) {
+                    survey.insert(
+                        instance.id.clone(),
+                        CarrierSurvey {
+                            authored: mv::carrier_has_authored_math_view_content(host, &instance.id),
+                            embedded: mv::legacy_embedded_control_values(&instance.graph),
+                            bound: mv::legacy_bound_control_suffixes(graph, &instance.id),
+                        },
+                    );
+                }
+            }
+        }
+        (scenes, carriers, survey)
+    };
+    let recipe = manifold_renderer::node_graph::bundled_preset_def(
+        &manifold_core::PresetTypeId::new("MathView"),
+    );
+    // Host base values to seed after the caller refreshes the manifest:
+    // (macro id, value) for migrated-view controls whose carrier never had a
+    // host binding.
+    let mut pending_base_values: Vec<(String, f32)> = Vec::new();
+    let view_macro = |view_id: &manifold_core::NodeId, suffix: &str| {
+        format!(
+            "sceneModifier:{}",
+            serde_json::to_string(&(view_id.as_str(), format!("math_view_{suffix}")))
+                .expect("NodeId and str are serializable")
+        )
+    };
+    let graph = host.graph.as_mut().expect("graph checked above");
+    // Strip plus host prune, inlined as a macro so the graph borrow and the
+    // host manifest/animation borrows stay disjoint field borrows.
+    macro_rules! strip_carrier {
+        ($carrier_id:expr) => {{
+            let carrier_id = $carrier_id;
+            if let Some(instance) = graph
+                .scene_modifiers
+                .iter_mut()
+                .find(|modifier| &modifier.id == carrier_id)
+            {
+                mv::strip_legacy_math_view_controls(&mut instance.graph);
+            }
+            let dropped = mv::drop_math_view_bindings(graph, carrier_id);
+            if !dropped.is_empty() {
+                let ids: std::collections::BTreeSet<&str> =
+                    dropped.iter().map(String::as_str).collect();
+                for id in &ids {
+                    host.params.remove(id);
+                }
+                macro_rules! prune_entries {
+                    ($field:ident) => {
+                        if let Some(entries) = host.$field.as_mut() {
+                            entries.retain(|entry| !ids.contains(entry.param_id.as_ref()));
+                        }
+                    };
+                }
+                prune_entries!(drivers);
+                prune_entries!(envelopes);
+                prune_entries!(ableton_mappings);
+                prune_entries!(audio_mods);
+                prune_entries!(automation_lanes);
+            }
+        }};
+    }
+    for scene in scenes {
+        let scene_carriers: Vec<_> = graph
+            .scene_modifiers
+            .iter()
+            .filter(|m| m.scene == scene && carriers.contains(&m.id))
+            .map(|m| m.id.clone())
+            .collect();
+        let mut reusable = graph
+            .scene_modifiers
+            .iter()
+            .find(|m| m.scene == scene && mv::is_math_view_recipe(&m.graph))
+            .map(|m| m.id.clone());
+        let mut created = 0usize;
+        let mut preserved = 0usize;
+        for carrier_id in &scene_carriers {
+            let info = &survey[carrier_id];
+            let view_id = if info.authored {
+                let reusable_fits = reusable.as_ref().is_some_and(|view| {
+                    mv::reusable_math_view_for_carrier(graph, carrier_id, view)
+                });
+                if reusable_fits {
+                    let view_id = reusable.take().expect("reuse checked above");
+                    // The reused view inherits the carrier association so
+                    // its Connect to Mesh disambiguates to this carrier too.
+                    if let Some(instance) =
+                        graph.scene_modifiers.iter_mut().find(|m| m.id == view_id)
+                    {
+                        instance.legacy_math_view_carrier = Some(carrier_id.clone());
+                    }
+                    Some(view_id)
+                } else if graph
+                    .scene_modifiers
+                    .iter()
+                    .filter(|m| mv::is_math_view_recipe(&m.graph))
+                    .count()
+                    >= mv::MAX_MATH_VIEW_MODIFIERS
+                {
+                    notices.push(format!(
+                        "Math View migration kept the embedded controls on {carrier_id}: the {}-Math View limit is reached",
+                        mv::MAX_MATH_VIEW_MODIFIERS
+                    ));
+                    None
+                } else {
+                    append_legacy_math_view(graph, &scene, carrier_id, recipe, notices)
+                }
+            } else {
+                None
+            };
+            let Some(view_id) = view_id else {
+                if info.authored {
+                    // Authored content whose standalone view could not be
+                    // created: keep the embedded controls so the saved data
+                    // survives, and say so.
+                    preserved += 1;
+                } else {
+                    strip_carrier!(carrier_id);
+                }
+                continue;
+            };
+            created += 1;
+            // Install Scope before retargeting so its original host id and
+            // animation survive alongside the other Math View controls.
+            let carrier_graph = graph.scene_modifiers.iter()
+                .find(|m| &m.id == carrier_id).expect("surveyed carrier").graph.clone();
+            let view_graph = &mut graph.scene_modifiers.iter_mut()
+                .find(|m| m.id == view_id).expect("created view").graph;
+            mv::preserve_legacy_scope_control(&carrier_graph, view_graph);
+            mv::retarget_math_view_bindings(graph, carrier_id, &view_id);
+            // Embedded values for controls the carrier never had a host
+            // binding for: host bindings win where they exist, otherwise the
+            // saved node value carries onto the view's control node and its
+            // host base value, so it drives the runtime and survives
+            // save/reload.
+            let view_position = graph
+                .scene_modifiers
+                .iter()
+                .position(|m| m.id == view_id)
+                .expect("view present");
+            let declared: std::collections::BTreeSet<String> = graph.scene_modifiers
+                [view_position]
+                .graph
+                .preset_metadata
+                .as_ref()
+                .map(|metadata| {
+                    metadata
+                        .params
+                        .iter()
+                        .filter(|param| param.id.starts_with(mv::CONTROL_PREFIX))
+                        .map(|param| param.id.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (suffix, value) in &info.embedded {
+                if info.bound.contains(suffix.as_str()) {
+                    continue;
+                }
+                if !declared.contains(&format!("math_view_{suffix}")) {
+                    continue;
+                }
+                if let Some(node) = graph.scene_modifiers[view_position]
+                    .graph
+                    .nodes
+                    .iter_mut()
+                    .find(|node| {
+                        node.node_id
+                            == manifold_core::NodeId::new(format!("__math_view_{suffix}"))
+                    })
+                {
+                    node.params.insert(
+                        "value".into(),
+                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value },
+                    );
+                }
+                pending_base_values.push((view_macro(&view_id, suffix), *value));
+            }
+            strip_carrier!(carrier_id);
+            // Mint host bindings the carrier never had (enabled, controls
+            // added after the project was saved). Existing retargeted
+            // bindings are matched by target and left alone.
+            match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+                graph, &view_id,
+            ) {
+                Ok(reconciled) => *graph = reconciled.graph,
+                Err(reason) => notices.push(format!(
+                    "Math View metadata reconciliation failed for {view_id}: {reason}"
+                )),
+            }
+        }
+        if created > 1 {
+            notices.push(format!(
+                "{created} legacy Math View sections became {created} standalone Math View modifiers, one per authored modifier"
+            ));
+        }
+        if preserved > 0 {
+            notices.push(format!(
+                "Math View migration preserved embedded controls on {preserved} modifier(s) whose standalone view could not be created; the legacy controls are inert and nothing reads them, but their values stay saved and migrate on a later load once a view can be created"
+            ));
+        }
+    }
+    pending_base_values
+}
+
+/// Append one standalone Math View instance immediately after its legacy
+/// carrier so the view samples the chain at the position the embedded section
+/// did. The instance records the carrier in `legacy_math_view_carrier` so its
+/// authored Connect to Mesh keeps pointing at that carrier's patch transform.
+/// Returns `None` (with a notice) when the recipe is unavailable, the carrier
+/// has no mesh frames, or initialization fails; the caller checks the view
+/// cap before calling.
+fn append_legacy_math_view(
+    graph: &mut manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
+    carrier_id: &manifold_core::NodeId,
+    recipe: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    notices: &mut Vec<String>,
+) -> Option<manifold_core::NodeId> {
+    let Some(recipe) = recipe else {
+        notices.push(
+            "Math View recipe unavailable; authored legacy controls were preserved".into(),
+        );
+        return None;
+    };
+    let position = graph
+        .scene_modifiers
+        .iter()
+        .position(|modifier| &modifier.id == carrier_id)?;
+    let (targets, frames) = (
+        graph.scene_modifiers[position].targets.clone(),
+        graph.scene_modifiers[position].mesh_frames.clone(),
+    );
+    if frames.is_empty() {
+        notices.push("Math View migration skipped: the legacy modifier had no mesh frames".into());
+        return None;
+    }
+    // The carrier's calibrated frames carry the exact sample correspondence
+    // the project's visuals were authored with; a fresh capture would also
+    // reject non-glTF sources.
+    let created = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
+        graph,
+        recipe,
+    )
+    .map(|view_graph| manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
+        id: manifold_core::NodeId::new(manifold_core::short_id()),
+        scene: scene.clone(),
+        targets,
+        mesh_frames: frames,
+        legacy_math_view_carrier: Some(carrier_id.clone()),
+        graph: Box::new(view_graph),
+    });
+    match created {
+        Ok(instance) => {
+            let id = instance.id.clone();
+            graph.scene_modifiers.insert(position + 1, instance);
+            Some(id)
+        }
+        Err(reason) => {
+            notices.push(format!("Math View migration failed: {reason}"));
+            None
+        }
+    }
+}
+
 /// One load-time migration path for editable scene graphs and acceptance
 /// fixtures. Unsupported legacy ownership remains intact with a visible notice.
 pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
@@ -200,27 +513,26 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
     let mut notices = Vec::new();
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue; };
-        let Some(graph) = host.graph.as_mut() else { continue; };
-        manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
-        let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
-        notices.extend(report.diagnostics);
-        let mut enriched = Vec::new();
-        for instance in &mut graph.scene_modifiers {
-            match manifold_core::scene_modifier_math_view::enrich_math_view_controls(&mut instance.graph) {
-                Ok(true) => enriched.push(instance.id.clone()),
-                Ok(false) => {}
-                Err(reason) => notices.push(format!("Math View controls unavailable for {}: {reason}", instance.id)),
-            }
+        if host.graph.is_none() { continue; }
+        {
+            let graph = host.graph.as_mut().expect("graph checked above");
+            manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+            manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
+            let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
+            notices.extend(report.diagnostics);
         }
-        for id in enriched {
-            match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(graph, &id) {
-                Ok(reconciled) => *graph = reconciled.graph,
-                Err(reason) => notices.push(format!("Math View metadata reconciliation failed for {id}: {reason}")),
-            }
+        // Borrows host.graph internally; the legacy-migration borrow above
+        // must end first.
+        let pending_base_values = migrate_legacy_math_views(host, &mut notices);
+        if let Some(graph) = host.graph.as_mut() {
+            manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         }
-        manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         host.refresh_manifest_from_graph();
+        // Carried embedded values become host base values now that the
+        // minted view bindings exist in the manifest.
+        for (macro_id, value) in pending_base_values {
+            host.set_base_param(&macro_id, value);
+        }
     }
     notices
 }

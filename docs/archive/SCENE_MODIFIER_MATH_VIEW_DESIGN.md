@@ -1,10 +1,23 @@
 # Scene modifier Math View — perform the structure behind the scene
 
-**Status:** IN PROGRESS · 2026-09-17 · Codex. Native grid repair and connected graphics events implemented (BUG-ywdj, BUG-657u); optional depth occlusion adds shared sampled-surface and scene-depth testing (D8). Representative fragment axes and clean trail re-enabling address BUG-cw9z and BUG-lln0. Broader mathematical presentation remains tracked in BUG-fgfk.
+**Status:** SHIPPED · 2026-09-18 · section 8 (standalone Math View) is the live design and complete on main: combined-chain capture including instance modifiers with per-copy motion trails, non-destructive per-carrier migration preserving each carrier's Connect to Mesh association under split capacity (16 stage-carrying + 16 views), historical partial-set detection. Owed: BUG-fgfk (broader mathematical presentation), BUG-jvn5 (post-view residuals, low). Sections 1–7 remain as the superseded record.
 **Prerequisites:** unified scene modifier recipes, parameter surface, native Metal.
 **Execution contract:** DESIGN_DOC_STANDARD.md sections 5–6; current AGENTS.md controls validation and delivery.
 
 Peter wants to show “the pure math, the graphs, lines, behaviours” behind a modifier, with a native section on its card and cuts between mathematics and the scene. The generated mockup establishes a visual direction, not the shader's trajectories. Content owns settings; normal parameter commands mutate them; the UI projects snapshots. Presentation controls are ordinary animatable generator macros. Rendering must remain bounded and must not duplicate deformation mathematics.
+
+## 8. Standalone Math View — one modifier owns the view — k3 (lead), 2026-09-17
+
+Sections 1–7 embedded Math View controls in each qualified modifier's recipe. That direction is superseded: Math View is now one standalone scene modifier that visualises the combined deformation of all preceding modifiers in its scene. No target selector, no per-modifier sections.
+
+Verified mechanics behind the design:
+
+- `prepare_scene_modifier_math_view(owner, registry, modifier_id, scope)` (`scene_modifier_expand/compiler.rs:148`) is already parameterised by an arbitrary modifier id; chain state keys (`attachment_key`, compiler.rs:1440) are per scene/object/endpoint, not per modifier, so captures at the view's chain position read the accumulated output of every preceding modifier.
+- New standalone views seed sampled faces at the first modifier of the scene and evaluate preceding stages through the ordinary compiler, fusion, value routes and backend, using one derived runtime. Migrated views retain a hidden Scope macro and two compatibility variants: original faces at the carrier for This modifier, or at the scene head for Within chain. Both capture the carrier's input and output, preserving its arrows and ghosts. Scope automation selects the variant without recompiling; new authoring has no Scope selector.
+- A stage-less recipe is schema-valid (`SceneModifierRecipe.stages` defaults empty; `validate_recipe` requires only `enabledParam`, scene_modifier_preset.rs:831); `append_instance` clones non-stage nodes as shared and writes no endpoints, so the view modifier passes the chain through unchanged.
+- Diagram semantics for the combined view: `incoming` wires from the reference samples (not the chain output), so ghosts show the undeformed mesh and arrows show the total reference→current displacement (`render_mesh_diagram.wgsl:124-173`).
+- Connect to Mesh keeps its patch-family contract (`compiler/math_events.rs:100-117`): supported when exactly one preceding modifier in the scene carries one reference patch transform per selected object with its reference wired from the saved original mesh; a migrated legacy view records its carrier (`legacy_math_view_carrier`) and keeps that carrier's patch association when several patch carriers precede it. Unsupported chains force the control neutral and lock the card row with the reason; nothing partially connects.
+- Compatibility: on load, legacy `math_view_*` controls are stripped from carrier recipes and their host binding values are moved onto one appended Math View instance per carrier (reusing a pristine existing view only when it immediately follows the carrier and samples the same objects). Embedded values and Scope animation retain their stable host addresses. Copying a carrier with its view remaps their association together; missing explicit associations never silently choose another carrier. Migrated views hold their own capacity budget (16) beside the 16 stage-carrying limit. Scope data removed by a previously saved migration cannot be reconstructed; recovery requires the original legacy project.
 
 ## 1. Audit — verified 2026-09-13
 
@@ -42,6 +55,8 @@ The existing `node.render_mesh_diagram` supplies an optional `depth` output and 
 **Cost:** each eligible modifier adds one 4-byte weight per original vertex, plus at most 1536 sampled vertices per object. The parent owns these buffers; both views retain the same native handles without copies. Local graphics-only scan masks, deformation intermediates and history stay bounded by the sample capacity. Shared producer readiness gates derived rendering during loading. Pure masks/samplers skip unchanged work. Scene mode dispatches no diagram work, but retains event evaluation and shared resource preparation. Existing scene allocations remain; no frame-rate claim is made.
 
 ## 3. Seams
+
+_Sections 1–7 describe the embedded per-modifier design. Superseded by section 8 (standalone Math View): `enrich_math_view_controls`, `has_math_view_controls` and `MathViewScope` no longer exist, and the Scope control is retired. The paragraphs below remain as the record of the original slice._
 
 Core exports `enrich_math_view_controls(&mut EffectGraphDef) -> Result<bool, String>` and `has_math_view_controls(&EffectGraphDef) -> bool`, plus the shared control vocabulary. Controls include Mode (Scene/Math/Overlay), Occlusion (X-ray/Depth), five element toggles and brightness levels, plus an Axes toggle, Pulse and Scan controls described in D6, Connect to Mesh, Density (2–8), Line Width, Geometry Hue, Path Hue, and Scope (This modifier/Within chain). The bundled recipe carries the same metadata; saved recipes receive additive enrichment on load.
 

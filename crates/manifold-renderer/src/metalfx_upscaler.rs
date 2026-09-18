@@ -59,6 +59,12 @@ mod imp {
             dst_w: u32,
             dst_h: u32,
         ) -> Option<Self> {
+            Self::try_new(device, src_w, src_h, dst_w, dst_h).ok()
+        }
+
+        pub fn try_new(
+            device: &manifold_gpu::GpuDevice, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32,
+        ) -> Result<Self, String> {
             let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
             let scaler = manifold_gpu::metalfx::MetalFxSpatialScaler::new(
                 device.raw_device(),
@@ -67,7 +73,7 @@ mod imp {
                 dst_w,
                 dst_h,
                 fmt,
-            )?;
+            ).ok_or_else(|| "MetalFX scaler creation failed".to_string())?;
             let rcas_pipeline = device.create_compute_pipeline(
                 include_str!("effects/shaders/fsr1_rcas_compute.wgsl"),
                 "cs_main",
@@ -82,9 +88,9 @@ mod imp {
                 ..Default::default()
             });
             let metalfx_intermediate =
-                RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX Intermediate");
-            let output = RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX+RCAS Output");
-            Some(Self {
+                RenderTarget::try_new(device, dst_w, dst_h, fmt, "MetalFX Intermediate")?;
+            let output = RenderTarget::try_new(device, dst_w, dst_h, fmt, "MetalFX+RCAS Output")?;
+            Ok(Self {
                 scaler,
                 rcas_pipeline,
                 rcas_sampler,

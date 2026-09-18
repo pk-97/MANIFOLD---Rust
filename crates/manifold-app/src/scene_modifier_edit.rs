@@ -26,6 +26,28 @@ pub(crate) enum SceneModifierAction {
     Preparation(LayerId, NodeId, String, f32),
 }
 
+/// NEW-authoring gate for singleton recipes: one instance per scene. Load
+/// migration is exempt (it legitimately creates several Math View instances
+/// per scene, one per authored legacy carrier); this guards only authoring
+/// actions. The picker projection disables the same collision UI-side.
+pub(crate) fn singleton_scene_conflict(
+    graph: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
+    recipe_id: &str,
+) -> Option<String> {
+    let conflict = graph.scene_modifiers.iter().any(|instance| {
+        instance.scene == *scene
+            && instance.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+                metadata.id.as_str() == recipe_id
+                    && metadata
+                        .scene_modifier
+                        .as_ref()
+                        .is_some_and(|recipe| recipe.singleton)
+            })
+    });
+    conflict.then(|| format!("{recipe_id} is already applied to this scene"))
+}
+
 pub(crate) fn build_action(
     project: &Project,
     action: SceneModifierAction,
@@ -59,11 +81,22 @@ pub(crate) fn build_action(
             if scenes.len() != 1 {
                 return Err("Applying a modifier requires exactly one scene".into());
             }
+            let scene = scenes.remove(0);
+            if let Some(metadata) = recipe.preset_metadata.as_ref()
+                && metadata
+                    .scene_modifier
+                    .as_ref()
+                    .is_some_and(|recipe| recipe.singleton)
+                && let Some(reason) =
+                    singleton_scene_conflict(graph, &scene, metadata.id.as_str())
+            {
+                return Err(reason);
+            }
             let instance = prepare_new_scene_modifier(
                 graph,
                 recipe,
                 NodeId::new(manifold_core::short_id()),
-                scenes.remove(0),
+                scene,
                 SceneTargetSelection::AllObjects,
             )
             .map_err(|e| e.to_string())?;
@@ -93,6 +126,24 @@ pub(crate) fn build_action(
                 .map_err(|e| e.to_string())
         }
         SceneModifierAction::Duplicate(_, selected) => {
+            for id in &selected {
+                let instance = graph
+                    .scene_modifiers
+                    .iter()
+                    .find(|modifier| &modifier.id == id)
+                    .ok_or("Modifier is no longer present")?;
+                if let Some(metadata) = instance.graph.preset_metadata.as_ref()
+                    && metadata
+                        .scene_modifier
+                        .as_ref()
+                        .is_some_and(|recipe| recipe.singleton)
+                {
+                    return Err(format!(
+                        "{} is already applied to this scene",
+                        metadata.id.as_str()
+                    ));
+                }
+            }
             DuplicateSceneModifiersCommand::new(project, target, &default, selected)
                 .map(|command| Box::new(command) as Box<dyn Command>)
                 .map_err(|e| e.to_string())
@@ -209,6 +260,43 @@ pub(crate) fn build_action(
             .map_err(|error| error.to_string())
         }
     }
+}
+
+/// Rejection reason when a Connect to Mesh ENABLE lands on an unsupported
+/// Math View chain. The card's disabled row is the primary gate; this is
+/// the defensive backstop for the same write arriving from any other
+/// surface (automation, headless scripts). The host param is resolved
+/// through the graph's bindings, never by parsing its id string.
+pub(crate) fn math_view_connect_mesh_enable_lock_reason(
+    project: &Project,
+    target: &GraphTarget,
+    host_param_id: &str,
+) -> Option<String> {
+    if matches!(target, GraphTarget::SceneModifier { .. }) {
+        return None;
+    }
+    let graph = crate::graph_target::resolve(project, target)?;
+    let binding = graph
+        .preset_metadata
+        .as_ref()?
+        .bindings
+        .iter()
+        .find(|binding| binding.id == host_param_id)?;
+    let BindingTarget::SceneModifier { modifier_id, param_id } = &binding.target else {
+        return None;
+    };
+    let connect_mesh_id = format!(
+        "{}connect_mesh",
+        manifold_core::scene_modifier_math_view::CONTROL_PREFIX
+    );
+    if param_id != &connect_mesh_id {
+        return None;
+    }
+    let instance = graph.scene_modifiers.iter().find(|m| &m.id == modifier_id)?;
+    if !manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
+        return None;
+    }
+    manifold_core::scene_modifier_math_view::math_view_connect_support(graph, modifier_id).err()
 }
 
 /// Source selectors and render mode cannot change under captured geometry.

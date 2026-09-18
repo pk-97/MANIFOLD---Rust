@@ -11,9 +11,8 @@
       {
         "id": "orbit",
         "name": "Orbit",
-        "min": 0.0,
+        "min": -6.2831855,
         "max": 6.2831855,
-        "wraps": true,
         "defaultValue": 2.2,
         "isAngle": true
       },
@@ -36,8 +35,7 @@
         "name": "Phase",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.0,
-        "wraps": true
+        "defaultValue": 0.0
       },
       {
         "id": "detail",
@@ -151,7 +149,18 @@
         "defaultValue": 0.0,
         "isAngle": true,
         "wraps": true
-      }
+      },
+      {"id":"math_view_mode","name":"Mode","min":0,"max":2,"defaultValue":0,"wholeNumbers":true,"valueLabels":["Scene","Math","Overlay"],"section":"Math View"},
+      {"id":"math_view_grid","name":"Grid","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
+      {"id":"math_view_fragments","name":"Fragments","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
+      {"id":"math_view_ghosts","name":"Ghosts","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
+      {"id":"math_view_vectors","name":"Vectors","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
+      {"id":"math_view_trails","name":"Motion trails","min":0,"max":1,"defaultValue":1,"isToggle":true,"section":"Math View"},
+      {"id":"math_view_density","name":"Density","min":2,"max":8,"defaultValue":3,"wholeNumbers":true,"section":"Math View"},
+      {"id":"math_view_line_width","name":"Line Width","min":0.5,"max":4,"defaultValue":1,"section":"Math View"},
+      {"id":"math_view_geometry_hue","name":"Geometry Hue","min":0,"max":1,"defaultValue":0.52,"section":"Math View"},
+      {"id":"math_view_path_hue","name":"Path Hue","min":0,"max":1,"defaultValue":0.13,"section":"Math View"},
+      {"id":"math_view_scope","name":"Scope","min":0,"max":1,"defaultValue":1,"wholeNumbers":true,"valueLabels":["This modifier","Within chain"],"section":"Math View"}
     ],
     "bindings": [
       {
@@ -336,7 +345,18 @@
           "nodeId": "mask",
           "param": "pitch"
         }
-      }
+      },
+      {"id":"math_view_mode","label":"Mode","defaultValue":0,"target":{"kind":"node","nodeId":"__math_view_mode","param":"value"}},
+      {"id":"math_view_grid","label":"Grid","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_grid","param":"value"}},
+      {"id":"math_view_fragments","label":"Fragments","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_fragments","param":"value"}},
+      {"id":"math_view_ghosts","label":"Ghosts","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_ghosts","param":"value"}},
+      {"id":"math_view_vectors","label":"Vectors","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_vectors","param":"value"}},
+      {"id":"math_view_trails","label":"Motion trails","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_trails","param":"value"}},
+      {"id":"math_view_density","label":"Density","defaultValue":3,"target":{"kind":"node","nodeId":"__math_view_density","param":"value"}},
+      {"id":"math_view_line_width","label":"Line Width","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_line_width","param":"value"}},
+      {"id":"math_view_geometry_hue","label":"Geometry Hue","defaultValue":0.52,"target":{"kind":"node","nodeId":"__math_view_geometry_hue","param":"value"}},
+      {"id":"math_view_path_hue","label":"Path Hue","defaultValue":0.13,"target":{"kind":"node","nodeId":"__math_view_path_hue","param":"value"}},
+      {"id":"math_view_scope","label":"Scope","defaultValue":1,"target":{"kind":"node","nodeId":"__math_view_scope","param":"value"}}
     ],
     "sceneModifier": {
       "schemaVersion": 1,
@@ -732,7 +752,18 @@
           }
         ]
       }
-    }
+    },
+    {"id":12,"nodeId":"__math_view_mode","typeId":"node.value","handle":"math_view_mode","params":{"value":{"type":"Float","value":0}}},
+    {"id":13,"nodeId":"__math_view_grid","typeId":"node.value","handle":"math_view_grid","params":{"value":{"type":"Float","value":1}}},
+    {"id":14,"nodeId":"__math_view_fragments","typeId":"node.value","handle":"math_view_fragments","params":{"value":{"type":"Float","value":1}}},
+    {"id":15,"nodeId":"__math_view_ghosts","typeId":"node.value","handle":"math_view_ghosts","params":{"value":{"type":"Float","value":1}}},
+    {"id":16,"nodeId":"__math_view_vectors","typeId":"node.value","handle":"math_view_vectors","params":{"value":{"type":"Float","value":1}}},
+    {"id":17,"nodeId":"__math_view_trails","typeId":"node.value","handle":"math_view_trails","params":{"value":{"type":"Float","value":1}}},
+    {"id":18,"nodeId":"__math_view_density","typeId":"node.value","handle":"math_view_density","params":{"value":{"type":"Float","value":3}}},
+    {"id":19,"nodeId":"__math_view_line_width","typeId":"node.value","handle":"math_view_line_width","params":{"value":{"type":"Float","value":1}}},
+    {"id":20,"nodeId":"__math_view_geometry_hue","typeId":"node.value","handle":"math_view_geometry_hue","params":{"value":{"type":"Float","value":0.52}}},
+    {"id":21,"nodeId":"__math_view_path_hue","typeId":"node.value","handle":"math_view_path_hue","params":{"value":{"type":"Float","value":0.13}}},
+    {"id":22,"nodeId":"__math_view_scope","typeId":"node.value","handle":"math_view_scope","params":{"value":{"type":"Float","value":1}}}
   ],
   "wires": []
 }

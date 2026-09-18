@@ -32,6 +32,13 @@ pub struct ArrayAllocation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayAllocationAction {
     Allocate(ArrayAllocation),
+    /// Keep an existing physical root whose byte capacity exactly matches
+    /// the new plan.  This is used by staged resize so a live simulation
+    /// buffer is retained without CPU clearing or a transient replacement.
+    Reuse {
+        resource: ResourceId,
+        root: ResourceId,
+    },
     Alias {
         resource: ResourceId,
         input: ResourceId,
@@ -233,19 +240,30 @@ pub fn plan_array_allocations(
                     "array output resolves to zero bytes",
                 ));
             }
-            actions.push(ArrayAllocationAction::Allocate(ArrayAllocation {
-                node: step.node,
-                resource: *resource,
-                bytes,
-                zero_init,
-            }));
-            storage.insert(
-                *resource,
-                ArrayStorage {
-                    root: *resource,
+            if let Some(existing) = prebound.get(resource)
+                && existing.bytes == bytes
+                && !zero_init
+            {
+                actions.push(ArrayAllocationAction::Reuse {
+                    resource: *resource,
+                    root: existing.root,
+                });
+                storage.insert(*resource, *existing);
+            } else {
+                actions.push(ArrayAllocationAction::Allocate(ArrayAllocation {
+                    node: step.node,
+                    resource: *resource,
                     bytes,
-                },
-            );
+                    zero_init,
+                }));
+                storage.insert(
+                    *resource,
+                    ArrayStorage {
+                        root: *resource,
+                        bytes,
+                    },
+                );
+            }
         }
     }
 
@@ -320,7 +338,7 @@ mod tests {
             .iter()
             .filter_map(|action| match action {
                 ArrayAllocationAction::Allocate(allocation) => Some(allocation),
-                ArrayAllocationAction::Alias { .. } => None,
+                ArrayAllocationAction::Reuse { .. } | ArrayAllocationAction::Alias { .. } => None,
             })
             .collect();
         assert_eq!(allocations.len(), 3);
@@ -329,6 +347,30 @@ mod tests {
                 .iter()
                 .all(|allocation| allocation.bytes == expected_bytes)
         );
+    }
+
+    #[test]
+    fn array_allocation_plan_reuses_exact_live_storage() {
+        let mut graph = Graph::new();
+        let cube = graph.add_node(Box::new(GenerateCubeMesh::new()));
+        let wave = graph.add_node(Box::new(WaveShearMesh::new()));
+        graph.connect((cube, "vertices"), (wave, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut prebound = AHashMap::default();
+        for (_, resource, item_size) in array_outputs(&plan) {
+            prebound.insert(
+                resource,
+                ArrayStorage {
+                    root: resource,
+                    bytes: 36 * u64::from(item_size),
+                },
+            );
+        }
+        let planned = plan_array_allocations(&graph, &plan, (64, 64), &prebound).unwrap();
+        assert!(planned.actions.iter().all(|action| matches!(
+            action,
+            ArrayAllocationAction::Reuse { .. } | ArrayAllocationAction::Alias { .. }
+        )));
     }
 
     #[test]
@@ -348,7 +390,9 @@ mod tests {
         assert_eq!(planned.actions.len(), 2);
         let (resource, input) = match planned.actions[1] {
             ArrayAllocationAction::Alias { resource, input } => (resource, input),
-            ArrayAllocationAction::Allocate(_) => panic!("alias output allocated separately"),
+            ArrayAllocationAction::Allocate(_) | ArrayAllocationAction::Reuse { .. } => {
+                panic!("alias output allocated separately")
+            }
         };
         assert_eq!(
             planned.storage[&resource].root,

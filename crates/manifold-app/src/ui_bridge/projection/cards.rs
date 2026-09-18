@@ -447,6 +447,10 @@ fn param_surface(
                     is_trigger_gate: p.spec.is_trigger_gate,
                     value_labels,
                     section: p.spec.section.clone(),
+                    // The base projection leaves every row interactive;
+                    // `modifier_surfaces` below re-locks Math View's
+                    // Connect to Mesh when the chain doesn't support it.
+                    disabled: None,
                 },
                 // D7: display-value resolution decided here — base/effective
                 // straight off the manifest slot, `driven` false (state_sync
@@ -681,9 +685,32 @@ pub(crate) fn modifier_surfaces(
             Some(manifold_core::effects::apply_card_reshape(param.base, param.spec.min, param.spec.max,
                 param.spec.invert, param.spec.curve, binding.scale, binding.offset) > 0.5)
         }).unwrap_or(false);
+        let legacy_scope = manifold_core::scene_modifier_math_view::has_legacy_scope_control(&instance.graph);
         let mut rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
-            id != recipe.enabled_param && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
+            id != recipe.enabled_param && !(legacy_scope && id == "math_view_scope")
+                && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
         for row in &mut rows { row.scene_addr = None; }
+        // Math View's Connect to Mesh locks when the static support check
+        // fails (the compiler enforces the same rule at preparation — the
+        // unsupported appearance simply never reaches the scene). The card
+        // projects the reason onto the row so the toggle reads as locked
+        // instead of looking live and silently doing nothing.
+        if manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
+            let connect_mesh_id = format!(
+                "{}connect_mesh",
+                manifold_core::scene_modifier_math_view::CONTROL_PREFIX
+            );
+            let reason = manifold_core::scene_modifier_math_view::math_view_connect_support(
+                def,
+                &instance.id,
+            )
+            .err();
+            for row in &mut rows {
+                if local_id(row.id.as_ref()) == Some(connect_mesh_id.as_str()) {
+                    row.spec.disabled = reason.clone();
+                }
+            }
+        }
         Some(ParamSurface {
             kind: ParamCardKind::Effect,
             title: metadata.display_name.clone(),
@@ -1084,6 +1111,121 @@ mod modifier_audio_projection_tests {
             graph.scene_modifiers.reverse();
             gp.graph = Some(graph.clone());
         }
+    }
+
+    /// The Connect to Mesh row on a standalone Math View card carries the
+    /// static support check's reason when no preceding patch-based modifier
+    /// qualifies — the row must read as locked, every other row stays live.
+    #[test]
+    fn math_view_connect_mesh_row_locks_without_a_patch_carrier() {
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        use manifold_core::scene_modifier_preset::{SceneMeshReferenceFrame, SceneModifierInstanceDef};
+
+        let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+        ))).unwrap();
+        owner.version = 3;
+        let view_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/assets/scene-modifier-presets/MathView.json"
+        ))).unwrap();
+        // One sampled object — the support check only reads frame targets.
+        let container = owner.nodes.iter().find(|node| node.group.is_some()).unwrap();
+        let group = container.group.as_ref().unwrap();
+        let source = group.nodes.iter().find(|node| node.type_id == "node.cube_mesh").unwrap();
+        let object = group.nodes.iter().find(|node| node.type_id == "node.scene_object").unwrap();
+        let transform = group.nodes.iter().find(|node| node.type_id == "node.transform_3d").unwrap();
+        let scope = vec![container.node_id.clone()];
+        let frame = SceneMeshReferenceFrame {
+            target: SceneNodeRef { scope: scope.clone(), node: object.node_id.clone() },
+            source: SceneNodeRef { scope, node: source.node_id.clone() },
+            source_definition_hash: manifold_core::scene_source_identity::scene_source_definition_hash(
+                &owner,
+                source,
+            )
+            .unwrap(),
+            source_offset: ["pos_x", "pos_y", "pos_z"].map(|param| {
+                match transform.params.get(param) {
+                    Some(SerializedParamValue::Float { value }) => f64::from(*value),
+                    _ => 0.0,
+                }
+            }),
+            scene_radius: 3.0,
+        };
+        owner.scene_modifiers.push(SceneModifierInstanceDef {
+            id: "math_view".into(),
+            scene: SceneNodeRef { scope: vec![], node: "scan_render".into() },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: vec![frame],
+            legacy_math_view_carrier: None,
+            graph: Box::new(view_recipe),
+        });
+        let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &owner,
+            &manifold_core::NodeId::new("math_view"),
+        )
+        .unwrap()
+        .graph;
+
+        let mut gp = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        gp.graph = Some(owner.clone());
+        gp.refresh_manifest_from_graph();
+        let vm = SceneVm::from_def(&owner).unwrap();
+        let surfaces = modifier_surfaces(&gp, &owner, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        assert_eq!(surfaces.len(), 1, "one Math View card");
+        let surface = &surfaces[0];
+        let bindings = owner.preset_metadata.as_ref().unwrap().bindings.as_slice();
+        let local_of = |row: &manifold_ui::param_surface::ParamRow| {
+            bindings.iter().find_map(|binding| {
+                if binding.id != row.id.as_ref() {
+                    return None;
+                }
+                match &binding.target {
+                    manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id }
+                        if modifier_id.as_str() == "math_view" => Some(param_id.as_str()),
+                    _ => None,
+                }
+            })
+        };
+        let connect_row = surface
+            .rows
+            .iter()
+            .find(|row| local_of(row) == Some("math_view_connect_mesh"))
+            .expect("Connect to Mesh row projected");
+        let reason = connect_row
+            .spec
+            .disabled
+            .as_deref()
+            .expect("unsupported chain must lock the row");
+        assert!(reason.contains("patch-based"), "reason names the carrier requirement, got {reason:?}");
+        assert!(
+            surface
+                .rows
+                .iter()
+                .filter(|row| local_of(row) != Some("math_view_connect_mesh"))
+                .all(|row| row.spec.disabled.is_none()),
+            "only the Connect to Mesh row locks"
+        );
+        let carrier: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-core/tests/fixtures/math-view-legacy/vortex-fragments-initial-ce78a59d0.json"
+        ))).unwrap();
+        let mut migrated = owner.clone();
+        manifold_core::scene_modifier_math_view::preserve_legacy_scope_control(
+            &carrier, &mut migrated.scene_modifiers[0].graph);
+        migrated = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &migrated, &manifold_core::NodeId::new("math_view")).unwrap().graph;
+        let scope_id = migrated.preset_metadata.as_ref().unwrap().bindings.iter()
+            .find(|binding| matches!(&binding.target,
+                manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. }
+                    if param_id == "math_view_scope")).unwrap().id.clone();
+        gp.graph = Some(migrated.clone());
+        gp.refresh_manifest_from_graph();
+        assert!(gp.params.contains(&scope_id), "legacy animation still has a parameter target");
+        let surfaces = modifier_surfaces(&gp, &migrated, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        assert!(surfaces[0].rows.iter().all(|row| row.id.as_ref() != scope_id),
+            "legacy Scope must not reappear on the standalone card");
     }
 }
 

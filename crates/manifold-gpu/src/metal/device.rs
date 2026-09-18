@@ -359,6 +359,37 @@ impl GpuDevice {
         }
     }
 
+    /// Fallible sibling of [`Self::create_texture`] for staged resource
+    /// preparation.  Resize callers use this before publishing a candidate;
+    /// the live resource graph is therefore untouched when Metal rejects an
+    /// allocation.
+    pub fn try_create_texture(&self, desc: &GpuTextureDesc) -> Result<GpuTexture, String> {
+        if alloc_log_enabled() {
+            eprintln!(
+                "[gpu-alloc] tex {} {}x{}x{} {:?} mips={}",
+                desc.label, desc.width, desc.height, desc.depth, desc.format, desc.mip_levels
+            );
+        }
+        let mtl_desc = Self::build_mtl_texture_desc(desc);
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .ok_or_else(|| {
+                format!(
+                    "Metal: texture allocation failed ({}x{}x{}, {:?})",
+                    desc.width, desc.height, desc.depth, desc.format
+                )
+            })?;
+        Ok(GpuTexture {
+            raw,
+            width: desc.width,
+            height: desc.height,
+            depth: desc.depth,
+            format: desc.format,
+            retire: self.retirement_mark(),
+        })
+    }
+
     /// Create a GPU buffer with private storage (GPU-only).
     pub fn create_buffer(&self, size: u64) -> GpuBuffer {
         if alloc_log_enabled() {
@@ -376,6 +407,23 @@ impl GpuDevice {
             mapped_ptr: None,
             retire: self.retirement_mark(),
         }
+    }
+
+    /// Fallible sibling of [`Self::create_buffer`] for staged allocation.
+    pub fn try_create_buffer(&self, size: u64) -> Result<GpuBuffer, String> {
+        if alloc_log_enabled() {
+            eprintln!("[gpu-alloc] buf {size}");
+        }
+        let raw = self
+            .device
+            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
+            .ok_or_else(|| format!("Metal: buffer allocation failed ({size} bytes)"))?;
+        Ok(GpuBuffer {
+            raw,
+            size,
+            mapped_ptr: None,
+            retire: self.retirement_mark(),
+        })
     }
 
     /// Create a GPU buffer with shared memory (CPU+GPU coherent).
@@ -400,6 +448,27 @@ impl GpuDevice {
             mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
             retire: self.retirement_mark(),
         }
+    }
+
+    /// Fallible sibling of [`Self::create_buffer_shared`] for staged
+    /// allocation.  The returned buffer is not zeroed; callers must preserve
+    /// the existing simulation reset contract and zero only a genuinely new
+    /// atomic storage allocation before its first GPU read.
+    pub fn try_create_buffer_shared(&self, size: u64) -> Result<GpuBuffer, String> {
+        if alloc_log_enabled() {
+            eprintln!("[gpu-alloc] bufshared {size}");
+        }
+        let raw = self
+            .device
+            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| format!("Metal: shared buffer allocation failed ({size} bytes)"))?;
+        let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
+        Ok(GpuBuffer {
+            raw,
+            size,
+            mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
+            retire: self.retirement_mark(),
+        })
     }
 
     /// Create a sampler state.

@@ -125,6 +125,7 @@ pub use loaded_preset_view::{
     snapshot_for_view,
 };
 pub use metal_backend::MetalBackend;
+pub(crate) use metal_backend::PreparedMetalBackendResize;
 pub use mesh_change::{
     MeshAspect, MeshDependency, MeshOutputRule, MeshRevision, MeshRevisionRule,
     PreparedMeshOutputRule, PreparedMeshRevisionRule, PreparedMeshRules,

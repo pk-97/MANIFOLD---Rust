@@ -829,6 +829,7 @@ fn placeholder_param_info() -> ParamRow {
             is_trigger_gate: false,
             value_labels: None,
             section: None,
+            disabled: None,
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
         audio: AudioRowState::default(),
@@ -3758,6 +3759,7 @@ mod tests {
                     is_trigger_gate: false,
                     value_labels: None,
                     section: Some("Transform".to_string()),
+                    disabled: None,
                 },
                 value: crate::param_surface::RowValue {
                     base: 0.0,

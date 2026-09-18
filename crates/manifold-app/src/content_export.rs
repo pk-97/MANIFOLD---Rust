@@ -259,13 +259,32 @@ impl ContentThread {
         self.engine.stop();
         self.engine.set_export_mode(true);
         let (cur_w, cur_h) = self.content_pipeline.dimensions();
-        if cur_w != base_config.width || cur_h != base_config.height {
-            self.content_pipeline.resize(
-                &mut self.engine,
-                base_config.width,
-                base_config.height,
-                1.0,
+        // Always request the export configuration. Output dimensions can stay
+        // equal while the live render scale is below 1.0, in which case a
+        // dimensions-only guard would leave the export at the wrong scale.
+        if let Err(message) = self.content_pipeline.resize(
+            &mut self.engine,
+            base_config.width,
+            base_config.height,
+            1.0,
+        ) {
+            log::error!("[ContentThread] Export resize failed: {message}");
+            self.engine.stop();
+            let restore_time = self.engine.beat_to_timeline_time(saved_beat);
+            self.engine.seek_to(restore_time);
+            if was_playing {
+                self.engine.play();
+            } else {
+                self.engine.set_state(saved_state);
+            }
+            self.engine.set_export_mode(false);
+            self.send_export_finished(
+                state_tx,
+                false,
+                format!("Export failed: resize rejected: {message}"),
+                &base_config.output_path,
             );
+            return;
         }
 
         let section_count = sections.len();
@@ -296,13 +315,28 @@ impl ContentThread {
 
         // Restore playback state (once, after all sections).
 
-        if cur_w != base_config.width || cur_h != base_config.height {
-            let render_scale = self
-                .engine
-                .project()
-                .map_or(1.0, |p| p.settings.render_scale);
-            self.content_pipeline
-                .resize(&mut self.engine, cur_w, cur_h, render_scale);
+        // Restore unconditionally: the saved output dimensions can match the
+        // export dimensions while the saved live render scale differs.
+        let render_scale = self
+            .engine
+            .project()
+            .map_or(1.0, |p| p.settings.render_scale);
+        if let Err(message) = self
+            .content_pipeline
+            .resize(&mut self.engine, cur_w, cur_h, render_scale)
+        {
+            log::error!("[ContentThread] Export restore resize failed: {message}");
+            // Keep the engine stopped: resuming with a mismatched pipeline
+            // would produce frames under an unverified render configuration.
+            self.engine.stop();
+            self.engine.set_export_mode(false);
+            self.send_export_finished(
+                state_tx,
+                false,
+                format!("Export failed: could not restore output size: {message}"),
+                &base_config.output_path,
+            );
+            return;
         }
         self.engine.stop();
         let restore_time = self.engine.beat_to_timeline_time(saved_beat);

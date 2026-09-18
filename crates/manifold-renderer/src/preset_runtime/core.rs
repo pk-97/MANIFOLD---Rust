@@ -117,8 +117,8 @@ pub struct PresetRuntime {
     pub(super) io: PresetIo,
     pub(super) width: u32,
     pub(super) height: u32,
-    /// Hash of the topology this graph was built for. Compared
-    /// each frame to decide whether to rebuild.
+    /// Dimension-independent topology hash. Dimensions are compared separately
+    /// so a committed resource resize does not trigger a redundant rebuild.
     pub(super) topology_hash: u64,
     /// Preset catalog generation this graph was built against (step 10
     /// hot-reload). The dispatcher compares it to the live
@@ -1249,7 +1249,7 @@ impl PresetRuntime {
             return None;
         }
 
-        let topology_hash = compute_topology_hash(effects, groups, width, height, preview_effect);
+        let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
         let mut runtime = Self {
@@ -1553,7 +1553,7 @@ impl PresetRuntime {
         self.width == width
             && self.height == height
             && self.topology_hash
-                == compute_topology_hash(effects, groups, width, height, preview_effect)
+                == compute_topology_hash(effects, groups, 0, 0, preview_effect)
     }
 
     /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
@@ -1836,7 +1836,10 @@ impl PresetRuntime {
     /// their decode, so they report `false` and can't wedge the loop.
     pub fn io_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.io_pending())
-            || self.math_views.iter().any(|view| view.variants.iter().any(Self::io_pending))
+            || self
+                .math_views
+                .iter()
+                .any(|view| view.variants.iter().any(Self::io_pending))
     }
 
     /// Any node in this graph still has load-time warmup work pending
@@ -1844,7 +1847,10 @@ impl PresetRuntime {
     /// until this returns `false` for every generator layer.
     pub fn warmup_pending(&self) -> bool {
         self.graph.nodes().any(|n| n.node.warmup_pending())
-            || self.math_views.iter().any(|view| view.variants.iter().any(Self::warmup_pending))
+            || self
+                .math_views
+                .iter()
+                .any(|view| view.variants.iter().any(Self::warmup_pending))
     }
 
     /// Push a value/position editor edit's inner-node values into the running
@@ -1855,7 +1861,9 @@ impl PresetRuntime {
         def: &manifold_core::effect_graph_def::EffectGraphDef,
     ) {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.apply_inner_param_overrides(def); }
+            for variant in &mut view.variants {
+                variant.apply_inner_param_overrides(def);
+            }
         }
         if let Some(seg) = self.effect_nodes.first_mut() {
             // Disjoint borrows (same pattern as the chain's `run`):
@@ -1883,7 +1891,9 @@ impl PresetRuntime {
         def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     ) {
         for view in &mut self.math_views {
-            for variant in &mut view.variants { variant.apply_manifest_reshape(manifest, def); }
+            for variant in &mut view.variants {
+                variant.apply_manifest_reshape(manifest, def);
+            }
         }
         if let Some(seg) = self.effect_nodes.first_mut() {
             seg.bound.rebake_reshapes(manifest, def);
@@ -1920,7 +1930,10 @@ impl PresetRuntime {
     /// like [`Self::awaiting_segment_swap`].
     pub fn awaiting_forced_outputs_rebuild(&self) -> bool {
         self.forced_outputs_stale
-            || self.math_views.iter().any(|view| view.variants.iter().any(Self::awaiting_forced_outputs_rebuild))
+            || self
+                .math_views
+                .iter()
+                .any(|view| view.variants.iter().any(Self::awaiting_forced_outputs_rebuild))
     }
 
     fn refresh_prepared_parameter_error(&mut self) -> bool {
@@ -2048,7 +2061,9 @@ impl PresetRuntime {
     pub fn reset_state(&mut self, _device: &GpuDevice) {
         for view in &mut self.math_views {
             view.events.clear();
-            for variant in &mut view.variants { variant.reset_state(_device); }
+            for variant in &mut view.variants {
+                variant.reset_state(_device);
+            }
         }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events { events.clear(); }
@@ -2083,7 +2098,9 @@ impl PresetRuntime {
     pub fn clear_trigger_state(&mut self) {
         for view in &mut self.math_views {
             view.events.clear();
-            for variant in &mut view.variants { variant.clear_trigger_state(); }
+            for variant in &mut view.variants {
+                variant.clear_trigger_state();
+            }
         }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events { events.clear(); }
@@ -2095,80 +2112,6 @@ impl PresetRuntime {
             }
         }
         self.state_store.cleanup_nodes(&latch_ids);
-    }
-
-    /// Resize the generator's backend + re-pre-bind the final-output
-    /// placeholder + re-run the canonical pre-allocate pass (resize wipes every
-    /// pinned binding incl. Array<T> buffers and Texture3D volumes).
-    pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
-        let Some(format) = self.target_format else {
-            // Mock-backend test path — no GPU, no resources to invalidate.
-            return;
-        };
-        let PresetIo::Generate {
-            final_output_input_resource,
-            ..
-        } = self.io
-        else {
-            return;
-        };
-        let Some(metal) = self
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|any| any.downcast_mut::<MetalBackend>())
-        else {
-            return;
-        };
-        metal.resize(width, height);
-        // `resize` wiped every pinned binding (incl. the final-output
-        // placeholder), so the slot index is stale. Pre-bind a fresh 1×1
-        // placeholder; `install_target` swaps in the host's real target next
-        // frame.
-        let placeholder =
-            RenderTarget::new(device, 1, 1, format, "preset_runtime_target_owner");
-        let slot = metal.pre_bind_texture_2d(final_output_input_resource, placeholder);
-        if let PresetIo::Generate {
-            final_output_slot, ..
-        } = &mut self.io
-        {
-            *final_output_slot = Some(slot);
-        }
-        // Re-run the canonical pre-allocate pass so downstream primitives don't
-        // render against an empty Array<T>/Texture3D wire after resize.
-        let Some(metal) = self
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|any| any.downcast_mut::<MetalBackend>())
-        else {
-            return;
-        };
-        for (resource,buffer) in &self.shared_arrays { metal.pre_bind_array(*resource,buffer.clone()); }
-        if let Err(e) =
-            crate::node_graph::pre_allocate_resources(&self.graph, &self.plan, device, metal)
-        {
-            log::warn!("PresetRuntime::resize re-allocation failed: {e}");
-        }
-        // Resize wiped the Array<T> wire buffers, and stateful loops whose
-        // state rides those buffers in place (`array_feedback`'s aliased
-        // in/out variant — every particle sim) came back zeroed with no
-        // re-seed: dead particles, black output, and no way for the
-        // performer to recover short of rebuilding the layer. Clear ALL
-        // graph state so every seed-bootstrap path re-arms — a resolution
-        // change reads as "the sim restarts", which is the honest contract
-        // (positions are UV-normalized but density/canvas-sized buffers
-        // aren't resolution-portable anyway).
-        for inst in self.graph.nodes_mut() {
-            inst.node.clear_state();
-        }
-        self.state_store.cleanup_all();
-        self.pin_math_view_depth(device, width, height);
-        for view in &mut self.math_views {
-            view.resize(self.executor.backend(), device, width, height, format);
-        }
     }
 
 }

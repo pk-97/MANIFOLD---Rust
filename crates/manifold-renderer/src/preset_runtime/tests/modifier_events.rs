@@ -140,6 +140,7 @@ fn canonical_owner() -> EffectGraphDef {
             },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
+            legacy_math_view_carrier: None,
             graph: Box::new(control_modifier(gate)),
         });
         let metadata = owner.preset_metadata.as_mut().expect("host metadata");

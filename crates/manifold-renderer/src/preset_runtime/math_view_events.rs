@@ -1,4 +1,4 @@
-//! One event clock per modifier, shared across all presentation modes.
+//! One event clock per Math View modifier, shared across all presentation modes.
 use super::*;
 use crate::node_graph::primitives::{BeatEnvelopeDurations, BeatEnvelopeState};
 use crate::node_graph::scene_modifier_expand::math_resource_node_id;
@@ -7,8 +7,8 @@ use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 pub(super) struct MathEvents {
     controls: Vec<(&'static str, NodeInstanceId, f32)>,
     masks: Vec<NodeInstanceId>,
-    variant_masks: [Vec<NodeInstanceId>; 2],
-    diagrams: [Vec<NodeInstanceId>; 2],
+    variant_masks: Vec<Vec<NodeInstanceId>>,
+    diagrams: Vec<Vec<NodeInstanceId>>,
     pulse: BeatEnvelopeState,
     scan: BeatEnvelopeState,
 }
@@ -16,7 +16,7 @@ impl MathEvents {
     pub fn prepare(
         modifier: &SceneModifierInstanceDef,
         parent: &PresetRuntime,
-        variants: &[PresetRuntime; 2],
+        variants: &[PresetRuntime],
         controls: Vec<(&'static str, NodeInstanceId, f32)>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let resolve = |runtime: &PresetRuntime,
@@ -42,22 +42,19 @@ impl MathEvents {
                 })
                 .collect()
         };
-        let presentations = |runtime: &PresetRuntime| -> Result<_, JsonGeneratorLoadError> {
-            let mut nodes = resolve(runtime, "diagram")?;
-            nodes.extend(resolve(runtime, "surface")?);
-            Ok(nodes)
-        };
+        let mut variant_masks = Vec::with_capacity(variants.len());
+        let mut diagrams = Vec::with_capacity(variants.len());
+        for variant in variants {
+            variant_masks.push(resolve(variant, "weights")?);
+            let mut variant_diagrams = resolve(variant, "diagram")?;
+            variant_diagrams.extend(resolve(variant, "surface")?);
+            diagrams.push(variant_diagrams);
+        }
         Ok(Self {
             controls,
             masks: resolve(parent, "weights")?,
-            variant_masks: [
-                resolve(&variants[0], "weights")?,
-                resolve(&variants[1], "weights")?,
-            ],
-            diagrams: [
-                presentations(&variants[0])?,
-                presentations(&variants[1])?,
-            ],
+            variant_masks,
+            diagrams,
             pulse: Default::default(),
             scan: Default::default(),
         })
@@ -73,10 +70,11 @@ impl MathEvents {
     pub fn tick(
         &mut self,
         graph: &mut Graph,
-        variants: &mut [PresetRuntime; 2],
+        variants: &mut [PresetRuntime],
         count: f32,
         baseline: f32,
         beat: Beats,
+        enabled: bool,
     ) {
         let value = |name: &str| {
             let (_, node, default) = self
@@ -91,6 +89,26 @@ impl MathEvents {
                 .filter(|v| v.is_finite())
                 .unwrap_or(*default)
         };
+        if !enabled {
+            // A bypassed Math View is fully neutral on the scene and does not
+            // advance its event clocks.
+            for &mask in &self.masks {
+                write_mask(
+                    graph,
+                    mask,
+                    MaskSettings {
+                        gain: 1.0,
+                        amount: 0.0,
+                        progress: 0.0,
+                        width: 0.2,
+                        direction: 2,
+                        reveal: false,
+                        enabled: false,
+                    },
+                );
+            }
+            return;
+        }
         let pulse_window = if value("pulse_trigger") > 0.5 {
             value("pulse_beats").max(0.0)
         } else {
@@ -163,8 +181,11 @@ impl MathEvents {
                 },
             );
         }
-        for (index, variant) in variants.iter_mut().enumerate() {
-            for &mask in &self.variant_masks[index] {
+        for (variant, (masks, diagrams)) in variants
+            .iter_mut()
+            .zip(self.variant_masks.iter().zip(&self.diagrams))
+        {
+            for &mask in masks {
                 write_mask(
                     &mut variant.graph,
                     mask,
@@ -179,7 +200,7 @@ impl MathEvents {
                     },
                 );
             }
-            for &diagram in &self.diagrams[index] {
+            for &diagram in diagrams {
                 for (name, value) in [
                     ("pulse_gain", gain),
                     ("scan_amount", scan_amount),

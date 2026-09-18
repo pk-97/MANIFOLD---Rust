@@ -19,8 +19,8 @@ use manifold_ui::panels::param_card::{ParamCardKind, ParamCardPanel, RowMod};
 use manifold_ui::{Rect, UITree};
 
 // W*4 must be 256-byte aligned for the texture→buffer readback copy.
-// 640*4 = 2560 = 10*256.
-const W: u32 = 640;
+// 960*4 = 3840 = 15*256.
+const W: u32 = 960;
 const H: u32 = 420;
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
 
@@ -42,6 +42,7 @@ fn row(id: &'static str, name: &str, min: f32, max: f32, base: f32, whole: bool)
             // duplicates the card title) — that post-strip state is what this
             // sheet renders.
             section: None,
+            disabled: None,
         },
         value: RowValue { base, effective: base, exposed: true, driven: false },
         modulation: RowMod::default(),
@@ -54,6 +55,13 @@ fn row(id: &'static str, name: &str, min: f32, max: f32, base: f32, whole: bool)
         },
         scene_addr: None,
     }
+}
+
+fn toggle_row(id: &'static str, name: &str, base: f32, disabled: Option<&str>) -> ParamRow {
+    let mut r = row(id, name, 0.0, 1.0, base, false);
+    r.spec.is_toggle = true;
+    r.spec.disabled = disabled.map(str::to_string);
+    r
 }
 
 fn effect_surface() -> ParamSurface {
@@ -91,7 +99,7 @@ fn modifier_surface() -> ParamSurface {
             layer_id: manifold_foundation::LayerId::new("layer-a"),
             enabled_label: "Camera Travel".into(),
             stack_index: 0,
-            stack_len: 1,
+            stack_len: 2,
             targets_all: true,
             objects: vec![],
         }),
@@ -99,6 +107,46 @@ fn modifier_surface() -> ParamSurface {
             row("bars", "Bars", 1.0, 64.0, 8.0, true),
             row("copies", "Copies", 1.0, 8.0, 8.0, true),
             row("spacing", "Spacing", 0.25, 16.0, 4.0, false),
+        ],
+        string_params: vec![],
+        audio_sends: Vec::new(),
+        relight: Default::default(),
+    }
+}
+
+/// Math View on a chain with no patch-based carrier — the projection's
+/// unsupported reason sits on the Connect to Mesh row, so the sheet shows
+/// the locked row (greyed label with the reason, neutral OFF button) next
+/// to a live toggle for contrast.
+fn math_view_surface() -> ParamSurface {
+    ParamSurface {
+        kind: ParamCardKind::Effect,
+        title: "Math View".into(),
+        effect_index: 0,
+        effect_id: manifold_foundation::EffectId::new("scene_modifier:math_view"),
+        enabled: true,
+        collapsed: false,
+        supports_envelopes: true,
+        has_graph_mod: false,
+        layer_id: None,
+        modifier: Some(ModifierCardInfo {
+            instance_id: manifold_foundation::NodeId::new("math-view-a"),
+            layer_id: manifold_foundation::LayerId::new("layer-a"),
+            enabled_label: "Enabled".into(),
+            stack_index: 1,
+            stack_len: 2,
+            targets_all: true,
+            objects: vec![],
+        }),
+        rows: vec![
+            row("mode", "Mode", 0.0, 2.0, 0.0, true),
+            toggle_row("grid", "Grid", 1.0, None),
+            toggle_row(
+                "connect_mesh",
+                "Connect to Mesh",
+                0.0,
+                Some("Connect to Mesh needs a patch-based modifier (like Vortex Fragments) earlier in the chain"),
+            ),
         ],
         string_params: vec![],
         audio_sends: Vec::new(),
@@ -143,6 +191,10 @@ fn modifier_card_chrome_contact_sheet() {
     let mut modifier = ParamCardPanel::new();
     modifier.configure(&modifier_surface());
     modifier.build(&mut tree, Rect::new(336.0, 16.0, 288.0, 380.0));
+
+    let mut math_view = ParamCardPanel::new();
+    math_view.configure(&math_view_surface());
+    math_view.build(&mut tree, Rect::new(656.0, 16.0, 288.0, 380.0));
 
     tree.end_region(region, start);
 

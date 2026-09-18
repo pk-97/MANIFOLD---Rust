@@ -372,6 +372,7 @@ mod tests {
                     },
                     targets: SceneTargetSelection::AllObjects,
                     mesh_frames: vec![frame.clone()],
+                    legacy_math_view_carrier: None,
                     graph: Box::new(local.clone()),
                 },
                 SceneModifierInstanceDef {
@@ -382,6 +383,7 @@ mod tests {
                     },
                     targets: SceneTargetSelection::AllObjects,
                     mesh_frames: vec![frame],
+                    legacy_math_view_carrier: None,
                     graph: Box::new(local),
                 },
             ],

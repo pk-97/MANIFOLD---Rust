@@ -1465,6 +1465,8 @@ pub enum PreAllocationError {
     /// The graph has modifier-owned allocations but the active GPU backend
     /// cannot provide a memory snapshot for admission.
     ModifierMemoryUnavailable,
+    /// A staged candidate could not obtain one of its native resources.
+    AllocationFailed(String),
     /// A primitive declared an `Array<T>` output but
     /// `array_output_capacity()` returned `None` — pre-bound allocation
     /// is a hard contract, so partial allocation is rejected loudly
@@ -1504,6 +1506,7 @@ impl std::fmt::Display for PreAllocationError {
                 f,
                 "scene modifier memory admission unavailable: the GPU did not expose current allocated size and working-set capacity"
             ),
+            Self::AllocationFailed(error) => write!(f, "GPU resource allocation failed: {error}"),
             Self::UnsizedArrayOutput {
                 node_type,
                 port,
@@ -1603,6 +1606,7 @@ fn pre_allocate_array_buffers(
     // Snapshot existing physical storage once. Several resources may already
     // share a backend slot; preserve that identity in the pure allocation plan.
     let mut prebound = AHashMap::default();
+    let mut prebound_buffers = AHashMap::default();
     let mut roots = AHashMap::default();
     for raw in 0..plan.resource_count() {
         let resource = ResourceId(raw as u32);
@@ -1613,6 +1617,7 @@ fn pre_allocate_array_buffers(
         let Some(buffer) = Backend::array_buffer(backend, slot) else { continue; };
         let root = *roots.entry(slot).or_insert(resource);
         prebound.insert(resource, ArrayStorage { root, bytes: buffer.size });
+        prebound_buffers.entry(root).or_insert_with(|| buffer.clone());
     }
     let allocation = plan_array_allocations(
         graph, plan, Backend::canvas_dims(backend), &prebound,
@@ -1637,9 +1642,34 @@ fn pre_allocate_array_buffers(
     for action in allocation.actions {
         match action {
             ArrayAllocationAction::Allocate(allocation) => {
-                let buffer = device.create_buffer_shared(allocation.bytes);
+                // Include live resources and earlier staged allocations before
+                // asking Metal for each new buffer, including non-modifier graphs.
+                super::scene_modifier_expand::admit_candidate_bytes(
+                    device.modifier_memory_snapshot(), allocation.bytes,
+                ).map_err(|error| PreAllocationError::AllocationFailed(error.to_string()))?;
+                #[cfg(all(test, feature = "gpu-proofs"))]
+                crate::render_target::allocation_checkpoint().map_err(PreAllocationError::AllocationFailed)?;
+                let buffer = device
+                    .try_create_buffer_shared(allocation.bytes)
+                    .map_err(PreAllocationError::AllocationFailed)?;
                 if allocation.zero_init { buffer.zero_fill(); }
                 backend.pre_bind_array(allocation.resource, buffer);
+            }
+            ArrayAllocationAction::Reuse { resource, root } => {
+                let slot = backend.slot_for(root).or_else(|| {
+                    prebound_buffers
+                        .get(&root)
+                        .cloned()
+                        .map(|buffer| backend.pre_bind_array(root, buffer))
+                }).ok_or_else(|| PreAllocationError::UnboundArrayResource {
+                    producer_node_type: "<resize>".into(),
+                    producer_port: format!("resource_{resource:?}"),
+                    producer_handle: None,
+                    cause: "reused array root has no live backing buffer",
+                })?;
+                if resource != root {
+                    backend.alias_array_resource(resource, slot);
+                }
             }
             ArrayAllocationAction::Alias { resource, input } => {
                 let slot = backend.slot_for(input)
@@ -1707,7 +1737,8 @@ fn pre_allocate_texture_3d_volumes(
                 .unwrap_or(GpuTextureFormat::Rgba16Float);
             let label = format!("graph_loader 3d volume: {node_type}.{port_name}");
             let label_static: &'static str = Box::leak(label.into_boxed_str());
-            let texture = device.create_texture(&GpuTextureDesc {
+            let texture = device
+                .try_create_texture(&GpuTextureDesc {
                 width: w,
                 height: h,
                 depth: d,
@@ -1716,7 +1747,8 @@ fn pre_allocate_texture_3d_volumes(
                 usage: GpuTextureUsage::RENDER_TARGET_FULL,
                 label: label_static,
                 mip_levels: 1,
-            });
+            })
+            .map_err(PreAllocationError::AllocationFailed)?;
             backend.pre_bind_texture_3d(*res_id, texture);
         }
     }

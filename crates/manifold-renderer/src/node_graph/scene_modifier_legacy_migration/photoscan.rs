@@ -1008,6 +1008,7 @@ fn build_instance(
                 .collect(),
         },
         mesh_frames: source_frames,
+        legacy_math_view_carrier: None,
         graph: Box::new(EffectGraphDef {
             version: 3,
             name: Some(kind.display_name().into()),

@@ -54,6 +54,12 @@ pub enum SceneTargetSelection {
     },
 }
 
+/// Stage-carrying modifiers (recipes with vertex stages) expand per-stage
+/// vertex buffers in the owner, so the owner caps their count; stage-less
+/// Math View instances are bounded separately by
+/// [`crate::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`].
+pub const MAX_STAGE_CARRYING_MODIFIERS: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneModifierInstanceDef {
@@ -62,6 +68,12 @@ pub struct SceneModifierInstanceDef {
     pub targets: SceneTargetSelection,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_frames: Vec<SceneMeshReferenceFrame>,
+    /// Legacy carrier whose embedded Math View this instance replaced.
+    /// Keeps its Connect to Mesh association and hidden Scope boundaries.
+    /// Copied stacks remap this id; missing carriers never silently retarget.
+    /// Never surfaced in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_math_view_carrier: Option<NodeId>,
     pub graph: Box<EffectGraphDef>,
 }
 

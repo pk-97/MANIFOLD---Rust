@@ -66,6 +66,22 @@ pub(crate) fn build_paste(
         &clipboard.selected,
         false,
     )?;
+    // Singleton recipes allow one instance per scene (the same rule the picker
+    // and the add/duplicate actions enforce); reject a paste that grows any
+    // (scene, singleton recipe) count, while leaving already-migrated
+    // multi-instance scenes pasteable for everything else.
+    let before_counts = singleton_counts(before);
+    let after_counts = singleton_counts(&after);
+    for (key, after_n) in &after_counts {
+        // One instance per scene is allowed; the paste is rejected only when
+        // it pushes a scene past that.
+        if *after_n > before_counts.get(key).copied().unwrap_or(0).max(1) {
+            return Err(format!(
+                "{} is already applied to this scene",
+                key.1.as_str()
+            ));
+        }
+    }
     Ok(Box::new(
         crate::generator_change::ReplaceGeneratorStateCommand::new(
             layer,
@@ -74,6 +90,37 @@ pub(crate) fn build_paste(
             "Paste Scene Modifiers",
         ),
     ))
+}
+
+/// Per-(scene, recipe) instance counts for singleton recipes.
+fn singleton_counts(
+    host: &manifold_core::effects::PresetInstance,
+) -> std::collections::BTreeMap<
+    (
+        manifold_core::scene_modifier_preset::SceneNodeRef,
+        String,
+    ),
+    usize,
+> {
+    let mut counts: std::collections::BTreeMap<_, usize> = std::collections::BTreeMap::new();
+    let Some(graph) = host.graph.as_ref() else {
+        return counts;
+    };
+    for instance in &graph.scene_modifiers {
+        let Some(metadata) = instance.graph.preset_metadata.as_ref() else {
+            continue;
+        };
+        if metadata
+            .scene_modifier
+            .as_ref()
+            .is_some_and(|recipe| recipe.singleton)
+        {
+            *counts
+                .entry((instance.scene.clone(), metadata.id.as_str().to_string()))
+                .or_default() += 1;
+        }
+    }
+    counts
 }
 
 fn scenes(nodes: &[EffectGraphNode], scope: &mut Vec<NodeId>, out: &mut Vec<SceneNodeRef>) {
@@ -396,6 +443,152 @@ mod tests {
         assert_eq!(host.params.get(&amount).unwrap().value, 0.42);
         assert_eq!(host.params.get(&amount).unwrap().base, 0.37);
         assert_eq!(host.drivers.as_ref().unwrap()[0].param_id.as_ref(), amount);
+        let after = serde_json::to_value(host).unwrap();
+        assert!(service.undo(&mut project));
+        assert_eq!(
+            serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap(),
+            before
+        );
+        assert!(service.redo(&mut project));
+        assert!(service.take_rejection().is_none());
+        assert_eq!(
+            serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap(),
+            after
+        );
+    }
+
+    #[test]
+    fn clipboard_paste_remaps_math_view_carrier_and_roundtrips_undo_redo() {
+        let (imported, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(
+            std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/gltf/cc0__japanese_thistle_cirsium_japonicum.glb"
+            )),
+        )
+        .unwrap();
+        assert!(report.object_count > 0);
+        let mut available_scenes = Vec::new();
+        scenes(&imported.nodes, &mut Vec::new(), &mut available_scenes);
+        let scene = available_scenes.into_iter().next().expect("imported scene");
+
+        let mut source_graph = imported.clone();
+        let carrier_recipe = manifold_renderer::node_graph::bundled_preset_def(
+            &PresetTypeId::new("VortexFragments"),
+        )
+        .unwrap();
+        let view_recipe = manifold_renderer::node_graph::bundled_preset_def(
+            &PresetTypeId::new("MathView"),
+        )
+        .unwrap();
+        let carrier_a = NodeId::new("carrier_a");
+        let carrier_b = NodeId::new("carrier_b");
+        let view_id = NodeId::new("math_view");
+        let carrier = |id: NodeId, graph: &EffectGraphDef| {
+            manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+                graph,
+                carrier_recipe,
+                id,
+                scene.clone(),
+                SceneTargetSelection::AllObjects,
+            )
+            .unwrap()
+        };
+        let carrier_a_instance = carrier(carrier_a.clone(), &source_graph);
+        source_graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+            &source_graph,
+            0,
+            carrier_a_instance,
+        )
+        .unwrap()
+        .graph;
+        let carrier_b_instance = carrier(carrier_b.clone(), &source_graph);
+        source_graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+            &source_graph,
+            1,
+            carrier_b_instance,
+        )
+        .unwrap()
+        .graph;
+        let mut view =
+            manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+                &source_graph,
+                view_recipe,
+                view_id.clone(),
+                scene.clone(),
+                SceneTargetSelection::AllObjects,
+            )
+            .unwrap();
+        view.legacy_math_view_carrier = Some(carrier_b.clone());
+        source_graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
+            &source_graph,
+            2,
+            view,
+        )
+        .unwrap()
+        .graph;
+
+        let mut project = Project::default();
+        let mut source_layer = Layer::new_generator(
+            "Source".into(),
+            PresetTypeId::new("PhotoscanBaseline"),
+            0,
+        );
+        let source = source_layer.layer_id.clone();
+        source_layer.gen_params_or_init().graph = Some(source_graph);
+        source_layer.gen_params_or_init().refresh_manifest_from_graph();
+        let mut destination_layer = Layer::new_generator(
+            "Destination".into(),
+            PresetTypeId::new("PhotoscanBaseline"),
+            1,
+        );
+        let destination = destination_layer.layer_id.clone();
+        destination_layer.gen_params_or_init().graph = Some(imported);
+        destination_layer
+            .gen_params_or_init()
+            .refresh_manifest_from_graph();
+        project.timeline.layers.push(source_layer);
+        project.timeline.layers.push(destination_layer);
+
+        let selected = [carrier_a, carrier_b.clone(), view_id];
+        let clipboard = ModifierClipboard::capture(&project, &source, &selected).unwrap();
+        let target = GraphTarget::Generator(destination.clone());
+        let before = serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap();
+        let command = build_paste(&project, destination.clone(), clipboard).unwrap();
+        let mut service = EditingService::new();
+        service.execute(
+            crate::scene_modifier_edit::with_admission(command),
+            &mut project,
+        );
+        assert!(service.take_rejection().is_none());
+
+        let host = project.graph_target_owner(&target).unwrap();
+        let graph = host.graph.as_ref().unwrap();
+        let pasted_view = graph
+            .scene_modifiers
+            .iter()
+            .find(|instance| {
+                instance
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.id.as_str() == "MathView")
+            })
+            .expect("pasted Math View");
+        let pasted_carrier = graph
+            .scene_modifiers
+            .iter()
+            .find(|instance| Some(&instance.id) == pasted_view.legacy_math_view_carrier.as_ref())
+            .expect("pasted Math View carrier");
+        assert_ne!(pasted_carrier.id, carrier_b);
+        let reloaded: EffectGraphDef = serde_json::from_value(serde_json::to_value(graph).unwrap()).unwrap();
+        assert_eq!(&reloaded, graph, "pasted association survives serialization");
+        assert_eq!(
+            manifold_core::scene_modifier_math_view::math_view_connect_support(
+                graph,
+                &pasted_view.id,
+            ),
+            Ok(())
+        );
         let after = serde_json::to_value(host).unwrap();
         assert!(service.undo(&mut project));
         assert_eq!(

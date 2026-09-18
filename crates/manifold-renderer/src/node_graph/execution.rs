@@ -508,6 +508,27 @@ impl Executor {
         self.memo_steps_len = None;
     }
 
+    /// Reset readiness and dataflow metadata after a backend resource swap.
+    /// ResourceIds and slots remain valid, but every physical target is fresh;
+    /// no prior memoized write or persistent-clear decision may skip its first
+    /// producer evaluation.
+    pub fn reset_after_resource_replacement(&mut self) {
+        self.memo_steps_len = None;
+        self.step_memo.clear();
+        self.resource_epoch.clear();
+        self.alias_propagation_state.clear();
+        self.initialized_persistent.clear();
+        self.slot_pending.fill(false);
+        self.mesh_pending.fill(false);
+        self.mesh_revisions
+            .fill(crate::node_graph::mesh_change::MeshRevision::default());
+        self.slot_mesh_revisions
+            .fill(crate::node_graph::mesh_change::MeshRevision::default());
+        self.mesh_dep_snapshots.iter_mut().for_each(|snapshot| *snapshot = None);
+        self.slot_generations.clear();
+        self.mesh_revision_counter = 0;
+    }
+
     /// Enable per-step attribution profiling (CPU encode cost + GPU span
     /// tags). Pair with [`manifold_gpu::GpuEncoder::enable_dispatch_profiling`]
     /// on the frame's encoder; read results via [`Self::take_step_profiles`].

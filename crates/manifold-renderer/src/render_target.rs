@@ -3,6 +3,33 @@ use manifold_gpu::{
     TexturePool,
 };
 
+// Thread-local fault injection at fallible allocation boundaries. Native tests
+// can reject each preparation stage without exhausting the machine's memory.
+#[cfg(all(test, feature = "gpu-proofs"))]
+thread_local! {
+    static FAIL_ALLOCATION_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn allocation_checkpoint() -> Result<(), String> {
+    FAIL_ALLOCATION_AFTER.with(|remaining| match remaining.get() {
+        Some(0) => Err("injected GPU allocation failure".into()),
+        Some(n) => { remaining.set(Some(n - 1)); Ok(()) }
+        None => Ok(()),
+    })
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) struct AllocationFailureGuard(Option<usize>);
+#[cfg(all(test, feature = "gpu-proofs"))]
+impl Drop for AllocationFailureGuard {
+    fn drop(&mut self) { FAIL_ALLOCATION_AFTER.with(|value| value.set(self.0)); }
+}
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn fail_allocation_after(count: usize) -> AllocationFailureGuard {
+    AllocationFailureGuard(FAIL_ALLOCATION_AFTER.with(|value| value.replace(Some(count))))
+}
+
 /// Offscreen render texture for compositing.
 pub struct RenderTarget {
     pub texture: GpuTexture,
@@ -53,6 +80,47 @@ impl RenderTarget {
         }
     }
 
+    /// Fallible sibling of [`Self::new`] used while preparing a staged
+    /// resize.  It does not touch an existing target when Metal rejects the
+    /// candidate allocation.
+    pub fn try_new(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        label: &str,
+    ) -> Result<Self, String> {
+        let bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(u64::from(format.bytes_per_pixel())))
+            .ok_or_else(|| "render target byte size overflows u64".to_string())?;
+        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        allocation_checkpoint()?;
+        let texture = device.try_create_texture(&GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label,
+            mip_levels: 1,
+        })?;
+        Ok(Self {
+            texture,
+            width,
+            height,
+            format,
+            mip_levels: 1,
+            label: label.to_string(),
+        })
+    }
+
     /// Create with a full mip chain (direct device allocation — mip-chained
     /// targets deliberately bypass the heap `TexturePool`, which recycles by
     /// `(w, h, format)` and would hand a flat texture back for a mipped
@@ -85,6 +153,45 @@ impl RenderTarget {
             mip_levels,
             label: label.to_string(),
         }
+    }
+
+    pub(crate) fn try_new_mipmapped(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        label: &str,
+    ) -> Result<Self, String> {
+        let mip_levels = full_mip_chain_len(width, height);
+        let bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(u64::from(format.bytes_per_pixel())))
+            .ok_or_else(|| "render target byte size overflows u64".to_string())?;
+        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        allocation_checkpoint()?;
+        let texture = device.try_create_texture(&GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label,
+            mip_levels,
+        })?;
+        Ok(Self {
+            texture,
+            width,
+            height,
+            format,
+            mip_levels,
+            label: label.to_string(),
+        })
     }
 
     /// Create from the texture pool (heap sub-allocation or recycled).

@@ -35,7 +35,7 @@ fn group_mask_reads_dry_input_and_updates_without_rebuild() {
         for (mask_amount, wet_dry, expected) in [(1.0, 1.0, 0.68), (0.0, 1.0, 0.32), (1.0, 0.5, 0.44), (1.0, 0.0, 0.2)] {
             effects[usize::from(mask_last)].set_base_param("amount", mask_amount);
             groups[0].wet_dry = wet_dry;
-            assert_eq!(compute_topology_hash(&effects, &groups, 16, 16, None), topology);
+            assert_eq!(compute_topology_hash(&effects, &groups, 0, 0, None), topology);
             let mut encoder = device.create_encoder("group-mask-proof");
             {
                 let mut gpu = GpuEncoder::new(&mut encoder, &device);
@@ -162,7 +162,7 @@ fn group_mask_circle_moves_over_infrared_without_rebuild() {
     let mut proof = image::RgbImage::new(128, 32);
     for (frame, centre) in [0.25, 0.75].into_iter().enumerate() {
         effects[0].set_base_param("position_x", centre);
-        assert_eq!(masked.topology_hash, compute_topology_hash(&effects, &groups, 64, 32, None));
+        assert_eq!(masked.topology_hash, compute_topology_hash(&effects, &groups, 0, 0, None));
         let mut encoder = device.create_encoder("circle-scan-proof");
         {
             let mut gpu = GpuEncoder::new(&mut encoder, &device);

@@ -304,6 +304,12 @@ impl RowHost {
         let Some((row, role)) = self.row_index.get(tree.widget_of(node)) else {
             return Vec::new();
         };
+        // A projection-disabled row takes no drag (the card's handle_click
+        // drops its clicks too) — `RowSpec.disabled` is honored at dispatch,
+        // never by each widget.
+        if ctx.rows.get(row).is_some_and(|r| r.spec.disabled.is_some()) {
+            return Vec::new();
+        }
         if !matches!(role, RowRole::Slider | RowRole::EnvelopeConfig | RowRole::AudioConfig)
             || row >= ctx.rows.len()
         {

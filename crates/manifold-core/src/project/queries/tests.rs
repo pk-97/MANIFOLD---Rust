@@ -318,6 +318,7 @@ fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
         },
         targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
         graph: Box::new(graph_def_with_id("local", "Local")),
     });
     let mut layer = crate::layer::Layer::new_generator(
@@ -420,6 +421,7 @@ fn scene_modifier_target_duplicate_lookup_is_atomic() {
         },
         targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
         graph: Box::new(graph_def_with_id("local", "Local")),
     };
     host.scene_modifiers.push(modifier.clone());

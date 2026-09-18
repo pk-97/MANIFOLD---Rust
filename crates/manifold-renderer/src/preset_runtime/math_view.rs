@@ -1,22 +1,33 @@
-//! Persistent sparse evaluations of authored scene-modifier graphs.
+//! Persistent sparse evaluations of the chain preceding a Math View modifier.
 //!
-//! The normal runtime keeps its original graph and resources. Each presentation
-//! evaluates the same prepared bindings against bounded sample geometry.
+//! The normal runtime keeps its original graph and resources. The standalone
+//! Math View modifier owns one derived runtime that evaluates every preceding
+//! modifier of its scene against bounded sample geometry, borrowing the
+//! parent's exported buffers and scene depth rather than copying them.
+//! Migrated Scope controls retain two variants for their original carrier;
+//! selection uses the same parent control graph and event clock.
 
 use super::*;
 use crate::node_graph::primitives::standalone_pipeline::dispatch_standalone_2d;
-use crate::node_graph::scene_modifier_expand::{MathViewScope, SceneModifierExpandError};
+use crate::node_graph::scene_modifier_expand::{LegacyMathViewScope, SceneModifierExpandError};
 
 pub(super) struct MathViewRuntime {
     pub modifier_id: NodeId,
     mode_node: NodeInstanceId,
-    scope_node: NodeInstanceId,
-    pub variants: [PresetRuntime; 2],
+    scope_node: Option<NodeInstanceId>,
+    enabled_node: NodeInstanceId,
+    pub variants: Vec<PresetRuntime>,
     presentation: Option<Presentation>,
     last_active_scope: Option<usize>,
     pub(super) events: super::math_view_events::MathEvents,
-    shared_resources: [Vec<(ResourceId, ResourceId)>; 2],
-    pub(super) shared_depth: [Vec<(ResourceId, ResourceId)>; 2],
+    pub(super) shared_resources: Vec<Vec<(ResourceId, ResourceId)>>,
+    pub(super) shared_depth: Vec<Vec<(ResourceId, ResourceId)>>,
+}
+
+pub(super) struct PreparedMathViewResize {
+    variants: Vec<PreparedRuntimeResize>,
+    diagram: RenderTarget,
+    background: RenderTarget,
 }
 
 struct Presentation {
@@ -53,16 +64,18 @@ impl PresetRuntime {
         let Some(backend) = self.executor.backend_mut().as_any_mut()
             .and_then(|any| any.downcast_mut::<MetalBackend>()) else { return; };
         for view in &self.math_views {
-            for &(source, _) in view.shared_depth.iter().flatten() {
-                if let Some(slot) = crate::node_graph::Backend::slot_for(backend, source) {
-                    backend.bind_resource_to_slot(source, slot);
-                } else {
-                    let (w, h) = crate::node_graph::execution::resolve_dims(
-                        &self.plan, source, (width, height),
-                    );
-                    backend.pre_bind_texture_2d(source, RenderTarget::new(
-                        device, w, h, GpuTextureFormat::R32Float, "math_view.scene_depth",
-                    ));
+            for resources in &view.shared_depth {
+                for &(source, _) in resources {
+                    if let Some(slot) = crate::node_graph::Backend::slot_for(backend, source) {
+                        backend.bind_resource_to_slot(source, slot);
+                    } else {
+                        let (w, h) = crate::node_graph::execution::resolve_dims(
+                            &self.plan, source, (width, height),
+                        );
+                        backend.pre_bind_texture_2d(source, RenderTarget::new(
+                            device, w, h, GpuTextureFormat::R32Float, "math_view.scene_depth",
+                        ));
+                    }
                 }
             }
         }
@@ -75,8 +88,15 @@ impl PresetRuntime {
                 .as_ref()
                 .and_then(|events| events.counts(&view.modifier_id))
                 .expect("prepared Math View event stream");
-            view.events
-                .tick(&mut self.graph, &mut view.variants, count, baseline, beat);
+            let enabled = view.enabled(&self.graph);
+            view.events.tick(
+                &mut self.graph,
+                &mut view.variants,
+                count,
+                baseline,
+                beat,
+                enabled,
+            );
         }
     }
 
@@ -114,7 +134,7 @@ pub(super) fn prepare_views(
 ) -> Result<Vec<MathViewRuntime>, JsonGeneratorLoadError> {
     let mut views = Vec::new();
     for modifier in &owner.scene_modifiers {
-        if !manifold_core::scene_modifier_math_view::has_math_view_controls(&modifier.graph) {
+        if !manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph) {
             continue;
         }
         let control = |suffix: &str| {
@@ -138,41 +158,70 @@ pub(super) fn prepare_views(
                 .instance_by_node_id(&copies[0].node_id)
                 .ok_or_else(|| invalid(format!("missing prepared {suffix} control")))
         };
+        let enabled_local = manifold_core::scene_modifier_preset::SceneNodeRef {
+            scope: Vec::new(),
+            node: NodeId::new("mv_enabled"),
+        };
+        let enabled_copies = parent
+            .modifier_node_copies(&modifier.id, &enabled_local)
+            .ok_or_else(|| invalid(format!("missing enabled route for {}", modifier.id)))?;
+        if enabled_copies.len() != 1 || enabled_copies[0].object.is_some() {
+            return Err(invalid("enabled must be a shared control"));
+        }
+        let enabled_node = parent
+            .graph
+            .instance_by_node_id(&enabled_copies[0].node_id)
+            .ok_or_else(|| invalid("missing prepared enabled control"))?;
         let mode_node = control("mode")?;
-        let scope_node = control("scope")?;
-        let isolated = PresetRuntime::from_def_for_render_view(
-            owner.clone(),
-            registry,
-            manifest,
-            fused,
-            Some((&modifier.id, MathViewScope::ThisModifier)),
-        )?;
-        let chained = PresetRuntime::from_def_for_render_view(
-            owner.clone(),
-            registry,
-            manifest,
-            fused,
-            Some((&modifier.id, MathViewScope::WithinChain)),
-        )?;
+        let legacy_scope = manifold_core::scene_modifier_math_view::has_legacy_scope_control(
+            &modifier.graph,
+        );
+        let scope_node = legacy_scope.then(|| control("scope")).transpose()?;
+        let mut variants = Vec::with_capacity(if legacy_scope { 2 } else { 1 });
+        if legacy_scope {
+            let isolated = PresetRuntime::from_def_for_render_view(
+                owner.clone(),
+                registry,
+                manifest,
+                fused,
+                Some((&modifier.id, Some(LegacyMathViewScope::ThisModifier))),
+            )?;
+            variants.push(isolated);
+            variants.push(PresetRuntime::from_def_for_render_view(
+                owner.clone(),
+                registry,
+                manifest,
+                fused,
+                Some((&modifier.id, Some(LegacyMathViewScope::WithinChain))),
+            )?);
+        } else {
+            variants.push(PresetRuntime::from_def_for_render_view(
+                owner.clone(),
+                registry,
+                manifest,
+                fused,
+                Some((&modifier.id, None)),
+            )?);
+        }
         let controls = manifold_core::scene_modifier_math_view::CONTROLS
             .iter()
             .map(|(name, _, default, _, _)| control(name).map(|node| (*name, node, *default)))
             .collect::<Result<Vec<_>, _>>()?;
-        let variants = [isolated, chained];
         let events =
             super::math_view_events::MathEvents::prepare(modifier, parent, &variants, controls)?;
-        let shared_depth = [
-            shared_resources(parent, &variants[0], modifier, &["depth"])?,
-            shared_resources(parent, &variants[1], modifier, &["depth"])?,
-        ];
-        let shared_resources = [
-            shared_resources(parent, &variants[0], modifier, &["vertices", "weights"])?,
-            shared_resources(parent, &variants[1], modifier, &["vertices", "weights"])?,
-        ];
+        let shared_depth = variants
+            .iter()
+            .map(|variant| shared_resources(parent, variant, modifier, &["depth"]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shared_resources = variants
+            .iter()
+            .map(|variant| shared_resources(parent, variant, modifier, &["vertices", "weights"]))
+            .collect::<Result<Vec<_>, _>>()?;
         views.push(MathViewRuntime {
             modifier_id: modifier.id.clone(),
             mode_node,
             scope_node,
+            enabled_node,
             variants,
             presentation: None,
             last_active_scope: None,
@@ -193,7 +242,15 @@ impl MathViewRuntime {
             .expect("Math View control resolved at preparation")
     }
 
+    pub fn enabled(&self, graph: &Graph) -> bool {
+        Self::control(graph, self.enabled_node) >= 0.5
+    }
+
+    /// Scene/Math/Overlay; a disabled view is Scene (fully neutral).
     pub fn mode(&self, graph: &Graph) -> u32 {
+        if !self.enabled(graph) {
+            return 0;
+        }
         Self::control(graph, self.mode_node).round().clamp(0.0, 2.0) as u32
     }
 
@@ -220,26 +277,67 @@ impl MathViewRuntime {
         Ok(())
     }
 
-    pub fn resize(
-        &mut self,
+    pub(super) fn prepare_resize(
+        &self,
         parent: &dyn crate::node_graph::Backend,
         device: &GpuDevice,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
-    ) {
-        self.bind_shared_resources(parent)
-            .expect("previously admitted shared mesh resources");
-        self.events.clear();
-        for variant in &mut self.variants {
-            variant.resize(device, width, height);
+    ) -> Result<PreparedMathViewResize, JsonGeneratorLoadError> {
+        let mut prepared_variants = Vec::with_capacity(self.variants.len());
+        for (variant, resources) in self.variants.iter().zip(&self.shared_resources) {
+            let overrides = resources
+                .iter()
+                .map(|&(source, destination)| {
+                    let buffer = parent
+                        .slot_for(source)
+                        .and_then(|slot| parent.array_buffer(slot))
+                        .ok_or_else(|| invalid("parent mesh export buffer is absent during resize"))?;
+                    Ok((destination, buffer.clone()))
+                })
+                .collect::<Result<Vec<_>, JsonGeneratorLoadError>>()?;
+            prepared_variants.push(variant.prepare_resize_with_overrides(
+                device, width, height, &overrides,
+            )?);
         }
-        self.install_depth_inputs(device);
-        self.presentation = Some(
-            Presentation::new(device, width, height, format)
-                .expect("previously admitted Math View output format"),
-        );
+        Ok(PreparedMathViewResize {
+            variants: prepared_variants,
+            diagram: RenderTarget::try_new(
+                device,
+                width,
+                height,
+                GpuTextureFormat::Rgba16Float,
+                "math_view.diagram",
+            )
+            .map_err(invalid)?,
+            background: RenderTarget::try_new(
+                device,
+                width,
+                height,
+                format,
+                "math_view.background",
+            )
+            .map_err(invalid)?,
+        })
+    }
+
+    pub(super) fn commit_resize(
+        &mut self,
+        prepared: PreparedMathViewResize,
+        parent: &dyn crate::node_graph::Backend,
+    ) {
+        for (variant, prepared_variant) in self.variants.iter_mut().zip(prepared.variants) {
+            variant.commit_resize(prepared_variant);
+        }
+        if let Some(presentation) = &mut self.presentation {
+            presentation.diagram = prepared.diagram;
+            presentation.background = prepared.background;
+        }
+        self.events.clear();
         self.last_active_scope = None;
+        self.bind_shared_resources(parent)
+            .expect("prepared Math View shared resources");
     }
 
     pub fn resources_ready(&self, parent: &crate::node_graph::execution::Executor) -> bool {
@@ -263,7 +361,10 @@ impl MathViewRuntime {
             self.last_active_scope = None;
             return;
         }
-        let scope = usize::from(Self::control(graph, self.scope_node) >= 0.5);
+        let scope = self
+            .scope_node
+            .map(|node| usize::from(Self::control(graph, node) >= 0.5))
+            .unwrap_or(0);
         if self.last_active_scope != Some(scope) {
             self.variants[scope].clear_state();
         }

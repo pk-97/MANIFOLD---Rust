@@ -5,7 +5,7 @@
 //! arrows, axes, the infinite world grid, and temporal trails share one bounded
 //! instanced pass. The grid uses the scene camera without the object transform.
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -21,6 +21,10 @@ const MSAA_SAMPLE_COUNT: u32 = 4;
 const HISTORY_SAMPLES: u32 = 64;
 const TRAIL_RENDER_SAMPLES: u32 = 32;
 const MAX_VERTICES: u32 = 1536;
+// Echo/copy chains (SpatialEchoes, SceneLoop) are capped at 8 visible copies
+// per object, matching analytic_echo_instances' own echo ceiling. Total marks
+// stay bounded by 4 * MAX_VERTICES/3 * 8 diagram instances plus trails.
+const MAX_COPY_INSTANCES: u32 = 8;
 const DIAGRAM_BLEND: GpuBlendState = GpuBlendState {
     src_factor: GpuBlendFactor::SrcAlpha,
     dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
@@ -62,6 +66,10 @@ struct DiagramUniforms {
     event_values: [f32;4],
     scan_values: [f32;4],
     event_targets: [u32;4],
+    copy_count: u32,
+    instances_wired: u32,
+    instance_history_stride: u32,
+    _instances_pad: u32,
 }
 
 #[repr(C)]
@@ -70,17 +78,21 @@ struct HistoryCaptureUniforms {
     vertex_count: u32,
     history_slot: u32,
     history_stride: u32,
-    _pad: u32,
+    copy_count: u32,
+    instance_stride: u32,
+    instance_capture: u32,
+    _pad: [u32; 2],
 }
 
 crate::primitive! {
     name: RenderMeshDiagram,
     type_id: "node.render_mesh_diagram",
-    purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; this presentation node contains no modifier math.",
+    purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; an optional InstanceTransform array repeats fragments, ghosts, displacement arrows and motion trails per copy so echo chains are visible. This presentation node contains no modifier math.",
     inputs: {
         current: Array(MeshVertex) required,
         reference: Array(MeshVertex) required,
         incoming: Array(MeshVertex) required,
+        instances: Array(InstanceTransform) optional,
         camera: Camera required,
         transform: Transform optional,
         grid: ScalarF32 optional,
@@ -156,17 +168,24 @@ crate::primitive! {
         depth_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         depth_sampler: Option<manifold_gpu::GpuSampler> = None,
         dummy_depth: Option<manifold_gpu::GpuTexture> = None,
+        identity_instances: Option<manifold_gpu::GpuBuffer> = None,
         capture_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         msaa: Option<manifold_gpu::GpuTexture> = None,
         width: u32 = 0,
         height: u32 = 0,
         history: Option<manifold_gpu::GpuBuffer> = None,
+        // Per-copy InstanceTransform ring, recorded by the same capture pass
+        // as the vertex ring. Only allocated once the instances port has been
+        // wired, so vertices-only diagrams pay nothing.
+        instance_history: Option<manifold_gpu::GpuBuffer> = None,
+        instance_counts: Option<manifold_gpu::GpuBuffer> = None,
         history_head: u32 = 0,
         history_len: u32 = 0,
         last_seconds: Option<f64> = None,
         last_frame_count: Option<i64> = None,
         history_reset: bool = false,
         last_vertex_count: u32 = 0,
+        last_copy_count: u32 = 0,
     },
 }
 
@@ -223,6 +242,36 @@ impl RenderMeshDiagram {
         self.history = Some(history);
     }
 
+    fn ensure_instance_history(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.instance_history.is_some() {
+            return;
+        }
+        // 64 slots x 8 copies x 32 B = 16 KiB, plus 256 B of per-slot copy
+        // counts — trivial next to the 1.5 MB vertex ring.
+        let ring_bytes = HISTORY_SAMPLES as u64
+            * MAX_COPY_INSTANCES as u64
+            * std::mem::size_of::<InstanceTransform>() as u64;
+        let ring = device.create_buffer_shared(ring_bytes);
+        ring.zero_fill();
+        let counts = device.create_buffer_shared(HISTORY_SAMPLES as u64 * 4);
+        counts.zero_fill();
+        self.instance_history = Some(ring);
+        self.instance_counts = Some(counts);
+    }
+
+    /// Copy-count change invalidates recorded instance history: old slots may
+    /// never have held copy c, and marks must not linger from a bypassed or
+    /// reordered producer. The shared head/len reset covers the vertex ring in
+    /// the same stroke.
+    fn note_copy_count(&mut self, copies: u32) {
+        if copies == self.last_copy_count {
+            return;
+        }
+        self.history_head = 0;
+        self.history_len = 0;
+        self.last_copy_count = copies;
+    }
+
     fn ensure_depth_resources(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.depth_sampler.is_none() {
             self.depth_sampler = Some(device.create_sampler(&GpuSamplerDesc {
@@ -244,6 +293,20 @@ impl RenderMeshDiagram {
             });
             device.upload_texture(&texture, bytemuck::bytes_of(&0.0f32));
             self.dummy_depth = Some(texture);
+        }
+        if self.identity_instances.is_none() {
+            // Bound at the instances slot when the port is unwired so the
+            // shared layout stays valid; the shader never reads it in that
+            // mode (instances_wired == 0 selects the identity constant).
+            let buffer = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+            let identity = [InstanceTransform {
+                pos_scale: [0.0, 0.0, 0.0, 1.0],
+                rot_pad: [0.0; 4],
+            }];
+            // SAFETY: 32 bytes into a 32-byte fresh buffer; no GPU work has
+            // touched it yet.
+            unsafe { buffer.write(0, bytemuck::bytes_of(&identity)) };
+            self.identity_instances = Some(buffer);
         }
     }
 
@@ -299,6 +362,16 @@ impl Primitive for RenderMeshDiagram {
         self.last_seconds = Some(seconds);
         self.last_frame_count = Some(ctx.time.frame_count);
         let density = ctx.scalar_or_param("density", 4.0).round().clamp(2.0, 8.0) as u32;
+        // Copy count comes from the wired InstanceTransform buffer. Producers
+        // collapse inactive slots to an all-zero transform (see
+        // generate_instance_transforms_body.wgsl), so a smaller active_count
+        // never draws garbage; the shader skips those sentinels explicitly.
+        let input_instances = ctx.inputs.array("instances");
+        let copies = input_instances.map_or(1, |buffer| {
+            ((buffer.size / std::mem::size_of::<InstanceTransform>() as u64) as u32)
+                .clamp(1, MAX_COPY_INSTANCES)
+        });
+        self.note_copy_count(copies);
         let capacity = ((current.size.min(reference.size).min(incoming.size)
             / std::mem::size_of::<MeshVertex>() as u64) as u32)
             .min(MAX_VERTICES);
@@ -378,18 +451,35 @@ impl Primitive for RenderMeshDiagram {
             event_values: [ctx.scalar_or_param("trails_brightness",1.0).max(0.0),ctx.scalar_or_param("pulse_gain",1.0).max(0.0),ctx.scalar_or_param("scan_amount",0.0),ctx.scalar_or_param("scan_progress",0.0)],
             scan_values: [ctx.scalar_or_param("scan_width",0.2),ctx.scalar_or_param("scan_direction",2.0),ctx.scalar_or_param("scan_mode",0.0),ctx.scalar_or_param("connect_mesh",0.0)],
             event_targets: [ctx.scalar_or_param("pulse_target",0.0).round().clamp(0.0,5.0) as u32,ctx.scalar_or_param("scan_target",0.0).round().clamp(0.0,5.0) as u32,mesh_triangles,scan_weights.map_or(0,|b|(b.size/4) as u32)],
+            copy_count: copies,
+            instances_wired: u32::from(input_instances.is_some()),
+            instance_history_stride: MAX_COPY_INSTANCES,
+            _instances_pad: 0,
         };
         let input_surface_depth = ctx.inputs.texture_2d("surface_depth");
         let input_scene_depth = ctx.inputs.texture_2d("scene_depth");
         let gpu = ctx.gpu_encoder();
         if color_out.is_some() {
             self.ensure_history(gpu.device);
+            if input_instances.is_some() {
+                self.ensure_instance_history(gpu.device);
+            }
         }
         self.ensure_depth_resources(gpu.device);
         let dummy_depth = self.dummy_depth.as_ref().expect("depth resources initialized");
         let surface_depth = input_surface_depth.unwrap_or(dummy_depth);
         let scene_depth = input_scene_depth.unwrap_or(dummy_depth);
         let depth_sampler = self.depth_sampler.as_ref().expect("depth sampler initialized");
+        let instances = input_instances.unwrap_or_else(|| {
+            self.identity_instances
+                .as_ref()
+                .expect("identity instance stub initialized")
+        });
+        // Instance rings are only allocated once the instances port has been
+        // wired; before that an existing read-only buffer keeps the shared
+        // layout valid (the shader never reads them when unwired).
+        let instance_ring = self.instance_history.as_ref().unwrap_or(current);
+        let instance_ring_counts = self.instance_counts.as_ref().unwrap_or(current);
 
         if color_out.is_some() && self.render_pipeline.is_none() {
             self.render_pipeline = Some(gpu.device.create_render_pipeline_msaa(
@@ -434,16 +524,20 @@ impl Primitive for RenderMeshDiagram {
             self.width = width;
             self.height = height;
         }
-        let arrow_count = tri_count;
+        let arrow_count = tri_count * copies;
         let grid_count = 1;
         // One world frame and at most three representative fragment frames.
         let axes_count = 3 + tri_count.min(3) * 3;
+        // Fragments, reference, ghosts, arrows and trails repeat per copy
+        // transform; a single identity copy keeps the instance budget
+        // byte-identical to the vertices-only diagram.
+        let trail_copies = if input_instances.is_some() { copies } else { 1 };
         let trail_count = if uniforms.trails != 0 {
-            TRAIL_RENDER_SAMPLES * vertex_count
+            TRAIL_RENDER_SAMPLES * vertex_count * trail_copies
         } else {
             0
         };
-        let instance_count = tri_count * 3 + arrow_count + grid_count + axes_count + trail_count;
+        let instance_count = tri_count * 3 * copies + arrow_count + grid_count + axes_count + trail_count;
         if let Some(out) = color_out {
             let history = self.history.as_ref().expect("history allocated");
             let depth_tested = uniforms.occlusion != 0;
@@ -462,6 +556,9 @@ impl Primitive for RenderMeshDiagram {
                         GpuBinding::Texture { binding: 7, texture: surface_depth },
                         GpuBinding::Texture { binding: 8, texture: scene_depth },
                         GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
+                        GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
+                        GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
+                        GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
                     ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
                 );
             } else {
@@ -476,6 +573,9 @@ impl Primitive for RenderMeshDiagram {
                         GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
                         GpuBinding::Buffer { binding: 5, buffer: mesh_weights.unwrap_or(reference), offset: 0 },
                         GpuBinding::Buffer { binding: 6, buffer: scan_weights.unwrap_or(reference), offset: 0 },
+                        GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
+                        GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
+                        GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
                     ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
                 );
             }
@@ -522,8 +622,13 @@ impl Primitive for RenderMeshDiagram {
                     GpuBinding::Texture { binding: 7, texture: surface_depth },
                     GpuBinding::Texture { binding: 8, texture: scene_depth },
                     GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
+                    GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
+                    // Never read by the depth entry point; existing buffers
+                    // keep the shared layout valid.
+                    GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
+                    GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
                 ],
-                3, if uniforms.occlusion != 0 { tri_count } else { 0 }, GpuLoadAction::Load, Self::TYPE_ID,
+                3, if uniforms.occlusion != 0 { tri_count * copies } else { 0 }, GpuLoadAction::Load, Self::TYPE_ID,
             );
         }
         // The capture follows the diagram pass in the same command stream,
@@ -537,11 +642,20 @@ impl Primitive for RenderMeshDiagram {
         } else if vertex_count != 0 {
             let history = self.history.as_ref().expect("history allocated for colour pass");
             let slot = self.history_head;
+            // Record the per-copy transforms the wired producer published this
+            // frame, next to the vertex sample of the same slot. Unwired:
+            // copy_count 0 guards every instance-ring read and write, so the
+            // ring (if it exists) stays untouched and vertices-only behaviour
+            // is unchanged.
+            let instance_capture = u32::from(input_instances.is_some());
             let capture_uniforms = HistoryCaptureUniforms {
                 vertex_count,
                 history_slot: slot,
                 history_stride: MAX_VERTICES,
-                _pad: 0,
+                copy_count: if instance_capture != 0 { copies } else { 0 },
+                instance_stride: MAX_COPY_INSTANCES,
+                instance_capture,
+                _pad: [0; 2],
             };
             gpu.native_enc.dispatch_compute(
                 self.capture_pipeline
@@ -562,8 +676,29 @@ impl Primitive for RenderMeshDiagram {
                         buffer: history,
                         offset: 0,
                     },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: instances,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: instance_ring,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 5,
+                        buffer: instance_ring_counts,
+                        offset: 0,
+                    },
                 ],
-                [vertex_count.div_ceil(256), 1, 1],
+                [
+                    vertex_count
+                        .max(if instance_capture != 0 { copies } else { 0 })
+                        .div_ceil(256),
+                    1,
+                    1,
+                ],
                 "math-view-history-capture",
             );
             self.history_head = (slot + 1) % HISTORY_SAMPLES;
@@ -621,6 +756,25 @@ mod tests {
     }
 
     #[test]
+    fn diagram_declares_optional_typed_instances_input() {
+        use crate::node_graph::ports::{ArrayType, PortType};
+        let input = RenderMeshDiagram::INPUTS
+            .iter()
+            .find(|input| input.name == "instances")
+            .expect("instances input declared");
+        assert!(!input.required);
+        assert_eq!(
+            input.ty,
+            PortType::Array(ArrayType::of_known::<InstanceTransform>())
+        );
+        assert_eq!(MAX_COPY_INSTANCES, 8);
+        assert!(
+            std::mem::size_of::<DiagramUniforms>().is_multiple_of(16),
+            "uniform block must stay 16-byte aligned"
+        );
+    }
+
+    #[test]
     fn history_is_bounded_and_reset_is_explicit() {
         assert_eq!(HISTORY_SAMPLES, 64);
         assert_eq!(TRAIL_RENDER_SAMPLES, 32);
@@ -631,6 +785,27 @@ mod tests {
         Primitive::clear_state(&mut node);
         assert_eq!((node.history_head, node.history_len), (0, 0));
         assert!(node.history_reset && node.last_seconds.is_none());
+    }
+
+    #[test]
+    fn copy_count_change_resets_history() {
+        let mut node = RenderMeshDiagram::new();
+        // First observed count only initialises the tracker: an empty ring
+        // has nothing to invalidate.
+        node.note_copy_count(3);
+        assert_eq!((node.history_head, node.history_len), (0, 0));
+        node.history_head = 40;
+        node.history_len = 40;
+        node.note_copy_count(3);
+        assert_eq!((node.history_head, node.history_len), (40, 40), "steady count keeps history");
+        // Grow, shrink, and bypass (wired -> unwired reports 1) all clear the
+        // shared rings so no slot outlives its copy-count era.
+        for next in [5u32, 2, 1] {
+            node.note_copy_count(next);
+            assert_eq!((node.history_head, node.history_len), (0, 0));
+            node.history_head = 9;
+            node.history_len = 9;
+        }
     }
 }
 

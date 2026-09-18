@@ -166,6 +166,14 @@ struct PingPong {
 }
 
 impl PingPong {
+    fn try_new(device: &GpuDevice, width: u32, height: u32) -> Result<Self, String> {
+        Ok(Self {
+            ping: RenderTarget::try_new(device, width, height, GpuTextureFormat::Rgba16Float, "resize-ping")?,
+            pong: RenderTarget::try_new(device, width, height, GpuTextureFormat::Rgba16Float, "resize-pong")?,
+            use_ping_as_source: true,
+        })
+    }
+
     fn new(
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
@@ -432,6 +440,16 @@ impl LayerOutput {
 /// Compositing flow (two-phase):
 /// 1. **generate_layers**: process each layer's clips + effects independently
 /// 2. **blend_layers**: serial blend of all layer outputs into main accumulator
+pub struct PreparedCompositorResize {
+    main: PingPong,
+    layers: AHashMap<LayerId, PingPong>,
+    groups: AHashMap<LayerId, PingPong>,
+    tonemap: RenderTarget,
+    layer_chains: Vec<(LayerId, crate::preset_runtime::PreparedRuntimeResize)>,
+    group_chains: Vec<(LayerId, crate::preset_runtime::PreparedRuntimeResize)>,
+    master_chain: Option<crate::preset_runtime::PreparedRuntimeResize>,
+}
+
 pub struct LayerCompositor {
     /// Main accumulation ping-pong (opaque black init).
     main: PingPong,
@@ -3151,35 +3169,55 @@ impl Compositor for LayerCompositor {
         &self.tonemap.output.texture
     }
 
-    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
-        self.main.resize(device, width, height);
-        for lb in self.layer_bufs.values_mut() {
-            lb.resize(device, width, height);
+    fn prepare_resize(&self, device: &GpuDevice, width: u32, height: u32) -> Result<PreparedCompositorResize, String> {
+        // Legacy plugin processors have no fallible preparation contract. Refuse
+        // rather than publishing half a resize if one is installed in the future.
+        if !self.plugin_warmups.is_empty() {
+            return Err("Resize is unavailable while a legacy plugin processor is installed".into());
         }
-        self.blend.resize(width, height);
-        // Drop cached chain graphs so they rebuild at the new resolution
-        // next frame (the underlying graph holds width/height-sized slots).
-        if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
-            eprintln!("[rebuild] scope=all reason=compositor-resize dims={width}x{height}");
+        let main = PingPong::try_new(device, width, height)?;
+        let layers = self.layer_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
+            .collect::<Result<_, String>>()?;
+        let groups = self.group_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
+            .collect::<Result<_, String>>()?;
+        let tonemap = RenderTarget::try_new(device, width, height, self.tonemap.output.format, "resize-tonemap")?;
+        let prepare_chains = |chains: &AHashMap<LayerId, Option<PresetRuntime>>| {
+            chains.iter().filter_map(|(id, chain)| chain.as_ref().map(|chain| (id, chain)))
+                .map(|(id, chain)| chain.prepare_resize(device, width, height)
+                    .map(|prepared| (id.clone(), prepared)).map_err(|error| error.to_string()))
+                .collect::<Result<Vec<_>, String>>()
+        };
+        Ok(PreparedCompositorResize {
+            main, layers, groups, tonemap,
+            layer_chains: prepare_chains(&self.effect_chains)?,
+            group_chains: prepare_chains(&self.group_effect_chains)?,
+            master_chain: self.master_effect_chain.as_ref()
+                .map(|chain| chain.prepare_resize(device, width, height))
+                .transpose().map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn commit_resize(&mut self, prepared: PreparedCompositorResize) {
+        self.blend.resize(prepared.main.width(), prepared.main.height());
+        self.main = prepared.main;
+        self.layer_bufs = prepared.layers;
+        self.group_bufs = prepared.groups;
+        self.tonemap.output = prepared.tonemap;
+        for (id, candidate) in prepared.layer_chains {
+            self.effect_chains.get_mut(&id).and_then(Option::as_mut)
+                .expect("resize chain owner unchanged").commit_resize(candidate);
         }
-        for ec in self.effect_chains.values_mut() {
-            *ec = None;
+        for (id, candidate) in prepared.group_chains {
+            self.group_effect_chains.get_mut(&id).and_then(Option::as_mut)
+                .expect("resize chain owner unchanged").commit_resize(candidate);
         }
-        self.master_effect_chain = None;
-        for processor in self.plugin_warmups.iter_mut() {
-            processor.resize(device, width, height);
+        if let Some(candidate) = prepared.master_chain {
+            self.master_effect_chain.as_mut().expect("resize chain owner unchanged")
+                .commit_resize(candidate);
         }
-        self.tonemap.resize(device, width, height);
-        for gb in self.group_bufs.values_mut() {
-            gb.resize(device, width, height);
-        }
-        for ec in self.group_effect_chains.values_mut() {
-            *ec = None;
-        }
-        // The per-layer LED composite size comes from `frame.led_composite_size`
-        // (the native LED grid), independent of compositor resolution — its
-        // buffers reallocate lazily in blend_layers_to_led / render() if the
-        // frame's LED size differs.
+        self.layer_outputs_scratch.clear();
+        self.source_outputs_scratch.clear();
+        self.clip_post_fx_scratch.clear();
     }
 
     fn dimensions(&self) -> (u32, u32) {
