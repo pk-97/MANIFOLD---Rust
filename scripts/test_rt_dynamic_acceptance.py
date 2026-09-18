@@ -8,6 +8,7 @@ being ignored, and correctness groups being run in separate gate processes.
 """
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +25,83 @@ SPEC.loader.exec_module(runner)
 
 
 class AcceptanceRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _static_reports(current_p95=3.9):
+        baseline = {
+            "status": "measured_static_rt",
+            "sourceCommit": "713cd9bb",
+            "hardware": {"gpu": "Apple M4 Max"},
+            "settings": {"measuredFrames": 120, "resolution": [1280, 720]},
+            "fixture": {"sha256": "fixture-hash"},
+            "gpuFrame": {"count": 120, "p95Ms": 3.882708348},
+            "rtDispatchWitness": {"observed": True, "channels": [{"label": "refl_raw"}]},
+        }
+        current = {
+            "hardware": {"gpu": "Apple M4 Max"},
+            "referenceProjectHash": "fixture-hash",
+            "productionConfigurations": [{
+                "name": "static_rt",
+                "status": "measured_production_frame",
+                "measuredFrames": 120,
+                "resolution": [1280, 720],
+                "anyDispatch": True,
+                "dispatchFrames": 120,
+                "gpuFrame": {"count": 120, "p95Ms": current_p95},
+            }],
+        }
+        return baseline, current
+
+    def test_static_baseline_match_passes(self):
+        baseline, current = self._static_reports()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "static-baseline.json"
+            path.write_text(json.dumps(baseline))
+            result = runner.validate_static_baseline(path, current)
+        self.assertEqual(result["status"], "pass")
+        self.assertAlmostEqual(result["deltaMs"], 0.017291652, places=6)
+        self.assertEqual(result["allowedDeltaMs"], 0.2)
+
+    def test_static_baseline_gpu_mismatch_fails(self):
+        baseline, current = self._static_reports()
+        current["hardware"]["gpu"] = "Apple M3 Max"
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "static-baseline.json"
+            path.write_text(json.dumps(baseline))
+            result = runner.validate_static_baseline(path, current)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("GPU mismatch", result["reason"])
+
+    def test_static_baseline_regression_fails(self):
+        baseline, current = self._static_reports(current_p95=4.2)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "static-baseline.json"
+            path.write_text(json.dumps(baseline))
+            result = runner.validate_static_baseline(path, current)
+        self.assertEqual(result["status"], "fail")
+        self.assertGreater(result["deltaMs"], result["allowedDeltaMs"])
+
+    def test_static_baseline_malformed_fields_fail(self):
+        for field in ("hardware", "gpuFrame", "settings", "fixture"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as td:
+                baseline, current = self._static_reports()
+                baseline[field] = ["invalid"]
+                path = Path(td) / "baseline.json"
+                path.write_text(json.dumps(baseline))
+                self.assertEqual(runner.validate_static_baseline(path, current)["status"], "fail")
+        baseline, current = self._static_reports(current_p95=-1)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "baseline.json"
+            path.write_text(json.dumps(baseline))
+            self.assertEqual(runner.validate_static_baseline(path, current)["status"], "fail")
+            current["productionConfigurations"] = 7
+            self.assertEqual(runner.validate_static_baseline(path, current)["status"], "fail")
+
+    def test_static_baseline_missing_blocks(self):
+        _, current = self._static_reports()
+        result = runner.validate_static_baseline(None, current)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("not provided", result["reason"])
+
     def test_perf_report_loader_rejects_missing_and_malformed_json(self):
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "missing.json"

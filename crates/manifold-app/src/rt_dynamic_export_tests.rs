@@ -85,6 +85,7 @@ struct ExportObservation {
     output: Option<PathBuf>,
     states: Vec<ContentState>,
     frames: Vec<crate::content_export::ExportFrameObservation>,
+    gpu_abort_requested: bool,
 }
 
 fn output_dir(name: &str) -> PathBuf {
@@ -184,11 +185,16 @@ fn run_export(
     project: Project,
     cfg: ExportConfig,
     cancel_before_frame: bool,
-    fail_before_encode_frame: Option<u32>,
+    fail_before_encode_frame: Option<(u32, crate::content_export::ExportTestFault)>,
 ) -> ExportObservation {
+    let faults_before = manifold_gpu::gpu_fault::fault_count();
     let mut content = headless_content_thread(project, cfg.width, cfg.height);
     let (cmd_tx, cmd_rx) = unbounded();
     let (state_tx, state_rx) = unbounded();
+    // Match app/project-load and export-repro preparation. Async imported
+    // sources must be ready before entering the one-evaluation-per-frame
+    // export loop; the observer deliberately excludes this preparation.
+    crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
     let (observation_tx, observation_rx) = unbounded();
     let _observer =
         crate::content_export::install_export_observer(observation_tx, fail_before_encode_frame);
@@ -199,6 +205,11 @@ fn run_export(
     }
 
     content.run_export(cfg, &cmd_rx, &state_tx);
+    assert_eq!(
+        manifold_gpu::gpu_fault::fault_count(),
+        faults_before,
+        "synthetic export failures must never fault hardware"
+    );
     drop(cmd_tx);
     drop(state_tx);
     let states: Vec<ContentState> = state_rx.try_iter().collect();
@@ -212,6 +223,7 @@ fn run_export(
         output,
         states,
         frames,
+        gpu_abort_requested: crate::content_export::export_test_gpu_abort_requested(),
     }
 }
 
@@ -379,8 +391,16 @@ fn rt_dynamic_export_first_frame_and_state_steps() {
     assert_eq!(observation.frames.len(), 12);
     for (index, frame) in observation.frames.iter().enumerate() {
         assert_eq!(frame.frame_idx as usize, index);
-        assert!((frame.beat - index as f64 / 6.0).abs() < 1e-5, "frame {index}: {frame:?}");
-        assert!(frame.generator_values.iter().any(|(id, _)| id == "cell_size"));
+        assert!(
+            (frame.beat - index as f64 / 6.0).abs() < 1e-5,
+            "frame {index}: {frame:?}"
+        );
+        assert!(
+            frame
+                .generator_values
+                .iter()
+                .any(|(id, _)| id == "cell_size")
+        );
         assert!((frame.time_seconds - index as f64 / FPS as f64).abs() < 1e-9);
         let expected_dt = if index == 0 { 0.0 } else { 1.0 / FPS as f64 };
         assert!((frame.dt_seconds - expected_dt).abs() < 1e-9);
@@ -406,12 +426,15 @@ fn rt_dynamic_export_first_frame_and_state_steps() {
         "stable cut map refits deformation"
     );
     assert!(
-        observation.frames[1..6].iter().any(|frame| frame.rt_updates.blas_refits > 0),
+        observation.frames[1..6]
+            .iter()
+            .any(|frame| frame.rt_updates.blas_refits > 0),
         "phase changes refit before the topology transition; equal adjacent sine samples may reuse"
     );
     assert!(
         observation.frames[6].rt_updates.blas_builds > 0,
-        "frame 6 must rebuild RT BLAS after the automated cut-map topology change: {:#?}", observation.frames
+        "frame 6 must rebuild RT BLAS after the automated cut-map topology change: {:#?}",
+        observation.frames
     );
     let hashes = decoded_frame_hashes(&path);
     assert_eq!(hashes.len(), 12, "one decoded hash per export frame");
@@ -509,27 +532,232 @@ fn rt_dynamic_export_repeat_and_sections() {
 
 #[test]
 fn rt_dynamic_export_fault_before_encode() {
+    use crate::content_export::ExportTestFault;
     let dir = output_dir("rt_dynamic_export_fault_before_encode");
-    let path = dir.join("fault-before-encode.mp4");
-    let cfg = config(&path, WIDTH, HEIGHT, false, false);
-    let observation = run_export(fixture_project(), cfg, false, Some(0));
-    assert!(observation.output.is_none());
-    assert!(observation.states.iter().any(|state| {
-        state
-            .export_finished
+    for fault in [
+        ExportTestFault::BeforeEncode,
+        ExportTestFault::PendingGeometry,
+        ExportTestFault::Preparation,
+        ExportTestFault::Encode,
+        ExportTestFault::GpuFault,
+        ExportTestFault::IgnoredSubmission,
+        ExportTestFault::CompletionTimeout,
+    ] {
+        let path = dir.join(format!("fault-{fault:?}.mp4"));
+        let cfg = config(&path, WIDTH, HEIGHT, false, false);
+        let observation = run_export(fixture_project(), cfg, false, Some((0, fault)));
+        assert!(observation.output.is_none());
+        assert_eq!(
+            observation.gpu_abort_requested,
+            matches!(
+                fault,
+                ExportTestFault::GpuFault
+                    | ExportTestFault::IgnoredSubmission
+                    | ExportTestFault::CompletionTimeout
+            )
+        );
+        assert!(observation.states.iter().any(|state| {
+            state
+                .export_finished
+                .as_ref()
+                .is_some_and(|event| !event.success)
+        }));
+        assert!(
+            !path.exists(),
+            "a pre-encode failure must not create an output file"
+        );
+        assert_eq!(
+            observation.frames.len(),
+            usize::from(fault == ExportTestFault::BeforeEncode),
+            "{fault:?}: injection must stop before frame 1 and before native encoding"
+        );
+    }
+}
+
+fn imported_modifiers_content(recipes: &[&str]) -> crate::content_thread::ContentThread {
+    let source = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/gltf/cc0___mushroom.glb"
+    ));
+    let (graph, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(source)
+        .expect("import SceneLoop host");
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(BPM);
+    project.settings.output_width = WIDTH as i32;
+    project.settings.output_height = HEIGHT as i32;
+    let mut layer = manifold_core::layer::Layer::new_generator(
+        "RT SceneLoop export".into(),
+        PresetTypeId::new("PhotoscanBaseline"),
+        0,
+    );
+    layer.gen_params_or_init().graph = Some(graph);
+    layer.gen_params_or_init().refresh_manifest_from_graph();
+    let id = layer.layer_id.clone();
+    let mut clip = TimelineClip::new_generator(Beats::ZERO, Beats(TWO_BEATS));
+    clip.layer_id = id.clone();
+    layer.clips.push(clip);
+    project.timeline.layers.push(layer);
+    let mut content = headless_content_thread(project, WIDTH, HEIGHT);
+    for recipe in recipes {
+        content.handle_command(ContentCommand::SceneModifier(
+            crate::scene_modifier_edit::SceneModifierAction::Add(id.clone(), (*recipe).into()),
+        ));
+        assert!(
+            content.graph_edit_diagnostic.is_none(),
+            "{recipe} attachment rejected"
+        );
+    }
+    let target = manifold_core::GraphTarget::Generator(id);
+    let (param, old) = {
+        let instance = content
+            .engine
+            .project()
+            .unwrap()
+            .preset_instance(&target)
+            .unwrap();
+        let param = instance
+            .params
+            .iter()
+            .find(|param| param.id().ends_with("rt_enabled"))
+            .expect("imported RT binding")
+            .id()
+            .to_owned();
+        let old = instance.get_base_param(&param);
+        (param, old)
+    };
+    content.handle_command(ContentCommand::Execute(Box::new(
+        manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, param, old, 1.0),
+    )));
+    assert!(content.graph_edit_diagnostic.is_none());
+    content
+}
+
+#[test]
+fn rt_dynamic_export_saved_modifier_stack() {
+    let dir = output_dir("rt_dynamic_export_saved_modifier_stack");
+    let mut content =
+        imported_modifiers_content(&["SurfaceWaves", "OrderedRecon", "SpatialEchoes"]);
+    let id = content.engine.project().unwrap().timeline.layers[0]
+        .layer_id
+        .clone();
+    let ids = |project: &Project| {
+        project.timeline.layers[0]
+            .gen_params()
+            .unwrap()
+            .graph_def()
             .as_ref()
-            .is_some_and(|event| !event.success)
-    }));
+            .unwrap()
+            .scene_modifiers
+            .iter()
+            .map(|modifier| modifier.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let original = ids(content.engine.project().unwrap());
+    content.handle_command(ContentCommand::SceneModifier(
+        crate::scene_modifier_edit::SceneModifierAction::Move(id, original[0].clone(), 1),
+    ));
+    assert!(content.graph_edit_diagnostic.is_none());
+    let reordered = vec![
+        original[1].clone(),
+        original[0].clone(),
+        original[2].clone(),
+    ];
+    assert_eq!(ids(content.engine.project().unwrap()), reordered);
+    content.handle_command(ContentCommand::Undo);
+    assert_eq!(ids(content.engine.project().unwrap()), original);
+    content.handle_command(ContentCommand::Redo);
+    assert_eq!(ids(content.engine.project().unwrap()), reordered);
+    let saved = dir.join("stack.manifold");
+    manifold_io::saver::save_project_v1(content.engine.project().unwrap(), &saved).unwrap();
+    let reopened = manifold_io::loader::load_project(&saved).unwrap();
+    assert_eq!(ids(&reopened), reordered);
+    drop(content);
+    let output = dir.join("stack.mp4");
+    let observation = run_export(
+        reopened,
+        config(&output, WIDTH, HEIGHT, false, false),
+        false,
+        None,
+    );
+    assert!(observation.output.is_some());
+    assert_video(&output, WIDTH, HEIGHT, 12);
     assert!(
-        !path.exists(),
-        "a pre-encode failure must not create an output file"
+        observation
+            .frames
+            .iter()
+            .all(|frame| frame.rt_dispatches > 0)
     );
+}
+
+#[test]
+fn rt_dynamic_export_stateful_scene_loop() {
+    let dir = output_dir("rt_dynamic_export_stateful_scene_loop");
+    let mut content = imported_modifiers_content(&["SceneLoop"]);
+    let (target, param, old) =
+        {
+            let project = content.engine.project().unwrap();
+            let target =
+                manifold_core::GraphTarget::Generator(project.timeline.layers[0].layer_id.clone());
+            let instance = project.preset_instance(&target).unwrap();
+            let param = instance.graph_def().as_ref().unwrap().preset_metadata.as_ref().unwrap()
+            .bindings.iter().find(|binding| matches!(&binding.target,
+                manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. }
+                    if param_id.as_str() == "bars"
+            )).expect("promoted SceneLoop bars binding").id.clone();
+            let old = instance.get_base_param(&param);
+            (target, param, old)
+        };
+    // Cross cell boundaries within the two-beat fixture; the default eight
+    // bars can move the camera without changing its resident instance window.
+    content.handle_command(ContentCommand::Execute(Box::new(
+        manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, param, old, 0.25),
+    )));
+    let project = content.engine.project().unwrap().clone();
+    drop(content);
+    let mut witnesses = Vec::new();
+    for index in 0..2 {
+        let path = dir.join(format!("stateful-{index}.mp4"));
+        let observation = run_export(
+            project.clone(),
+            config(&path, WIDTH, HEIGHT, false, false),
+            false,
+            None,
+        );
+        assert!(
+            observation.output.is_some(),
+            "stateful export {index} failed: {:?}",
+            observation
+                .states
+                .iter()
+                .filter_map(|state| state.export_finished.as_ref())
+                .collect::<Vec<_>>()
+        );
+        assert_video(&path, WIDTH, HEIGHT, 12);
+        assert_eq!(observation.frames.len(), 12);
+        assert_eq!(observation.frames[0].dt_seconds, 0.0);
+        assert!(
+            observation
+                .frames
+                .iter()
+                .all(|frame| frame.rt_dispatches > 0)
+        );
+        assert!(
+            observation.frames[1..]
+                .iter()
+                .all(|frame| (frame.dt_seconds - 1.0 / FPS as f64).abs() < 1e-9)
+        );
+        assert!(
+            observation.frames[1..]
+                .iter()
+                .any(|frame| frame.rt_updates.tlas_refits > 0),
+            "SceneLoop must move instance bounds"
+        );
+        witnesses.push(decoded_frame_hashes(&path));
+    }
     assert_eq!(
-        observation.frames.len(),
-        1,
-        "fault injection must stop before frame 1"
+        witnesses[0], witnesses[1],
+        "stateful repeat must restart from the same initial state"
     );
-    assert_eq!(observation.frames[0].frame_idx, 0);
 }
 
 #[test]

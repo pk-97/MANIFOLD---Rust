@@ -2980,7 +2980,26 @@ impl RenderScene {
             gpu.rt_history_resets += u32::from(history_changed);
             #[cfg(feature = "gpu-proofs")]
             if gpu.capture_rt_geometry {
-                self.rt_probe = Some(rt_proof::RtProbeScene::capture(objects, &alpha_textures));
+                let mut history_textures = Vec::new();
+                history_textures.extend(self.rt_irr_history.iter().flatten());
+                history_textures.extend(self.rt_refl_history.iter().flatten());
+                history_textures.extend(self.rt_sv_history.iter().flatten());
+                history_textures.extend(self.rt_sv_m1_history.iter().flatten());
+                history_textures.extend(self.rt_sv_m2_history.iter().flatten());
+                history_textures.extend(self.rt_sv_hold_history.iter().flatten());
+                history_textures.extend(self.rt_sv2_history.iter().flatten());
+                history_textures.extend(self.rt_sv2_m1_history.iter().flatten());
+                history_textures.extend(self.rt_sv2_m2_history.iter().flatten());
+                history_textures.extend(self.rt_sv2_hold_history.iter().flatten());
+                history_textures.extend(self.rt_svt_history.iter().flatten());
+                history_textures.extend(self.rt_depth_history.iter().flatten());
+                history_textures.extend(self.rt_normal_history.iter().flatten());
+                history_textures.extend(self.rt_moments_history.iter().flatten());
+                self.rt_probe = Some(rt_proof::RtProbeScene::capture(
+                    objects,
+                    &alpha_textures,
+                    &history_textures,
+                ));
             }
             for (index, draw) in opaque_draws.clone().enumerate() {
                 self.rt_mesh_revisions[index] = draw.mesh_revision.map(|r| (r, draw.topology_hint));
@@ -8330,6 +8349,21 @@ fn build_uniforms(
 }
 
 impl EffectNode for RenderScene {
+    fn clear_state(&mut self) {
+        // Explicit simulation reset (export origin), not a graph rebuild:
+        // retain prepared geometry/resources, restart sampling and route all
+        // temporal consumers through the existing first-frame reset decision.
+        self.jitter_frame_index = 0;
+        self.rt_reset_detector = TemporalResetDetector::new();
+        self.rt_history_ping = 0;
+        self.rt_irr_needs_reset = true;
+        self.rt_moments_valid = false;
+        self.prev_model.fill(None);
+        self.prev_view_proj = None;
+        self.prev_cam_state = None;
+        self.prev_jitter_ndc = None;
+    }
+
     fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
         crate::node_graph::depth_rule::DepthRule::SourceHeight
     }

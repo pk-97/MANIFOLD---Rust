@@ -579,3 +579,185 @@ fn rt_dynamic_current_frame_warmup_toggle_deform_and_idle() {
         }
     }
 }
+
+#[test]
+fn rt_dynamic_history_reset_and_resume() {
+    use manifold_core::NodeId;
+    use manifold_renderer::node_graph::ParamValue;
+
+    const SENTINEL: f32 = 123.0;
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        scene_json(),
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("history proof scene graph must build");
+    let mut reference = PresetRuntime::from_json_str_with_device(
+        scene_json(),
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("aligned history reference must build");
+    let material = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("material"))
+        .expect("history proof material");
+    let target = h.make_target("rt-dynamic-history-reset");
+
+    let render_frame = |runtime: &mut PresetRuntime, frame: i64, capture_geometry: bool| {
+        let context = PresetContext {
+            time: frame as f64 / 60.0,
+            beat: frame as f64 / 30.0,
+            dt: if frame == 0 { 0.0 } else { 1.0 / 60.0 },
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut status = None;
+        let mut resets = 0;
+        let captures = harness::capture_rt_channels(|| {
+            let mut encoder = h.device.create_encoder("rt-dynamic-history-reset");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
+                gpu.capture_rt_geometry = capture_geometry;
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &context,
+                    &manifold_core::params::ParamManifest::default(),
+                );
+                status = Some(gpu.frame_status());
+                resets = gpu.rt_history_resets;
+            }
+            encoder.commit_and_wait_completed();
+        });
+        (status, resets, captures)
+    };
+
+    let (status, _, _) = render_frame(&mut runtime, 0, true);
+    assert_eq!(status, Some(FrameRenderStatus::Complete));
+    // The first maintenance pass creates the resident history pair after the
+    // geometry probe is captured, so refresh the probe on one settled frame.
+    let (status, _, _) = render_frame(&mut runtime, 1, true);
+    assert_eq!(status, Some(FrameRenderStatus::Complete));
+    render_frame(&mut reference, 0, false);
+    render_frame(&mut reference, 1, false);
+    let reference_material = reference
+        .graph
+        .instance_by_node_id(&NodeId::new("material"))
+        .unwrap();
+    reference
+        .graph
+        .set_param(reference_material, "color_r", ParamValue::Float(0.15))
+        .unwrap();
+    let (_, reference_resets, fresh) = render_frame(&mut reference, 2, false);
+    assert!(reference_resets > 0);
+    runtime
+        .rt_probe_scene()
+        .expect("settled RT frame must publish resident histories")
+        .inject_history_sentinel(&h.device, f64::from(SENTINEL));
+
+    runtime
+        .graph
+        .set_param(material, "color_r", ParamValue::Float(0.15))
+        .expect("material change must be accepted");
+    let (status, resets, changed) = render_frame(&mut runtime, 2, true);
+    assert_eq!(status, Some(FrameRenderStatus::Complete));
+    assert!(
+        resets > 0,
+        "changed material must request a shared history reset"
+    );
+    let changed_irr = changed
+        .iter()
+        .find(|capture| capture.label == "irr_accum")
+        .expect("changed frame must publish accumulated irradiance");
+    let changed_pixels = harness::read_rt_channel(&h.device, changed_irr);
+    assert!(changed_pixels.iter().all(|value| value.is_finite()));
+    assert!(
+        changed_pixels
+            .iter()
+            .all(|value| (*value - SENTINEL).abs() > 1.0),
+        "changed frame retained the injected temporal sentinel"
+    );
+    // Both runtimes have the same frame/RNG sequence and appearance reset.
+    // Any surviving fraction of the poisoned history must differ from this
+    // unpoisoned fresh-history reference, not merely from the sentinel itself.
+    for label in ["irr_accum", "refl_history_write", "mask", "sv_hold"] {
+        let actual = changed
+            .iter()
+            .find(|capture| capture.label == label)
+            .unwrap();
+        let expected = fresh.iter().find(|capture| capture.label == label).unwrap();
+        let actual = harness::read_rt_channel(&h.device, actual);
+        let expected = harness::read_rt_channel(&h.device, expected);
+        assert_eq!(actual.len(), expected.len());
+        for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 2e-3,
+                "{label}[{index}]: poisoned {actual}, fresh {expected}"
+            );
+        }
+    }
+    let changed_moments = changed
+        .iter()
+        .find(|capture| capture.label == "moments")
+        .expect("changed frame must publish temporal moments");
+    let changed_counts = read_rgba32_channel(&h.device, changed_moments);
+    assert!(
+        changed_counts
+            .chunks_exact(4)
+            .all(|pixel| pixel[3].is_finite() && pixel[3] <= 1.1)
+    );
+
+    let (status, resets, resumed) = render_frame(&mut runtime, 3, false);
+    assert_eq!(status, Some(FrameRenderStatus::Complete));
+    assert_eq!(resets, 0, "unchanged frame must resume accumulation");
+    let resumed_moments = resumed
+        .iter()
+        .find(|capture| capture.label == "moments")
+        .expect("resumed frame must publish temporal moments");
+    let resumed_counts = read_rgba32_channel(&h.device, resumed_moments);
+    assert!(
+        resumed_counts
+            .chunks_exact(4)
+            .any(|pixel| pixel[3].is_finite() && pixel[3] > 1.1),
+        "unchanged frame did not resume a resident temporal history"
+    );
+}
+
+fn read_rgba32_channel(
+    device: &manifold_gpu::GpuDevice,
+    capture: &manifold_renderer::node_graph::primitives::RtCaptureSlot,
+) -> Vec<f32> {
+    assert_eq!(capture.tex.format, GpuTextureFormat::Rgba32Float);
+    let bytes_per_row = capture.w * 16;
+    let total = u64::from(capture.h * bytes_per_row);
+    let buffer = device.create_buffer_shared(total);
+    let mut encoder = device.create_encoder("rt-history-proof-readback");
+    encoder.copy_texture_to_buffer(&capture.tex, &buffer, capture.w, capture.h, bytes_per_row);
+    encoder.commit_and_wait_completed();
+    let ptr = buffer
+        .mapped_ptr()
+        .expect("history proof readback buffer must be mapped");
+    let raw = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
+    raw.chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .collect()
+}

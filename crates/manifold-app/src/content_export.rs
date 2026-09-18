@@ -40,9 +40,22 @@ pub(crate) struct ExportFrameObservation {
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExportTestFault {
+    BeforeEncode,
+    PendingGeometry,
+    Preparation,
+    Encode,
+    GpuFault,
+    IgnoredSubmission,
+    CompletionTimeout,
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 thread_local! {
     static EXPORT_OBSERVER: RefCell<Option<Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
-    static EXPORT_FAILURE_FRAME: Cell<Option<u32>> = const { Cell::new(None) };
+    static EXPORT_FAILURE_FRAME: Cell<Option<(u32, ExportTestFault)>> = const { Cell::new(None) };
+    static EXPORT_GPU_ABORT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Installs the test-only observer and optional pre-encode fault injection for
@@ -54,13 +67,14 @@ pub(crate) struct ExportObservationGuard;
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 pub(crate) fn install_export_observer(
     sender: Sender<ExportFrameObservation>,
-    fail_before_encode_frame: Option<u32>,
+    fail_before_encode_frame: Option<(u32, ExportTestFault)>,
 ) -> ExportObservationGuard {
     EXPORT_OBSERVER.with(|slot| {
         assert!(slot.borrow().is_none(), "export observer already installed");
         *slot.borrow_mut() = Some(sender);
     });
     EXPORT_FAILURE_FRAME.with(|frame| frame.set(fail_before_encode_frame));
+    EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(false));
     ExportObservationGuard
 }
 
@@ -82,8 +96,13 @@ fn observe_export_frame(observation: ExportFrameObservation) {
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-fn should_fail_before_encode(frame_idx: u32) -> bool {
-    EXPORT_FAILURE_FRAME.with(|frame| frame.get() == Some(frame_idx))
+fn export_test_fault(frame_idx: u32) -> Option<ExportTestFault> {
+    EXPORT_FAILURE_FRAME.with(|frame| frame.get().filter(|(index, _)| *index == frame_idx).map(|(_, fault)| fault))
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) fn export_test_gpu_abort_requested() -> bool {
+    EXPORT_GPU_ABORT_REQUESTED.with(Cell::get)
 }
 
 /// A signalled fence is not success if any GPU work failed during the frame.
@@ -676,6 +695,16 @@ impl ContentThread {
         //    origin so each frame's tick sets time absolutely
         //    (origin + frame_idx * frame_dt) instead of accumulating dt.
         self.engine.set_export_origin(start_time);
+        // Project warmup can evaluate a variable number of frames while
+        // imported assets load. Restart simulation and RT sampling once per
+        // section so those preparation frames cannot affect exported pixels.
+        for renderer in self.engine.renderers_mut() {
+            if let Some(generator) = renderer.as_any_mut().downcast_mut::<
+                manifold_renderer::generator_renderer::GeneratorRenderer,
+            >() {
+                generator.reset_all_generator_state();
+            }
+        }
         //    Each iteration is wrapped in an autoreleasepool to drain Metal's
         //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;
@@ -788,6 +817,16 @@ impl ContentThread {
         }
 
         if gpu_failed {
+            // Synthetic completion failures must prove the fatal decision and
+            // real partial-file cleanup without terminating the test process.
+            // Real GPU failures still use the unchanged fatal-session path.
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if EXPORT_FAILURE_FRAME.with(|fault| matches!(fault.get(), Some((_,
+                ExportTestFault::GpuFault | ExportTestFault::IgnoredSubmission | ExportTestFault::CompletionTimeout
+            )))) {
+                EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(true));
+                return failed || finalize_failed;
+            }
             crate::abort_gpu_work("Export GPU failure; partial export cancelled");
         }
         failed || finalize_failed
@@ -865,6 +904,13 @@ impl ContentThread {
         // this boundary is an error, never permission to tick again — the
         // export loop must not rerun the graph to settle RT.
         let frame_status = self.content_pipeline.frame_render_status();
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let frame_status = match export_test_fault(frame_idx) {
+            Some(ExportTestFault::PendingGeometry) => manifold_renderer::frame_status::FrameRenderStatus::PendingGeometry,
+            Some(ExportTestFault::Preparation) => manifold_renderer::frame_status::FrameRenderStatus::Failed(manifold_renderer::frame_status::FrameRenderFailure::RtAllocation),
+            Some(ExportTestFault::Encode) => manifold_renderer::frame_status::FrameRenderStatus::Failed(manifold_renderer::frame_status::FrameRenderFailure::RtEncode),
+            _ => frame_status,
+        };
         if frame_status != manifold_renderer::frame_status::FrameRenderStatus::Complete {
             let message = format!(
                 "Export frame {frame_idx} is not complete ({frame_status:?}); refusing to encode"
@@ -885,7 +931,17 @@ impl ContentThread {
             Self::get_metal_texture_ptr(texture)
         };
 
-        if let Err(message) = self.content_pipeline.wait_for_export_complete(initial_gpu_faults) {
+        let completion = self.content_pipeline.wait_for_export_complete(initial_gpu_faults);
+        // Exercise the real completion decision without faulting or hanging
+        // hardware, and only after the actual submitted work has completed.
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let completion = completion.and_then(|()| match export_test_fault(frame_idx) {
+            Some(ExportTestFault::GpuFault) => export_gpu_completion(true, 0, 1, false, false).unwrap(),
+            Some(ExportTestFault::IgnoredSubmission) => export_gpu_completion(true, 0, 0, true, false).unwrap(),
+            Some(ExportTestFault::CompletionTimeout) => export_gpu_completion(false, 0, 0, false, true).unwrap(),
+            _ => Ok(()),
+        });
+        if let Err(message) = completion {
             log::error!("[Export] Frame {frame_idx} failed: {message}");
             return Some(ExportFrameFailure { message, gpu: true });
         }
@@ -909,7 +965,7 @@ impl ContentThread {
                     .flat_map(|instance| instance.params.iter())
                     .map(|param| (param.id().to_owned(), param.value)).collect(),
             });
-            if should_fail_before_encode(frame_idx) {
+            if export_test_fault(frame_idx) == Some(ExportTestFault::BeforeEncode) {
                 return Some(ExportFrameFailure {
                     message: format!("injected export failure before encode at frame {frame_idx}"),
                     gpu: false,

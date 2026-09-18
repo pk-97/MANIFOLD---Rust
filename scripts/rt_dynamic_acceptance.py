@@ -22,10 +22,11 @@ MODES
            --test gpu_proofs -- rt_dynamic_perf --test-threads=1`, followed by
            the held-out and reference-content app measurements.
            Requires --reference-project and --held-out-project; both files'
-           SHA-256 hashes are recorded in the report fixtures.
+           SHA-256 hashes are recorded in the report fixtures. Pass
+           --static-baseline-report with the measured pre-change report to
+           qualify the static RT regression gate.
 
-GROUPS WHOSE TESTS DO NOT EXIST YET (catalog, export, perf, and not-yet-landed
-gpu groups) still have a dispatch entry. Absence is detected by listing tests
+Every required group has a dispatch entry. Absence is detected by listing tests
 (`cargo test -- --list`), recorded as a blocked group ("tests not yet
 implemented"), and makes the run exit nonzero — A0's "zero selected tests is
 a failed gate". The scaffold lands before those modules exist; a blocked
@@ -315,6 +316,150 @@ def gpu_report_section(gpu_family: str | None) -> dict:
     }
 
 
+def _number(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and value == value and value not in (float("inf"), float("-inf")))
+
+
+def _static_result(status: str, reason: str, **fields) -> dict:
+    result = {"status": status, "reason": reason}
+    result.update(fields)
+    return result
+
+
+def validate_static_baseline(baseline_path: Path | None,
+                             current_report: dict | None,
+                             current_report_path: Path | None = None) -> dict:
+    """Compare a measured pre-change report with this run's static frame."""
+    provenance = {
+        "baselineReport": str(baseline_path) if baseline_path else None,
+        "currentReport": str(current_report_path) if current_report_path else None,
+    }
+    if baseline_path is None:
+        return _static_result("blocked", "static baseline report was not provided",
+                              provenance=provenance)
+    if not baseline_path.exists():
+        return _static_result("blocked", f"static baseline report not found: {baseline_path}",
+                              provenance=provenance)
+    try:
+        baseline = json.loads(baseline_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return _static_result("fail", f"static baseline report is malformed: {exc}",
+                              provenance=provenance)
+    if not isinstance(baseline, dict):
+        return _static_result("fail", "static baseline report root must be an object",
+                              provenance=provenance)
+    if current_report is None:
+        return _static_result("blocked", "current production performance report is missing",
+                              provenance=provenance)
+
+    if not isinstance(current_report, dict):
+        return _static_result("fail", "current report root must be an object", provenance=provenance)
+    for report, name, fields in (
+        (baseline, "baseline", ("settings", "gpuFrame", "rtDispatchWitness", "fixture", "hardware")),
+        (current_report, "current", ("hardware", "fixture")),
+    ):
+        for field in fields:
+            if field in report and not isinstance(report[field], dict):
+                return _static_result("fail", f"{name}.{field} must be an object", provenance=provenance)
+    configs = current_report.get("productionConfigurations", [])
+    if not isinstance(configs, list):
+        return _static_result("fail", "productionConfigurations must be an array", provenance=provenance)
+    for config in configs:
+        if not isinstance(config, dict) or not isinstance(config.get("gpuFrame"), dict):
+            return _static_result("fail", "configuration/gpuFrame must be objects", provenance=provenance)
+
+    baseline_settings = baseline.get("settings")
+    baseline_frame = baseline.get("gpuFrame")
+    baseline_witness = baseline.get("rtDispatchWitness")
+    baseline_fixture = baseline.get("fixture")
+    current_hardware = current_report.get("hardware")
+    current_configs = current_report.get("productionConfigurations")
+    current_static = next((item for item in current_configs or []
+                           if isinstance(item, dict) and item.get("name") == "static_rt"), None)
+    problems = []
+    if baseline.get("status") != "measured_static_rt":
+        problems.append("baseline status is not measured_static_rt")
+    if (not isinstance(baseline_witness, dict)
+            or baseline_witness.get("observed") is not True
+            or not baseline_witness.get("channels")):
+        problems.append("baseline has no observed RT dispatch witness")
+    if not isinstance(baseline_settings, dict) or baseline_settings.get("measuredFrames") != 120:
+        problems.append("baseline measuredFrames is not 120")
+    if (not isinstance(baseline_frame, dict)
+            or baseline_frame.get("count") != 120
+            or not _number(baseline_frame.get("p95Ms"))
+            or baseline_frame["p95Ms"] <= 0):
+        problems.append("baseline gpuFrame does not contain 120 timed samples")
+    if (not isinstance(baseline_settings, dict)
+            or baseline_settings.get("resolution") != [1280, 720]):
+        problems.append("baseline resolution is not 1280x720")
+    baseline_gpu = (baseline.get("hardware") or {}).get("gpu")
+    baseline_hash = ((baseline_fixture or {}).get("sha256")
+                     if isinstance(baseline_fixture, dict) else None)
+    if not baseline_gpu:
+        problems.append("baseline GPU identity is missing")
+    if not baseline_hash:
+        problems.append("baseline fixture hash is missing")
+    if not isinstance(current_static, dict):
+        problems.append("current production report has no static_rt configuration")
+    if not isinstance(current_hardware, dict) or not current_hardware.get("gpu"):
+        problems.append("current production GPU identity is missing")
+    current_hash = current_report.get("referenceProjectHash")
+    if not current_hash:
+        current_hash = (current_report.get("fixture") or {}).get("sha256")
+    if not current_hash:
+        problems.append("current production fixture hash is missing")
+    if current_static:
+        if current_static.get("status") != "measured_production_frame":
+            problems.append("current static_rt status is not measured_production_frame")
+        current_frame = current_static.get("gpuFrame") or {}
+        if (current_static.get("measuredFrames") != 120
+                or current_frame.get("count") != 120):
+            problems.append("current static_rt does not contain 120 timed samples")
+        if current_static.get("resolution") != [1280, 720]:
+            problems.append("current static_rt resolution is not 1280x720")
+        if (current_static.get("anyDispatch") is not True
+                or current_static.get("dispatchFrames") != 120):
+            problems.append("current static_rt has no RT dispatch evidence")
+        if not _number(current_frame.get("p95Ms")) or current_frame["p95Ms"] <= 0:
+            problems.append("current static_rt gpuFrame has no p95")
+    if baseline_gpu and isinstance(current_hardware, dict) and baseline_gpu != current_hardware.get("gpu"):
+        problems.append(f"GPU mismatch: baseline {baseline_gpu!r}, current {current_hardware.get('gpu')!r}")
+    if baseline_hash and current_hash and baseline_hash != current_hash:
+        problems.append("fixture hash mismatch between baseline and current production report")
+    if problems:
+        return _static_result(
+            "fail", "; ".join(problems), provenance=provenance,
+            baselineSourceCommit=baseline.get("sourceCommit"),
+            baselineGpuP95Ms=(baseline_frame or {}).get("p95Ms"),
+            fixtureSha256=baseline_hash,
+            resolution=(baseline_settings or {}).get("resolution"),
+        )
+
+    baseline_p95 = baseline_frame["p95Ms"]
+    current_p95 = current_static["gpuFrame"]["p95Ms"]
+    allowed_delta = max(baseline_p95 * 0.05, 0.2)
+    delta = current_p95 - baseline_p95
+    regression = delta > allowed_delta
+    return _static_result(
+        "fail" if regression else "pass",
+        "current static RT p95 exceeds allowed regression" if regression
+        else "static RT p95 is within baseline tolerance",
+        provenance=provenance,
+        baselineSourceCommit=baseline.get("sourceCommit"),
+        baselineGpu=baseline_gpu,
+        currentGpu=current_hardware.get("gpu"),
+        fixtureSha256=baseline_hash,
+        resolution=[1280, 720],
+        baselineGpuP95Ms=baseline_p95,
+        currentGpuP95Ms=current_p95,
+        deltaMs=delta,
+        allowedDeltaMs=allowed_delta,
+        toleranceRule="max(5% of baseline p95, 0.2 ms)",
+    )
+
+
 # ── mode implementations ────────────────────────────────────────────────
 #
 # Each returns (exit_code, tests, metrics, commands, fixtures). Dispatch is
@@ -518,6 +663,7 @@ def _perf_qualification(
     reference: dict,
     held_out: dict,
     reference_content: dict | None = None,
+    static_regression: dict | None = None,
 ) -> tuple[dict, list[str]]:
     """Classify measured perf evidence without turning absent baselines into passes."""
     problems: list[str] = []
@@ -571,13 +717,17 @@ def _perf_qualification(
             problems.append("referenceContent.cpuWall.p95Ms")
 
     # These gates are deliberately separate from correctness/resource status.
-    # A9's checked-in static baseline has not been supplied by the harness.
+    # The optional pre-change report is evaluated by mode_perf and supplied
+    # here as a structured result when available.
     static_gate = _nested(reference, "gates", "staticRegression")
-    static_baseline = "missing" if static_gate else "not_evaluated"
-    if isinstance(static_gate, dict):
-        static_baseline = "pass" if static_gate.get("passed") is True else "fail"
-    elif isinstance(static_gate, (int, float)):
-        static_baseline = "pass" if static_gate <= 0.05 else "fail"
+    if static_regression is not None:
+        static_baseline = static_regression.get("status", "fail")
+    else:
+        static_baseline = "missing" if static_gate else "not_evaluated"
+        if isinstance(static_gate, dict):
+            static_baseline = "pass" if static_gate.get("passed") is True else "fail"
+        elif isinstance(static_gate, (int, float)):
+            static_baseline = "pass" if static_gate <= 0.05 else "fail"
 
     # The reports currently serialize the configuration collection as an array.
     def array_number(collection: object, name: str, section: str) -> float | None:
@@ -622,7 +772,8 @@ def _perf_qualification(
 
 
 def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
-              reference_project: Path | None, held_out_project: Path | None):
+              reference_project: Path | None, held_out_project: Path | None,
+              static_baseline_report: Path | None = None):
     fixtures = []
     tests = []
     commands = []
@@ -635,6 +786,9 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             missing_inputs.append(f"{label} not found: {path}")
         else:
             fixtures.append({"name": Path(path).name, "hash": sha256_file(Path(path))})
+    if static_baseline_report is not None and static_baseline_report.is_file():
+        fixtures.append({"name": static_baseline_report.name,
+                         "hash": sha256_file(static_baseline_report)})
     if missing_inputs:
         # A9: no invented proxy pass — a missing held-out fixture blocks.
         tests.append(blocked_entry(
@@ -798,6 +952,17 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
                               reference_content_error, reference_content_report))
     report_errors = [error for error in (
         reference_error, held_out_error, reference_content_error) if error]
+    static_regression = validate_static_baseline(
+        static_baseline_report, reference_report_data, reference_report)
+    static_test_status = static_regression["status"]
+    tests.append({
+        "name": "perf: static RT regression",
+        "status": static_test_status,
+        "observed": static_regression.get("reason"),
+        "required": "measured pre-change baseline on matching GPU and fixture",
+        "artifactPaths": [str(path) for path in (
+            static_baseline_report, reference_report) if path is not None],
+    })
     if reference_report_data and reference_report_data.get("referenceProjectHash"):
         if reference_report_data["referenceProjectHash"] != expected_hash:
             report_errors.append("reference report source hash does not match checked-in graph")
@@ -816,7 +981,8 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
     qualification_problems = []
     if not report_errors and reference_report_data and held_out_report_data and reference_content_report_data:
         qualification, qualification_problems = _perf_qualification(
-            reference_report_data, held_out_report_data, reference_content_report_data)
+            reference_report_data, held_out_report_data,
+            reference_content_report_data, static_regression)
         if qualification_problems:
             tests.append(blocked_entry(
                 "perf: correctness/resource evidence",
@@ -847,11 +1013,12 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             "correctness": "not_evaluated",
             "resource": "not_evaluated",
             "liveBudget": "not_evaluated",
-            "staticBaseline": "not_evaluated",
+            "staticBaseline": static_regression.get("status", "not_evaluated"),
             "overall": "fail",
             "heldOutContentFrameP95Ms": None,
             "referenceContentFrameP95Ms": None,
         },
+        "staticRegression": static_regression,
         "achieved": {
             "heldOutContentFrameP95Ms": (
                 float(_nested(held_out_report_data, "cpuWall", "p95Ms"))
@@ -876,16 +1043,27 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             },
             "heldOut": held_out_report_data.get("enforced") if held_out_report_data else None,
             "referenceContent": reference_content_report_data.get("enforced") if reference_content_report_data else None,
+            "staticRegression": static_regression,
         },
         "referenceReport": reference_report_data,
         "heldOutReport": held_out_report_data,
         "referenceContentReport": reference_content_report_data,
     }
+    if static_test_status == "pass":
+        metrics["passed"] += 1
+    elif static_test_status == "fail":
+        metrics["failed"] += 1
+    else:
+        metrics["blocked"] += 1
     exit_code = 0
     if (rc != 0 or held_out_rc != 0 or reference_content_rc != 0
             or metrics["ignored"] or report_errors):
         exit_code = 1
     if qualification and qualification["overall"] != "pass":
+        exit_code = 1
+    if static_test_status == "fail":
+        exit_code = 1
+    elif static_test_status == "blocked":
         exit_code = 1
     return exit_code, tests, metrics, commands, fixtures
 
@@ -972,6 +1150,10 @@ def main() -> int:
         "--held-out-project", type=Path, default=None,
         help="perf mode: held-out-scene project file (SHA-256 recorded)",
     )
+    parser.add_argument(
+        "--static-baseline-report", type=Path, default=None,
+        help="perf mode: measured pre-change static RT report (qualification baseline)",
+    )
     args = parser.parse_args()
 
     manifest = args.manifest_path or default_manifest_path()
@@ -1019,7 +1201,8 @@ def main() -> int:
             exit_code, tests, metrics, commands, fixtures = mode_export(repo, manifest, artifact_dir)
         else:  # perf
             exit_code, tests, metrics, commands, fixtures = mode_perf(
-                repo, manifest, artifact_dir, args.reference_project, args.held_out_project)
+                repo, manifest, artifact_dir, args.reference_project,
+                args.held_out_project, args.static_baseline_report)
 
         report["tests"] = tests
         report["metrics"] = metrics

@@ -17,10 +17,15 @@ pub struct RtProbeObject {
 pub struct RtProbeScene {
     pub objects: Vec<RtProbeObject>,
     pub(super) textures: Vec<GpuTexture>,
+    history_textures: Vec<GpuTexture>,
 }
 
 impl RtProbeScene {
-    pub(super) fn capture(objects: &[manifold_gpu::raytrace::RtObjectGeometry], textures: &[&GpuTexture]) -> Self {
+    pub(super) fn capture(
+        objects: &[manifold_gpu::raytrace::RtObjectGeometry],
+        textures: &[&GpuTexture],
+        history_textures: &[&GpuTexture],
+    ) -> Self {
         Self {
             objects: objects.iter().map(|object| RtProbeObject {
                 vertices: object.vertex_buffer.clone(),
@@ -35,6 +40,18 @@ impl RtProbeScene {
                 gain: object.appearance_gain,
             }).collect(),
             textures: textures.iter().map(|texture| (*texture).clone()).collect(),
+            history_textures: history_textures.iter().map(|texture| (*texture).clone()).collect(),
         }
+    }
+
+    /// GPU-proofs-only seam for poisoning resident temporal state with a
+    /// finite value before a production frame. The following frame must use
+    /// its shared reset decision to discard these values.
+    pub fn inject_history_sentinel(&self, device: &manifold_gpu::GpuDevice, value: f64) {
+        let mut encoder = device.create_encoder("rt-proof-history-sentinel");
+        for texture in &self.history_textures {
+            encoder.clear_texture(texture, value, value, value, value);
+        }
+        encoder.commit_and_wait_completed();
     }
 }

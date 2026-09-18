@@ -192,12 +192,18 @@ struct Triangle {
 
 #[derive(Clone, Copy)]
 struct ProbeWitness {
-    label: &'static str,
     triangle: Triangle,
+}
+
+const DETERMINISTIC_RAY_COUNT: usize = 64;
+
+#[derive(Clone, Copy)]
+struct ProbeHitExpectation {
     ray: DebugRayQueryRay,
     object_id: u32,
     primitive_id: u32,
     instance_id: u32,
+    oracle: (f32, f32, f32),
 }
 
 /// CPU-visible copies of the exact buffers handed to the resident RT scene.
@@ -329,7 +335,7 @@ fn slot_base(scene: &[ProbeObjectSnapshot], object: usize) -> u32 {
 }
 
 fn probe_witness_first(scene: &[ProbeObjectSnapshot]) -> ProbeWitness {
-    for (object_id, object) in scene.iter().enumerate() {
+    for object in scene {
         let slots = if object.instances.is_some() {
             object.instance_slots.max(1)
         } else {
@@ -348,23 +354,7 @@ fn probe_witness_first(scene: &[ProbeObjectSnapshot]) -> ProbeWitness {
                 if !length.is_finite() || length < 1e-6 {
                     continue;
                 }
-                let center = std::array::from_fn::<_, 3, _>(|axis| {
-                    (triangle.p[0][axis] + triangle.p[1][axis] + triangle.p[2][axis]) / 3.0
-                });
-                let unit = normal.map(|value| value / length);
-                return ProbeWitness {
-                    label: "production rt probe",
-                    triangle,
-                    ray: DebugRayQueryRay {
-                        origin: std::array::from_fn(|axis| center[axis] + unit[axis] * 0.01),
-                        direction: unit.map(|value| -value),
-                        min_distance: 0.0,
-                        max_distance: 0.02,
-                    },
-                    object_id: object_id as u32,
-                    primitive_id,
-                    instance_id: slot_base(scene, object_id) + instance,
-                };
+                return ProbeWitness { triangle };
             }
         }
     }
@@ -438,11 +428,12 @@ fn candidate_triangle(
     Some(Triangle { p: positions })
 }
 
-fn probe_witness(scene: &[ProbeObjectSnapshot]) -> ProbeWitness {
-    let mut best = probe_witness_first(scene);
-    let mut best_distance = moller_trumbore(best.ray.origin, best.ray.direction, best.triangle)
-        .expect("initial production RT witness must intersect")
-        .0;
+#[allow(clippy::type_complexity)]
+fn nearest_hit(
+    scene: &[ProbeObjectSnapshot],
+    ray: DebugRayQueryRay,
+) -> Option<(Triangle, u32, u32, u32, (f32, f32, f32))> {
+    let mut nearest: Option<(f32, f32, f32, Triangle, u32, u32, u32)> = None;
     for (object_id, object) in scene.iter().enumerate() {
         let slots = object
             .instances
@@ -453,22 +444,102 @@ fn probe_witness(scene: &[ProbeObjectSnapshot]) -> ProbeWitness {
                 let Some(triangle) = candidate_triangle(object, instance_id, primitive_id) else {
                     continue;
                 };
-                let Some((distance, _, _)) =
-                    moller_trumbore(best.ray.origin, best.ray.direction, triangle)
+                let Some((distance, u, v)) = moller_trumbore(ray.origin, ray.direction, triangle)
                 else {
                     continue;
                 };
-                if distance < best_distance {
-                    best_distance = distance;
-                    best.triangle = triangle;
-                    best.object_id = object_id as u32;
-                    best.primitive_id = primitive_id;
-                    best.instance_id = slot_base(scene, object_id) + instance_id;
+                if distance < ray.min_distance || distance > ray.max_distance {
+                    continue;
+                }
+                if nearest
+                    .as_ref()
+                    .is_none_or(|candidate| distance < candidate.0)
+                {
+                    nearest = Some((
+                        distance,
+                        u,
+                        v,
+                        triangle,
+                        object_id as u32,
+                        primitive_id,
+                        slot_base(scene, object_id) + instance_id,
+                    ));
                 }
             }
         }
     }
-    best
+    nearest.map(
+        |(_, u, v, triangle, object_id, primitive_id, instance_id)| {
+            let distance = moller_trumbore(ray.origin, ray.direction, triangle)
+                .expect("nearest candidate must intersect")
+                .0;
+            (
+                triangle,
+                object_id,
+                primitive_id,
+                instance_id,
+                (distance, u, v),
+            )
+        },
+    )
+}
+
+fn deterministic_probe_expectations(
+    scene: &[ProbeObjectSnapshot],
+    triangle: Triangle,
+) -> Vec<ProbeHitExpectation> {
+    let normal = cross(
+        sub(triangle.p[1], triangle.p[0]),
+        sub(triangle.p[2], triangle.p[0]),
+    );
+    let length = dot(normal, normal).sqrt();
+    assert!(
+        length.is_finite() && length >= 1e-6,
+        "probe triangle must be nondegenerate"
+    );
+    let unit = normal.map(|value| value / length);
+    let mut expectations = Vec::with_capacity(DETERMINISTIC_RAY_COUNT);
+    // Query the nearest physical hit including edge candidates first, then
+    // select64rays whose actual nearest hit is interior. Excluding edge
+    // candidates from intersection itself would invent a farther CPU hit.
+    'samples: for a in 2..31 {
+        for b in 2..(31 - a) {
+            let u = a as f32 / 32.0;
+            let v = b as f32 / 32.0;
+            let point = [
+                triangle.p[0][0] * (1.0 - u - v) + triangle.p[1][0] * u + triangle.p[2][0] * v,
+                triangle.p[0][1] * (1.0 - u - v) + triangle.p[1][1] * u + triangle.p[2][1] * v,
+                triangle.p[0][2] * (1.0 - u - v) + triangle.p[1][2] * u + triangle.p[2][2] * v,
+            ];
+            let ray = DebugRayQueryRay {
+                origin: [
+                    point[0] + unit[0] * 0.01,
+                    point[1] + unit[1] * 0.01,
+                    point[2] + unit[2] * 0.01,
+                ],
+                direction: unit.map(|value| -value),
+                min_distance: 0.0,
+                max_distance: 0.02,
+            };
+            let (_, object_id, primitive_id, instance_id, oracle) = nearest_hit(scene, ray)
+                .unwrap_or_else(|| panic!("probe lattice ray missed final geometry at ({u}, {v})"));
+            if oracle.1 < 0.05 || oracle.2 < 0.05 || oracle.1 + oracle.2 > 0.95 {
+                continue;
+            }
+            expectations.push(ProbeHitExpectation {
+                ray,
+                object_id,
+                primitive_id,
+                instance_id,
+                oracle,
+            });
+            if expectations.len() == DETERMINISTIC_RAY_COUNT {
+                break 'samples;
+            }
+        }
+    }
+    assert_eq!(expectations.len(), DETERMINISTIC_RAY_COUNT);
+    expectations
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -505,12 +576,41 @@ fn moller_trumbore(
     let q = cross(tvec, e1);
     let v = dot(direction, q) * inverse;
     let t = dot(e2, q) * inverse;
-    (t >= 0.0 && u >= 0.05 && v >= 0.05 && u + v <= 0.95).then_some((t, u, v))
+    (t >= 0.0 && u >= 0.0 && v >= 0.0 && u + v <= 1.0).then_some((t, u, v))
 }
 
 fn render_and_witness(owner: EffectGraphDef, label: &str, expected_frames: usize) {
+    render_and_witness_controlled(owner, label, expected_frames, None, None);
+}
+
+fn render_and_witness_controlled(
+    owner: EffectGraphDef,
+    label: &str,
+    expected_frames: usize,
+    control: Option<(&str, &str, &[f32])>,
+    writer_offsets: Option<&[f32]>,
+) {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
+    let metadata = owner.preset_metadata.as_ref();
+    let mut manifest = manifold_core::params::ParamManifest::from_params(
+        metadata
+            .map(|metadata| {
+                metadata
+                    .params
+                    .iter()
+                    .cloned()
+                    .map(manifold_core::params::Param::bundled)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    );
+    let control_id = control.map(|(_, param, _)| {
+        metadata.unwrap().bindings.iter().find(|binding| matches!(&binding.target,
+            manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } if param_id.as_str() == param
+        )).unwrap_or_else(|| panic!("{label}: no production modifier binding for {param}"))
+            .id.clone()
+    });
     let mut runtime = PresetRuntime::from_def_with_device(
         owner,
         &registry,
@@ -523,6 +623,16 @@ fn render_and_witness(owner: EffectGraphDef, label: &str, expected_frames: usize
     .unwrap_or_else(|error| panic!("{label} runtime must build: {error}"));
     let target = h.make_target(label);
     for frame in 0..expected_frames {
+        if let Some((_, _, values)) = control {
+            assert_eq!(
+                values.len(),
+                expected_frames,
+                "{label} control sequence length"
+            );
+            let param = manifest.get_mut(control_id.as_ref().unwrap()).unwrap();
+            assert!((param.spec.min..=param.spec.max).contains(&values[frame]));
+            param.value = values[frame];
+        }
         if let Some(writer) = runtime
             .graph
             .instance_by_node_id(&manifold_core::NodeId::new("custom_writer"))
@@ -532,7 +642,17 @@ fn render_and_witness(owner: EffectGraphDef, label: &str, expected_frames: usize
                 .set_param(
                     writer,
                     "offset",
-                    manifold_renderer::node_graph::ParamValue::Float(frame as f32 * 0.25),
+                    manifold_renderer::node_graph::ParamValue::Float(writer_offsets.map_or(
+                        frame as f32 * 0.25,
+                        |values| {
+                            assert_eq!(
+                                values.len(),
+                                expected_frames,
+                                "{label} writer sequence length"
+                            );
+                            values[frame]
+                        },
+                    )),
                 )
                 .unwrap();
         }
@@ -554,19 +674,14 @@ fn render_and_witness(owner: EffectGraphDef, label: &str, expected_frames: usize
         };
         let mut status = None;
         let mut snapshot = None;
-        let mut witness = None;
+        let mut expectations = None;
         let mut query_buffer: Option<GpuBuffer> = None;
         let captures = harness::capture_rt_channels(|| {
             let mut encoder = h.device.create_encoder(label);
             {
                 let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
                 gpu.capture_rt_geometry = true;
-                runtime.render(
-                    &mut gpu,
-                    &target.texture,
-                    &context,
-                    &manifold_core::params::ParamManifest::default(),
-                );
+                runtime.render(&mut gpu, &target.texture, &context, &manifest);
                 let scene = runtime
                     .rt_probe_scene()
                     .unwrap_or_else(|| panic!("{label} frame {frame} must capture RT geometry"));
@@ -575,27 +690,21 @@ fn render_and_witness(owner: EffectGraphDef, label: &str, expected_frames: usize
             }
             encoder.commit_and_wait_completed();
             let cpu_scene = snapshot.as_ref().expect("RT geometry snapshot committed");
-            let selected = probe_witness(cpu_scene);
-            let oracle = moller_trumbore(
-                selected.ray.origin,
-                selected.ray.direction,
-                selected.triangle,
-            )
-            .unwrap_or_else(|| {
-                panic!(
-                    "{label} frame {frame} analytical ray missed {}",
-                    selected.label
-                )
-            });
-            assert!(oracle.0.is_finite() && oracle.0 > 0.0);
-            witness = Some((selected, oracle));
+            let selected = probe_witness_first(cpu_scene);
+            let sample_expectations =
+                deterministic_probe_expectations(cpu_scene, selected.triangle);
+            let rays: Vec<_> = sample_expectations
+                .iter()
+                .map(|sample| sample.ray)
+                .collect();
+            expectations = Some(sample_expectations);
 
             // Query the same resident acceleration structure after its render
             // and geometry-copy command buffers have completed. This keeps the
             // CPU oracle independent of the production query while ensuring
             // the readback bytes are from this frame's final geometry.
             let mut query_encoder = h.device.create_encoder("catalog-rt-query");
-            query_buffer = runtime.rt_probe_rays(&h.device, &mut query_encoder, &[selected.ray]);
+            query_buffer = runtime.rt_probe_rays(&h.device, &mut query_encoder, &rays);
             query_encoder.commit_and_wait_completed();
         });
         assert_eq!(
@@ -607,50 +716,92 @@ fn render_and_witness(owner: EffectGraphDef, label: &str, expected_frames: usize
             !captures.is_empty(),
             "{label} frame {frame} must dispatch RT"
         );
-        let (selected, oracle) = witness.expect("RT witness must be recorded");
+        let expectations = expectations.expect("RT witnesses must be recorded");
+        assert_eq!(expectations.len(), DETERMINISTIC_RAY_COUNT);
         let hit_buffer = query_buffer.expect("RT probe query must return a hit buffer");
         let hit_ptr = hit_buffer
             .mapped_ptr()
             .expect("RT probe hit buffer must be CPU-mapped");
-        let hit = unsafe { (hit_ptr as *const DebugRayQueryHit).read_unaligned() };
-        assert_eq!(
-            hit.hit, 1,
-            "{label} frame {frame} production RT query missed"
-        );
-        let tolerance = 1e-4f32.max(1e-4 * oracle.0.abs());
-        assert!(
-            (hit.distance - oracle.0).abs() <= tolerance,
-            "{label} frame {frame} distance {} vs CPU {} (tol {tolerance})",
-            hit.distance,
-            oracle.0
-        );
-        assert!(
-            (hit.bary[0] - oracle.1).abs() <= 2e-4,
-            "{label} frame {frame} bary.u {} vs CPU {}",
-            hit.bary[0],
-            oracle.1
-        );
-        assert!(
-            (hit.bary[1] - oracle.2).abs() <= 2e-4,
-            "{label} frame {frame} bary.v {} vs CPU {}",
-            hit.bary[1],
-            oracle.2
-        );
-        assert_eq!(
-            hit.object_id, selected.object_id,
-            "{label} frame {frame} object id"
-        );
-        assert_eq!(
-            hit.instance_id, selected.instance_id,
-            "{label} frame {frame} instance id"
-        );
-        assert_eq!(
-            hit.primitive_id, selected.primitive_id,
-            "{label} frame {frame} primitive id"
-        );
+        let mut coincident_hits = 0;
+        for (sample_index, expected) in expectations.iter().enumerate() {
+            let hit = unsafe {
+                hit_ptr
+                    .add(sample_index * std::mem::size_of::<DebugRayQueryHit>())
+                    .cast::<DebugRayQueryHit>()
+                    .read_unaligned()
+            };
+            assert_eq!(
+                hit.hit, 1,
+                "{label} frame {frame} ray {sample_index} missed"
+            );
+            let tolerance = 1e-4f32.max(1e-4 * expected.oracle.0.abs());
+            assert!(
+                (hit.distance - expected.oracle.0).abs() <= tolerance,
+                "{label} frame {frame} ray {sample_index} distance {} vs CPU {} (tol {tolerance})",
+                hit.distance,
+                expected.oracle.0
+            );
+            let oracle = if (hit.object_id, hit.instance_id, hit.primitive_id)
+                == (
+                    expected.object_id,
+                    expected.instance_id,
+                    expected.primitive_id,
+                ) {
+                expected.oracle
+            } else {
+                // Cut recipes can contain coincident triangles. Metal need
+                // not choose the CPU iteration order among equal-distance
+                // hits. Verify the exact returned triangle and nearest
+                // distance before comparing its own barycentrics.
+                let scene = snapshot.as_ref().unwrap();
+                let object = scene
+                    .get(hit.object_id as usize)
+                    .expect("RT object ID in bounds");
+                let instance = hit
+                    .instance_id
+                    .checked_sub(slot_base(scene, hit.object_id as usize))
+                    .expect("RT instance ID belongs to object");
+                assert!(
+                    instance
+                        < object
+                            .instances
+                            .as_ref()
+                            .map_or(1, |_| object.instance_slots)
+                );
+                let triangle = candidate_triangle(object, instance, hit.primitive_id)
+                    .expect("RT primitive ID names a valid covered triangle");
+                let actual = moller_trumbore(expected.ray.origin, expected.ray.direction, triangle)
+                    .expect("returned RT triangle intersects the exact query ray");
+                assert!(
+                    (actual.0 - expected.oracle.0).abs() <= 1e-6,
+                    "{label} ray {sample_index}: non-nearest IDs GPU({},{},{}) CPU({},{},{}), distances {} vs {}",
+                    hit.object_id,
+                    hit.instance_id,
+                    hit.primitive_id,
+                    expected.object_id,
+                    expected.instance_id,
+                    expected.primitive_id,
+                    actual.0,
+                    expected.oracle.0
+                );
+                coincident_hits += 1;
+                actual
+            };
+            assert!(
+                (hit.bary[0] - oracle.1).abs() <= 2e-4,
+                "{label} frame {frame} ray {sample_index} bary.u {} vs CPU {}",
+                hit.bary[0],
+                oracle.1
+            );
+            assert!(
+                (hit.bary[1] - oracle.2).abs() <= 2e-4,
+                "{label} frame {frame} ray {sample_index} bary.v {} vs CPU {}",
+                hit.bary[1],
+                oracle.2
+            );
+        }
         println!(
-            "{label} frame {frame}: production RT hit {} at t={}",
-            selected.label, hit.distance
+            "{label} frame {frame}: {DETERMINISTIC_RAY_COUNT} production RT hits matched CPU ({coincident_hits} coincident triangles)"
         );
     }
 }
@@ -712,6 +863,14 @@ fn rt_dynamic_catalog_all_stock_and_compositions() {
 
 #[test]
 fn rt_dynamic_catalog_authored_unknown_mesh_writer() {
+    render_and_witness(
+        authored_unknown_writer_graph(),
+        "authored-unknown-writer",
+        3,
+    );
+}
+
+fn authored_unknown_writer_graph() -> EffectGraphDef {
     let mut graph: serde_json::Value =
         serde_json::from_str(super::rt_dynamic_current_frame::scene_json()).unwrap();
     let shader = r#"
@@ -755,10 +914,51 @@ fn cs_main(@builtin(global_invocation_id) id:vec3<u32>) {
     graph["wires"].as_array_mut().unwrap().push(
         serde_json::json!({"fromNode":30,"fromPort":"vertices","toNode":4,"toPort":"vertices"}),
     );
-    graph["wires"].as_array_mut().unwrap().push(serde_json::json!({"fromNode":2,"fromPort":"out","toNode":30,"toPort":"vertices"}));
-    render_and_witness(
-        serde_json::from_value(graph).unwrap(),
-        "authored-unknown-writer",
-        3,
+    graph["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"fromNode":2,"fromPort":"out","toNode":30,"toPort":"vertices"}));
+    serde_json::from_value(graph).unwrap()
+}
+
+#[test]
+fn rt_dynamic_catalog_endpoint_pause_backward_seek_controls() {
+    // Each sequence includes the documented lower/upper endpoints, a repeated
+    // paused value, and a backward seek. The same resident-AS numerical
+    // witness runs after every control update, so a stale deformation or
+    // instance table cannot satisfy the matrix through dispatch alone.
+    const WAVES_PHASE: &[f32] = &[0.0, 1.0, 1.0, 0.25, 0.0];
+    const CUT_PROGRESS: &[f32] = &[0.0, 1.0, 1.0, 0.25, 0.0];
+    const ECHO_COUNT: &[f32] = &[1.0, 8.0, 8.0, 3.0, 1.0];
+
+    render_and_witness_controlled(
+        attach(catalog_host(), &["SurfaceWaves"]),
+        "surface-waves-endpoints",
+        WAVES_PHASE.len(),
+        Some(("wave", "phase", WAVES_PHASE)),
+        None,
+    );
+    render_and_witness_controlled(
+        attach(catalog_host(), &["OrderedRecon"]),
+        "ordered-recon-endpoints",
+        CUT_PROGRESS.len(),
+        Some(("recon", "progress", CUT_PROGRESS)),
+        None,
+    );
+    render_and_witness_controlled(
+        attach(catalog_host(), &["SpatialEchoes"]),
+        "spatial-echoes-instance-endpoints",
+        ECHO_COUNT.len(),
+        Some(("analytic_echo", "count", ECHO_COUNT)),
+        None,
+    );
+
+    const WRITER_OFFSET: &[f32] = &[-0.5, 0.5, 0.5, 0.125, -0.5];
+    render_and_witness_controlled(
+        authored_unknown_writer_graph(),
+        "authored-unknown-writer-endpoints",
+        WRITER_OFFSET.len(),
+        None,
+        Some(WRITER_OFFSET),
     );
 }
