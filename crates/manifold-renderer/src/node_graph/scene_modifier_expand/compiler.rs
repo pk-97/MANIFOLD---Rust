@@ -18,7 +18,7 @@ use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 use super::{
     SceneModifierExpandError, bindings, frames,
     index::FlatSceneIndex,
-    math_view::MathViewRequest,
+    math_view::{LegacyMathViewScope, MathViewRequest},
     namespace,
     routes::{self, PreparedSceneModifierGraph},
 };
@@ -153,7 +153,22 @@ pub fn prepare_scene_modifier_math_view(
     registry: &PrimitiveRegistry,
     modifier_id: &NodeId,
 ) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
-    prepare_scene_modifiers_impl(owner, registry, Some(MathViewRequest { modifier_id }))
+    prepare_scene_modifiers_impl(owner, registry, Some(MathViewRequest {
+        modifier_id,
+        legacy_scope: None,
+    }))
+}
+
+pub(crate) fn prepare_legacy_scene_modifier_math_view(
+    owner: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    modifier_id: &NodeId,
+    scope: LegacyMathViewScope,
+) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
+    prepare_scene_modifiers_impl(owner, registry, Some(MathViewRequest {
+        modifier_id,
+        legacy_scope: Some(scope),
+    }))
 }
 
 fn prepare_scene_modifiers_impl(
@@ -232,6 +247,17 @@ fn prepare_scene_modifiers_impl(
                 detail: "Math View modifier was not found".into(),
             });
     }
+    let legacy_carrier = math_view.filter(|request| request.legacy_scope.is_some())
+        .map(|request| {
+            let view = owner.scene_modifiers.iter().find(|m| m.id == *request.modifier_id)
+                .expect("view checked above");
+            let carrier = view.legacy_math_view_carrier.as_ref()
+                .ok_or_else(|| invalid("mathView.scope", "legacy Scope requires its original carrier"))?;
+            owner.scene_modifiers.iter().take_while(|m| m.id != view.id)
+                .find(|m| &m.id == carrier && m.scene == view.scene)
+                .map(|m| m.id.clone())
+                .ok_or_else(|| invalid("mathView.scope", "original carrier must precede the legacy view"))
+        }).transpose()?;
     let index = FlatSceneIndex::build(owner)?;
     preflight_expansion(owner, &index)?;
     let math_targets = if let Some(request) = math_view {
@@ -298,7 +324,9 @@ fn prepare_scene_modifiers_impl(
                 && builder
                     .math_targets
                     .as_ref()
-                    .is_some_and(|(scene, _)| scene == &instance.scene);
+                    .is_some_and(|(scene, _)| scene == &instance.scene)
+                && (request.legacy_scope != Some(LegacyMathViewScope::ThisModifier)
+                    || legacy_carrier.as_ref() == Some(&instance.id));
             if should_seed {
                 let requested_targets = builder
                     .math_targets
@@ -312,14 +340,17 @@ fn prepare_scene_modifiers_impl(
                 builder.math_seeded = true;
             }
         }
-        // Capture at the view's own position: the chain producer here is the
-        // combined output of every preceding modifier. The view is stage-less,
-        // so its append does not disturb the chain.
+        // New views capture at their own position. Legacy Scope instead
+        // brackets the original carrier, even if the view was moved later.
         let capture = if builder
             .math_view
-            .is_some_and(|request| instance.id == *request.modifier_id)
+            .is_some_and(|request| legacy_carrier.as_ref().map_or(
+                instance.id == *request.modifier_id, |carrier| &instance.id == carrier))
         {
-            Some(builder.capture_math_view_input(instance, &targets)?)
+            let view = owner.scene_modifiers.iter()
+                .find(|m| builder.math_view.is_some_and(|request| m.id == *request.modifier_id))
+                .expect("requested view exists");
+            Some(builder.capture_math_view_input(view, &frames::selected_objects(&index, view)?)?)
         } else {
             None
         };
@@ -329,7 +360,14 @@ fn prepare_scene_modifiers_impl(
                 builder.context(owner, instance, None, &targets, value)?;
             }
         }
-        if let Some(capture) = capture {
+        if let Some(mut capture) = capture {
+            if legacy_carrier.is_some() {
+                for (target, sample) in &mut capture {
+                    let key = builder.attachment_key(instance, Some(target), SceneEndpoint::Vertices)?;
+                    sample.current = builder.current.get(&key).and_then(Clone::clone)
+                        .ok_or_else(|| invalid("mathView.scope", "carrier has no vertex output"))?;
+                }
+            }
             builder.math_captures = capture;
         }
         leaf_maps.insert(instance.id.to_string(), leaves);
@@ -500,6 +538,7 @@ struct Builder<'a> {
 #[derive(Debug, Clone)]
 struct MathViewCapture {
     reference: PortAddress,
+    incoming: PortAddress,
     current: PortAddress,
     /// Chain producer of `SceneEndpoint::Instances` at the view's position:
     /// preceding copy/echo modifiers (SpatialEchoes, WavesEchoes, SceneLoop)
@@ -726,9 +765,13 @@ impl Builder<'_> {
             captures.insert(
                 target.clone(),
                 MathViewCapture {
+                    incoming: if self.math_view.is_some_and(|r| r.legacy_scope.is_some()) {
+                        current.clone()
+                    } else { reference.clone() },
                     reference,
                     current,
-                    instances,
+                    // Embedded Math Views predate per-copy diagrams.
+                    instances: if self.math_view.is_some_and(|r| r.legacy_scope.is_some()) { None } else { instances },
                     radius: frame.scene_radius,
                 },
             );
@@ -838,7 +881,7 @@ impl Builder<'_> {
             for (from, to_port) in [
                 (Some(capture.current.clone()), "current"),
                 (Some(capture.reference.clone()), "reference"),
-                (Some(capture.reference.clone()), "incoming"),
+                (Some(capture.incoming.clone()), "incoming"),
                 (Some(camera.clone()), "camera"),
                 (transform.clone(), "transform"),
                 (capture.instances.clone(), "instances"),
@@ -881,7 +924,7 @@ impl Builder<'_> {
             for (from, to_port) in [
                 (Some(capture.current), "current"),
                 (Some(capture.reference.clone()), "reference"),
-                (Some(capture.reference), "incoming"),
+                (Some(capture.incoming), "incoming"),
                 (Some(camera.clone()), "camera"),
                 (transform, "transform"),
                 (capture.instances, "instances"),

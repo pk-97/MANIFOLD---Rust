@@ -4,6 +4,54 @@ fn owner() -> EffectGraphDef {
     crate::node_graph::scene_modifier_expand::math_view_test_owner()
 }
 
+#[cfg(feature = "gpu-proofs")]
+fn legacy_scope_owner() -> EffectGraphDef {
+    let mut owner = owner();
+    let legacy_carrier: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-core/tests/fixtures/math-view-legacy/vortex-fragments-events-96c78f522.json"
+    )))
+    .unwrap();
+    let view_id = NodeId::new("math_view");
+    {
+        let view = owner
+            .scene_modifiers
+            .iter_mut()
+            .find(|instance| instance.id == view_id)
+            .unwrap();
+        manifold_core::scene_modifier_math_view::preserve_legacy_scope_control(
+            &legacy_carrier,
+            &mut view.graph,
+        );
+    }
+    owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner, &view_id,
+    )
+    .unwrap()
+    .graph;
+
+    let mut carrier_b = owner.scene_modifiers[0].clone();
+    carrier_b.id = NodeId::new("vortex_b");
+    let metadata = carrier_b.graph.preset_metadata.as_mut().unwrap();
+    metadata
+        .params
+        .iter_mut()
+        .find(|param| param.id == "orbit")
+        .unwrap()
+        .default_value = 4.0;
+    metadata
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.id == "orbit")
+        .unwrap()
+        .default_value = 4.0;
+    owner = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, 1, carrier_b)
+        .unwrap()
+        .graph;
+    owner.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("vortex_b"));
+    owner
+}
+
 fn manifest(owner: &EffectGraphDef) -> ParamManifest {
     ParamManifest::from_params(
         owner
@@ -43,15 +91,16 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
         .unwrap();
         let mut runtime =
             PresetRuntime::from_def_for_render(owner.clone(), &registry, Some(&params), fused)
-                .unwrap();
+        .unwrap();
         assert_eq!(runtime.plan.steps().len(), baseline.plan.steps().len());
         assert_eq!(runtime.math_views.len(), 1);
+        assert_eq!(runtime.math_views[0].variants.len(), 1);
         assert_eq!(runtime.math_views[0].mode(&runtime.graph), 0);
         set(&owner, &mut params, "math_view_mode", 1.0);
         set(&owner, &mut params, "orbit", 0.73);
         runtime.apply_param_values(&params);
         assert_eq!(runtime.math_views[0].mode(&runtime.graph), 1);
-        let variant = &mut runtime.math_views[0].variant;
+        let variant = &mut runtime.math_views[0].variants[0];
         variant.apply_param_values(&params);
         let local = manifold_core::scene_modifier_preset::SceneNodeRef {
             scope: vec![NodeId::new("vortex_stage")],
@@ -96,6 +145,95 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
     let restored: EffectGraphDef =
         serde_json::from_str(&serde_json::to_string(&owner).unwrap()).unwrap();
     assert_eq!(restored, owner);
+}
+
+#[cfg(feature = "gpu-proofs")]
+#[test]
+fn legacy_math_view_runtime_switches_scope_variants() {
+    const W: u32 = 320;
+    const H: u32 = 180;
+    let guard = crate::test_device();
+    let device = guard.arc();
+    let owner = legacy_scope_owner();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut params = manifest(&owner);
+    set(&owner, &mut params, "math_view_mode", 1.0);
+    let mut runtime = PresetRuntime::from_def_for_render(
+        owner.clone(),
+        &registry,
+        Some(&params),
+        false,
+    )
+    .unwrap()
+    .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
+    .unwrap();
+    assert_eq!(runtime.math_views[0].variants.len(), 2);
+    let target = RenderTarget::new(
+        &device,
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        "legacy-math-view-scope-proof",
+    );
+    let render = |runtime: &mut PresetRuntime, params: &ParamManifest| {
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: W,
+            height: H,
+            output_width: W,
+            output_height: H,
+            aspect: W as f32 / H as f32,
+            owner_key: 1,
+            is_clip_level: false,
+            frame_count: 1,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut encoder = device.create_encoder("legacy-math-view-scope-proof");
+        runtime.render(
+            &mut GpuEncoder::new(&mut encoder, &device),
+            &target.texture,
+            &ctx,
+            params,
+        );
+        encoder.commit_and_wait_completed();
+        crate::headless_readback::readback_raw_halves(&device, &target.texture, W, H)
+    };
+    set(&owner, &mut params, "math_view_scope", 0.0);
+    let _warm = render(&mut runtime, &params);
+    let isolated = render(&mut runtime, &params);
+    if let Ok(path) = std::env::var("MANIFOLD_MATH_SCOPE_PREVIEW") {
+        std::fs::write(
+            format!("{path}-scope0.png"),
+            crate::headless_readback::readback_to_srgb_png_linear(
+                &device,
+                &target.texture,
+                W,
+                H,
+            ),
+        )
+        .unwrap();
+    }
+    set(&owner, &mut params, "math_view_scope", 1.0);
+    let chained = render(&mut runtime, &params);
+    if let Ok(path) = std::env::var("MANIFOLD_MATH_SCOPE_PREVIEW") {
+        std::fs::write(
+            format!("{path}-scope1.png"),
+            crate::headless_readback::readback_to_srgb_png_linear(
+                &device,
+                &target.texture,
+                W,
+                H,
+            ),
+        )
+        .unwrap();
+    }
+    set(&owner, &mut params, "math_view_scope", 0.0);
+    let restored = render(&mut runtime, &params);
+    assert_ne!(isolated, chained, "legacy Scope must select a different variant");
+    assert_eq!(isolated, restored, "switching Scope back must restore the first variant");
 }
 
 #[cfg(feature = "gpu-proofs")]
@@ -152,8 +290,8 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
             let overlay_depth = render(&mut runtime, &params);
             assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
             let view = &runtime.math_views[0];
-            let variant = &view.variant;
-            for &(source, destination) in &view.shared_depth {
+            let variant = &view.variants[0];
+            for &(source, destination) in &view.shared_depth[0] {
                 let parent = runtime.executor.backend();
                 let child = variant.executor.backend();
                 let original = parent.texture_2d(parent.slot_for(source).unwrap()).unwrap();
@@ -205,7 +343,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             .unwrap()
             .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
             .unwrap();
-    let view_shared = &runtime.math_views[0].variant.shared_arrays;
+    let view_shared = &runtime.math_views[0].variants[0].shared_arrays;
     assert!(!view_shared.is_empty());
     for (_, retained) in view_shared.iter() {
         assert!(
@@ -353,7 +491,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     }
     set(&owner, &mut params, "math_view_scan_progress", 0.5);
     render(&mut runtime, &params, 12);
-    for resources in runtime.math_views[0].variant
+    for resources in runtime.math_views[0].variants[0]
         .shared_arrays
         .chunks_exact(2)
     {
@@ -607,12 +745,13 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     assert_eq!((runtime.width, runtime.height), (48, 64));
     let backend = runtime.executor.backend();
     for view in &runtime.math_views {
-        let variant = &view.variant;
-        for (parent, child) in &view.shared_resources {
-            let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
-            let child_backend = variant.executor.backend();
-            let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
-            assert!(parent.ptr_eq(child));
+        for (variant, links) in view.variants.iter().zip(&view.shared_resources) {
+            for (parent, child) in links {
+                let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
+                let child_backend = variant.executor.backend();
+                let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
+                assert!(parent.ptr_eq(child));
+            }
         }
     }
 }

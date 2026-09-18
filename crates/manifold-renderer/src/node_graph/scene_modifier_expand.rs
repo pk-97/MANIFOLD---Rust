@@ -17,6 +17,8 @@ pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
 mod math_view;
+pub(crate) use math_view::LegacyMathViewScope;
+pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;
 mod frames;
 mod fragment_cuts;

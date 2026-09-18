@@ -802,6 +802,46 @@ fn math_view_fixture() -> EffectGraphDef {
 }
 
 #[test]
+fn scene_modifier_math_view_legacy_scope_keeps_carrier_boundaries() {
+    let mut owner = math_view_fixture();
+    let mut carrier = owner.scene_modifiers[0].clone();
+    carrier.id = NodeId::new("legacy_carrier");
+    owner.scene_modifiers.insert(1, carrier);
+    owner.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("legacy_carrier"));
+    // Even when moved away from the carrier, compatibility capture ends there.
+    let mut later = owner.scene_modifiers[0].clone();
+    later.id = NodeId::new("later");
+    owner.scene_modifiers.insert(2, later);
+    let registry = PrimitiveRegistry::with_builtin();
+    let view = NodeId::new("math_view");
+    let mut live_counts = Vec::new();
+    for scope in [LegacyMathViewScope::ThisModifier, LegacyMathViewScope::WithinChain] {
+        let prepared = prepare_legacy_scene_modifier_math_view(&owner, &registry, &view, scope).unwrap();
+        let (diagram, surface) = diagram_and_surface(&prepared);
+        for node in [diagram, surface] {
+            let incoming = diagram_input_source(&prepared, node, "incoming").unwrap();
+            let reference = diagram_input_source(&prepared, node, "reference").unwrap();
+            let current = diagram_input_source(&prepared, node, "current").unwrap();
+            assert_ne!(current, incoming, "carrier deformation must remain visible");
+            assert_eq!(incoming == reference, scope == LegacyMathViewScope::ThisModifier,
+                "legacy arrows start at the carrier input, not always the original mesh");
+        }
+        let graph = prepared.def.into_graph(&registry,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+        let plan = crate::node_graph::compile(&graph).unwrap();
+        live_counts.push(plan.steps().iter().filter(|step| {
+            graph.get_node(step.node).unwrap().node.type_id().as_str() == "node.transform_mesh_patches"
+        }).count());
+    }
+    assert!(live_counts[0] > 0);
+    assert_eq!(live_counts[1], 2 * live_counts[0],
+        "isolated Scope evaluates the carrier only; chain Scope includes its predecessor, never later stages");
+    owner.scene_modifiers[3].legacy_math_view_carrier = Some(NodeId::new("missing"));
+    assert!(prepare_legacy_scene_modifier_math_view(&owner, &registry, &view,
+        LegacyMathViewScope::ThisModifier).is_err(), "missing legacy carrier cannot silently retarget");
+}
+
+#[test]
 fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage() {
     let owner = math_view_fixture();
     let registry = PrimitiveRegistry::with_builtin();

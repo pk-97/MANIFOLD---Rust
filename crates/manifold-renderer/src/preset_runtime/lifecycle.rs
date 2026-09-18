@@ -12,7 +12,9 @@ impl PresetRuntime {
     pub fn clear_state(&mut self) {
         for view in &mut self.math_views {
             view.events.clear();
-            view.variant.clear_state();
+            for variant in &mut view.variants {
+                variant.clear_state();
+            }
         }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events {

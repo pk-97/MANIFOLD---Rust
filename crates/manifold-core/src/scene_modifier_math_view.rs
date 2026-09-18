@@ -19,7 +19,8 @@ pub const MATH_VIEW_RECIPE_ID: &str = "MathView";
 /// stage-carrier limit in `prepare_scene_modifiers`. Budget per view, surveyed
 /// 2026-09-18: (1) the parent prepared def gains 3 generated nodes per sampled
 /// object (weights mask, samples, export) plus one route per shared control
-/// (~35); (2) the runtime owns one derived sparse `PresetRuntime` per view,
+/// (~35); (2) the runtime owns one derived sparse `PresetRuntime` per new view
+/// (two only for migrated Scope compatibility),
 /// evaluating the preceding chain over at most 512 sampled triangles per
 /// object (density-bounded), plus 2 output-size render targets and a fixed
 /// small pipeline/sampler set; (3) the modifier buffer budget is byte-based
@@ -199,9 +200,8 @@ pub fn strip_legacy_math_view_controls(graph: &mut EffectGraphDef) -> bool {
 }
 
 /// Move one carrier's host Math View bindings onto the standalone instance.
-/// Only bindings for params the view recipe declares are moved (legacy
-/// `math_view_scope` has no standalone equivalent and stays for
-/// `drop_math_view_bindings`). Host binding ids are left unchanged so
+/// Only bindings for params the view recipe declares are moved, including
+/// its hidden legacy Scope when present. Host binding ids are left unchanged so
 /// host-side values, animation and modulation keyed by id survive; only the
 /// target changes. Returns the number of retargeted bindings.
 pub fn retarget_math_view_bindings(
@@ -235,6 +235,11 @@ pub fn retarget_math_view_bindings(
             && declared.contains(param_id.as_str())
         {
             *modifier_id = to.clone();
+            if param_id == "math_view_scope"
+                && let Some(spec) = metadata.params.iter_mut().find(|p| p.id == binding.id)
+            {
+                spec.card_visible = false;
+            }
             moved += 1;
         }
     }
@@ -298,6 +303,7 @@ pub fn carrier_has_authored_math_view_content(
     let defaults: std::collections::HashMap<&str, f32> = CONTROLS
         .iter()
         .map(|(suffix, _, default, ..)| (*suffix, *default))
+        .chain([("scope", 1.0)])
         .collect();
     let mut embedded_authored = false;
     visit(&instance.graph.nodes, &mut |node| {
@@ -362,6 +368,30 @@ pub fn carrier_has_authored_math_view_content(
     false
 }
 
+/// Retain the original Scope macro and automation as hidden compatibility data.
+pub fn preserve_legacy_scope_control(carrier: &EffectGraphDef, view: &mut EffectGraphDef) {
+    if has_legacy_scope_control(view) {
+        return;
+    }
+    let Some(metadata) = &carrier.preset_metadata else { return; };
+    let Some(spec) = metadata.params.iter().find(|p| p.id == "math_view_scope") else { return; };
+    let Some(binding) = metadata.bindings.iter().find(|b| b.id == "math_view_scope") else { return; };
+    let Some(node) = carrier.nodes.iter().find(|n| n.node_id == control_node_id("scope")) else { return; };
+    let mut spec = spec.clone();
+    spec.card_visible = false;
+    let mut node = node.clone();
+    node.id = view.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+    let metadata = view.preset_metadata.as_mut().expect("Math View recipe metadata");
+    metadata.params.push(spec);
+    metadata.bindings.push(binding.clone());
+    view.nodes.push(node);
+}
+
+/// New views omit Scope; migrated views retain it for playback compatibility.
+pub fn has_legacy_scope_control(graph: &EffectGraphDef) -> bool {
+    is_math_view_recipe(graph) && control_present(graph, "scope")
+}
+
 /// The carrier's embedded `__math_view_*` control node values, suffix → value.
 /// These are the values a save carried when no host binding was minted for a
 /// control; load migration copies them onto the standalone view so they are
@@ -413,38 +443,6 @@ pub fn legacy_bound_control_suffixes(
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The legacy Scope control's saved value on a carrier: the host base value
-/// when a binding exists, else the embedded node value. `0` was This
-/// modifier (isolated); `1` was Within chain. The standalone view always
-/// renders the combined chain, so an isolated scope with preceding modifiers
-/// is a behavior change migration must name.
-pub fn legacy_scope_value(
-    host: &crate::effects::PresetInstance,
-    carrier: &NodeId,
-) -> Option<f32> {
-    let graph = host.graph.as_ref()?;
-    let macro_id = format!(
-        "sceneModifier:{}",
-        serde_json::to_string(&(carrier.as_str(), "math_view_scope")).ok()?
-    );
-    if graph.preset_metadata.as_ref().is_some_and(|metadata| {
-        metadata.bindings.iter().any(|binding| binding.id == macro_id)
-    }) {
-        return Some(host.get_base_param(&macro_id));
-    }
-    let instance = graph.scene_modifiers.iter().find(|m| &m.id == carrier)?;
-    let mut value = None;
-    visit(&instance.graph.nodes, &mut |node| {
-        if node.node_id == control_node_id("scope")
-            && let Some(crate::effect_graph_def::SerializedParamValue::Float { value: v }) =
-                node.params.get("value")
-        {
-            value = Some(*v);
-        }
-    });
-    value
 }
 
 /// Whether an existing standalone view may absorb a legacy carrier's section
@@ -550,12 +548,14 @@ pub fn math_view_connect_support(owner: &EffectGraphDef, view_id: &NodeId) -> Re
         };
     // A migrated view keeps its carrier association: while the named carrier
     // is still a preceding modifier of the same scene, only its patches
-    // qualify. A stale name (carrier deleted or moved behind the view) falls
-    // back to the ordinary ambiguity rule.
+    // qualify. A stale name remains unsupported rather than changing targets.
     let restricted: Option<&crate::scene_modifier_preset::SceneModifierInstanceDef> = view
         .legacy_math_view_carrier
         .as_ref()
         .and_then(|carrier| preceding_same_scene.iter().find(|m| &m.id == carrier).copied());
+    if view.legacy_math_view_carrier.is_some() && restricted.is_none() {
+        return Err("The original Math View carrier must precede this view in the same scene".into());
+    }
     let qualified: Vec<&crate::scene_modifier_preset::SceneModifierInstanceDef> = match restricted
     {
         Some(carrier) => vec![carrier],
@@ -996,14 +996,19 @@ mod tests {
                 .contains("ambiguous"),
             "no association falls back to the ambiguity rule"
         );
-        // A stale name (carrier no longer in the chain) also falls back.
+        // A stale name must not silently associate the view with another carrier.
         owner.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("gone"));
         assert!(
             math_view_connect_support(&owner, &NodeId::new("math_view_b"))
                 .unwrap_err()
-                .contains("ambiguous"),
-            "stale carrier name falls back to the ambiguity rule"
+                .contains("original Math View carrier"),
+            "stale carrier names must not silently retarget"
         );
+        let mut single_other_carrier = owner.clone();
+        single_other_carrier.scene_modifiers.remove(0);
+        assert!(math_view_connect_support(&single_other_carrier, &NodeId::new("math_view_b"))
+            .unwrap_err().contains("original Math View carrier"),
+            "a missing association cannot connect to the one remaining unrelated carrier");
         // A named carrier that lost its patch transform does not qualify.
         owner.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("vortex_b"));
         let echo_only: EffectGraphDef = serde_json::from_value(serde_json::json!({
