@@ -817,7 +817,7 @@ fn legacy_vortex_carrier_graph() -> EffectGraphDef {
 /// Legacy projects embedded Math View controls in the Vortex recipe. Loading
 /// moves them onto one appended standalone Math View modifier: host binding
 /// ids (and therefore values, animation and modulation) survive, the retired
-/// Scope control is dropped, and a second migration pass is a no-op.
+/// Scope remains hidden and functional, and a second migration pass is a no-op.
 #[test]
 fn legacy_math_view_migration_journey() {
     let output_dir = PathBuf::from("target/journey-proofs/math-view-migration");
@@ -861,7 +861,7 @@ fn legacy_math_view_migration_journey() {
         .expect("reconcile legacy carrier")
         .graph;
         owner.refresh_manifest_from_graph();
-        // A non-default Mode proves value preservation; Scope proves removal.
+        // Non-default Mode and Scope both survive migration.
         let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
         owner.set_base_param(mode_macro.as_str(), 1.0);
         let scope_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_scope\"]");
@@ -925,22 +925,25 @@ fn legacy_math_view_migration_journey() {
         1.0,
         "saved Mode value survives migration"
     );
-    // Retired Scope is gone from metadata and manifest.
+    // Scope keeps its stable macro id but leaves the authoring card.
     let scope_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_scope\"]");
     assert!(
-        !graph
+        graph
             .preset_metadata
             .as_ref()
             .unwrap()
             .bindings
             .iter()
             .any(|binding| binding.id == scope_macro),
-        "scope binding dropped"
+        "scope binding survives"
     );
     assert!(
-        !owner.params.contains(scope_macro.as_str()),
-        "scope host param pruned"
+        owner.params.contains(scope_macro.as_str()),
+        "scope host param survives"
     );
+    assert_eq!(owner.get_base_param(&scope_macro), 0.0);
+    assert!(!graph.preset_metadata.as_ref().unwrap().params.iter()
+        .find(|param| param.id == scope_macro).unwrap().card_visible);
     // The view's enabled param got a fresh host binding.
     let _ = host_binding(&reopened, &layer_id, &view.id, "enabled");
 
@@ -2357,8 +2360,8 @@ fn legacy_math_view_reuse_guards_migration_journey() {
     let fresh_view = graph.scene_modifiers[1].id.clone();
     assert_eq!(
         targets_for(&fresh_view),
-        mv::CONTROLS.len(),
-        "the fresh view carries the carrier's retargeted bindings"
+        mv::CONTROLS.len() + 1,
+        "the fresh view carries the carrier's bindings, including hidden Scope"
     );
     // Rejected: the existing view samples different objects than the carrier
     // — reusing it would move the carrier's bindings onto the wrong geometry
@@ -2417,12 +2420,9 @@ fn legacy_math_view_reuse_guards_migration_journey() {
     );
 }
 
-/// Legacy Scope drop (compatibility audit a): a carrier whose saved Scope is
-/// This modifier (0) with preceding modifiers in the scene renders the
-/// combined chain after migration instead of the isolated modifier, and the
-/// load notice must name that change.
+/// Scope remains an animated hidden binding after migration and save/reload.
 #[test]
-fn legacy_math_view_isolated_scope_notice_journey() {
+fn legacy_math_view_isolated_scope_preservation_journey() {
     use manifold_core::scene_modifier_math_view as mv;
     let (mut project, layer_id, frames, project_scene) = legacy_carrier_project();
     // A plain modifier precedes the carrier in the same scene.
@@ -2450,14 +2450,16 @@ fn legacy_math_view_isolated_scope_notice_journey() {
         let owner = project.graph_target_owner_mut(&target).unwrap();
         owner.set_base_param(&carrier_macro(&carrier, "mode"), 1.0);
         owner.set_base_param(&carrier_macro(&carrier, "scope"), 0.0);
+        owner.drivers_mut().push(ParameterDriver::new(
+            ParamId::from(carrier_macro(&carrier, "scope")),
+            BeatDivision::Whole,
+            DriverWaveform::Sine,
+        ));
         owner.refresh_manifest_from_graph();
     }
     let mut migrated = project.clone();
     let notices = crate::project_io::migrate_project_scene_graphs(&mut migrated);
-    assert!(
-        notices.iter().any(|notice| notice.contains("used This-modifier scope")),
-        "isolated scope change named, got: {notices:?}"
-    );
+    assert!(notices.is_empty(), "Scope is preserved: {notices:?}");
     let graph = generator_graph(&migrated, &layer_id);
     assert_eq!(graph.scene_modifiers.len(), 3, "preceding modifier, carrier, view");
     assert!(
@@ -2466,15 +2468,34 @@ fn legacy_math_view_isolated_scope_notice_journey() {
     );
     let scope_macro = carrier_macro(&carrier, "scope");
     assert!(
-        !graph
+        graph
             .preset_metadata
             .as_ref()
             .unwrap()
             .bindings
             .iter()
-            .any(|binding| binding.id == scope_macro),
-        "retired scope binding dropped"
+            .any(|binding| binding.id == scope_macro && matches!(&binding.target,
+                BindingTarget::SceneModifier { modifier_id, param_id }
+                    if modifier_id == &graph.scene_modifiers[2].id && param_id == "math_view_scope")),
+        "scope binding retargets to the view"
     );
+    let view = &graph.scene_modifiers[2];
+    assert_eq!(view.legacy_math_view_carrier.as_ref(), Some(&carrier));
+    assert!(mv::has_legacy_scope_control(&view.graph));
+    assert!(!view.graph.preset_metadata.as_ref().unwrap().params.iter()
+        .find(|param| param.id == "math_view_scope").unwrap().card_visible);
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let owner = migrated.graph_target_owner(&target).unwrap();
+    assert_eq!(owner.get_base_param(&scope_macro), 0.0);
+    assert!(owner.drivers.as_ref().unwrap().iter().any(|driver| driver.param_id.as_ref() == scope_macro));
+    let dir = PathBuf::from("target/journey-proofs/math-view-scope");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("migrated-scope.manifold");
+    manifold_io::saver::save_project_v1(&migrated, &path).unwrap();
+    let mut reloaded = manifold_io::loader::load_project(&path).unwrap();
+    assert!(crate::project_io::migrate_project_scene_graphs(&mut reloaded).is_empty());
+    let reloaded_owner = reloaded.graph_target_owner(&target).unwrap();
+    assert_eq!(serde_json::to_value(owner).unwrap(), serde_json::to_value(reloaded_owner).unwrap());
 }
 /// Historical partial control sets (BUG-t8at): the real bundled Vortex
 /// snapshots from each legacy era detect as carriers, migrate to a standalone

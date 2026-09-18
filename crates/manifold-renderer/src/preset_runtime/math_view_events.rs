@@ -7,8 +7,8 @@ use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 pub(super) struct MathEvents {
     controls: Vec<(&'static str, NodeInstanceId, f32)>,
     masks: Vec<NodeInstanceId>,
-    variant_masks: Vec<NodeInstanceId>,
-    diagrams: Vec<NodeInstanceId>,
+    variant_masks: Vec<Vec<NodeInstanceId>>,
+    diagrams: Vec<Vec<NodeInstanceId>>,
     pulse: BeatEnvelopeState,
     scan: BeatEnvelopeState,
 }
@@ -16,7 +16,7 @@ impl MathEvents {
     pub fn prepare(
         modifier: &SceneModifierInstanceDef,
         parent: &PresetRuntime,
-        variant: &PresetRuntime,
+        variants: &[PresetRuntime],
         controls: Vec<(&'static str, NodeInstanceId, f32)>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let resolve = |runtime: &PresetRuntime,
@@ -42,12 +42,18 @@ impl MathEvents {
                 })
                 .collect()
         };
-        let mut diagrams = resolve(variant, "diagram")?;
-        diagrams.extend(resolve(variant, "surface")?);
+        let mut variant_masks = Vec::with_capacity(variants.len());
+        let mut diagrams = Vec::with_capacity(variants.len());
+        for variant in variants {
+            variant_masks.push(resolve(variant, "weights")?);
+            let mut variant_diagrams = resolve(variant, "diagram")?;
+            variant_diagrams.extend(resolve(variant, "surface")?);
+            diagrams.push(variant_diagrams);
+        }
         Ok(Self {
             controls,
             masks: resolve(parent, "weights")?,
-            variant_masks: resolve(variant, "weights")?,
+            variant_masks,
             diagrams,
             pulse: Default::default(),
             scan: Default::default(),
@@ -64,7 +70,7 @@ impl MathEvents {
     pub fn tick(
         &mut self,
         graph: &mut Graph,
-        variant: &mut PresetRuntime,
+        variants: &mut [PresetRuntime],
         count: f32,
         baseline: f32,
         beat: Beats,
@@ -175,33 +181,38 @@ impl MathEvents {
                 },
             );
         }
-        for &mask in &self.variant_masks {
-            write_mask(
-                &mut variant.graph,
-                mask,
-                MaskSettings {
-                    gain: 1.0,
-                    amount: scan_amount,
-                    progress,
-                    width,
-                    direction,
-                    reveal,
-                    enabled: true,
-                },
-            );
-        }
-        for &diagram in &self.diagrams {
-            for (name, value) in [
-                ("pulse_gain", gain),
-                ("scan_amount", scan_amount),
-                ("scan_progress", progress),
-                ("scan_width", width),
-                ("scan_direction", direction as f32),
-                ("scan_mode", if reveal { 1.0 } else { 0.0 }),
-            ] {
-                variant
-                    .graph
-                    .set_param_unchecked(diagram, name, ParamValue::Float(value));
+        for (variant, (masks, diagrams)) in variants
+            .iter_mut()
+            .zip(self.variant_masks.iter().zip(&self.diagrams))
+        {
+            for &mask in masks {
+                write_mask(
+                    &mut variant.graph,
+                    mask,
+                    MaskSettings {
+                        gain: 1.0,
+                        amount: scan_amount,
+                        progress,
+                        width,
+                        direction,
+                        reveal,
+                        enabled: true,
+                    },
+                );
+            }
+            for &diagram in diagrams {
+                for (name, value) in [
+                    ("pulse_gain", gain),
+                    ("scan_amount", scan_amount),
+                    ("scan_progress", progress),
+                    ("scan_width", width),
+                    ("scan_direction", direction as f32),
+                    ("scan_mode", if reveal { 1.0 } else { 0.0 }),
+                ] {
+                    variant
+                        .graph
+                        .set_param_unchecked(diagram, name, ParamValue::Float(value));
+                }
             }
         }
     }

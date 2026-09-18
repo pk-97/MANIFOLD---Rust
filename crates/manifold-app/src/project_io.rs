@@ -202,9 +202,8 @@ pub struct ProjectIOAction {
 /// records the carrier in `legacy_math_view_carrier` so its authored Connect
 /// to Mesh keeps pointing at that carrier's patch transform even when other
 /// patch carriers precede it. Embedded control values without host bindings
-/// are copied onto the view; the retired Scope control is dropped, and an
-/// authored This-modifier scope with preceding modifiers is named in a
-/// notice because the standalone view always renders the combined chain.
+/// are copied onto the view. Legacy Scope remains a hidden compatibility
+/// macro, including its automation; new standalone views have no Scope.
 /// Carriers with only default, inactive content — including
 /// enabled-but-untouched ones — are stripped cleanly. When an authored
 /// carrier's view cannot be created (recipe unavailable, no mesh frames, or
@@ -223,7 +222,6 @@ fn migrate_legacy_math_views(
         authored: bool,
         embedded: std::collections::BTreeMap<String, f32>,
         bound: std::collections::HashSet<String>,
-        scope_isolated_with_preceding: bool,
     }
     let (scenes, carriers, survey): (
         Vec<manifold_core::scene_modifier_preset::SceneNodeRef>,
@@ -238,29 +236,21 @@ fn migrate_legacy_math_views(
         let scenes = mv::legacy_math_view_scenes(graph);
         let mut survey = std::collections::HashMap::new();
         for scene in &scenes {
-            // Isolated (This-modifier) scope only changes behavior when any
-            // modifier precedes the carrier in its scene — carrier or not.
-            let mut preceding_in_scene = false;
             for instance in graph
                 .scene_modifiers
                 .iter()
                 .filter(|m| m.scene == *scene)
             {
                 if carriers.contains(&instance.id) {
-                    let scope_isolated_with_preceding = preceding_in_scene
-                        && mv::legacy_scope_value(host, &instance.id)
-                            .is_some_and(|value| value == 0.0);
                     survey.insert(
                         instance.id.clone(),
                         CarrierSurvey {
                             authored: mv::carrier_has_authored_math_view_content(host, &instance.id),
                             embedded: mv::legacy_embedded_control_values(&instance.graph),
                             bound: mv::legacy_bound_control_suffixes(graph, &instance.id),
-                            scope_isolated_with_preceding,
                         },
                     );
                 }
-                preceding_in_scene = true;
             }
         }
         (scenes, carriers, survey)
@@ -330,11 +320,6 @@ fn migrate_legacy_math_views(
         let mut preserved = 0usize;
         for carrier_id in &scene_carriers {
             let info = &survey[carrier_id];
-            if info.scope_isolated_with_preceding {
-                notices.push(format!(
-                    "Math View on {carrier_id} used This-modifier scope; the standalone Math View always shows the combined chain, so its display now includes the preceding modifiers"
-                ));
-            }
             let view_id = if info.authored {
                 let reusable_fits = reusable.as_ref().is_some_and(|view| {
                     mv::reusable_math_view_for_carrier(graph, carrier_id, view)
@@ -379,6 +364,13 @@ fn migrate_legacy_math_views(
                 continue;
             };
             created += 1;
+            // Install Scope before retargeting so its original host id and
+            // animation survive alongside the other Math View controls.
+            let carrier_graph = graph.scene_modifiers.iter()
+                .find(|m| &m.id == carrier_id).expect("surveyed carrier").graph.clone();
+            let view_graph = &mut graph.scene_modifiers.iter_mut()
+                .find(|m| m.id == view_id).expect("created view").graph;
+            mv::preserve_legacy_scope_control(&carrier_graph, view_graph);
             mv::retarget_math_view_bindings(graph, carrier_id, &view_id);
             // Embedded values for controls the carrier never had a host
             // binding for: host bindings win where they exist, otherwise the

@@ -727,6 +727,19 @@ pub fn duplicate_scene_modifiers(
         .iter()
         .map(|instance| instance.id.clone())
         .collect();
+    // Allocate every duplicate identity before cloning any instance so that
+    // references between selected modifiers can be rewritten against the
+    // complete old-to-new map in one pass.
+    let mut id_remaps = HashMap::with_capacity(selected_instances.len());
+    for source in &selected_instances {
+        let new_id = loop {
+            let candidate = NodeId::new(crate::short_id());
+            if used_ids.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
+        id_remaps.insert(source.id.clone(), new_id);
+    }
     let mut copies = Vec::with_capacity(selected_instances.len());
     let mut remaps = Vec::new();
     let mut numeric_specs: Vec<crate::effect_graph_def::ParamSpecDef> = Vec::new();
@@ -754,13 +767,15 @@ pub fn duplicate_scene_modifiers(
         .unwrap_or_default();
     for source in selected_instances {
         let mut copy = source.clone();
-        let new_id = loop {
-            let candidate = NodeId::new(crate::short_id());
-            if used_ids.insert(candidate.clone()) {
-                break candidate;
-            }
-        };
-        copy.id = new_id;
+        copy.id = id_remaps
+            .get(&source.id)
+            .cloned()
+            .expect("every selected modifier received a duplicate id");
+        if let Some(carrier) = copy.legacy_math_view_carrier.as_mut()
+            && let Some(remapped) = id_remaps.get(carrier)
+        {
+            *carrier = remapped.clone();
+        }
         if let Some(metadata) = owner.preset_metadata.as_ref() {
             let mut source_numeric_ids = HashMap::new();
             for binding in metadata.bindings.iter().filter(|binding| {
@@ -1415,6 +1430,46 @@ mod tests {
                 .all(|param| !param.id.contains("source"))
         );
     }
+
+    #[test]
+    fn scene_modifier_edit_duplicate_remaps_legacy_math_view_carrier() {
+        let mut graph = insert_scene_modifier(&owner(), 0, recipe("carrier_a"))
+            .unwrap()
+            .graph;
+        graph = insert_scene_modifier(&graph, 1, recipe("carrier_b"))
+            .unwrap()
+            .graph;
+        graph = insert_scene_modifier(&graph, 2, recipe("view"))
+            .unwrap()
+            .graph;
+        graph.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("carrier_b"));
+
+        let duplicated = duplicate_scene_modifiers(
+            &graph,
+            &[
+                NodeId::new("carrier_a"),
+                NodeId::new("carrier_b"),
+                NodeId::new("view"),
+            ],
+        )
+        .unwrap();
+        let copies = &duplicated.graph.scene_modifiers[3..];
+        let copied_b = copies[1].id.clone();
+        let copied_view = &copies[2];
+
+        assert_ne!(copied_b, NodeId::new("carrier_b"));
+        assert_eq!(copied_view.legacy_math_view_carrier, Some(copied_b));
+        assert_eq!(
+            graph.scene_modifiers[2].legacy_math_view_carrier,
+            Some(NodeId::new("carrier_b"))
+        );
+        let view_only = duplicate_scene_modifiers(&graph, &[NodeId::new("view")]).unwrap();
+        assert_eq!(
+            view_only.graph.scene_modifiers[3].legacy_math_view_carrier,
+            Some(NodeId::new("carrier_b"))
+        );
+    }
+
     #[test]
     fn scene_modifier_edit_duplicate_preserves_migrated_macro_calibration() {
         let mut graph = insert_scene_modifier(&owner(), 0, recipe("source")).unwrap().graph;

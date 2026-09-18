@@ -68,10 +68,10 @@ pub struct SceneModifierInstanceDef {
     pub targets: SceneTargetSelection,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_frames: Vec<SceneMeshReferenceFrame>,
-    /// Load-migration provenance only: the legacy carrier whose embedded
-    /// Math View section this instance replaced. Lets a migrated view keep
-    /// its authored Connect to Mesh association when several preceding
-    /// modifiers carry patch transforms. Never surfaced in the UI.
+    /// Legacy carrier whose embedded Math View this instance replaced.
+    /// Keeps its Connect to Mesh association and hidden Scope boundaries.
+    /// Copied stacks remap this id; missing carriers never silently retarget.
+    /// Never surfaced in the UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_math_view_carrier: Option<NodeId>,
     pub graph: Box<EffectGraphDef>,

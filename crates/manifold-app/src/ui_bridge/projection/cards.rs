@@ -685,8 +685,10 @@ pub(crate) fn modifier_surfaces(
             Some(manifold_core::effects::apply_card_reshape(param.base, param.spec.min, param.spec.max,
                 param.spec.invert, param.spec.curve, binding.scale, binding.offset) > 0.5)
         }).unwrap_or(false);
+        let legacy_scope = manifold_core::scene_modifier_math_view::has_legacy_scope_control(&instance.graph);
         let mut rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
-            id != recipe.enabled_param && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
+            id != recipe.enabled_param && !(legacy_scope && id == "math_view_scope")
+                && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
         for row in &mut rows { row.scene_addr = None; }
         // Math View's Connect to Mesh locks when the static support check
         // fails (the compiler enforces the same rule at preparation — the
@@ -1205,6 +1207,25 @@ mod modifier_audio_projection_tests {
                 .all(|row| row.spec.disabled.is_none()),
             "only the Connect to Mesh row locks"
         );
+        let carrier: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-core/tests/fixtures/math-view-legacy/vortex-fragments-initial-ce78a59d0.json"
+        ))).unwrap();
+        let mut migrated = owner.clone();
+        manifold_core::scene_modifier_math_view::preserve_legacy_scope_control(
+            &carrier, &mut migrated.scene_modifiers[0].graph);
+        migrated = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &migrated, &manifold_core::NodeId::new("math_view")).unwrap().graph;
+        let scope_id = migrated.preset_metadata.as_ref().unwrap().bindings.iter()
+            .find(|binding| matches!(&binding.target,
+                manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. }
+                    if param_id == "math_view_scope")).unwrap().id.clone();
+        gp.graph = Some(migrated.clone());
+        gp.refresh_manifest_from_graph();
+        assert!(gp.params.contains(&scope_id), "legacy animation still has a parameter target");
+        let surfaces = modifier_surfaces(&gp, &migrated, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        assert!(surfaces[0].rows.iter().all(|row| row.id.as_ref() != scope_id),
+            "legacy Scope must not reappear on the standalone card");
     }
 }
 
