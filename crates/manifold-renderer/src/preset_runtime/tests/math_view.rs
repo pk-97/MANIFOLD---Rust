@@ -703,7 +703,21 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
             &params,
         );
         encoder.commit_and_wait_completed();
-        crate::headless_readback::readback_raw_halves(&device, &target.texture, 320, 180)
+        let pixels = crate::headless_readback::readback_raw_halves(&device, &target.texture, 320, 180);
+        if std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").is_some() {
+            // Encode the live target before the closure drops it.
+            std::fs::write(
+                std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").unwrap(),
+                crate::headless_readback::readback_to_srgb_png_linear(
+                    &device,
+                    &target.texture,
+                    320,
+                    180,
+                ),
+            )
+            .unwrap();
+        }
+        pixels
     };
     let black = |pixels: &[u8]| pixels.chunks_exact(8).all(|pixel| pixel[..6] == [0; 6]);
     let energy = |pixels: &[u8]| -> f64 {
@@ -730,23 +744,4 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
         energy(&echoes),
         energy(&plain)
     );
-    if let Ok(path) = std::env::var("MANIFOLD_MATH_ECHOES_PREVIEW") {
-        std::fs::write(
-            path,
-            crate::headless_readback::readback_to_srgb_png_linear(
-                &device,
-                &RenderTarget::new(
-                    &device,
-                    320,
-                    180,
-                    GpuTextureFormat::Rgba16Float,
-                    "math-instance-copies-proof-png",
-                )
-                .texture,
-                320,
-                180,
-            ),
-        )
-        .unwrap();
-    }
 }
