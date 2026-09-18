@@ -240,6 +240,7 @@ mod tests {
                     },
                     targets: SceneTargetSelection::AllObjects,
                     mesh_frames: Vec::new(),
+                    legacy_math_view_carrier: None,
                     graph: Box::new(local_graph(*enable)),
                 })
                 .collect(),

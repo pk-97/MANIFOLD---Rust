@@ -94,6 +94,16 @@ pub(super) fn prepare(
             .filter(|item| item.scene == modifier.scene)
             .map(|item| item.id.clone())
             .collect();
+        // A view migrated from a legacy carrier names it
+        // (`legacy_math_view_carrier`); while the named carrier still
+        // precedes the view in this scene, only its patch routes qualify, so
+        // several patch carriers no longer disable the authored connection.
+        // A stale name falls back to the ordinary exactly-one rule.
+        let preferred_carrier: Option<NodeId> = modifier
+            .legacy_math_view_carrier
+            .as_ref()
+            .filter(|carrier| preceding.contains(carrier))
+            .cloned();
         let control = |name: &str| -> Result<u32, SceneModifierExpandError> {
             let local = NodeId::new(format!("__math_view_{name}"));
             let copy = routes
@@ -118,6 +128,11 @@ pub(super) fn prepare(
                 let found: Vec<_> = routes
                     .iter()
                     .filter(|r| preceding.contains(&r.modifier_id))
+                    .filter(|r| {
+                        preferred_carrier
+                            .as_ref()
+                            .is_none_or(|preferred| r.modifier_id == *preferred)
+                    })
                     .flat_map(|r| &r.copies)
                     .filter(|c| c.object.as_ref() == Some(&frame.target))
                     .filter_map(|c| {

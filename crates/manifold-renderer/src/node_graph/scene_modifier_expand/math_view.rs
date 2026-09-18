@@ -100,6 +100,7 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: frames.clone(),
+        legacy_math_view_carrier: None,
         graph: Box::new(recipe),
     });
     owner.scene_modifiers.push(SceneModifierInstanceDef {
@@ -110,6 +111,7 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: frames,
+        legacy_math_view_carrier: None,
         graph: Box::new(view_recipe),
     });
     let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
@@ -160,6 +162,7 @@ pub(crate) fn test_owner_with_instance_echoes() -> manifold_core::effect_graph_d
             scene: view_scene,
             targets: view_targets,
             mesh_frames: view_frames,
+            legacy_math_view_carrier: None,
             graph: Box::new(echo_recipe),
         },
     );

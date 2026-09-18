@@ -34,6 +34,7 @@ pub fn prepare_new_scene_modifier(
         scene,
         targets,
         mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
         graph: Box::new(graph),
     };
     instance.mesh_frames = resolve_modifier_mesh_frames(owner, &instance)?;

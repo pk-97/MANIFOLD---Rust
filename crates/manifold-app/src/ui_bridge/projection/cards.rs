@@ -1156,6 +1156,7 @@ mod modifier_audio_projection_tests {
             scene: SceneNodeRef { scope: vec![], node: "scan_render".into() },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![frame],
+            legacy_math_view_carrier: None,
             graph: Box::new(view_recipe),
         });
         let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(

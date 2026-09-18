@@ -239,6 +239,7 @@ fn modifier_control_state_runtime_preserves_gate_when_another_modifier_is_remove
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![],
+        legacy_math_view_carrier: None,
         graph: Box::new(local.clone()),
     };
     let route = SceneModifierNodeRoute {

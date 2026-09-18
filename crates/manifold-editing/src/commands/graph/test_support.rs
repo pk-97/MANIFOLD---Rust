@@ -40,6 +40,7 @@ pub(super) fn modifier_draft_fixture() -> (Project, GraphTarget, EffectGraphDef)
             },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
+            legacy_math_view_carrier: None,
             graph: Box::new(local.clone()),
         });
     }

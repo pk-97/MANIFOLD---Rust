@@ -161,10 +161,32 @@ fn prepare_scene_modifiers_impl(
     registry: &PrimitiveRegistry,
     math_view: Option<MathViewRequest<'_>>,
 ) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
-    if owner.scene_modifiers.len() > 16 {
+    // Capacity is split (BUG-ty86): stage-carrying modifiers expand per-stage
+    // vertex buffers and keep the historic 16 limit; stage-less Math View
+    // instances are bounded by their own surveyed budget (see
+    // `scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`), so a full legacy
+    // migration of 16 carriers (16 stripped carriers + 16 views) prepares.
+    let stage_carrying = owner
+        .scene_modifiers
+        .iter()
+        .filter(|m| {
+            !manifold_core::scene_modifier_math_view::is_math_view_recipe(&m.graph)
+        })
+        .count();
+    if stage_carrying > manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS {
         return Err(SceneModifierExpandError::CapacityExceeded {
             path: "sceneModifiers".into(),
-            detail: "an owner supports at most 16 modifiers".into(),
+            detail: "an owner supports at most 16 stage-carrying modifiers".into(),
+        });
+    }
+    let view_count = owner.scene_modifiers.len() - stage_carrying;
+    if view_count > manifold_core::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS {
+        return Err(SceneModifierExpandError::CapacityExceeded {
+            path: "sceneModifiers".into(),
+            detail: format!(
+                "an owner supports at most {} Math View modifiers",
+                manifold_core::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS
+            ),
         });
     }
     validate_scene_modifier_schema(owner)?;

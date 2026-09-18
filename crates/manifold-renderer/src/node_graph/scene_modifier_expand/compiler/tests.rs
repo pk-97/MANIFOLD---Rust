@@ -56,9 +56,55 @@ pub(super) fn fixture() -> EffectGraphDef {
         },
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![],
+        legacy_math_view_carrier: None,
         graph: Box::new(recipe),
     });
     owner
+}
+
+#[test]
+fn scene_modifier_capacity_splits_stage_carriers_and_math_views() {
+    let registry = PrimitiveRegistry::with_builtin();
+    // 17 stage-carrying modifiers still exceed the stage cap (BUG-ty86 keeps
+    // the historic rule for them).
+    let mut owner = fixture();
+    let template = owner.scene_modifiers[0].clone();
+    for i in 0..16 {
+        let mut instance = template.clone();
+        instance.id = NodeId::new(format!("modifier_{i}"));
+        owner.scene_modifiers.push(instance);
+    }
+    assert_eq!(owner.scene_modifiers.len(), 17);
+    assert!(
+        matches!(
+            prepare_scene_modifiers(&owner, &registry),
+            Err(SceneModifierExpandError::CapacityExceeded { .. })
+        ),
+        "17 stage-carrying modifiers are rejected"
+    );
+    // One carrier plus 16 Math View instances is 17 total and prepares: the
+    // views are bounded by their own cap, not the stage-carrier count.
+    let mut owner = math_view_fixture();
+    let view_template = owner.scene_modifiers[1].clone();
+    for i in 0..15 {
+        let mut instance = view_template.clone();
+        instance.id = NodeId::new(format!("math_view_{i}"));
+        owner.scene_modifiers.push(instance);
+    }
+    assert_eq!(owner.scene_modifiers.len(), 17);
+    prepare_scene_modifiers(&owner, &registry)
+        .expect("16 views plus one stage carrier prepare under the split cap");
+    // A 17th view exceeds the view cap.
+    let mut extra = view_template.clone();
+    extra.id = NodeId::new("math_view_overflow");
+    owner.scene_modifiers.push(extra);
+    assert!(
+        matches!(
+            prepare_scene_modifiers(&owner, &registry),
+            Err(SceneModifierExpandError::CapacityExceeded { .. })
+        ),
+        "17 Math View instances are rejected"
+    );
 }
 
 pub(super) fn fusion_fixture() -> EffectGraphDef {
@@ -1392,6 +1438,7 @@ fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
         // SceneLoop consumes no mesh coordinate context, so saved frames are
         // rejected for it; its EachObject stage resolves targets directly.
         mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
         graph: Box::new(loop_recipe),
     });
     let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
