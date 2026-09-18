@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+arrayvec = "0.7"
 manifold-core = { path = "../manifold-core" }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-gpu = { path = "../manifold-gpu" }
@@ -149,6 +150,8 @@ required-features = ["gpu-proofs"]
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
 # every `mod gpu_tests`, and the `gpu_proofs` integration binary above.
 gpu-proofs = []
+# Bounded dynamic-RT timing is opt-in, separate from correctness gates.
+rt-perf-proofs = ["gpu-proofs"]
 
 [lints]
 workspace = true

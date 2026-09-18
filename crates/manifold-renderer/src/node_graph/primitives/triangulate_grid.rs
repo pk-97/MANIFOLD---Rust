@@ -68,6 +68,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["triangulate", "make triangles", "triangulate grid", "mesh", "surface"],
+    pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/triangulate_grid_body.wgsl"),
     input_access: [BufferGather],

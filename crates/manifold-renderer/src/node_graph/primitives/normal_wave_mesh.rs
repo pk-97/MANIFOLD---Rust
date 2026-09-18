@@ -73,6 +73,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["normal wave", "surface wave", "surface waves", "wave mesh", "smooth mesh wave"],
+    pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/normal_wave_mesh_body.wgsl"),
     input_access: [BufferGather],

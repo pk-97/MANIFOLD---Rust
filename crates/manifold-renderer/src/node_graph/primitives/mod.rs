@@ -214,6 +214,8 @@ mod render_3d_mesh;
 mod render_instanced_3d_mesh;
 mod render_mode;
 pub(crate) mod render_scene;
+#[cfg(feature = "gpu-proofs")]
+pub use render_scene::rt_proof::{RtProbeObject, RtProbeScene};
 mod render_filled_rects;
 mod render_lines;
 mod render_text;

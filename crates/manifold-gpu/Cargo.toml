@@ -18,6 +18,7 @@ vulkan = ["dep:ash"]
 gpu-proofs = []
 
 [dependencies]
+arrayvec = "0.7"
 # Shared vocabulary (cold-touch detector only — no project model).
 manifold-foundation = { path = "../manifold-foundation" }
 # WGSL parsing + validation + MSL output + SPIR-V output

@@ -66,6 +66,8 @@
 //! scene.
 
 mod rt_changes;
+#[cfg(feature = "gpu-proofs")]
+pub mod rt_proof;
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::node_graph::mesh_change::MeshRevision;
 use crate::node_graph::bindings::Slot;
@@ -1049,6 +1051,8 @@ pub struct RenderScene {
     /// performer-gesture gate).
     rt_tracer: Option<manifold_gpu::raytrace::MetalShadowRayTracer>,
     rt_accel: Option<manifold_gpu::raytrace::RtAccel>,
+    #[cfg(feature = "gpu-proofs")]
+    rt_probe: Option<rt_proof::RtProbeScene>,
     /// Last successfully encoded transform, geometry and shading keys.
     rt_accel_key: Option<u64>,
     rt_accel_topo_key: Option<u64>,
@@ -1458,38 +1462,23 @@ fn gesture_detect(
     (changed, gesture_active, changed, gesture_counter)
 }
 
-fn ensure_rt_gi_materials(
-    slot: &mut Option<manifold_gpu::GpuBuffer>,
-    capacity: &mut usize,
+/// Allocate a replacement without publishing it. The caller commits all RT
+/// tables only after acceleration preparation also succeeds.
+fn prepare_rt_table<T>(
     device: &manifold_gpu::GpuDevice,
-    object_count: usize,
-) {
-    let needed = object_count.max(1);
-    if slot.is_none() || *capacity < needed {
-        *slot = Some(device.create_buffer_shared(
-            (needed * std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>()) as u64,
-        ));
-        *capacity = needed;
-    }
-}
-
-/// RT-T2-C: the per-object motion-matrix buffer for
-/// `accumulate_irradiance` — same grow-never-shrink contract as
-/// `ensure_rt_gi_materials` above, one column-major `[[f32; 4]; 4]` per
-/// object.
-fn ensure_rt_obj_motion(
-    slot: &mut Option<manifold_gpu::GpuBuffer>,
-    capacity: &mut usize,
-    device: &manifold_gpu::GpuDevice,
-    object_count: usize,
-) {
-    let needed = object_count.max(1);
-    if slot.is_none() || *capacity < needed {
-        *slot = Some(
-            device.create_buffer_shared((needed * std::mem::size_of::<[[f32; 4]; 4]>()) as u64),
-        );
-        *capacity = needed;
-    }
+    capacity: usize,
+    needed: usize,
+    shared: bool,
+) -> Result<Option<manifold_gpu::GpuBuffer>, FrameRenderFailure> {
+    if capacity >= needed { return Ok(None); }
+    let bytes = needed.checked_mul(std::mem::size_of::<T>())
+        .ok_or(FrameRenderFailure::RtAllocation)? as u64;
+    let result = if shared { device.try_create_buffer_shared(bytes) }
+        else { device.try_create_buffer(bytes) };
+    result.map(Some).map_err(|error| {
+        log::error!("RT table preparation failed: {error}");
+        FrameRenderFailure::RtAllocation
+    })
 }
 
 /// Half-res march uniforms (VOLUMETRIC_LIGHT_DESIGN.md D2). Mirrors
@@ -1520,7 +1509,8 @@ const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
 type RtMeshSnapshot = Option<(MeshRevision, Option<(Slot, u64)>)>;
 type RtFrameTables<'a> = (
-    Vec<manifold_gpu::raytrace::GiMaterial>, Vec<&'a manifold_gpu::GpuTexture>, u64, u64, bool,
+    arrayvec::ArrayVec<manifold_gpu::raytrace::GiMaterial, { OBJECT_SAFETY_MAX as usize }>,
+    manifold_gpu::raytrace::RtMaterialTextures<'a>, u64, u64, bool,
 );
 
 fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderFailure {
@@ -2250,6 +2240,9 @@ impl RenderScene {
             width, height, rt_enabled, rt_shadows_enabled, rt_trace_w, rt_trace_h,
             rt_firefly_clamp_enabled, denoise_aux_ready, ..
         } = *pre;
+        let preparing = ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
+        let rt_enabled = rt_enabled || preparing;
+        let rt_firefly_clamp_enabled = rt_firefly_clamp_enabled || preparing;
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek color format BEFORE the gpu_encoder block below borrows ctx.
         let opaque_scene_color_target_format =
             has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
@@ -2762,7 +2755,7 @@ impl RenderScene {
             // RS-B: build gi_materials alongside objects (SAME order) for
             // the emissive light table at accel-build time. Reused below
             // for the GPU upload at dispatch time.
-            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws.clone()
+            let gi_materials_data: arrayvec::ArrayVec<manifold_gpu::raytrace::GiMaterial, { OBJECT_SAFETY_MAX as usize }> = opaque_draws.clone()
                 .map(|d| {
                     manifold_gpu::raytrace::GiMaterial::new(
                         [
@@ -2881,6 +2874,10 @@ impl RenderScene {
                     draw.topology_hint, structural_changed,
                 ));
             }
+            #[cfg(feature = "gpu-proofs")]
+            if ctx.gpu.as_ref().is_some_and(|gpu| gpu.force_rt_rebuild) {
+                self.rt_changes.fill(RtGeometryChange::Rebuild);
+            }
             let geometry_changed = self.rt_changes.iter().any(|c| *c != RtGeometryChange::Reuse);
             let history_changed = geometry_changed || appearance_changed;
             let instance_changed = structural_changed || self.rt_accel_key != Some(accel_key);
@@ -2924,30 +2921,32 @@ impl RenderScene {
                     log::error!("node.render_scene: RT candidate admission failed: {error}");
                     FrameRenderFailure::RtAllocation
                 })?;
+                let materials = prepare_rt_table::<manifold_gpu::raytrace::GiMaterial>(
+                    gpu.device, self.rt_gi_materials_capacity, rt_gi_slot_count, false)?;
+                let motion = prepare_rt_table::<[[f32; 4]; 4]>(
+                    gpu.device, self.rt_obj_motion_capacity, objects.len(), false)?;
+                let normals = prepare_rt_table::<manifold_gpu::raytrace::RtNormalSource>(
+                    gpu.device, self.rt_normal_sources_capacity, rt_gi_slot_count, false)?;
+                let normal_scratch = prepare_rt_table::<manifold_gpu::raytrace::RtNormalSource>(
+                    gpu.device, self.rt_normal_sources_scratch_capacity, rt_gi_slot_count, true)?;
+                self.rt_gi_upload.try_reserve(rt_gi_slot_count.saturating_sub(self.rt_gi_upload.len()))
+                    .map_err(|_| FrameRenderFailure::RtAllocation)?;
+                self.rt_motion_upload.try_reserve(objects.len().saturating_sub(self.rt_motion_upload.len()))
+                    .map_err(|_| FrameRenderFailure::RtAllocation)?;
                 tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan)
                     .map_err(rt_frame_failure)?;
+                for (replacement, destination, capacity, needed) in [
+                    (materials, &mut self.rt_gi_materials, &mut self.rt_gi_materials_capacity, rt_gi_slot_count),
+                    (motion, &mut self.rt_obj_motion, &mut self.rt_obj_motion_capacity, objects.len()),
+                    (normals, &mut self.rt_normal_sources, &mut self.rt_normal_sources_capacity, rt_gi_slot_count),
+                    (normal_scratch, &mut self.rt_normal_sources_scratch, &mut self.rt_normal_sources_scratch_capacity, rt_gi_slot_count),
+                ] {
+                    if let Some(buffer) = replacement {
+                        *destination = Some(buffer);
+                        *capacity = needed;
+                    }
+                }
             }
-            // Reserve CPU snapshots only at a capacity preparation boundary.
-            if self.rt_gi_upload.capacity() < rt_gi_slot_count {
-                self.rt_gi_upload.reserve(rt_gi_slot_count.saturating_sub(self.rt_gi_upload.len()));
-            }
-            if self.rt_motion_upload.capacity() < objects.len() {
-                self.rt_motion_upload.reserve(objects.len().saturating_sub(self.rt_motion_upload.len()));
-            }
-            ensure_rt_gi_materials(
-                &mut self.rt_gi_materials,
-                &mut self.rt_gi_materials_capacity,
-                gpu.device,
-                rt_gi_slot_count,
-            );
-            // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
-            // placement as `ensure_rt_gi_materials` above.
-            ensure_rt_obj_motion(
-                &mut self.rt_obj_motion,
-                &mut self.rt_obj_motion_capacity,
-                gpu.device,
-                objects.len(),
-            );
             // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
             // the SAME `objects` slice every RT-ready frame (below), not
             // gated on the accel-rebuild key (an object's `transform` alone
@@ -2959,7 +2958,7 @@ impl RenderScene {
             // BUG-wytp: the same returned list now also carries normal-map
             // textures (and MR maps, since R3), indexed by
             // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
-            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources_snapshot(
+            let alpha_textures = manifold_gpu::raytrace::ensure_normal_sources_snapshot(
                 &mut self.rt_normal_sources_scratch,
                 &mut self.rt_normal_sources_scratch_capacity,
                 &mut self.rt_normal_sources,
@@ -2969,10 +2968,20 @@ impl RenderScene {
                 objects,
             );
             let accel = self.rt_accel.as_mut().ok_or(FrameRenderFailure::RtNeedsPreparation)?;
-            tracer.encode_accel_update(
+            let update = tracer.encode_accel_update(
                 gpu.device, gpu.native_enc, accel, objects, &self.rt_changes,
                 &gi_materials_data, instance_changed, history_changed,
             ).map_err(rt_frame_failure)?;
+            gpu.rt_updates.blas_builds += update.blas_builds;
+            gpu.rt_updates.blas_refits += update.blas_refits;
+            gpu.rt_updates.tlas_builds += update.tlas_builds;
+            gpu.rt_updates.tlas_refits += update.tlas_refits;
+            gpu.rt_updates.emissive_refreshes += update.emissive_refreshes;
+            gpu.rt_history_resets += u32::from(history_changed);
+            #[cfg(feature = "gpu-proofs")]
+            if gpu.capture_rt_geometry {
+                self.rt_probe = Some(rt_proof::RtProbeScene::capture(objects, &alpha_textures));
+            }
             for (index, draw) in opaque_draws.clone().enumerate() {
                 self.rt_mesh_revisions[index] = draw.mesh_revision.map(|r| (r, draw.topology_hint));
             }
@@ -5078,10 +5087,10 @@ impl RenderScene {
     /// RT block).
     fn collect_rt_objects<'ctx>(
         draws: &[ObjectDraw<'ctx>], rt_enabled: bool,
-    ) -> Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>> {
+    ) -> arrayvec::ArrayVec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>, { OBJECT_SAFETY_MAX as usize }> {
         // Resolve resident topology before authoring RT consumer flags or
         // selecting raster fallback. Reuse this exact object list for AS work.
-        let rt_objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> =
+        let rt_objects: arrayvec::ArrayVec<manifold_gpu::raytrace::RtObjectGeometry, { OBJECT_SAFETY_MAX as usize }> =
             draws.iter()
                 .filter(|d| rt_enabled && d.alpha_mode != AlphaMode::Blend)
                 .map(|d| {
@@ -5584,7 +5593,11 @@ impl RenderScene {
             self.object_port_names.iter().take(objects).map(|port| {
                 port_index.get(port.as_ref()).copied()
                     .and_then(|slot| ctx.inputs.object_slot(slot))
-                    .and_then(|object| object.topology)
+                    .map(|object| (
+                        object.mesh,
+                        object.mesh.and_then(|slot| ctx.inputs.mesh_revision_of(slot)).map(|r| r.topology),
+                        object.topology,
+                    ))
             }),
         );
         let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time)
@@ -5891,6 +5904,8 @@ impl RenderScene {
             opaque_depth_snapshot_height: 0,
             rt_tracer: None,
             rt_accel: None,
+            #[cfg(feature = "gpu-proofs")]
+            rt_probe: None,
             rt_accel_key: None,
             rt_accel_topo_key: None,
             rt_accel_content_key: None,
@@ -8334,6 +8349,25 @@ impl EffectNode for RenderScene {
         &RENDER_SCENE_OUTPUTS
     }
 
+    #[cfg(feature = "gpu-proofs")]
+    fn rt_probe_scene(&self) -> Option<&rt_proof::RtProbeScene> {
+        self.rt_probe.as_ref()
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    fn rt_probe_rays(
+        &self,
+        device: &manifold_gpu::GpuDevice,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        rays: &[manifold_gpu::raytrace::DebugRayQueryRay],
+    ) -> Option<manifold_gpu::GpuBuffer> {
+        let scene = self.rt_probe.as_ref()?;
+        let textures: manifold_gpu::raytrace::RtMaterialTextures = scene.textures.iter().collect();
+        Some(self.rt_tracer.as_ref()?.debug_ray_query(device, encoder,
+            self.rt_accel.as_ref()?, self.rt_normal_sources.as_ref()?, rays,
+            Some(&textures), scene.objects.len() as u32, 0))
+    }
+
     fn warmup_pending(&self) -> bool {
         // RT accel builds asynchronously. Once `rt_accel` exists we keep
         // warming until `ready` flips true; before that first evaluate
@@ -8525,8 +8559,9 @@ impl EffectNode for RenderScene {
             return;
         };
 
-        let rt_objects = Self::collect_rt_objects(&draws, rt_enabled);
-        let rt_tables = if rt_enabled && !rt_objects.is_empty() {
+        let prepare_rt = rt_enabled || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
+        let rt_objects = Self::collect_rt_objects(&draws, prepare_rt);
+        let rt_tables = if prepare_rt && !rt_objects.is_empty() {
             self.ensure_rt_tracer(ctx.gpu_encoder().device);
             match self.rt_accel_maintenance(ctx, &mut rt_ready, &rt_objects, &draws) {
                 Ok((materials, textures, topo, content, changed)) => {
@@ -8606,7 +8641,9 @@ impl EffectNode for RenderScene {
         // the accel below is instance-aware — one TLAS slot per wired
         // instance capacity, composed GPU-side (descriptor-build kernel),
         // so instanced objects trace one copy per live raster slot. ----
-        if let Some((gi_materials_data, alpha_textures, topo_key, content_key)) = rt_tables {
+        if let Some((gi_materials_data, alpha_textures, topo_key, content_key)) = rt_tables
+            && rt_enabled
+        {
             let objects = rt_objects;
 
             // BUG-trh7 stage 2, pass 7b: the trace + accumulate half. false =
@@ -8632,6 +8669,7 @@ impl EffectNode for RenderScene {
             ) {
                 return;
             }
+            ctx.gpu_encoder().rt_dispatches += u32::from(rt_rendered_this_frame);
         }
 
         // ---- Pass 2 (immutable phase): draw (BUG-trh7 stage 2,

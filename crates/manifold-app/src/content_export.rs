@@ -4,6 +4,9 @@
 
 use std::sync::Arc;
 
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+use std::cell::{Cell, RefCell};
+
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::{Beats, Seconds};
@@ -17,6 +20,70 @@ use crate::content_thread::ContentThread;
 struct ExportFrameFailure {
     message: String,
     gpu: bool,
+}
+
+/// One production export frame immediately before the native encoder call.
+/// This is test-only evidence: it observes the already-rendered frame and
+/// never evaluates the graph or performs another GPU submission.
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+#[derive(Clone, Debug)]
+pub(crate) struct ExportFrameObservation {
+    pub frame_idx: u32,
+    pub time_seconds: f64,
+    pub dt_seconds: f64,
+    pub status: manifold_renderer::frame_status::FrameRenderStatus,
+    pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
+    pub rt_dispatches: u32,
+    pub history_resets: u32,
+    pub beat: f64,
+    pub generator_values: Vec<(String, f32)>,
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+thread_local! {
+    static EXPORT_OBSERVER: RefCell<Option<Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
+    static EXPORT_FAILURE_FRAME: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
+/// Installs the test-only observer and optional pre-encode fault injection for
+/// the current content thread. The guard clears the hooks when it
+/// is dropped, so separate exports cannot inherit observation state.
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) struct ExportObservationGuard;
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) fn install_export_observer(
+    sender: Sender<ExportFrameObservation>,
+    fail_before_encode_frame: Option<u32>,
+) -> ExportObservationGuard {
+    EXPORT_OBSERVER.with(|slot| {
+        assert!(slot.borrow().is_none(), "export observer already installed");
+        *slot.borrow_mut() = Some(sender);
+    });
+    EXPORT_FAILURE_FRAME.with(|frame| frame.set(fail_before_encode_frame));
+    ExportObservationGuard
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+impl Drop for ExportObservationGuard {
+    fn drop(&mut self) {
+        EXPORT_OBSERVER.with(|slot| *slot.borrow_mut() = None);
+        EXPORT_FAILURE_FRAME.with(|frame| frame.set(None));
+    }
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+fn observe_export_frame(observation: ExportFrameObservation) {
+    EXPORT_OBSERVER.with(|slot| {
+        if let Some(sender) = slot.borrow().as_ref() {
+            let _ = sender.send(observation);
+        }
+    });
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+fn should_fail_before_encode(frame_idx: u32) -> bool {
+    EXPORT_FAILURE_FRAME.with(|frame| frame.get() == Some(frame_idx))
 }
 
 /// A signalled fence is not success if any GPU work failed during the frame.
@@ -821,6 +888,33 @@ impl ContentThread {
         if let Err(message) = self.content_pipeline.wait_for_export_complete(initial_gpu_faults) {
             log::error!("[Export] Frame {frame_idx} failed: {message}");
             return Some(ExportFrameFailure { message, gpu: true });
+        }
+
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        {
+            let (rt_updates, rt_dispatches, history_resets) =
+                self.content_pipeline.frame_rt_observation();
+            observe_export_frame(ExportFrameObservation {
+                frame_idx,
+                time_seconds: frame_idx as f64 * frame_dt,
+                dt_seconds: this_dt,
+                status: frame_status,
+                rt_updates,
+                rt_dispatches,
+                history_resets,
+                beat: self.engine.current_beat().0,
+                generator_values: self.engine.project().into_iter()
+                    .flat_map(|project| &project.timeline.layers)
+                    .filter_map(|layer| layer.gen_params())
+                    .flat_map(|instance| instance.params.iter())
+                    .map(|param| (param.id().to_owned(), param.value)).collect(),
+            });
+            if should_fail_before_encode(frame_idx) {
+                return Some(ExportFrameFailure {
+                    message: format!("injected export failure before encode at frame {frame_idx}"),
+                    gpu: false,
+                });
+            }
         }
 
         match tex_ptr {

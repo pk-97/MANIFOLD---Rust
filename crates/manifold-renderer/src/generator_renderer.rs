@@ -1539,6 +1539,7 @@ impl ClipRenderer for GeneratorRenderer {
             ));
             {
                 let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+                gpu.preparing = true;
                 gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
                 if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
                     let params = layer

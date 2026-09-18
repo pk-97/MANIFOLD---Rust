@@ -143,8 +143,12 @@ mod gap_start_probe;
 mod corridor_acceptance;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
 mod scene_modifier_journey;
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+mod rt_dynamic_export_tests;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
 mod scene_modifier_performance;
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
+mod rt_dynamic_held_out;
 mod window_registry;
 mod workspace;
 

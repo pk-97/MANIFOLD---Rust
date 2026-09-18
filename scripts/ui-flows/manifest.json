@@ -99,6 +99,7 @@
     ]
   },
   "flows": {
+    "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",
     "automation-show-parameter": "inspector",
     "automation-clear-parameter": "inspector",

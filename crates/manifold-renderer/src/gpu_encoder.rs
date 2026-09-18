@@ -19,6 +19,16 @@ pub struct GpuEncoder<'a> {
     /// [`Self::checkpoint`]. Always false for profiled frames so per-buffer
     /// dispatch timestamps stay monolithic (UI_RESPONSIVENESS_UNDER_LOAD D5).
     pub chunking_enabled: bool,
+    /// Candidate warmup may prepare RT resources even when its saved toggle is off.
+    pub preparing: bool,
+    /// Operations actually encoded by the shared dynamic RT path this frame.
+    pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
+    pub rt_history_resets: u32,
+    pub rt_dispatches: u32,
+    #[cfg(feature = "gpu-proofs")]
+    pub capture_rt_geometry: bool,
+    #[cfg(feature = "gpu-proofs")]
+    pub force_rt_rebuild: bool,
     /// Live per-send audio histories used by audio-reactive graph sources.
     /// The registry is content-thread owned and only borrowed for this frame.
     pub audio_visuals: Option<&'a manifold_core::audio_visual::AudioVisualRegistry>,
@@ -44,6 +54,14 @@ impl<'a> GpuEncoder<'a> {
             pool: None,
             uniform_arena: None,
             chunking_enabled: false,
+            preparing: false,
+            rt_updates: Default::default(),
+            rt_history_resets: 0,
+            rt_dispatches: 0,
+            #[cfg(feature = "gpu-proofs")]
+            capture_rt_geometry: false,
+            #[cfg(feature = "gpu-proofs")]
+            force_rt_rebuild: false,
             audio_visuals: None,
             frame_status: crate::frame_status::FrameRenderStatus::Complete,
         }
@@ -61,6 +79,14 @@ impl<'a> GpuEncoder<'a> {
             pool: Some(pool),
             uniform_arena: None,
             chunking_enabled: false,
+            preparing: false,
+            rt_updates: Default::default(),
+            rt_history_resets: 0,
+            rt_dispatches: 0,
+            #[cfg(feature = "gpu-proofs")]
+            capture_rt_geometry: false,
+            #[cfg(feature = "gpu-proofs")]
+            force_rt_rebuild: false,
             audio_visuals: None,
             frame_status: crate::frame_status::FrameRenderStatus::Complete,
         }

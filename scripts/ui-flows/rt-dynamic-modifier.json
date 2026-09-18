@@ -1,0 +1,258 @@
+[
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "type": "Button"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "text": "ON"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Surface Waves"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Amplitude"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Phase",
+          "text": "0.00"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "under_text": "Phase",
+          "type": "Button"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "under_text": "Phase",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "under_text": "Phase",
+              "type": "Label"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Phase",
+          "text": "0.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "Phase",
+          "text": "0.00"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "type": "Button"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "text": "ON"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  {
+    "Step": {
+      "frames": 2
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "under_text": "RT Enabled",
+          "text": "ON"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

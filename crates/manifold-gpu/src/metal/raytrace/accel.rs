@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use arrayvec::ArrayVec;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -30,6 +31,11 @@ use super::{
     RT_INSTANCE_TRANSFORM_BYTES, RtNormalSource, SHADOW_WORKGROUP, EmissiveScratch,
     effective_instance_slots, write_instance_obj_params,
 };
+
+/// Fixed-capacity texture list returned by the normal-source table builder.
+/// The cap is part of the shader ABI, so this keeps the hot per-frame list on
+/// the stack while preserving the existing bounded-table degradation rules.
+pub type RtMaterialTextures<'a> = ArrayVec<&'a GpuTexture, MAX_RT_MATERIAL_TEXTURES>;
 
 // ─── Acceleration structure: per-object BLAS + one instance TLAS ───────
 //
@@ -633,9 +639,7 @@ pub fn encode_inline_copy(
 
 
 /// Per-object geometry change class for [`encode_accel_update`] — the
-/// caller's dirty decision from its revision metadata (§4.1). Until P6,
-/// `Refit` intentionally executes the rebuild branch and reports
-/// `blas_builds`; P6 replaces that branch, not the caller policy.
+/// caller's dirty decision from its revision metadata (§4.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RtGeometryChange {
     /// No geometry or descriptor change — no BLAS work.
@@ -643,7 +647,7 @@ pub enum RtGeometryChange {
     /// Normals/UVs/appearance-only change — tables/history refresh, no
     /// BLAS work while the descriptor opacity class holds.
     Attributes,
-    /// Positions moved, topology stable. Executes as a rebuild until P6.
+    /// Positions moved, topology stable. Refits the existing BLAS in place.
     Refit,
     /// Topology/cut/alpha-class change — rebuild the affected BLAS.
     Rebuild,
@@ -986,6 +990,9 @@ pub(crate) fn plan_accel(
             + descriptor_bytes * 2
             + obj_params_bytes * 2
             + emissive_peak_bytes(emissive_candidate_capacity)
+            // bytes_for covers candidate/sort storage, not either object
+            // table: charge both the CPU scratch and ordered GPU snapshot.
+            + 2 * (16 + objects.len().max(1) as u64 * 56)
     };
 
     Ok(RtAccelPlan {
@@ -1032,46 +1039,77 @@ pub(crate) fn prepare_accel(
         let structure = raw_device
             .newAccelerationStructureWithSize(b.struct_bytes as usize)
             .ok_or(RtAccelError::Allocation { bytes: b.struct_bytes, resource: "BLAS structure" })?;
+        device.record_accel_allocation();
         blas_out.push(Blas {
             structure,
             descriptor: b.descriptor.clone(),
             tri: b.tri.clone(),
-            build_scratch: device.create_buffer(b.build_scratch),
-            refit_scratch: device.create_buffer(b.refit_scratch),
+            build_scratch: device
+                .try_create_buffer(b.build_scratch)
+                .map_err(|_| RtAccelError::Allocation { bytes: b.build_scratch, resource: "BLAS build scratch" })?,
+            refit_scratch: device
+                .try_create_buffer(b.refit_scratch)
+                .map_err(|_| RtAccelError::Allocation { bytes: b.refit_scratch, resource: "BLAS refit scratch" })?,
             built: false,
         });
     }
     let tlas_structure = raw_device
         .newAccelerationStructureWithSize(plan.tlas_struct_bytes as usize)
         .ok_or(RtAccelError::Allocation { bytes: plan.tlas_struct_bytes, resource: "TLAS structure" })?;
-    let tlas_build_scratch = device.create_buffer(plan.tlas_build_scratch);
-    let tlas_refit_scratch = device.create_buffer(plan.tlas_refit_scratch);
+    device.record_accel_allocation();
+    let tlas_build_scratch = device
+        .try_create_buffer(plan.tlas_build_scratch)
+        .map_err(|_| RtAccelError::Allocation { bytes: plan.tlas_build_scratch, resource: "TLAS build scratch" })?;
+    let tlas_refit_scratch = device
+        .try_create_buffer(plan.tlas_refit_scratch)
+        .map_err(|_| RtAccelError::Allocation { bytes: plan.tlas_refit_scratch, resource: "TLAS refit scratch" })?;
 
     let (instance_buffer, instance_buffer_scratch) = if plan.instanced {
         (
-            device.create_buffer(
+            device.try_create_buffer(
                 u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
-            ),
-            device.create_buffer_shared(
+            ).map_err(|_| RtAccelError::Allocation {
+                bytes: u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                resource: "instance descriptor buffer",
+            })?,
+            device.try_create_buffer_shared(
                 u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
-            ),
+            ).map_err(|_| RtAccelError::Allocation {
+                bytes: u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                resource: "instance descriptor scratch",
+            })?,
         )
     } else {
         // Non-instanced fast path: CPU-authored descriptors are staged in a
         // retained shared scratch buffer and copied into the private table at
         // encode time, so queued frames cannot overwrite one another.
-        build_instance_buffer_from_plan(device, &plan)
+        build_instance_buffer_from_plan(device, &plan)?
     };
     let instance_obj_params = if plan.instanced {
-        Some(device.create_buffer(
+        Some(device.try_create_buffer(
             (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
-        ))
+        ).map_err(|_| RtAccelError::Allocation {
+            bytes: (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
+            resource: "instance build params",
+        })?)
     } else {
         None
     };
-    let instance_obj_params_scratch = instance_obj_params.as_ref().map(|params| {
-        device.create_buffer_shared(params.size)
-    });
+    let instance_obj_params_scratch = match instance_obj_params.as_ref() {
+        Some(params) => Some(device.try_create_buffer_shared(params.size).map_err(|_| {
+            RtAccelError::Allocation { bytes: params.size, resource: "instance build params scratch" }
+        })?),
+        None => None,
+    };
+
+    // Bind the resident BLAS list while preparing the descriptor. This list
+    // is immutable for the resource generation, so updates never need to
+    // allocate a temporary retained-handle vector when the TLAS first builds.
+    let tlas_descriptor = plan.tlas_descriptor.clone();
+    let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
+        blas_out.iter().map(|b| b.structure.clone()).collect();
+    tlas_descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_retained_slice(&blas_structures)));
+    tlas_descriptor.setInstanceCount(plan.total_slots.max(1) as usize);
 
     let pins = Arc::new(AccelPins {
         tlas: tlas_structure.clone(),
@@ -1089,15 +1127,15 @@ pub(crate) fn prepare_accel(
         geometry_buffers: plan.geometry_buffers.clone(),
     });
 
-    let emissive_table = EmissiveLightTable::new(device);
+    let emissive_table = EmissiveLightTable::new(device)?;
     let emissive_scratch = EmissiveScratch::new(
         device,
         plan.emissive_candidate_capacity,
         plan.topology.len(),
-    );
+    )?;
     *resident = Some(RtAccel {
         structure: tlas_structure,
-        descriptor: plan.tlas_descriptor.clone(),
+        descriptor: tlas_descriptor,
         build_scratch: tlas_build_scratch,
         refit_scratch: tlas_refit_scratch,
         tlas_needs_build: true,
@@ -1125,11 +1163,18 @@ pub(crate) fn prepare_accel(
 /// Non-instanced instance-buffer allocation from a plan — zeroed identity
 /// descriptors; encode rewrites transforms/masks from the current objects
 /// every update (same content as the old `build_instance_buffer`).
-fn build_instance_buffer_from_plan(device: &GpuDevice, plan: &RtAccelPlan) -> (GpuBuffer, GpuBuffer) {
+fn build_instance_buffer_from_plan(
+    device: &GpuDevice,
+    plan: &RtAccelPlan,
+) -> Result<(GpuBuffer, GpuBuffer), RtAccelError> {
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let size = (stride * plan.topology.len().max(1)) as u64;
-    let destination = device.create_buffer(size);
-    let scratch = device.create_buffer_shared(size);
+    let destination = device
+        .try_create_buffer(size)
+        .map_err(|_| RtAccelError::Allocation { bytes: size, resource: "instance descriptor buffer" })?;
+    let scratch = device
+        .try_create_buffer_shared(size)
+        .map_err(|_| RtAccelError::Allocation { bytes: size, resource: "instance descriptor scratch" })?;
     let ptr = scratch.mapped_ptr().expect("RT instance-descriptor scratch must be CPU-mapped");
     for i in 0..plan.topology.len() {
         let desc = MTLAccelerationStructureInstanceDescriptor {
@@ -1143,7 +1188,7 @@ fn build_instance_buffer_from_plan(device: &GpuDevice, plan: &RtAccelPlan) -> (G
             std::ptr::write_unaligned(ptr.add(i * stride) as *mut _, desc);
         }
     }
-    (destination, scratch)
+    Ok((destination, scratch))
 }
 
 /// Encode a current-frame acceleration update onto the caller's encoder
@@ -1176,53 +1221,67 @@ pub(crate) fn encode_accel_update(
     if objects.len() != accel.blas.len() {
         return Err(RtAccelError::NeedsPreparation);
     }
-    let mut current_topology: Vec<RtGeometryTopology> = Vec::with_capacity(objects.len());
-    for (i, o) in objects.iter().enumerate() {
-        validate_object_geometry(i, o)?;
-        current_topology.push(RtGeometryTopology::from_geometry(o));
+    if accel.check_topology(objects).is_err() {
+        return Err(RtAccelError::NeedsPreparation);
     }
-    let slot_total: u32 = current_topology.iter().map(|t| t.instance_slots).sum();
+    // Keep validation and action classification allocation-free. The resident
+    // topology is updated in place only after all checks pass, so a rejected
+    // update cannot publish a partial snapshot.
+    let mut slot_total = 0u32;
+    let mut blas_builds = 0u32;
+    let mut blas_refits = 0u32;
+    for (i, (o, change)) in objects.iter().zip(changes).enumerate() {
+        validate_object_geometry(i, o)?;
+        let current = RtGeometryTopology::from_geometry(o);
+        slot_total = slot_total.checked_add(current.instance_slots).ok_or_else(|| {
+            RtAccelError::InvalidGeometry {
+                object: i,
+                reason: "instance slot count overflows u32".into(),
+            }
+        })?;
+        if !accel.blas[i].built {
+            blas_builds += 1;
+            continue;
+        }
+        // Buffer-identity moved: the resident descriptors still reference
+        // the OLD buffers, and the resident pin set holds them. Any identity
+        // move needs prepare (full replacement retargets and repins) — never
+        // encode against stale handles.
+        if accel.topology[i].vertex != current.vertex
+            || accel.topology[i].index != current.index
+        {
+            return Err(RtAccelError::NeedsPreparation);
+        }
+        match change {
+            RtGeometryChange::Reuse | RtGeometryChange::Attributes => {}
+            RtGeometryChange::Refit => {
+                if blas_storage_compatible(&accel.topology[i], &current) {
+                    blas_refits += 1;
+                } else {
+                    return Err(RtAccelError::NeedsPreparation);
+                }
+            }
+            RtGeometryChange::Rebuild => {
+                if blas_storage_compatible(&accel.topology[i], &current) {
+                    blas_builds += 1;
+                } else {
+                    return Err(RtAccelError::NeedsPreparation);
+                }
+            }
+        }
+    }
+    // `instance_slot_total` is kept at least one by plan_accel, including an
+    // empty object list. Preserve that resident contract without allocating a
+    // temporary topology vector.
+    let slot_total = slot_total.max(1);
     if accel.instanced != objects.iter().any(|o| o.instances_addr != 0)
         || slot_total != accel.instance_slot_total
     {
         return Err(RtAccelError::NeedsPreparation);
     }
-
-    // Per-object action. An unbuilt BLAS always builds. Refit runs the
-    // rebuild branch until P6 (§4.1). Rebuild reuses resident storage when
-    // the shape is compatible; a shape change needs prepare first.
-    enum Action { None, Build }
-    let mut actions = Vec::with_capacity(objects.len());
-    for (i, change) in changes.iter().enumerate() {
-        let action = if !accel.blas[i].built {
-            Action::Build
-        } else {
-            // Buffer-identity moved: the resident descriptors still reference
-            // the OLD buffers, and the resident pin set holds them. Any
-            // identity move needs prepare (full replacement retargets and
-            // repins) — never encode against stale handles.
-            let identity_moved = accel.topology[i].vertex != current_topology[i].vertex
-                || accel.topology[i].index != current_topology[i].index;
-            if identity_moved {
-                return Err(RtAccelError::NeedsPreparation);
-            }
-            match change {
-                RtGeometryChange::Reuse | RtGeometryChange::Attributes => Action::None,
-                RtGeometryChange::Refit | RtGeometryChange::Rebuild => {
-                    if blas_storage_compatible(&accel.topology[i], &current_topology[i]) {
-                        Action::Build
-                    } else {
-                        return Err(RtAccelError::NeedsPreparation);
-                    }
-                }
-            }
-        };
-        actions.push(action);
-    }
-    let blas_builds = actions.iter().filter(|a| matches!(a, Action::Build)).count() as u32;
     let tlas_build = accel.tlas_needs_build;
-    let tlas_refit = !tlas_build && (blas_builds > 0 || instance_data_changed);
-    if blas_builds == 0 && !tlas_build && !tlas_refit && !emissive_data_changed {
+    let tlas_refit = !tlas_build && (blas_builds > 0 || blas_refits > 0 || instance_data_changed);
+    if blas_builds == 0 && blas_refits == 0 && !tlas_build && !tlas_refit && !emissive_data_changed {
         return Ok(RtAccelUpdate::default());
     }
 
@@ -1256,7 +1315,7 @@ pub(crate) fn encode_accel_update(
             )
         };
         encode_inline_copy(device, encoder, obj_params, 0, bytes);
-    } else if instance_data_changed || blas_builds > 0 || tlas_build {
+    } else if instance_data_changed || blas_builds > 0 || blas_refits > 0 || tlas_build {
         let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
         let mask_offset = std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask);
         let scratch = accel
@@ -1309,39 +1368,47 @@ pub(crate) fn encode_accel_update(
         let () = msg_send![&*enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read | MTLResourceUsage::Write];
     }
 
-    if blas_builds > 0 {
-        for (i, action) in actions.iter().enumerate() {
-            if !matches!(action, Action::Build) {
+    if blas_builds > 0 || blas_refits > 0 {
+        for (blas, change) in accel.blas.iter_mut().zip(changes) {
+            let build = !blas.built || matches!(change, RtGeometryChange::Rebuild);
+            let refit = blas.built && matches!(change, RtGeometryChange::Refit);
+            if !build && !refit {
                 continue;
             }
-            let blas = &mut accel.blas[i];
             unsafe {
                 let () = msg_send![&*enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read | MTLResourceUsage::Write];
             }
-            enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-                &blas.structure,
-                &blas.descriptor,
-                blas.build_scratch.raw(),
-                0,
-            );
-            blas.built = true;
+            if build {
+                enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+                    &blas.structure,
+                    &blas.descriptor,
+                    blas.build_scratch.raw(),
+                    0,
+                );
+                blas.built = true;
+            } else {
+                unsafe {
+                    enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                        &blas.structure,
+                        &blas.descriptor,
+                        Some(&blas.structure),
+                        Some(blas.refit_scratch.raw()),
+                        0,
+                    );
+                }
+            }
         }
         update.blas_builds = blas_builds;
+        update.blas_refits = blas_refits;
     }
 
     if tlas_build || tlas_refit {
-        let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
-            accel.blas.iter().map(|b| b.structure.clone()).collect();
         unsafe {
-            for b in &blas_structures {
-                let () = msg_send![&*enc, useResource: &**b, usage: MTLResourceUsage::Read];
+            for b in &accel.blas {
+                let () = msg_send![&*enc, useResource: &*b.structure, usage: MTLResourceUsage::Read];
             }
         }
         if tlas_build {
-            // The retained descriptor's BLAS array names the structures the
-            // TLAS instances — refresh it to the resident set (a fresh
-            // prepare cloned the plan's probe array).
-            accel.descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_retained_slice(&blas_structures)));
             accel.descriptor.setInstanceCount(accel.instance_slot_total.max(1) as usize);
             unsafe {
                 accel.descriptor.setInstanceDescriptorBuffer(Some(accel.instance_buffer.raw()));
@@ -1387,7 +1454,9 @@ pub(crate) fn encode_accel_update(
     // enumerate → sort → gather → alias → stats; the CPU table build/refit
     // is deleted). `RtAccelUpdate::emissive_refreshes` is set there.
 
-    accel.topology = current_topology;
+    for (topology, object) in accel.topology.iter_mut().zip(objects) {
+        *topology = RtGeometryTopology::from_geometry(object);
+    }
     Ok(update)
 }
 
@@ -1505,7 +1574,7 @@ pub fn ensure_normal_sources<'a>(
     capacity: &mut usize,
     device: &GpuDevice,
     objects: &[RtObjectGeometry<'a>],
-) -> Vec<&'a GpuTexture> {
+) -> RtMaterialTextures<'a> {
     let object_count = objects.len();
     // D11: canonical rows [0, N) + slot rows [N, N+Σ) in one buffer.
     let needed = normal_source_row_count(objects);
@@ -1517,7 +1586,7 @@ pub fn ensure_normal_sources<'a>(
     let ptr = buf
         .mapped_ptr()
         .expect("RT normal-source buffer must be CPU-mapped");
-    let mut material_textures: Vec<&'a GpuTexture> = Vec::new();
+    let mut material_textures = RtMaterialTextures::new();
     // D11: slot-region cursor — object i's slots occupy [base_i, base_i +
     // cap_i) within [N, N+Σ), matching the TLAS slot addressing.
     let mut slot_row = 0usize;
@@ -1692,7 +1761,7 @@ pub fn ensure_normal_sources_snapshot<'a>(
     device: &GpuDevice,
     encoder: &mut crate::GpuEncoder,
     objects: &[RtObjectGeometry<'a>],
-) -> Vec<&'a GpuTexture> {
+) -> RtMaterialTextures<'a> {
     let textures = ensure_normal_sources(scratch, scratch_capacity, device, objects);
     let needed = normal_source_row_count(objects);
     let bytes = (needed * std::mem::size_of::<RtNormalSource>()) as u64;

@@ -1,13 +1,14 @@
 //! First-frame current-geometry dispatch proof for SCENE_MODIFIER_RT_DESIGN P5.
 //!
-//! This is a dispatch and frame-validity proof only: it does not claim
-//! numerical ray-hit or image correctness. A tiny generated mesh is rendered
-//! through the production `PresetRuntime` path exactly once, and the test
-//! requires both a complete frame status and a real RT capture produced by
-//! `render_scene`'s trace branch.
+//! A tiny generated mesh is rendered through the production `PresetRuntime`
+//! path, and the test requires both a complete frame status and a real RT
+//! capture produced by `render_scene`'s trace branch. The pinned current
+//! `MeshVertex` output also supplies an analytical centroid-ray witness, so
+//! the proof cannot pass on RT dispatch alone with stale or degenerate data.
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::frame_status::FrameRenderStatus;
+use manifold_renderer::generators::mesh_common::MeshVertex;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
@@ -15,72 +16,129 @@ use manifold_renderer::preset_runtime::PresetRuntime;
 
 use crate::harness;
 
-fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectGraphDef {
+pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
     use manifold_core::scene_modifier_preset::{
         SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
     };
     let mut owner: EffectGraphDef = serde_json::from_str(include_str!(
         "../fixtures/scene-modifiers/nested_multimaterial_v2.json"
-    )).unwrap();
+    ))
+    .unwrap();
     owner.version = 3;
-    let scene = owner.nodes.iter_mut().find(|node| node.type_id == "node.render_scene").unwrap();
-    scene.params.insert("rt_enabled".into(), SerializedParamValue::Bool { value: true });
-    let scene_ref = SceneNodeRef { scope: Vec::new(), node: scene.node_id.clone() };
+    let scene = owner
+        .nodes
+        .iter_mut()
+        .find(|node| node.type_id == "node.render_scene")
+        .unwrap();
+    scene.params.insert(
+        "rt_enabled".into(),
+        SerializedParamValue::Bool { value: true },
+    );
+    let scene_ref = SceneNodeRef {
+        scope: Vec::new(),
+        node: scene.node_id.clone(),
+    };
     let scene_id = scene.id;
     // The structural fixture's PBR material needs a real environment when
     // rendered. Reuse the small procedural environment from the RT proofs.
-    owner.nodes.push(serde_json::from_value(serde_json::json!({
-        "id": 40, "nodeId": "combo_environment", "typeId": "node.bake_environment",
-        "params": {
-            "width": {"type": "Int", "value": 64},
-            "height": {"type": "Int", "value": 32},
-            "uniform": {"type": "Bool", "value": true}
-        }
-    })).unwrap());
-    owner.wires.push(manifold_core::effect_graph_def::EffectGraphWire {
-        from_node: 40, from_port: "envmap".into(), to_node: scene_id, to_port: "envmap".into(),
-    });
+    owner.nodes.push(
+        serde_json::from_value(serde_json::json!({
+            "id": 40, "nodeId": "combo_environment", "typeId": "node.bake_environment",
+            "params": {
+                "width": {"type": "Int", "value": 64},
+                "height": {"type": "Int", "value": 32},
+                "uniform": {"type": "Bool", "value": true}
+            }
+        }))
+        .unwrap(),
+    );
+    owner
+        .wires
+        .push(manifold_core::effect_graph_def::EffectGraphWire {
+            from_node: 40,
+            from_port: "envmap".into(),
+            to_node: scene_id,
+            to_port: "envmap".into(),
+        });
 
     // Reuse the saved-frame convention of scene_modifier_expand::math_view's
     // deterministic fixture. Real stock recipes run on two tiny cube sources,
     // with no asynchronous import or private project asset dependency.
     let mut frames = Vec::new();
     for container in &owner.nodes {
-        let Some(group) = &container.group else { continue };
-        let source = group.nodes.iter().find(|node| node.type_id == "node.cube_mesh").unwrap();
-        let object = group.nodes.iter().find(|node| node.type_id == "node.scene_object").unwrap();
-        let transform = group.nodes.iter().find(|node| node.type_id == "node.transform_3d").unwrap();
+        let Some(group) = &container.group else {
+            continue;
+        };
+        let source = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.cube_mesh")
+            .unwrap();
+        let object = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.scene_object")
+            .unwrap();
+        let transform = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.transform_3d")
+            .unwrap();
         let scope = vec![container.node_id.clone()];
         frames.push(SceneMeshReferenceFrame {
-            target: SceneNodeRef { scope: scope.clone(), node: object.node_id.clone() },
-            source: SceneNodeRef { scope, node: source.node_id.clone() },
-            source_definition_hash: manifold_core::scene_source_identity::scene_source_definition_hash(&owner, source).unwrap(),
-            source_offset: ["pos_x", "pos_y", "pos_z"].map(|param| match transform.params.get(param) {
-                Some(SerializedParamValue::Float { value }) => f64::from(*value),
-                _ => 0.0,
+            target: SceneNodeRef {
+                scope: scope.clone(),
+                node: object.node_id.clone(),
+            },
+            source: SceneNodeRef {
+                scope,
+                node: source.node_id.clone(),
+            },
+            source_definition_hash:
+                manifold_core::scene_source_identity::scene_source_definition_hash(&owner, source)
+                    .unwrap(),
+            source_offset: ["pos_x", "pos_y", "pos_z"].map(|param| {
+                match transform.params.get(param) {
+                    Some(SerializedParamValue::Float { value }) => f64::from(*value),
+                    _ => 0.0,
+                }
             }),
             scene_radius: 3.0,
         });
     }
     for (id, json) in [
-        ("vortex", include_str!("../../assets/scene-modifier-presets/VortexFragments.json")),
-        ("recon", include_str!("../../assets/scene-modifier-presets/OrderedRecon.json")),
+        (
+            "vortex",
+            include_str!("../../assets/scene-modifier-presets/VortexFragments.json"),
+        ),
+        (
+            "recon",
+            include_str!("../../assets/scene-modifier-presets/OrderedRecon.json"),
+        ),
     ] {
         let recipe = serde_json::from_str(json).unwrap();
         let graph = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
         let instance = SceneModifierInstanceDef {
-            id: id.into(), scene: scene_ref.clone(), targets: SceneTargetSelection::AllObjects,
-            mesh_frames: frames.clone(), graph: Box::new(graph),
+            id: id.into(),
+            scene: scene_ref.clone(),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames.clone(),
+            legacy_math_view_carrier: None,
+            graph: Box::new(graph),
         };
         owner = manifold_core::scene_modifier_edit::insert_scene_modifier(
-            &owner, owner.scene_modifiers.len(), instance,
-        ).unwrap().graph;
+            &owner,
+            owner.scene_modifiers.len(),
+            instance,
+        )
+        .unwrap()
+        .graph;
     }
     owner
 }
 
-fn scene_json() -> &'static str {
+pub(super) fn scene_json() -> &'static str {
     r#"{"version":2,"name":"RtDynamicCurrentFrame","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},
         {"id":1,"typeId":"node.grid_mesh","nodeId":"grid","params":{
@@ -128,6 +186,70 @@ fn scene_json() -> &'static str {
     ]}"#
 }
 
+/// Read a non-degenerate triangle from the executor's pinned Array dump and
+/// construct an analytical ray through its centroid. This is derived from
+/// the bytes the current frame produced: a non-black RT capture alone cannot
+/// distinguish a stale source mesh from the geometry dispatched by the
+/// modifier chain.
+fn current_geometry_ray(runtime: &PresetRuntime) -> (String, [f32; 3], [f32; 3]) {
+    let dumps = runtime.dump_arrays_all();
+    for dump in dumps.iter().filter(|dump| {
+        dump.item_size as usize == std::mem::size_of::<MeshVertex>()
+            && dump.buffer.mapped_ptr().is_some()
+    }) {
+        let count = (dump.buffer.size as usize / std::mem::size_of::<MeshVertex>()) / 3 * 3;
+        let ptr = dump
+            .buffer
+            .mapped_ptr()
+            .expect("dumped mesh must be mapped") as *const MeshVertex;
+        for tri in (0..count).step_by(3) {
+            let vertices = unsafe {
+                [
+                    ptr.add(tri).read_unaligned(),
+                    ptr.add(tri + 1).read_unaligned(),
+                    ptr.add(tri + 2).read_unaligned(),
+                ]
+            };
+            let e1 = [
+                vertices[1].position[0] - vertices[0].position[0],
+                vertices[1].position[1] - vertices[0].position[1],
+                vertices[1].position[2] - vertices[0].position[2],
+            ];
+            let e2 = [
+                vertices[2].position[0] - vertices[0].position[0],
+                vertices[2].position[1] - vertices[0].position[1],
+                vertices[2].position[2] - vertices[0].position[2],
+            ];
+            let normal = [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ];
+            let norm =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            if !norm.is_finite() || norm < 1e-6 {
+                continue;
+            }
+            let centroid = [
+                (vertices[0].position[0] + vertices[1].position[0] + vertices[2].position[0]) / 3.0,
+                (vertices[0].position[1] + vertices[1].position[1] + vertices[2].position[1]) / 3.0,
+                (vertices[0].position[2] + vertices[1].position[2] + vertices[2].position[2]) / 3.0,
+            ];
+            let unit = [normal[0] / norm, normal[1] / norm, normal[2] / norm];
+            return (
+                format!("{}:{}:{}", dump.name, dump.type_id, tri),
+                [
+                    centroid[0] + unit[0] * 4.0,
+                    centroid[1] + unit[1] * 4.0,
+                    centroid[2] + unit[2] * 4.0,
+                ],
+                [-unit[0], -unit[1], -unit[2]],
+            );
+        }
+    }
+    panic!("current frame did not publish a mapped, non-degenerate MeshVertex triangle");
+}
+
 #[test]
 fn rt_dynamic_current_frame_first_frame_dispatches() {
     let h = harness::shared();
@@ -142,6 +264,7 @@ fn rt_dynamic_current_frame_first_frame_dispatches() {
         None,
     )
     .expect("current-frame RT scene graph must build");
+    runtime.set_dump_all(true);
     let target = h.make_target("rt-dynamic-current-frame");
     let ctx = PresetContext {
         time: 0.1,
@@ -183,6 +306,12 @@ fn rt_dynamic_current_frame_first_frame_dispatches() {
         !captures.is_empty(),
         "the first evaluated frame must produce real RT captures"
     );
+    let (triangle, origin, direction) = current_geometry_ray(&runtime);
+    assert!(origin.iter().all(|value| value.is_finite()));
+    assert!(direction.iter().all(|value| value.is_finite()));
+    println!(
+        "current-frame geometry ray witness: triangle={triangle} origin={origin:?} direction={direction:?}"
+    );
 }
 
 #[test]
@@ -192,35 +321,261 @@ fn rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches() {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let owner = modifier_combo_scene();
-    assert!(manifold_core::scene_modifier_preset::scene_modifier_parameter_lock_reason(
-        &owner, &NodeId::new("scan_render"), "rt_enabled",
-    ).is_none(), "the editor must allow this stock vertex-modifier stack's RT control");
+    assert!(
+        manifold_core::scene_modifier_preset::scene_modifier_parameter_lock_reason(
+            &owner,
+            &NodeId::new("scan_render"),
+            "rt_enabled",
+        )
+        .is_none(),
+        "the editor must allow this stock vertex-modifier stack's RT control"
+    );
     let mut runtime = PresetRuntime::from_def_with_device(
-        owner, &registry, std::sync::Arc::clone(&h.device), h.width, h.height,
-        GpuTextureFormat::Rgba16Float, None,
-    ).expect("Vortex Fragments + Ordered Recon must load with RT enabled");
-    let scene = runtime.graph.instance_by_node_id(&NodeId::new("scan_render")).unwrap();
+        owner,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("Vortex Fragments + Ordered Recon must load with RT enabled");
+    runtime.set_dump_all(true);
+    let scene = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("scan_render"))
+        .unwrap();
     let target = h.make_target("rt-modifier-combo");
     for (frame, enabled) in [true, false, true].into_iter().enumerate() {
-        runtime.graph.set_param(scene, "rt_enabled", ParamValue::Bool(enabled))
+        runtime
+            .graph
+            .set_param(scene, "rt_enabled", ParamValue::Bool(enabled))
             .expect("the prepared modifier runtime must allow live RT toggles");
         let ctx = PresetContext {
-            time: frame as f64 / 24.0, beat: frame as f64 / 12.0, dt: 1.0 / 24.0,
-            width: h.width, height: h.height, output_width: h.width, output_height: h.height,
-            aspect: h.width as f32 / h.height as f32, owner_key: 0, is_clip_level: false,
-            frame_count: frame as i64, anim_progress: 0.0, trigger_count: 0,
+            time: frame as f64 / 24.0,
+            beat: frame as f64 / 12.0,
+            dt: 1.0 / 24.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame as i64,
+            anim_progress: 0.0,
+            trigger_count: 0,
         };
         let mut status = None;
+        let mut rt_updates = None;
+        let mut rt_history_resets = 0;
+        let mut rt_dispatches = 0;
         let captures = harness::capture_rt_channels(|| {
             let mut enc = h.device.create_encoder("rt-modifier-combo");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
                 status = Some(gpu.frame_status());
+                rt_updates = Some(gpu.rt_updates);
+                rt_history_resets = gpu.rt_history_resets;
+                rt_dispatches = gpu.rt_dispatches;
             }
             enc.commit_and_wait_completed();
         });
-        assert_eq!(status, Some(FrameRenderStatus::Complete), "combo frame {frame}");
-        assert_eq!(!captures.is_empty(), enabled, "RT dispatch must follow the live toggle on frame {frame}");
+        assert_eq!(
+            status,
+            Some(FrameRenderStatus::Complete),
+            "combo frame {frame}"
+        );
+        assert_eq!(
+            !captures.is_empty(),
+            enabled,
+            "RT dispatch must follow the live toggle on frame {frame}"
+        );
+        let updates = rt_updates.expect("frame must expose RT update counters");
+        if enabled {
+            assert_eq!(
+                rt_dispatches, 1,
+                "enabled combo frame {frame} must trace exactly once"
+            );
+        } else {
+            assert_eq!(
+                rt_dispatches, 0,
+                "disabled combo frame {frame} must not trace"
+            );
+            assert_eq!(
+                updates,
+                Default::default(),
+                "disabled combo frame {frame} must do no RT maintenance"
+            );
+            assert_eq!(
+                rt_history_resets, 0,
+                "disabled combo frame {frame} must preserve RT history"
+            );
+        }
+        if frame == 0 && enabled {
+            assert!(
+                updates.tlas_builds + updates.blas_builds > 0,
+                "first combo frame must build its resident AS"
+            );
+        }
+        if frame == 2 && enabled {
+            assert!(
+                updates.blas_builds
+                    + updates.blas_refits
+                    + updates.tlas_builds
+                    + updates.tlas_refits
+                    > 0,
+                "re-enabled changed combo frame must update its resident AS"
+            );
+            assert!(
+                rt_history_resets > 0,
+                "changed combo geometry must reset RT history"
+            );
+        }
+        if enabled {
+            let (triangle, origin, direction) = current_geometry_ray(&runtime);
+            assert!(origin.iter().all(|value| value.is_finite()));
+            assert!(direction.iter().all(|value| value.is_finite()));
+            println!("modifier combo frame {frame} geometry ray witness: triangle={triangle}");
+        }
+    }
+}
+
+#[test]
+fn rt_dynamic_current_frame_warmup_toggle_deform_and_idle() {
+    use manifold_core::NodeId;
+    use manifold_renderer::node_graph::ParamValue;
+    let h = harness::shared();
+    let mut graph: serde_json::Value = serde_json::from_str(scene_json()).unwrap();
+    graph["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id":30,"nodeId":"wave","typeId":"node.normal_wave_mesh",
+            "params":{"amplitude":{"type":"Float","value":0.2},"phase":{"type":"Float","value":0.0}}
+        }));
+    for wire in graph["wires"].as_array_mut().unwrap() {
+        if wire["fromNode"] == 2 && wire["toNode"] == 4 {
+            wire["toNode"] = 30.into();
+            wire["toPort"] = "in".into();
+        }
+    }
+    graph["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"fromNode":30,"fromPort":"out","toNode":4,"toPort":"vertices"}));
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &graph.to_string(),
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .unwrap();
+    let scene = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("scene"))
+        .unwrap();
+    let wave = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("wave"))
+        .unwrap();
+    let target = h.make_target("rt-warmup-toggle");
+    let mut prepared_allocations = [0; 3];
+    for (frame, (enabled, preparing, phase)) in [
+        (false, true, 0.0),
+        (true, false, 0.0),
+        (true, false, 0.4),
+        (true, false, 0.4),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        runtime
+            .graph
+            .set_param(scene, "rt_enabled", ParamValue::Bool(enabled))
+            .unwrap();
+        runtime
+            .graph
+            .set_param(wave, "phase", ParamValue::Float(phase))
+            .unwrap();
+        let context = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 0.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame as i64,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut encoder = h.device.create_encoder("warmup toggle deformation");
+        let (status, updates, resets, dispatches) = {
+            let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
+            gpu.preparing = preparing;
+            runtime.render(&mut gpu, &target.texture, &context, &Default::default());
+            (
+                gpu.frame_status(),
+                gpu.rt_updates,
+                gpu.rt_history_resets,
+                gpu.rt_dispatches,
+            )
+        };
+        encoder.commit_and_wait_completed();
+        assert_eq!(status, FrameRenderStatus::Complete, "frame {frame}");
+        assert_eq!(dispatches, u32::from(enabled), "frame {frame}");
+        match frame {
+            0 => {
+                assert_eq!((updates.blas_builds, updates.tlas_builds), (1, 1));
+                prepared_allocations = h.device.allocation_counts();
+            }
+            1 => {
+                assert_eq!(
+                    (
+                        updates.blas_builds,
+                        updates.blas_refits,
+                        updates.tlas_refits
+                    ),
+                    (0, 0, 0),
+                    "RT toggle reuses the prepared unchanged mesh"
+                );
+                let current = h.device.allocation_counts();
+                assert_eq!(
+                    (current[0], current[2]),
+                    (prepared_allocations[0], prepared_allocations[2]),
+                    "toggle allocates no buffers/AS"
+                );
+            }
+            2 => {
+                assert_eq!(
+                    (
+                        updates.blas_builds,
+                        updates.blas_refits,
+                        updates.tlas_refits
+                    ),
+                    (0, 1, 1)
+                );
+                assert_eq!(resets, 1);
+            }
+            3 => {
+                assert_eq!(updates, Default::default());
+                assert_eq!(resets, 0);
+            }
+            _ => unreachable!(),
+        }
     }
 }

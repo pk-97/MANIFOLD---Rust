@@ -1224,7 +1224,17 @@ impl Runner {
         render: &mut RenderState,
         scrolled_in_place: bool,
     ) {
-        super::sync_data(ui, data, zoom_ppb);
+        if self.needs_structural_sync {
+            super::sync_data(ui, data, zoom_ppb);
+        } else {
+            // Configuring inspector cards clears their row widget IDs. The
+            // live app only does that before a structural rebuild; doing it
+            // on a value-only frame leaves push_state unable to repaint the
+            // existing toggle/slider widgets.
+            super::sync_project_data(ui, &data.project, data.active, &data.selection);
+            ui.viewport.set_zoom(zoom_ppb);
+            ui.rt_quality_panel.configure(data.project.settings.rt_quality);
+        }
         // BUG-073 fix shape (b): this driver has no per-frame timer, so a
         // tween a dispatch just armed (e.g. a newly-armed drawer growing a
         // card's row count) would otherwise sit at its t=0 state forever —

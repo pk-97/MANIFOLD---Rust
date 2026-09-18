@@ -171,9 +171,9 @@ pub trait ShadowRayTracer {
     /// Encode a current-frame update onto the caller's encoder (§4.2):
     /// instance descriptors → changed BLAS builds → TLAS → emissive
     /// preparation, ordered after the frame's geometry writes and before
-    /// the trace dispatch. No allocation, no commit, no CPU wait. Until
-    /// P6, `RtGeometryChange::Refit` executes the rebuild branch and
-    /// reports `blas_builds`.
+    /// the trace dispatch. No allocation, no commit, no CPU wait.
+    /// Position-only changes refit resident BLAS storage; connectivity
+    /// changes rebuild it. Both update TLAS bounds before tracing.
     /// Design amendment: `device` is threaded explicitly — §4.1's sketch
     /// omits it, but the descriptor-build pipeline and the (pre-P4a)
     /// emissive table are device-held and neither the encoder nor the
@@ -1625,6 +1625,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         instance_data_changed: bool,
         emissive_data_changed: bool,
     ) -> Result<RtAccelUpdate, RtAccelError> {
+        super::emissive::validate_emissive_inputs(accel, objects, materials)?;
         let mut update = encode_accel_update(
             device, encoder, accel, objects, changes, materials,
             instance_data_changed, emissive_data_changed,
@@ -1636,7 +1637,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // areas (GatherOnly; instanced mode composes at sample time through
         // the descriptor buffer, so it needs nothing); an unchanged frame
         // dispatches none of these passes.
-        let refresh = if update.blas_builds > 0 || emissive_data_changed {
+        let refresh = if update.blas_builds > 0 || update.blas_refits > 0 || emissive_data_changed {
             Some(super::EmissiveRefresh::Full)
         } else if instance_data_changed && !accel.instanced {
             Some(super::EmissiveRefresh::GatherOnly)

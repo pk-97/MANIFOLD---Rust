@@ -2,8 +2,8 @@ use crate::node_graph::{MeshRevision, Slot};
 use manifold_gpu::raytrace::RtGeometryChange;
 
 /// Classify the per-object acceleration-structure update for one evaluated
-/// frame. P5 rebuilds for every topology or position change; P6 can replace
-/// the position branch with refit once that path has its proof.
+/// frame. Connectivity changes rebuild; position-only changes refit the
+/// resident hierarchy and update its instance bounds on the same encoder.
 pub(super) fn classify_mesh_change(
     previous: Option<(MeshRevision, Option<(Slot, u64)>)>,
     current: Option<MeshRevision>,
@@ -23,9 +23,10 @@ pub(super) fn classify_mesh_change(
 
     if previous_topology_hint != topology_hint
         || previous_revision.topology != current_revision.topology
-        || previous_revision.positions != current_revision.positions
     {
         RtGeometryChange::Rebuild
+    } else if previous_revision.positions != current_revision.positions {
+        RtGeometryChange::Refit
     } else if previous_revision.content != current_revision.content {
         RtGeometryChange::Attributes
     } else {
@@ -91,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn position_change_rebuilds_in_p5() {
+    fn position_change_refits_with_stable_topology() {
         let previous = revision(1, 1, 1);
         assert_eq!(
             classify_mesh_change(
@@ -100,7 +101,7 @@ mod tests {
                 None,
                 false,
             ),
-            RtGeometryChange::Rebuild
+            RtGeometryChange::Refit
         );
     }
 

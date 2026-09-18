@@ -5,6 +5,21 @@
 use super::*;
 
 impl PresetRuntime {
+    #[cfg(feature = "gpu-proofs")]
+    pub fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
+        self.graph.nodes().find_map(|node| node.node.rt_probe_scene())
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    pub fn rt_probe_rays(
+        &self,
+        device: &manifold_gpu::GpuDevice,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        rays: &[manifold_gpu::raytrace::DebugRayQueryRay],
+    ) -> Option<manifold_gpu::GpuBuffer> {
+        self.graph.nodes().find_map(|node| node.node.rt_probe_rays(device, encoder, rays))
+    }
+
     /// Aim the authoring-time output preview at `node_id` within effect
     /// `effect_id`, or clear it. Resolves the editor's stable [`NodeId`] to
     /// the runtime node via the owning effect's `node_map`. A `None` node id,
