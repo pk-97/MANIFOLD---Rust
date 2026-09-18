@@ -588,6 +588,33 @@ mod tests {
         assert!(reason.contains("does not cover"), "{reason}");
         owner.scene_modifiers[0].mesh_frames = vec![frame("object")];
 
+        // An instances-only carrier (SpatialEchoes shape: echo nodes, no patch
+        // transform) is not a qualified carrier; connect stays locked with the
+        // reason instead of silently partially connecting (BUG-uvts).
+        let echo_only: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version":3,
+            "presetMetadata":{"id":"SpatialEchoes","displayName":"Spatial Echoes","category":"Geometry","oscPrefix":"spatialechoes","params":[],"bindings":[],"sceneModifier":{"schemaVersion":1,"singleton":false,"enabledParam":"enabled"}},
+            "nodes":[{"id":1,"nodeId":"echo","typeId":"node.analytic_echo_instances"}],
+            "wires":[]
+        }))
+        .unwrap();
+        let original_carrier = (*owner.scene_modifiers[0].graph).clone();
+        *owner.scene_modifiers[0].graph = echo_only.clone();
+        let reason = math_view_connect_support(&owner, &NodeId::new("math_view")).unwrap_err();
+        assert!(reason.contains("patch-based modifier"), "{reason}");
+        // Echoes mixed after a real patch carrier neither enable nor break
+        // connect: exactly one qualified carrier still resolves.
+        *owner.scene_modifiers[0].graph = original_carrier;
+        owner.scene_modifiers.insert(1, SceneModifierInstanceDef {
+            id: NodeId::new("spatial_echoes"),
+            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
+            mesh_frames: vec![frame("object")],
+            graph: Box::new(echo_only),
+        });
+        assert!(math_view_connect_support(&owner, &NodeId::new("math_view")).is_ok());
+        owner.scene_modifiers.remove(1);
+
         // A view ahead of the carrier sees no qualified preceding modifier.
         let mut reordered = owner.clone();
         let view = reordered.scene_modifiers.pop().unwrap();

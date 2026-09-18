@@ -37,6 +37,8 @@ pub use compiler::{
 };
 #[cfg(test)]
 pub(crate) use math_view::test_owner as math_view_test_owner;
+#[cfg(test)]
+pub(crate) use math_view::test_owner_with_instance_echoes as math_view_test_owner_with_instance_echoes;
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
 pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
