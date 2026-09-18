@@ -1,6 +1,6 @@
 # Scene modifier Math View — perform the structure behind the scene
 
-**Status:** IN PROGRESS · 2026-09-17 · Codex. Native grid repair and connected graphics events implemented (BUG-ywdj, BUG-657u); optional depth occlusion adds shared sampled-surface and scene-depth testing (D8). Representative fragment axes and clean trail re-enabling address BUG-cw9z and BUG-lln0. Broader mathematical presentation remains tracked in BUG-fgfk. Section 8 (standalone Math View) supersedes per-modifier sections.
+**Status:** SHIPPED · 2026-09-18 · section 8 (standalone Math View) is the live design and complete on main: combined-chain capture including instance modifiers, non-destructive per-carrier migration, historical partial-set detection. Owed: BUG-fgfk (broader mathematical presentation), BUG-jvn5 (post-view residuals, low). Sections 1–7 remain as the superseded record.
 **Prerequisites:** unified scene modifier recipes, parameter surface, native Metal.
 **Execution contract:** DESIGN_DOC_STANDARD.md sections 5–6; current AGENTS.md controls validation and delivery.
 
