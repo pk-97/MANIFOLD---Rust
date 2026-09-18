@@ -1111,8 +1111,7 @@ fn scene_modifier_math_view_captures_the_combined_chain_at_its_position() {
 }
 
 #[test]
-fn scene_modifier_math_view_first_in_chain_captures_the_seed_samples() {
-    // math_view with an empty preceding chain captures the seed samples as
+fn scene_modifier_math_view_first_in_chain_captures_the_seed_samples() {    // math_view with an empty preceding chain captures the seed samples as
     // both reference and current.
     let fixture = math_view_fixture();
     let mut owner = fixture.clone();
@@ -1175,4 +1174,336 @@ fn scene_modifier_math_view_first_in_chain_captures_the_seed_samples() {
         sources.windows(2).all(|pair| pair[0] == pair[1]),
         "empty chain: every geometry port reads the same seed node"
     );
+}
+
+fn diagram_input_source(
+    prepared: &PreparedSceneModifierGraph,
+    diagram_id: u32,
+    port: &str,
+) -> Option<(u32, String)> {
+    prepared
+        .def
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == diagram_id && wire.to_port == port)
+        .map(|wire| (wire.from_node, wire.from_port.clone()))
+}
+
+fn diagram_and_surface(prepared: &PreparedSceneModifierGraph) -> (u32, u32) {
+    let diagram = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| {
+            node.type_id == "node.render_mesh_diagram" && node.title.as_deref() == Some("Math View Diagram")
+        })
+        .expect("colour diagram");
+    let surface = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| {
+            node.type_id == "node.render_mesh_diagram" && node.title.as_deref() == Some("Math View Surface Depth")
+        })
+        .expect("surface depth diagram");
+    (diagram.id, surface.id)
+}
+
+#[test]
+fn scene_modifier_math_view_captures_preceding_instance_echoes() {
+    // BUG-uvts: SpatialEchoes writes only SceneEndpoint::Instances. The view
+    // must capture that producer and wire it into both diagram passes, while
+    // the vertices-only fixture stays unwired.
+    let owner = super::super::math_view::test_owner_with_instance_echoes();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let (diagram, surface) = diagram_and_surface(&prepared);
+    for node_id in [diagram, surface] {
+        let instances = diagram_input_source(&prepared, node_id, "instances")
+            .expect("echo chain: instances input is wired");
+        let current = diagram_input_source(&prepared, node_id, "current")
+            .expect("echo chain: current input is wired");
+        assert_ne!(
+            instances.0, current.0,
+            "instances and vertices read their own chain producers"
+        );
+        let source = prepared
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.id == instances.0)
+            .unwrap();
+        assert_ne!(
+            source.type_id, "system.mesh_input",
+            "instances come from the echo stage, not the seeded samples"
+        );
+        assert_ne!(
+            source.type_id,
+            "node.arrange_copies",
+            "instances come from the echo stage, not the identity fallback"
+        );
+    }
+
+    // Vertices-only capture: no producer exists upstream, so the port stays
+    // unwired and the diagram behaves exactly as before (BUG-uvts acceptance).
+    let plain = prepare_scene_modifier_math_view(
+        &math_view_fixture(),
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let (plain_diagram, plain_surface) = diagram_and_surface(&plain);
+    for node_id in [plain_diagram, plain_surface] {
+        assert!(
+            diagram_input_source(&plain, node_id, "instances").is_none(),
+            "vertices-only chain keeps the instances port unwired"
+        );
+    }
+}
+
+#[test]
+fn scene_modifier_math_view_captures_vertices_and_instances_from_the_right_producers() {
+    // Vortex deforms vertices, SpatialEchoes echoes instances: each endpoint
+    // must reach the diagram from its own stage output.
+    let owner = super::super::math_view::test_owner_with_instance_echoes();
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let (diagram, _) = diagram_and_surface(&prepared);
+    let source_type = |prepared: &PreparedSceneModifierGraph, diagram: u32, port: &str| {
+        let (id, _) = diagram_input_source(prepared, diagram, port).unwrap();
+        prepared
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .unwrap()
+            .type_id
+            .clone()
+    };
+    // The vertices capture is the same producer shape as the vertices-only
+    // fixture; the instances capture is a different, non-seed producer.
+    let plain = prepare_scene_modifier_math_view(
+        &math_view_fixture(),
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let (plain_diagram, _) = diagram_and_surface(&plain);
+    assert_eq!(
+        source_type(&prepared, diagram, "current"),
+        source_type(&plain, plain_diagram, "current"),
+        "adding an echo modifier must not change the vertices capture"
+    );
+    let current_id = diagram_input_source(&prepared, diagram, "current").unwrap().0;
+    let instances_id = diagram_input_source(&prepared, diagram, "instances").unwrap().0;
+    assert_ne!(current_id, instances_id, "each endpoint reads its own producer");
+    assert_ne!(
+        source_type(&prepared, diagram, "instances"),
+        "system.mesh_input",
+        "instances come from the echo stage, not the seeded samples"
+    );
+}
+
+#[test]
+fn scene_modifier_math_view_post_view_modifiers_do_not_leak_into_capture() {
+    // BUG-jvn5 tie: modifiers after the view never feed the diagram. The
+    // capture must read the seed samples for vertices and stay unwired for
+    // instances, even when a vertex modifier and an echo modifier follow.
+    let mut owner = math_view_fixture();
+    let view = owner.scene_modifiers.remove(1);
+    owner.scene_modifiers.insert(0, view);
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let (diagram, surface) = diagram_and_surface(&prepared);
+    for node_id in [diagram, surface] {
+        let (current_id, _) = diagram_input_source(&prepared, node_id, "current").unwrap();
+        let source = prepared
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.id == current_id)
+            .unwrap();
+        assert_eq!(
+            source.type_id, "system.mesh_input",
+            "post-view vertex modifiers must not leak into the capture"
+        );
+        assert!(
+            diagram_input_source(&prepared, node_id, "instances").is_none(),
+            "post-view echo modifiers must not leak into the capture"
+        );
+    }
+
+    // The compiled view plan drops the post-view stage work entirely; only
+    // load-time expansion still sees it (BUG-jvn5 verification: the GPU cost
+    // premise holds only for stateful post-view roots, not ordinary stages).
+    let graph = prepared
+        .def
+        .clone()
+        .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+        .unwrap();
+    let plan = crate::node_graph::compile(&graph).unwrap();
+    for step in plan.steps() {
+        let node = graph.get_node(step.node).unwrap();
+        assert!(
+            !node.node_id.as_str().starts_with("instance/vortex_a/"),
+            "post-view modifier stage is evaluated in the view plan: {}",
+            node.node_id
+        );
+    }
+}
+
+#[test]
+fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
+    // Design call for BUG-jvn5: a post-view modifier that writes Camera (like
+    // SceneLoop's lens stage) still frames the diagram — the view is a window
+    // into the scene and must match the performer's final framing. Its
+    // instance copies, however, are post-view and must not enter the capture.
+    let mut owner = math_view_fixture();
+    let loop_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/SceneLoop.json"
+    )))
+    .unwrap();
+    let view = owner
+        .scene_modifiers
+        .iter()
+        .find(|instance| instance.id == NodeId::new("math_view"))
+        .expect("fixture view")
+        .clone();
+    owner.scene_modifiers.push(SceneModifierInstanceDef {
+        id: NodeId::new("scene_loop"),
+        scene: view.scene.clone(),
+        targets: SceneTargetSelection::AllObjects,
+        // SceneLoop consumes no mesh coordinate context, so saved frames are
+        // rejected for it; its EachObject stage resolves targets directly.
+        mesh_frames: Vec::new(),
+        graph: Box::new(loop_recipe),
+    });
+    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner,
+        &NodeId::new("scene_loop"),
+    )
+    .unwrap()
+    .graph;
+    let registry = PrimitiveRegistry::with_builtin();
+    let prepared = prepare_scene_modifier_math_view(
+        &owner,
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    // Baseline without the post-view SceneLoop: the diagram reads the host
+    // camera chain producer.
+    let plain = prepare_scene_modifier_math_view(
+        &math_view_fixture(),
+        &registry,
+        &NodeId::new("math_view"),
+    )
+    .unwrap();
+    let (diagram, _) = diagram_and_surface(&prepared);
+    let (plain_diagram, _) = diagram_and_surface(&plain);
+    let (camera_id, _) = diagram_input_source(&prepared, diagram, "camera").unwrap();
+    let (plain_camera_id, _) = diagram_input_source(&plain, plain_diagram, "camera").unwrap();
+    assert_ne!(
+        camera_id, plain_camera_id,
+        "post-view camera writes keep framing the diagram (final scene camera)"
+    );
+    assert!(
+        diagram_input_source(&prepared, diagram, "instances").is_none(),
+        "post-view instance writes stay out of the capture"
+    );
+}
+
+#[test]
+fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
+    // Connect to Mesh stays all-or-nothing: an instances-only preceding
+    // chain (SpatialEchoes alone, no patch carrier) must keep the view's
+    // mask presentation-only — no weights wire reaches the scene object from
+    // the generated mask (BUG-uvts acceptance).
+    let fixture = super::super::math_view::test_owner_with_instance_echoes();
+    let mut owner = fixture.clone();
+    owner.scene_modifiers.retain(|instance| instance.id != NodeId::new("vortex_a"));
+    let metadata = owner.preset_metadata.as_mut().unwrap();
+    metadata
+        .bindings
+        .retain(|binding| !matches!(
+            &binding.target,
+            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "vortex_a"
+        ));
+    let binding_ids: std::collections::HashSet<_> = metadata
+        .bindings
+        .iter()
+        .map(|binding| binding.id.clone())
+        .collect();
+    metadata.params.retain(|param| binding_ids.contains(&param.id));
+    let owner = owner;
+    let registry = PrimitiveRegistry::with_builtin();
+    let parent = prepare_scene_modifiers(&owner, &registry).unwrap();
+    let view = owner
+        .scene_modifiers
+        .iter()
+        .find(|instance| instance.id == NodeId::new("math_view"))
+        .unwrap();
+    let objects: std::collections::BTreeSet<u32> = parent
+        .def
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == "node.scene_object")
+        .map(|node| node.id)
+        .collect();
+    for frame in &view.mesh_frames {
+        let mask_id = super::math_events::resource_node_id(&view.id, &frame.target, "weights");
+        let mask = parent
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.node_id == mask_id)
+            .expect("generated appearance mask");
+        assert!(
+            parent.def.wires.iter().all(|wire| {
+                !(wire.from_node == mask.id && objects.contains(&wire.to_node))
+            }),
+            "unsupported chain: mask weights must not reach the scene object"
+        );
+        // Without a qualified patch carrier the mask stays presentation-only:
+        // it feeds the view's export boundary for the derived view to read,
+        // never the scene object itself.
+        let export_id = super::math_events::resource_node_id(&view.id, &frame.target, "export");
+        let export = parent
+            .def
+            .nodes
+            .iter()
+            .find(|node| node.node_id == export_id)
+            .expect("generated mesh export");
+        let consumers: Vec<u32> = parent
+            .def
+            .wires
+            .iter()
+            .filter(|wire| wire.from_node == mask.id)
+            .map(|wire| wire.to_node)
+            .collect();
+        assert!(
+            !consumers.is_empty(),
+            "the presentation mask must still feed the view export"
+        );
+        assert!(
+            consumers.iter().all(|consumer| *consumer == export.id),
+            "unsupported chain: mask weights must only reach the view export"
+        );
+    }
 }

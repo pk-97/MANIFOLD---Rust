@@ -479,6 +479,11 @@ struct Builder<'a> {
 struct MathViewCapture {
     reference: PortAddress,
     current: PortAddress,
+    /// Chain producer of `SceneEndpoint::Instances` at the view's position:
+    /// preceding copy/echo modifiers (SpatialEchoes, WavesEchoes, SceneLoop)
+    /// or a host-wired instances port. `None` when nothing upstream produces
+    /// copies — the diagram then behaves exactly as a vertices-only capture.
+    instances: Option<PortAddress>,
     radius: f64,
 }
 
@@ -688,11 +693,20 @@ impl Builder<'_> {
                     path: instance.id.to_string(),
                     detail: format!("Math View has no saved mesh frame for {target:?}"),
                 })?;
+            // Instances resolve through the same chain-state table as vertices.
+            // attachment_key only seeds the entry from the host wire when the
+            // chain never touched the endpoint; it creates no identity node
+            // (that is endpoint_input during stage append), so an untouched
+            // chain reads back as None and the diagram stays vertices-only.
+            let instances_key =
+                self.attachment_key(instance, Some(target), SceneEndpoint::Instances)?;
+            let instances = self.current.get(&instances_key).and_then(|address| address.clone());
             captures.insert(
                 target.clone(),
                 MathViewCapture {
                     reference,
                     current,
+                    instances,
                     radius: frame.scene_radius,
                 },
             );
@@ -796,13 +810,16 @@ impl Builder<'_> {
             let diagram = (diagram_id, "color".to_string());
             // Ghosts and arrow tails read the undeformed reference samples, so
             // arrows show the total reference→current displacement of the whole
-            // preceding chain, not one modifier's local step.
+            // preceding chain, not one modifier's local step. When a preceding
+            // modifier produces instances, the same per-copy ghosts and arrows
+            // repeat at every copy transform, so echo chains are visible too.
             for (from, to_port) in [
                 (Some(capture.current.clone()), "current"),
                 (Some(capture.reference.clone()), "reference"),
                 (Some(capture.reference.clone()), "incoming"),
                 (Some(camera.clone()), "camera"),
                 (transform.clone(), "transform"),
+                (capture.instances.clone(), "instances"),
             ] {
                 let Some(from) = from else { continue; };
                 self.derived.wires.push(EffectGraphWire {
@@ -845,6 +862,7 @@ impl Builder<'_> {
                 (Some(capture.reference), "incoming"),
                 (Some(camera.clone()), "camera"),
                 (transform, "transform"),
+                (capture.instances, "instances"),
             ] {
                 let Some(from) = from else { continue; };
                 self.derived.wires.push(EffectGraphWire {
