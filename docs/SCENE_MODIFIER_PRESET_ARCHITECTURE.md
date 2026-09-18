@@ -254,9 +254,9 @@ Persisting a stack is a deliberate schema change, not a small descriptor refacto
 
 Instance/vertex math runs through manifold-gpu and the existing native Metal backend. Pure per-element operations must use freeze codegen with standalone/fused proofs. Prepare pipelines and capacities before performance. Keep source resources immutable and use existing generation/retirement semantics so raster, shadows, RT, motion vectors and export consume coherent geometry.
 
-**Rendering capability boundary:** dynamic mesh RT is currently unsupported because acceleration updates wait for settled vertex generations (BUG-e3p6.4). M1 conservatively treats any Vertices-writing modifier stage as requiring dynamic-vertex support for RT, even if currently bypassed. Surface the incompatibility through shared renderer admission; preserve the authored request and show the reason without silently switching settings. This endpoint rule is independent of preset names and live values; any future relaxation needs proof. Raster M1 can ship independently. Do not claim shadow/motion-vector/RT coherence without its specific check. Enable gestures neither reclassify capability nor compile pipelines.
+**Rendering capability boundary:** vertices-writing modifiers use the same final geometry for raster and RT. Geometry revisions select retained BLAS refits or rebuilds before tracing; appearance and material changes refresh the current frame's tables and invalidate stale history. Modifier recipes do not implement RT, and the editor preserves the authored RT toggle across modifier attachment, reorder, save and reload. Existing opaque/masked material participation remains unchanged; deformation motion vectors are not supplied by this work.
 
-The successor contract is [automatic scene-modifier RT](SCENE_MODIFIER_RT_DESIGN.md), with [numerical acceptance definitions](SCENE_MODIFIER_RT_ACCEPTANCE.md), owned by `BUG-e3p6.4`. Its header and phase markers are authoritative; the current limitation above remains until implementation passes those gates.
+The authoritative contract is [automatic scene-modifier RT](SCENE_MODIFIER_RT_DESIGN.md), with [numerical acceptance definitions](SCENE_MODIFIER_RT_ACCEPTANCE.md), owned by `BUG-e3p6.4`. Its phase markers and acceptance ledger distinguish implemented behavior from measured qualification.
 
 ## 8. Invariants & enforcement
 
@@ -272,7 +272,7 @@ All named tests below are new deliverables, not currently passing tests. Shared 
 | A6 | Migration preserves known legacy behaviour and mappings | `scene_modifier_legacy_migration`, F4 |
 | A7 | Invalid input never partially applies | `scene_modifier_invalid_atomic`, F1/F3 |
 | A8 | No live structural rebuild for gestures | `scene_modifier_live_binding_no_rebuild`, F5 |
-| A9 | Geometry changes reach every claimed render path; unsupported dynamic RT is diagnosed | `scene_modifier_geometry_generation` and mode-admission test, F2/F8; RT parity owned by BUG-e3p6.4 |
+| A9 | Geometry changes reach raster and the current-frame RT path; pending/error frames are rejected | `scene_modifier_geometry_generation` and mode-admission test, F2/F8; RT parity owned by BUG-e3p6.4 |
 | A10 | Source-only restrictions are explicit and tested | `scene_modifier_source_order`, F2 |
 | A11 | Common scan frame across material groups; no atom-specific compiler setup | `scene_modifier_coordinate_context`, F2/F4 |
 | A12 | Files own all curation and attachment; new recipe needs no Rust registration | `scene_modifier_file_authoring`, F6/F7 |

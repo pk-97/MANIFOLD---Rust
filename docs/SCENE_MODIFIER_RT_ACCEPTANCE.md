@@ -2,21 +2,21 @@
 
 <!-- index: Implementation-ready numerical, catalog, export, lifetime and performance gates for automatic RT on modified meshes. -->
 
-**Status:** APPROVED definitions · 2026-09-16 · Codex lead · tests below are implementation deliverables, not executed results.
+**Status:** APPROVED definitions · implementation evidence updated 2026-09-18 · Codex lead · A1–A9 remain the acceptance requirements; A11 distinguishes executed evidence from outstanding qualification.
 
-Authority: [design and phase briefs](SCENE_MODIFIER_RT_DESIGN.md), [dated source inventory](SCENE_MODIFIER_RT_INVENTORY.md), existing [modifier validation contract](SCENE_MODIFIER_VALIDATION_PLAN.md). Work item: `BUG-e3p6.4`. No rendering, GPU capability or performance result is asserted by this document. The lead owns acceptance; K3 implements the named probes alongside their fixes.
+Authority: [design and phase briefs](SCENE_MODIFIER_RT_DESIGN.md), [dated source inventory](SCENE_MODIFIER_RT_INVENTORY.md), existing [modifier validation contract](SCENE_MODIFIER_VALIDATION_PLAN.md). Work item: `BUG-e3p6.4`. The lead owns acceptance. Measured results appear only in A11; requirements elsewhere are not implied passes.
 
 ## A0. Harness, evidence and execution
 
-Extend `crates/manifold-renderer/tests/gpu_proofs/` and its existing shared native Metal device/readback harness. New file `rt_dynamic_geometry.rs` contains nested modules named `rt_dynamic_baseline`, `rt_dynamic_fusion`, `rt_dynamic_ordering`, `rt_dynamic_shading`, `rt_dynamic_current_frame`, `rt_dynamic_refit` and `rt_dynamic_catalog`. Put the named test in its owning module so phase filters select real tests. CPU tests use `mesh_change_` prefixes. App tests use `rt_dynamic_export_` and the existing `journey-proofs` harness. Register modules in the existing test root; zero selected tests is a failed gate.
+Extend `crates/manifold-renderer/tests/gpu_proofs/` and its existing shared native Metal device/readback harness. New file `rt_dynamic_geometry.rs` contains nested modules named `rt_dynamic_oracle`, `rt_dynamic_fusion`, `rt_dynamic_ordering`, `rt_dynamic_shading`, `rt_dynamic_current_frame`, `rt_dynamic_refit` and `rt_dynamic_catalog`. Put the named test in its owning module so phase filters select real tests. CPU tests use `mesh_change_` prefixes. App tests use `rt_dynamic_export_` and the existing `journey-proofs` harness. Register modules in the existing test root; zero selected tests is a failed gate.
 
 Add a debug ray-query entry point beside `MetalShadowRayTracer::debug_fetch_interpolated_normal`, using the production candidate-hit helper, source tables, descriptors and AS. It encodes into the caller's encoder and returns readback buffers; the harness waits only after all geometry/update/query commands are submitted. Ray input is origin/direction/tmin/tmax; output includes hit flag, object/instance/primitive IDs, distance, barycentrics, interpolated normal/UV and coverage. Invalid IDs are explicit sentinels. Debug code must not create a second acceleration or material implementation.
 
-Use a CPU Möller–Trumbore oracle only in tests. Read final GPU geometry after query completion to compute the oracle when testing real modifiers: never duplicate modifier math. Compare rays away from edges (minimum barycentric coordinate 0.05); separate edge/degenerate cases use explicit expected hit/miss rules. Seed is fixed and reported. For stochastic visibility use fixed seeds over many independent samples; do not compare single noisy beauty images.
+Use a CPU Möller–Trumbore oracle only in tests. Read final GPU geometry after query completion to compute the oracle when testing real modifiers: never duplicate modifier math. Compare rays away from edges (minimum barycentric coordinate 0.05); separate edge/degenerate cases use explicit expected hit/miss rules. Coincident cut triangles do not have a unique primitive ID: validate the exact returned ID against its readback triangle and require its CPU intersection distance to match the nearest CPU hit within 1e-6 before comparing that triangle’s barycentrics. Unique nearest hits still require exact IDs. Seed is fixed and reported. For stochastic visibility use fixed seeds over many independent samples; do not compare single noisy beauty images.
 
-Common thresholds: hit/miss and all IDs exact; finite distance/position error ≤ `max(1e-4 scene units, 1e-4 * abs(expected))`; barycentric/UV error ≤ `2e-4`; normalized normal dot ≥ `0.9999`; no NaN/Inf. Fixture extent is 2 scene units unless specified. Rebuild-vs-refit uses the **same current GPU output**, not separately evaluated modifiers. Rays at distances near a topology boundary are excluded from the general tolerance and tested explicitly.
+Common thresholds: hit/miss and all unique-nearest IDs exact; finite distance/position error ≤ `max(1e-4 scene units, 1e-4 * abs(expected))`; barycentric/UV error ≤ `2e-4`; normalized normal dot ≥ `0.9999`; no NaN/Inf. Fixture extent is 2 scene units unless specified. Rebuild-vs-refit uses the **same current GPU output**, not separately evaluated modifiers. Rays at distances near a topology boundary are excluded from the general tolerance and tested explicitly.
 
-Exact group ownership: `rt_dynamic_baseline::rt_dynamic_baseline_records_unsupported` is P0-only; `rt_dynamic_ordering` owns backend same-command-buffer and teardown/snapshot probes in A2 (P3); `rt_dynamic_fusion::rt_dynamic_fusion_roundtrip` runs the fused/unfused metadata and actual GPU mesh-output comparison in A1 (P2). `rt_dynamic_shading` owns A4 (P4a/P4b). `rt_dynamic_current_frame` owns pending/admission/history and production-renderer versions of A2/A3 (P5). `rt_dynamic_refit` owns final selective-action and fresh-build comparisons in A3 (P6). `rt_dynamic_catalog::rt_dynamic_catalog_all_stock_and_compositions` owns A6 (P7a). Add module `rt_dynamic_perf` with `rt_dynamic_bounded_perf` for A9 as an explicitly invoked release-build proof (P8); ordinary GPU mode excludes this measurement module. CPU mode runs A1, catalog mode A6, export mode A7, and GPU mode the correctness groups only. Each phase adds only its now-passing group; the final runner requires every final group.
+Exact group ownership: `rt_dynamic_oracle::rt_dynamic_oracle_rejects_wrong_hits` retains the independent oracle self-check after removal of the P0 unsupported-state assertion; `rt_dynamic_ordering` owns backend same-command-buffer and teardown/snapshot probes in A2 (P3); `rt_dynamic_fusion::rt_dynamic_fusion_roundtrip` runs the fused/unfused metadata and actual GPU mesh-output comparison in A1 (P2). `rt_dynamic_shading` owns A4 (P4a/P4b). `rt_dynamic_current_frame` owns pending/admission/history and production-renderer versions of A2/A3 (P5). `rt_dynamic_refit` owns final selective-action and fresh-build comparisons in A3 (P6). `rt_dynamic_catalog::rt_dynamic_catalog_all_stock_and_compositions` owns A6 (P7a). Add module `rt_dynamic_perf` with `rt_dynamic_perf_bounded_a9` for A9 as an explicitly invoked release-build proof with `rt-perf-proofs` (P8); ordinary GPU mode excludes this measurement module. CPU mode runs A1, catalog mode A6, export mode A7, and GPU mode the correctness groups only. Each phase adds only its now-passing group; the final runner requires every final group.
 
 P0 first introduces a baseline witness that passes by recording the existing unsupported result and proving the oracle distinguishes alternating states. Remove that baseline limitation assertion when P5 lands; the runner then requires the positive same-frame test. Never leave ignored tests, expected-failure acceptance tests, reduced ray counts or missing modules to obtain green output.
 
@@ -82,7 +82,7 @@ Do not pass this test by permanently disabling temporal systems. Record reset co
 
 ## A6. Complete stock catalog and future producers — P2/P7a
 
-Discover recipe files from `assets/scene-modifier-presets/*.json`; at audit time there are **13 (9 available, 4 hidden)**. Assert that discovered names equal the acceptance fixture registry; an added recipe without a fixture fails with its name. Attach through `prepare_new_scene_modifier`/`prepare_scene_modifiers` to the existing tiny imported host and generated analytical host. Use real parameter bindings to enable RT and assert RT actually dispatched. Capture final geometry for the independent ray oracle; do not validate by “nonblack output.”
+Discover recipe files from `assets/scene-modifier-presets/*.json`; at the final implementation audit there are **14**, including the hidden legacy MathView recipe. Assert that discovered names equal the acceptance fixture registry; an added recipe without a fixture fails with its name. Attach through `prepare_new_scene_modifier`/`prepare_scene_modifiers` to the existing tiny imported host and generated analytical host. Use real parameter bindings to enable RT and assert RT actually dispatched. Capture final geometry for the independent ray oracle; do not validate by “nonblack output.”
 
 | Class | Recipes | Required coverage |
 |---|---|---|
@@ -116,7 +116,7 @@ Compatibility: existing project fixtures deserialize without migration changes; 
 
 Acceptance budgets below are **targets, not measurements**. Use release builds on Peter's current native-RT Mac, plugged in, report model/GPU/OS. Disable validation layers only for timing, retain correctness run with the ordinary proof configuration. Render at 1280×720, the existing `RtQualityColumn::default()` realtime settings (`manifold-foundation/src/settings.rs:188`: shadows=1, AO=4, GI=4, reflections=8 samples, Half ray resolution, Medium spatial denoise); serialize/report those settings and the existing upscaler selection and hold them constant across comparisons.
 
-Reference scene: two objects, one static and one exactly 65,536-triangle grid with Surface Waves, one directional light and a small emissive triangle; one view, no echoes/cuts. Held-out scene: an existing representative imported scan selected from Peter's projects, with its path/hash, triangle count and modifier chain recorded before timing. If none is available, mark the held-out gate blocked and report it; do not invent a proxy pass.
+Reference scene: two objects, one static and one exactly 65,536-triangle grid with Surface Waves, one directional light and a small two-triangle emissive patch; one view, no echoes/cuts. Held-out scene: an existing representative imported scan selected from Peter's projects, with its path/hash, triangle count and modifier chain recorded before timing. If none is available, mark the held-out gate blocked and report it; do not invent a proxy pass.
 
 Prepare once, 16 warmup frames then 120 measured frames; one bounded run per fixture/configuration. Reference configurations: RT off; static RT; dynamic selective-refit RT; fresh-build RT reference using the same geometry (test harness only). One verification run is permitted after a concrete fix. Do not launch a general soak or explore arbitrary GPU settings.
 
@@ -128,7 +128,7 @@ After warmup require **zero new Metal buffers, AS objects, pipelines or scratch 
 
 ## A10. Commands and final acceptance ledger
 
-Commands use an acquired absolute `RT_WORKTREE` path and run only the phase's selected gates. Cargo target/builder lock follows repository slot discipline. These are implementation-time commands; this documentation task does not run them.
+Commands use an acquired absolute `RT_WORKTREE` path and run only the phase's selected gates. Cargo target/builder lock follows repository slot discipline. These are implementation-time commands; executed evidence is recorded below.
 
 ```sh
 cargo test --manifest-path "$RT_WORKTREE/Cargo.toml" -p manifold-renderer mesh_change_
@@ -140,3 +140,66 @@ python3 "$RT_WORKTREE/scripts/rt_dynamic_acceptance.py" --manifest-path "$RT_WOR
 For other GPU phases replace the filter with the exact module in A0; do not run the whole suite by default. Use `scripts/codex_checks.py` for focused crate tests/clippy and `scripts/gpu_proofs_gate.py` for changed GPU paths. GPU proofs use cargo test, never nextest. Final app landing goes through `scripts/land_branch.py` and its required landing gate. Passed checks are not repeated without changed code/new evidence.
 
 Lead ledger at final review must contain one row per A1–A9: implementing commit, exact command, test count, artifact/report, pass/fail/blocked, and remaining limitation. All correctness/resource/export rows must pass to close `BUG-e3p6.4`; live performance and L4 results are reported separately and honestly. Failures after two concrete attempts return evidence to the lead. No silent skips, fallback, ignored tests or fabricated measured results.
+
+
+## A11. Implementation evidence — 2026-09-18
+
+Implementation commits: `0e95bb5dd` and `d7e054595` (expanded proofs and deterministic export reset), on the P5 lineage merged with main
+`713cd9bb1`. This ledger records actual coverage rather than treating every
+proposed case in A1–A9 as executed. Artifacts are under
+`/tmp/manifold-rt-dynamic/`; final landing logs are retained there separately.
+`BUG-e3p6.4` remains open until the qualification gaps below are resolved.
+
+Commands below run from the acquired worktree, with `RUSTC_WRAPPER=` and
+`.claude/scripts/with-build-lock.sh`; native GPU execution requires a host
+that can create a Metal device. `G` means
+`python3 scripts/gpu_proofs_gate.py`; the final landing runs the required
+broader diff-selected CPU/GPU gate independently.
+
+| Requirement | Executed evidence in implementation commit | Result / remaining qualification |
+|---|---|---|
+| A1 revisions | CPU `mesh_change_` contracts plus new non-mesh cut-map content regression; final touched-crate gate executes these. Real export changes the map at frame 6 and observes a BLAS rebuild. | Export regression passed. Final CPU result belongs to the landing transcript. |
+| A2 order/lifetime/admission | `G --filter rt_dynamic_ordering`; 3 tests covering same-submission writes, unsubmitted teardown/multiple frames, rejected admission and retained resident geometry. | Passed. Exhaustive allocation-failure injection for every resource kind and the proposed delayed-source production fixture remain unqualified. |
+| A3 refit | `G --filter rt_dynamic_refit`; 2 tests, including expanded bounds, finite collapse/revival, wired instances, fresh-build numerical comparison and atomic invalid-input rejection. Current-frame warmup/toggle/deform/idle proof also passed. | Passed for tested fixtures; not the entire proposed 64-ray, eight-state matrix. |
+| A4 shading | `G --filter rt_dynamic_shading`; 3 tests including GPU geometry/alias preparation, appearance/attributes and queued-frame metadata snapshots. Existing numerical coverage tests retain their thresholds. | Passed. Existing transparent-transport and normal-transform limitations remain unchanged. |
+| A5 history | Current-frame tests assert deformation resets and unchanged-frame reuse. `rt_dynamic_history_reset_and_resume` poisons resident core RT histories, changes material appearance, compares irradiance/reflection/visibility/hold against an aligned unpoisoned reference, checks fresh moment counts and resumed accumulation. | Core RT sentinel/reference test passed. MetalFX denoiser and temporal-upscale internal histories are not enabled by that proof and remain unqualified. |
+| A6 catalog | `G --filter rt_dynamic_catalog`; 3 tests discover all 14 recipes, five compositions, reversed order, save/reload and an unknown authored WGSL producer. Every frame checks 64 interior rays against readback geometry, including explicit coincident-triangle handling. Representative Waves/cuts/echoes controls cover endpoints, repeated values and backward parameter movement. | Passed. Both-host, transport-seek and fused/unfused Cartesian matrix remains incomplete; existing fusion proofs cover representative cases. Saved/reordered/undo-redo stacks also run through the app export proof. |
+| A7 export | `cargo test --release -p manifold-app --features journey-proofs,perf-soak,ui-snapshot rt_dynamic_export_ -- --test-threads=1`; 6 passed, 0 ignored (`/tmp/rt-reset-export.log`). | Frame-zero RT, animated refits, frame-six cut rebuild, deterministic repeat/save/reload/sections, SceneLoop repeat, saved modifier reorder/undo/redo, all seven injected failures, cancel, resize and HDR passed. Export now resets existing generator simulation state and RT sampling at each section origin, excluding variable async warmup from the result. |
+| A8 compatibility/UI | `cargo run --release -p manifold-app --features journey-proofs,perf-soak,ui-snapshot -- ui-snap mushroomscene --script scripts/ui-flows/rt-dynamic-modifier.json`; 46 steps passed. Real Corrosion witness exported and first frame observed. | RT enable, add Waves, phase edit, undo, off/on, add Ordered Recon and Spatial Echoes, and undo/redo passed. Reorder/save/reopen/export use the separate production-command export proof; the UI harness has no save/export action. Peter’s L4 judgment remains pending. |
+| A9 bounded performance | Release `rt_dynamic_perf` renderer test, `rt_dynamic_reference_content`, and `rt_dynamic_held_out` app tests: 16 warmup + 120 measured frames each. Reports: `rt_dynamic_perf.json`, `reference-content.json`, `held-out.json`, `qualification.json`. | Reference GPU p95 4.081208 ms; full content p95 4.788333 ms; AS maintenance p95 0.403292 ms. Zero measured post-warmup Metal buffer/AS allocations, pipeline compiles or GPU faults. Static pre-change comparison passed: 3.882708 ms before versus 3.819083 ms after, within the 0.2 ms allowed delta. Exhaustive Rust-allocation/peak-overlap instrumentation remains a separate qualification requirement. |
+
+The measured GPU is Apple M4 Max; final-review system observation recorded macOS 26.6.2 (25G83) and AC power. The release measurements use 1280×720, shadows=1, AO=4, GI=4,
+reflections=8, Half ray resolution and Medium spatial denoise. Static RT
+p95 was 3.819083 ms; fresh-build reference p95 was 4.491 ms. The reference
+fixture SHA-256 is
+`e351e5b71a2e408fc7114165d7b841a9ddaaadff2250be9a20f85ddfb60c665d`.
+The held-out Corrosion witness has 852,850 source triangles and the original
+VortexFragments → MathView → OrderedRecon stack, plus SurfaceWaves added
+in memory for measurement. Its GPU p95 was 44.634 ms and full-content p95
+46.430292 ms; this is not a 60 fps qualification.
+
+Corrosion compatibility evidence used an isolated one-layer copy, SHA-256
+`008855943e7ca80aa6ef0bd7ac7afde8c5235b921202a312a9c1c8fa176d4a64`.
+The source project was not modified. Exact export command:
+
+```sh
+target/release/manifold export-repro /tmp/manifold-rt-dynamic/corrosion-witness.manifold --output /tmp/manifold-rt-dynamic/corrosion-rt.mp4 --start 80.5 --end 81.5 --width 320 --height 568 --fps 12
+```
+
+`corrosion-rt.png` shows visible shattered floral geometry. This establishes
+nonblank output for the supplied legacy stack, not parity with a prior app
+version. Export logs: `/tmp/rt-final-export.log`; UI log:
+`/tmp/rt-final-ui-flow.log`. Performance runner orchestration has nine passing
+Python tests; the measurements above were executed directly with its underlying
+Cargo commands, not falsely recorded as a completed `--mode perf` run.
+
+
+Static comparison uses `static-baseline.json`, measured from unchanged main
+`713cd9bb1` with the exact reference JSON, 16 warmup frames and 120 samples.
+The old renderer dispatched RT, verified through its existing capture queue.
+`--static-baseline-report /tmp/manifold-rt-dynamic/static-baseline.json` now
+validates fixture hash, GPU, resolution, sample count and dispatch before
+computing the regression result. The existing measurements aggregate to
+`qualification.json` with correctness/resource/liveBudget/staticBaseline
+all passing; this performance-report result does not erase the unexecuted
+A2/A5/A6 qualification cases above.

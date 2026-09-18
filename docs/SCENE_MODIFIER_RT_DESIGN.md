@@ -2,7 +2,7 @@
 
 <!-- index: Implementation contract for automatic ray tracing of scene-modified meshes: geometry revisions, fusion, ordered BLAS updates, emissive sampling, export, and K3 phase briefs. -->
 
-**Status:** IN PROGRESS · 2026-09-17 · P0–P4b landed and gate-green (P4b: appearance weights/gain reach RT — checked weight/index sources, shared index resolution, deterministic fractional coverage, brightness/coverage×brightness radiance multipliers). Next: P5 — the shared dynamic scene path (section 5.3). Owed: P2–P4b demo artifacts to Peter by P5.
+**Status:** IN PROGRESS · 2026-09-18 · P0–P4b landed; P5–P8 production implementation is complete in `0e95bb5dd` and `d7e054595`. Current-frame, refit, catalog, export and bounded performance evidence is in acceptance §A11. Full acceptance remains open for the listed qualification gaps and Peter’s L4 review.
 **Prerequisites:** existing scene-modifier foundation and native Metal RT on main. Work item: `BUG-e3p6.4`.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md), sections 5–6 and 8; repository `AGENTS.md` takes precedence over older workflow guidance.
 
@@ -54,7 +54,7 @@ Binding constraints: content-thread hot path, GPU command order, asynchronous so
 
 **D10 — Admission before publication, reuse afterward.** Retain BLAS build/refit scratch, descriptors and emissive workspaces. Prepare during existing scene warmup/candidate preparation, including RT-off scenes that expose the RT toggle, so toggle-on pays no shader compile or geometry allocation. Charge those resources to admission. This deliberately increases prepared memory and load-time work. Unexpected structural growth must enter existing candidate preparation; it cannot allocate unchecked on the live path.
 
-Relationship to `RAYTRACING_DESIGN.md` D17: its settle-and-private-submit mechanism remains the current shipped behavior. P5 supersedes that mechanism with caller-ordered current-frame updates. Its no-CPU-wait requirement remains. Initial construction is moved into candidate warmup before publication; D10 accounts for that cost. This design does not claim that putting a large first build on a live frame is free.
+Relationship to `RAYTRACING_DESIGN.md` D17: the shared caller-ordered update path supersedes its former settle-and-private-submit mechanism. Its no-CPU-wait requirement remains. Initial construction is moved into candidate warmup before publication; D10 accounts for that cost. This design does not claim that putting a large first build on a live frame is free.
 
 Rejected alternative: rebuild all geometry on every write without metadata. It is a useful test reference but wastes static meshes and cannot deliver the Surface Waves live target. Rejected alternative: a new worker/queue rebuilding RT asynchronously. It adds ownership and stale-frame reconciliation while the graph already provides ordered GPU dataflow.
 
@@ -409,7 +409,7 @@ Entry: audit base plus current `BUG-e3p6.4`; read sections 1–2 and acceptance 
 
 Deliver: deterministic ray-query helper and CPU triangle-intersection oracle, small canonical fixture builder, counters, pending-source and emission witnesses. Existing unsupported behavior is demonstrated by an explicit baseline probe whose expected observation is stale/missing current geometry; do not commit ignored/red tests. The passing implementation gates are introduced with their owning fixes. Record baseline values, not a screenshot judgment.
 
-Gate: `gpu_proofs_gate.py --filter rt_dynamic_baseline`; ray oracle must distinguish the two geometry states and a deliberately wrong hit result. Negative: no alternate modifier math in production, no ignored tests. Demo: numeric report and diagnostic PNG, L1 plus Peter artifact. Gesture: alternate Surface Waves phase at a held camera. This is the one baseline reproduction; do not run broad RT experiments.
+Gate: originally `rt_dynamic_baseline`, now `gpu_proofs_gate.py --filter rt_dynamic_oracle` after replacing the unsupported-state witness; ray oracle must distinguish the two geometry states and a deliberately wrong hit result. Negative: no alternate modifier math in production, no ignored tests. Demo: numeric report and diagnostic PNG, L1 plus Peter artifact. Gesture: alternate Surface Waves phase at a held camera. This is the one baseline reproduction; do not run broad RT experiments.
 
 ### P1 — Mesh revision metadata (LANDED)
 
@@ -443,31 +443,31 @@ Gate: `gpu_proofs_gate.py --filter rt_dynamic_shading` plus changed alpha/normal
 
 Landed: `rt_dynamic_coverage_and_attributes` (9 sections) green plus full gpu_proofs gate 206/206; the one root-cause fix was restoring the any_hit terminal committed-hit check after the walker rewrite.
 
-### P5 — Enable the shared dynamic scene path (NOT STARTED; after P2, P4b)
+### P5 — Enable the shared dynamic scene path (IMPLEMENTED; acceptance evidence and limits in A11; after P2, P4b)
 
 Read-back: sections 4–5, render-scene collection/flags/reset order, export inventory. Deliver revision-driven selective rebuilds, unified current-frame flags, pending/error handling, general topology-history integration, conservative deformation resets, frame-validity propagation through nested encoders/export, aggregate resource admission and warmup. Remove content-settle/deferred-ready behavior and update authoritative RT/modifier contracts. This is the first complete user-visible milestone: correct dynamic geometry with rebuild costs, live and export.
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_current_frame`; renderer/gpu CPU tests and clippy; current-state/first-frame export test. Negative: old defer/gate/latch symbols absent. Demo: same-frame RT/raster raw hit report plus production modifier UI flow, target L3. Gesture: turn RT on, animate Surface Waves continuously, pause and resume. Budget here is correctness/resource safety, not a claim of 60 fps rebuilds.
 
-### P6 — Selective BLAS refit (NOT STARTED; after P5)
+### P6 — Selective BLAS refit (IMPLEMENTED; acceptance evidence and limits in A11; after P5)
 
 Read-back: sections 2 D4, 3 rules, 4 dirty order; Apple refs; A3/A4. Deliver actual in-place BLAS refit for position-only changes, followed by TLAS update, using retained scratch. Reference remains a freshly rebuilt AS from the identical GPU output. No new runtime mode/switch. Same descriptor list and instance builder.
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_refit`; degenerate/revival and bounds-expansion tests mandatory; focused gpu/renderer clippy. Negative: no full-list BLAS rebuild for a single proven deformation. Demo: exact action counts and hit parity, L1 plus artifact. Gesture: increase wave amplitude beyond the original mesh bounds. Failure of a backend capability proof keeps the correct rebuild path and blocks fast-path qualification; report it to lead after the bounded attempt budget.
 
-### P7a — Production catalog and saved-project acceptance (NOT STARTED; after P6)
+### P7a — Production catalog and saved-project acceptance (IMPLEMENTED; acceptance evidence and limits in A11; after P6)
 
 Read-back: complete acceptance matrix; existing modifier journey and export repro. Deliver discovery-driven stock catalog cases, composition cases, authored custom producer, and project save/reload + undo/redo. Include all documented modifier recipes, hidden stock recipes included; count-match the catalog.
 
 Gate: `gpu_proofs_gate.py --filter rt_dynamic_catalog`; renderer/editing tests selected by `codex_checks.py`. Negative: no skipped hidden recipe and no implementation branches on modifier recipe IDs. Demo: catalog numerical report and saved-project artifacts, L1. Gesture: reorder Waves + cuts + echoes, save/reopen and modulate phase.
 
-### P7b — Production export and performer flow (NOT STARTED; after P7a)
+### P7b — Production export and performer flow (IMPLEMENTED; acceptance evidence and limits in A11; after P7a)
 
 Read-back: acceptance A7–A8, export inventory and existing journey harness. Deliver the acceptance runner, production export frame-one/state-count/failure/cancellation/HDR assertions and one registered UI flow using existing controls. Do not change export simulation semantics to settle RT.
 
 Gate: focused app tests `rt_dynamic_export_` with `journey-proofs`; execute registered UI flow and deterministic export artifact; focused app clippy and diff-selected checks. Negative: no affected export frame reaches the media encoder before successful GPU completion. Demo: L3 plus video/PNGs for Peter; L4 stays pending until Peter tests. Gesture: enable RT, animate/reorder modifiers, save/reopen and export.
 
-### P8 — Bounded performance and final delivery (NOT STARTED; after P7b)
+### P8 — Bounded performance and final delivery (IMPLEMENTED; acceptance evidence and limits in A11; after P7b)
 
 Read-back: acceptance A9; current warmup and admission behavior. Deliver one bounded measurement run on this Mac with reference and held-out scenes, preparation/steady-state timings, allocation counts and memory peak. Fix only evidenced failures within this design; do not tune unrelated shaders. This phase does not expand into a general renderer optimization campaign.
 
