@@ -15,7 +15,7 @@ use manifold_renderer::node_graph::camera::Camera;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_gpu::raytrace::{EmissiveAliasEntry,EmissiveTableStats,EmissiveTriangleGpu,GiMaterial,MetalShadowRayTracer,RtObjectGeometry,ShadowRayTracer};
+use manifold_gpu::raytrace::{EmissiveAliasEntry,EmissiveTableStats,EmissiveTriangleGpu,GiMaterial,MetalShadowRayTracer,RtGeometryChange,RtObjectGeometry,ShadowRayTracer};
 use manifold_gpu::{GpuBuffer,GpuDevice};
 use std::time::Instant;
 use crate::harness;
@@ -184,7 +184,7 @@ fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{vertex_bu
     tracer.prepare_accel(d,&mut slot,plan).expect("prepare");
     let mut accel=slot.unwrap();
     let mut enc=d.create_encoder("rs-c-alias-proof");
-    tracer.debug_encode_emissive_table(d,&mut enc,&mut accel,&o,&m).expect("encode");
+    tracer.encode_accel_update(d,&mut enc,&mut accel,&o,&[RtGeometryChange::Rebuild],&m,true,true).expect("encode");
     enc.commit_and_wait_completed();
     let t=accel.emissive_table.as_ref().expect("table");
     let stats=unsafe{(t.stats.mapped_ptr().unwrap() as *const EmissiveTableStats).read_unaligned()};

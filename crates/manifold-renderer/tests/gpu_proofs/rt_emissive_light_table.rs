@@ -11,14 +11,14 @@
 //!    entry_count 0.
 //!
 //! P4a: the table is prepared by the production GPU kernels
-//! (`MetalShadowRayTracer::debug_encode_emissive_table` — enumerate →
+//! (`ShadowRayTracer::encode_accel_update` — enumerate →
 //! radix sort → gather → alias → stats, the same dispatches the shared AS
 //! update path runs). The CPU-side builder is deleted; count/mean/area
 //! assertions read the GPU-written `EmissiveTableStats` buffer.
 
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
-    MetalShadowRayTracer, RtAccel, RtObjectGeometry, ShadowRayTracer,
+    MetalShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
     MAX_RT_EMISSIVE_TRIANGLES,
 };
 use manifold_gpu::GpuDevice;
@@ -76,7 +76,7 @@ fn cpu_triangle_area(v0: [f32; 3], v1: [f32; 3], v2: [f32; 3]) -> f32 {
 }
 
 /// P4a: run the production GPU emissive preparation on this fixture —
-/// plan/prepare an `RtAccel`, then `debug_encode_emissive_table` on a
+/// plan/prepare an `RtAccel`, then `encode_accel_update` on a
 /// committed encoder. Returns the tracer, the accel (table resident), and
 /// the mapped GPU stats; callers map `table.triangles`/`table.aliases`
 /// for entry-level assertions.
@@ -93,9 +93,12 @@ fn gpu_prepare_emissive_table(
         .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
     let mut encoder = device.create_encoder("rt-emissive-table-proof");
+    // Descriptor transforms are encoded with the AS update. Preparation
+    // allocates storage only; bypassing encode would gather zero transforms.
+    let changes = vec![RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .debug_encode_emissive_table(device, &mut encoder, &mut accel, objects, materials)
-        .expect("encode emissive table");
+        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, materials, true, true)
+        .expect("encode acceleration and emissive table");
     encoder.commit_and_wait_completed();
     let table = accel.emissive_table.as_ref().expect("encode ensures the table");
     let stats_ptr = table.stats.mapped_ptr().expect("stats buffer must be shared");

@@ -150,6 +150,8 @@ proposed case in A1–A9 as executed. Artifacts are under
 `/tmp/manifold-rt-dynamic/`; final landing logs are retained there separately.
 `BUG-e3p6.4` remains open until the qualification gaps below are resolved.
 
+The first final landing gate passed CPU tests, clippy and UI flows but caught two GPU regressions: the cube source rewrote static geometry because it lacked its pure declaration, and an older emissive proof bypassed the newly encoded descriptor upload. The follow-up declares the audited parameter-only cube source pure and routes emissive proofs through the production AS update; the full gate must pass before landing.
+
 Commands below run from the acquired worktree, with `RUSTC_WRAPPER=` and
 `.claude/scripts/with-build-lock.sh`; native GPU execution requires a host
 that can create a Metal device. `G` means

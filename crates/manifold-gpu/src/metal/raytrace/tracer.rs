@@ -1085,27 +1085,6 @@ impl MetalShadowRayTracer {
         &self.zero_emissive_stats
     }
 
-    /// P4a proof surface (§5.1 "debug proof entry points use the same
-    /// kernels and stats layout"): run a Full emissive preparation on the
-    /// caller's encoder — same kernels, same stats layout as production.
-    /// The caller commits and waits, then maps `table.stats` /
-    /// `table.triangles` / `table.aliases` for value assertions. Never on
-    /// the production path (which reaches `encode_emissive_table` only
-    /// through `encode_accel_update`).
-    pub fn debug_encode_emissive_table(
-        &self,
-        device: &GpuDevice,
-        encoder: &mut GpuEncoder,
-        accel: &mut RtAccel,
-        objects: &[RtObjectGeometry<'_>],
-        materials: &[GiMaterial],
-    ) -> Result<(), RtAccelError> {
-        super::emissive::encode_emissive_table(
-            self, device, encoder, accel, objects, materials,
-            super::EmissiveRefresh::Full,
-        )
-    }
-
     /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` section 8
     /// Tier-1 item 2's gate) — dispatches the SAME `fetch_interpolated_normal`
     /// MSL helper `trace_shadow_rays` uses internally, against caller-
