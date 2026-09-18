@@ -194,14 +194,14 @@ pub struct ProjectIOAction {
 }
 
 /// Load-time compatibility for the pre-standalone Math View. Each legacy
-/// carrier with authored content — non-default values, host-side animation or
-/// modulation touching its controls, or an active enabled state — gains its
-/// own Math View instance immediately after it in the chain, keeping the
-/// carrier's target selection and mesh frames, and the carrier's host
-/// bindings move onto it (binding ids are unchanged, so values, animation and
-/// modulation survive). Carriers with only default, inactive content are
-/// stripped cleanly. When an authored carrier's view cannot be created its
-/// embedded controls are preserved untouched and the skip is reported.
+/// carrier with authored content — non-default control values or host-side
+/// animation or modulation touching them — gains its own Math View instance
+/// immediately after it in the chain, keeping the carrier's target selection
+/// and mesh frames, and the carrier's host bindings move onto it (binding ids
+/// are unchanged, so values, animation and modulation survive). Carriers with
+/// only default, inactive content — including enabled-but-untouched ones —
+/// are stripped cleanly. When an authored carrier's view cannot be created
+/// its embedded controls are preserved untouched and the skip is reported.
 fn migrate_legacy_math_views(
     host: &mut manifold_core::effects::PresetInstance,
     notices: &mut Vec<String>,

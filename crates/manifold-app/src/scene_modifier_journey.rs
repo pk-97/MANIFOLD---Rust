@@ -985,14 +985,15 @@ fn legacy_math_view_migration_journey() {
     );
 }
 
-/// Multi-carrier legacy migration (BUG-ngdf): three Vortex carriers, one per
-/// authoredness class. A is disabled with default content and strips cleanly
-/// without a view. B is enabled, in Math mode, with a beat driver on its
-/// pulse trigger and an explicit one-object selection. C is enabled, in
-/// Overlay mode, with an envelope on scan amount and all objects. B and C
-/// each gain their own view immediately after themselves; binding ids are
-/// unchanged so values and modulation survive save/reload, and a second
-/// migration pass plus a save/reload round trip change nothing.
+/// Multi-carrier legacy migration (BUG-ngdf): four Vortex carriers, one per
+/// authoredness class. A is disabled with default content; D is enabled but
+/// equally untouched — neither is authored, and both strip cleanly without a
+/// view. B is enabled, in Math mode, with a beat driver on its pulse trigger
+/// and an explicit one-object selection. C is enabled, in Overlay mode, with
+/// an envelope on scan amount and all objects. B and C each gain their own
+/// view immediately after themselves; binding ids are unchanged so values
+/// and modulation survive save/reload, and a second migration pass plus a
+/// save/reload round trip change nothing.
 #[test]
 fn legacy_math_view_multi_carrier_migration_journey() {
     use manifold_core::scene_modifier_math_view as mv;
@@ -1002,6 +1003,7 @@ fn legacy_math_view_multi_carrier_migration_journey() {
     let carrier_a = NodeId::new("legacy_vortex_a");
     let carrier_b = NodeId::new("legacy_vortex_b");
     let carrier_c = NodeId::new("legacy_vortex_c");
+    let carrier_d = NodeId::new("legacy_vortex_d");
 
     let mut project = math_view_project();
     let frames = {
@@ -1050,6 +1052,13 @@ fn legacy_math_view_multi_carrier_migration_journey() {
             mesh_frames: frames.clone(),
             graph: Box::new(legacy_vortex_carrier_graph()),
         });
+        graph.scene_modifiers.push(SceneModifierInstanceDef {
+            id: carrier_d.clone(),
+            scene: scene.clone(),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames.clone(),
+            graph: Box::new(legacy_vortex_carrier_graph()),
+        });
         // Drop the old fixture pair's bindings, then mint each carrier's
         // (including every math_view_* control and enabled).
         let metadata = graph.preset_metadata.as_mut().unwrap();
@@ -1059,7 +1068,7 @@ fn legacy_math_view_multi_carrier_migration_journey() {
         metadata
             .params
             .retain(|param| !param.id.starts_with("sceneModifier:"));
-        for id in [&carrier_a, &carrier_b, &carrier_c] {
+        for id in [&carrier_a, &carrier_b, &carrier_c, &carrier_d] {
             *graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
                 graph, id,
             )
@@ -1067,10 +1076,12 @@ fn legacy_math_view_multi_carrier_migration_journey() {
             .graph;
         }
         owner.refresh_manifest_from_graph();
-        // A: disabled, defaults — nothing authored. B: Math mode + driver. C:
-        // Overlay mode + envelope.
+        // A: disabled, defaults; D: enabled but equally untouched — neither
+        // is authored. B: Math mode + driver. C: Overlay mode + envelope.
         let enabled_a = format!("sceneModifier:[\"{carrier_a}\",\"enabled\"]");
         owner.set_base_param(&enabled_a, 0.0);
+        // D is deliberately left exactly as reconciled: enabled at its
+        // default, every Math View control at its default.
         owner.set_base_param(&mode_macro_b, 1.0);
         owner.drivers_mut().push(ParameterDriver::new(
             ParamId::from(pulse_trigger.clone()),
@@ -1115,6 +1126,7 @@ fn legacy_math_view_multi_carrier_migration_journey() {
             (kinds[2].0.clone(), true),
             (carrier_c.clone(), false),
             (kinds[4].0.clone(), true),
+            (carrier_d.clone(), false),
         ],
         "chain order preserved, one view after each authored carrier: {kinds:?}"
     );
@@ -1134,7 +1146,12 @@ fn legacy_math_view_multi_carrier_migration_journey() {
     assert_eq!(view_c.mesh_frames, frames, "C's view keeps C's mesh frames");
 
     // Every carrier is stripped; the authored deformation survives.
-    for (carrier, index) in [(&carrier_a, 0), (&carrier_b, 1), (&carrier_c, 3)] {
+    for (carrier, index) in [
+        (&carrier_a, 0),
+        (&carrier_b, 1),
+        (&carrier_c, 3),
+        (&carrier_d, 5),
+    ] {
         let modifier = &graph.scene_modifiers[index];
         assert_eq!(&modifier.id, carrier);
         assert!(
@@ -1194,21 +1211,22 @@ fn legacy_math_view_multi_carrier_migration_journey() {
         "C's scan envelope still keyed by the unchanged binding id"
     );
 
-    // A carried no authored content: its minted math_view bindings and params
-    // were pruned with the strip.
-    assert!(
-        !metadata
-            .bindings
-            .iter()
-            .any(|binding| binding.id.contains("\"legacy_vortex_a\",\"math_view")),
-        "A's math_view bindings pruned"
-    );
-    assert!(
-        !owner
-            .params
-            .contains(&format!("sceneModifier:[\"{carrier_a}\",\"math_view_mode\"]")),
-        "A's math_view host params pruned"
-    );
+    // A and D carried no authored content: their minted math_view bindings
+    // and params were pruned with the strip, and neither gained a view.
+    for untouched in [&carrier_a, &carrier_d] {
+        assert!(
+            !metadata.bindings.iter().any(|binding| {
+                binding.id.contains(&format!("\"{untouched}\",\"math_view"))
+            }),
+            "{untouched}'s math_view bindings pruned"
+        );
+        assert!(
+            !owner.params.contains(&format!(
+                "sceneModifier:[\"{untouched}\",\"math_view_mode\"]"
+            )),
+            "{untouched}'s math_view host params pruned"
+        );
+    }
 
     // Both views expose the full current control surface: every control is
     // declared by the view recipe and host-bound.

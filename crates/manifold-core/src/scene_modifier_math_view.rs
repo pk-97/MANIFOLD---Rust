@@ -260,11 +260,11 @@ pub fn legacy_math_view_scenes(owner: &EffectGraphDef) -> Vec<SceneNodeRef> {
 
 /// Whether a legacy carrier carries authored Math View content that merits its
 /// own standalone instance: an embedded control value off its default, host
-/// base values off their binding defaults, host-side animation or modulation
-/// (drivers, envelopes, Ableton mappings, audio mods, automation lanes)
-/// touching its `math_view_*` bindings, or an active enabled state. Carriers
-/// failing every check have default, inactive content and are stripped cleanly
-/// by load migration instead.
+/// base values off their binding defaults, or host-side animation or
+/// modulation (drivers, envelopes, Ableton mappings, audio mods, automation
+/// lanes) touching its `math_view_*` bindings. Carriers failing every check
+/// have default, inactive content and are stripped cleanly by load migration
+/// instead — an enabled-but-untouched modifier is not authored.
 pub fn carrier_has_authored_math_view_content(
     host: &crate::effects::PresetInstance,
     carrier_id: &NodeId,
@@ -344,19 +344,6 @@ pub fn carrier_has_authored_math_view_content(
         if host.get_base_param(&binding.id) != binding.default_value {
             return true;
         }
-    }
-    // An active enabled state: the modifier itself is switched on.
-    let enabled = metadata.bindings.iter().find(|binding| {
-        matches!(
-            &binding.target,
-            BindingTarget::SceneModifier { modifier_id, param_id }
-                if modifier_id == carrier_id && param_id == "enabled"
-        )
-    });
-    if let Some(binding) = enabled
-        && host.get_base_param(&binding.id) != 0.0
-    {
-        return true;
     }
     false
 }
@@ -907,12 +894,13 @@ mod tests {
             &NodeId::new("vortex_a")
         ));
 
-        // An active enabled state is authored; a disabled modifier with
-        // default values is not.
+        // The modifier's own enabled state is not Math View authorship: an
+        // enabled-but-untouched carrier (enabled at its default) and a
+        // disabled one both strip cleanly.
         let mut host = host_with_carrier(legacy_carrier_at_defaults());
         let enabled = push_host_binding(&mut host, "enabled", 1.0);
         host.set_base_param(&enabled, 1.0);
-        assert!(carrier_has_authored_math_view_content(
+        assert!(!carrier_has_authored_math_view_content(
             &host,
             &NodeId::new("vortex_a")
         ));
