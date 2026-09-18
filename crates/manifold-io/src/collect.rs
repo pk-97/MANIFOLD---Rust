@@ -940,6 +940,7 @@ mod tests {
             scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
             graph: Box::new(local.def),
         });
         assert_eq!(defs_from_meta(&host.def), vec![(
@@ -1010,6 +1011,7 @@ mod tests {
             scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
+            legacy_math_view_carrier: None,
             graph: Box::new(local),
         });
         let mut project = Project::default();

@@ -305,6 +305,7 @@ mod tests {
                 },
                 targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
                 mesh_frames: Vec::new(),
+                legacy_math_view_carrier: None,
                 graph: Box::new(graph("local")),
             });
         let mut other = graph("other");
@@ -319,6 +320,7 @@ mod tests {
                 },
                 targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
                 mesh_frames: Vec::new(),
+                legacy_math_view_carrier: None,
                 graph: Box::new(other),
             });
         let target = GraphTarget::SceneModifier {

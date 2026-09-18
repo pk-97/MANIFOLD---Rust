@@ -2371,6 +2371,7 @@ mod binding_reroute_tests {
             scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
             graph: Box::new(local),
         });
         let mut layer = Layer::new_generator("Generator".into(), PresetTypeId::new("Test"), 0);

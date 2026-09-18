@@ -479,6 +479,7 @@ mod tests {
             },
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
+            legacy_math_view_carrier: None,
             graph: Box::new(graph),
         };
         (owner, instance)
