@@ -19153,7 +19153,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; an optional InstanceTransform array repeats fragments, ghosts and displacement arrows per copy so echo chains are visible. This presentation node contains no modifier math.",
+      "purpose": "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; an optional InstanceTransform array repeats fragments, ghosts, displacement arrows and motion trails per copy so echo chains are visible. This presentation node contains no modifier math.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Draws sparse evaluated mesh samples as a transparent native diagram.",

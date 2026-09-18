@@ -7,7 +7,7 @@ struct U {
     depth_pass: u32, occlusion: u32, mode: u32, _depth_pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
-    copy_count: u32, instances_wired: u32, _instances_pad: vec2<u32>,
+    copy_count: u32, instances_wired: u32, instance_history_stride: u32, _instances_pad: u32,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32> };
 struct I { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
@@ -23,6 +23,8 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @loca
 @group(0) @binding(8) var scene_depth: texture_2d<f32>;
 @group(0) @binding(9) var depth_sampler: sampler;
 @group(0) @binding(10) var<storage, read> copy_instances: array<I>;
+@group(0) @binding(11) var<storage, read> instance_history: array<I>;
+@group(0) @binding(12) var<storage, read> instance_counts: array<u32>;
 
 fn targeted(target_element: u32, element: u32) -> bool { return target_element == 0u || target_element == element; }
 fn tone(color: vec4<f32>, gain: f32) -> vec4<f32> {
@@ -296,14 +298,33 @@ fn vertex_body(vi: u32, instance: u32) -> O {
     }
 
     if (vi >= 6u || u.trails == 0u || u.history_len < 2u) { return hidden(); }
-    let trail = ii - trails_base; let sample = trail / u.vertex_count; let vertex = trail % u.vertex_count;
+    let trail = ii - trails_base;
+    // Trail marks repeat per copy like the other blocks: sample-major, then
+    // copy, then vertex. Vertices-only diagrams keep a single identity copy
+    // and never read the instance ring, so their output stays byte-identical.
+    let trail_copies = select(1u, u.copy_count, u.instances_wired != 0u);
+    let per_sample = u.vertex_count * trail_copies;
+    let sample = trail / per_sample;
+    let copy = (trail % per_sample) / u.vertex_count;
+    let vertex = trail % u.vertex_count;
     let count = min(u.history_len - 1u, 32u);
     if (sample >= count) { return hidden(); }
     let start = u.history_len - 1u - count;
     let slot_a = (u.history_head + u.history_capacity - u.history_len + start + sample) % u.history_capacity;
     let slot_b = (slot_a + 1u) % u.history_capacity;
-    let a = history[slot_a * u.history_stride + vertex].xyz;
-    let b = history[slot_b * u.history_stride + vertex].xyz;
+    // A historical mark composes the vertex sample of slot s with the
+    // instance transform recorded in the same slot — never today's transform
+    // applied to old vertices. Slots that never held copy c draw nothing.
+    var inst_a = I(vec4<f32>(0.0, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+    var inst_b = inst_a;
+    if (u.instances_wired != 0u) {
+        if (copy >= instance_counts[slot_a] || copy >= instance_counts[slot_b]) { return hidden(); }
+        inst_a = instance_history[slot_a * u.instance_history_stride + copy];
+        inst_b = instance_history[slot_b * u.instance_history_stride + copy];
+        if (inactive_copy(inst_a) || inactive_copy(inst_b)) { return hidden(); }
+    }
+    let a = apply_copy(history[slot_a * u.history_stride + vertex].xyz, inst_a);
+    let b = apply_copy(history[slot_b * u.history_stride + vertex].xyz, inst_b);
     let alpha = 0.12 + 0.5 * f32(sample + 1u) / f32(count);
     return line(a, b, vec4<f32>(hsv(u.path_hue), alpha), vi);
 }

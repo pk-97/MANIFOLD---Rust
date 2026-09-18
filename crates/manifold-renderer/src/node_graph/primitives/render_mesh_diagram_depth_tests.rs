@@ -100,7 +100,8 @@ fn uniforms(
         event_targets: [0; 4],
         copy_count: 1,
         instances_wired: 0,
-        _instances_pad: [0; 2],
+        instance_history_stride: 0,
+        _instances_pad: 0,
     }
 }
 
