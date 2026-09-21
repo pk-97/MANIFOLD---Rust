@@ -33,6 +33,7 @@ pub struct GpuTexture {
     /// (CAMetalLayer drawable wraps, mip views of a marked parent) — those
     /// release immediately, as before.
     pub(crate) retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+    pub(crate) residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
 }
 
 unsafe impl Send for GpuTexture {}
@@ -41,7 +42,7 @@ unsafe impl Sync for GpuTexture {}
 impl Drop for GpuTexture {
     fn drop(&mut self) {
         if let Some(mark) = &self.retire {
-            mark.retire_texture(&self.raw);
+            mark.retire_texture(&self.raw, self.residency.take());
         }
         // TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): env-gated deferred
         // destruction. Disabled unless MANIFOLD_DEFER_DROP_FRAMES is set —
@@ -80,6 +81,7 @@ impl GpuTexture {
             depth,
             format,
             retire: None,
+            residency: None,
         }
     }
 
@@ -173,6 +175,7 @@ impl GpuTexture {
             depth: 1,
             format: self.format,
             retire,
+            residency: self.residency.clone(),
         }
     }
 }
@@ -195,6 +198,7 @@ pub struct GpuBuffer {
     /// stamped and retired through the completion fence on drop; `None`
     /// for external wraps, which release immediately.
     pub(crate) retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+    pub(crate) residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
 }
 
 unsafe impl Send for GpuBuffer {}
@@ -203,7 +207,7 @@ unsafe impl Sync for GpuBuffer {}
 impl Drop for GpuBuffer {
     fn drop(&mut self) {
         if let Some(mark) = &self.retire {
-            mark.retire_buffer(&self.raw);
+            mark.retire_buffer(&self.raw, self.residency.take());
         }
         // TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): see the GpuTexture
         // Drop impl above.
@@ -221,6 +225,7 @@ impl GpuBuffer {
             size,
             mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
             retire: None,
+            residency: None,
         }
     }
 
@@ -513,6 +518,7 @@ pub struct GpuHeap {
     /// drop retirement as pool/device allocations; `None` when the heap was
     /// created before retirement wiring).
     retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+    residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
 }
 
 unsafe impl Send for GpuHeap {}
@@ -523,8 +529,9 @@ impl GpuHeap {
     pub(crate) fn new(
         heap: Retained<ProtocolObject<dyn MTLHeap>>,
         retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
     ) -> Self {
-        Self { heap, retire }
+        Self { heap, retire, residency }
     }
 
     /// Sub-allocate a texture from this heap.
@@ -542,6 +549,7 @@ impl GpuHeap {
             depth: desc.depth,
             format: desc.format,
             retire: self.retire.clone(),
+            residency: self.residency.clone(),
         })
     }
 

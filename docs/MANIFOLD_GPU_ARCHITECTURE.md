@@ -50,6 +50,22 @@ cache deletion is required. New descriptor options must extend this key.
 
 **Ownership model:** All Metal objects are owned as `Retained<ProtocolObject<dyn MTLFoo>>` (automatic retain/release via `objc2::rc`). No manual `objc_retain`/`objc_release`, no raw pointer fields on GPU wrappers. Command buffers and encoders are fully typed — no `*mut c_void` cmd_buf tricks.
 
+**Memory preparation:** Retaining a Metal object does not keep its memory ready
+for GPU access. The content pipeline owns one `MTLResidencySet` manager and
+drains allocation/lifetime changes during warmup and before rendering. Device
+textures, buffers, pooled textures and heaps share residency leases across clones
+and views; fence retirement retains the lease until submitted work completes.
+Other threads enqueue changes without mutating the residency set. External
+drawable wraps, memoryless storage and raw RT acceleration structures are not
+registered by this manager. Existing resource declarations and hazard tracking
+remain authoritative.
+
+Residency is requested within Metal's recommended working-set limit. Over-budget
+sets release their request and report the condition; they do not prevent project
+loading. Requests are advisory, so system memory pressure can still delay GPU
+access. Warmup telemetry records the request, allocation count, tracked bytes and
+budget rather than claiming that all memory is physically resident.
+
 **Resolution changes:** The content thread prepares compositor, upscaler, generator,
 effect-chain and Math View replacements before publishing new dimensions. GPU
 allocation/admission errors discard the candidate and preserve the live renderer,

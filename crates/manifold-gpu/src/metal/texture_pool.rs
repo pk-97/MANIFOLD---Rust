@@ -74,6 +74,7 @@ struct TexturePoolInner {
     /// acquired before this is set keep `None` (immediate release), the same
     /// pre-attach discipline as `completion_event`.
     retire: Option<std::sync::Arc<crate::metal::retire::RetireMark>>,
+    residency_sender: Option<crate::metal::residency::ResidencySender>,
     /// New allocations via device.create_texture().
     stats_allocated: u64,
     /// Textures recycled from pool (avoided allocation).
@@ -101,6 +102,7 @@ impl TexturePool {
                 frames_in_flight,
                 completion_event: None,
                 retire: None,
+                residency_sender: device.residency_sender(),
                 stats_allocated: 0,
                 stats_recycled: 0,
             }),
@@ -192,6 +194,9 @@ impl TexturePool {
             .device
             .newTextureWithDescriptor(&mtl_desc)
             .expect("Metal: TexturePool allocation failed — GPU memory exhausted");
+        let residency = inner.residency_sender.as_ref().map(|sender| {
+            super::residency::lease_for_texture(sender, &raw)
+        });
         GpuTexture {
             raw,
             width,
@@ -199,6 +204,7 @@ impl TexturePool {
             depth: 1,
             format,
             retire: inner.retire.clone(),
+            residency,
         }
     }
 

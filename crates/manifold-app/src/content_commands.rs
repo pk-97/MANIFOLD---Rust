@@ -34,7 +34,18 @@ pub(crate) struct WarmupReport {
     pub interrupted: bool,
     pub total_layers: u32,
     pub pending_workers: usize,
+    pub residency: Option<WarmupResidencyReport>,
     pub layers: Vec<WarmupLayerReport>,
+}
+
+/// A residency request is memory preparation, not proof of physical residency.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WarmupResidencyReport {
+    pub allocation_count: usize,
+    pub allocated_bytes: u64,
+    pub budget_bytes: u64,
+    pub requested: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -447,6 +458,10 @@ impl ContentThread {
                     renderer.stop_clip(clip_id.as_str());
                 }
             }
+            // Keep each prepared layer's memory requested while later layers
+            // warm, instead of paying for its first GPU use during playback.
+            #[cfg(target_os = "macos")]
+            self.content_pipeline.prepare_gpu_residency();
             report.layers.push(WarmupLayerReport {
                 id: _layer_id.to_string(),
                 name: layer_name.clone(),
@@ -653,6 +668,20 @@ impl ContentThread {
                     }
                 }
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(stats) = self.content_pipeline.prepare_gpu_residency() {
+            log::info!(
+                "[ContentThread] Warmup memory: {} allocations, {} bytes / {} budget, residency requested={}",
+                stats.allocation_count, stats.allocated_bytes, stats.budget_bytes, stats.requested
+            );
+            report.residency = Some(WarmupResidencyReport {
+                allocation_count: stats.allocation_count,
+                allocated_bytes: stats.allocated_bytes,
+                budget_bytes: stats.budget_bytes,
+                requested: stats.requested,
+            });
         }
 
         // Later chain phases are guarded by the total budget too. Reaching

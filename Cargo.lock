@@ -2357,6 +2357,7 @@ dependencies = [
 name = "manifold-gpu"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arrayvec",
  "ash",
  "block2 0.6.2",

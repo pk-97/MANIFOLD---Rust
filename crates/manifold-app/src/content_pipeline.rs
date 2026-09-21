@@ -1051,12 +1051,16 @@ pub struct ContentPipeline {
     last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
     /// Fence-stamped drop-retirement queue (BUG-l7t4 class fix). Drained once
     /// per frame in `render_content_native`; its `Drop` flushes at teardown.
-    /// FIELD ORDER MATTERS: this must be the LAST field to drop — sibling
+    /// FIELD ORDER MATTERS: this must drop after resource-owning fields — sibling
     /// fields (compositor, texture_pool) enqueue their
     /// marked-texture teardown onto it on the way out, and the queue's own
     /// `Drop` waits out the GPU before releasing those late entries.
     #[cfg(target_os = "macos")]
     retire_queue: Option<manifold_gpu::RetireQueue>,
+    /// Content-thread owner of residency requests. Drops after retirement so
+    /// memory stays requested until the last fence-protected resource releases.
+    #[cfg(target_os = "macos")]
+    residency: Option<manifold_gpu::GpuResidencyManager>,
 }
 
 /// The semantic node-preview render pipelines, borrowed as one bundle so the
@@ -1200,6 +1204,8 @@ impl ContentPipeline {
             last_gpu_profiles: Vec::new(),
             #[cfg(target_os = "macos")]
             retire_queue: None,
+            #[cfg(target_os = "macos")]
+            residency: None,
         }
     }
 
@@ -1287,6 +1293,7 @@ impl ContentPipeline {
         // against this device so an edit-time fused swap-in never pays the
         // naga+spirv-opt+MSL compile on the content thread.
         manifold_renderer::node_graph::freeze::install::set_prewarm_device(device.clone());
+        self.residency = device.create_residency_manager();
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
         let pool = device.create_texture_pool(3);
@@ -1535,6 +1542,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     #[cfg(target_os = "macos")]
     pub fn native_device(&self) -> Option<&manifold_gpu::GpuDevice> {
         self.native_device.as_deref()
+    }
+
+    /// Prepare newly allocated memory during loading and release requests for
+    /// resources whose retirement fence has completed. The request is advisory:
+    /// Metal can still postpone residency under system memory pressure.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn prepare_gpu_residency(&mut self) -> Option<manifold_gpu::GpuResidencyStats> {
+        if let Some(queue) = self.retire_queue.as_mut() {
+            queue.drain();
+        }
+        let residency = self.residency.as_mut()?;
+        residency.drain();
+        Some(residency.stats())
     }
 
     /// Clone the content device handle for command admission. The handle is
@@ -2078,15 +2098,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // `self.pending_graph_dump` ends here. The compositor captures during
         // the frame; the readback runs after the compositor CB commits.
         let pending_dump = self.pending_graph_dump.take();
+        // Release completed resources before updating their memory requests.
+        // With no allocation/lifetime changes, both queues take an empty path.
+        self.prepare_gpu_residency();
         let native_device = self.native_device.as_ref().unwrap();
-
-        // BUG-l7t4 class fix: drain the fence-stamped drop-retirement queue.
-        // Releases marked textures whose dropping frame's commit the GPU has
-        // retired (signaled_value >= stamp). One try_recv sweep + host-side
-        // counter reads — no allocation, no GPU round trip.
-        if let Some(queue) = self.retire_queue.as_mut() {
-            queue.drain();
-        }
 
         // Spike-triggered sub-phase trace (BUG-035): with MANIFOLD_RENDER_TRACE=1,
         // any content frame over 20ms prints a per-section breakdown to stderr.
