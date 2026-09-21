@@ -35,6 +35,7 @@ def flow_filters_for_paths(repo, paths):
 def tooling_checks(repo, paths):
     """Shared worker/landing selection; does not execute tests."""
     tooling = {
+        "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/test_agent_worktree.py"},
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/ui-flows/manifest.json"},
         "scripts/test_codex_prepare.py": {"scripts/codex_prepare.py", "scripts/codex_subsystems.json", "scripts/test_codex_prepare.py", "scripts/codex_checks.py"},
         "scripts/test_codex_usage.py": {"scripts/codex_usage.py", "scripts/test_codex_usage.py"},
@@ -46,8 +47,14 @@ def tooling_checks(repo, paths):
     from codex_regressions import inventory
     for item in inventory(repo):
         tooling["scripts/test_codex_regressions.py"].add(str(Path(item["source"]).relative_to(repo)))
-    return [{"name": test, "argv": ["python3", "-B", str(repo / test)], "cwd": str(repo)}
-            for test, triggers in tooling.items() if set(paths) & triggers]
+    checks = [{"name": test, "argv": ["python3", "-B", str(repo / test)], "cwd": str(repo)}
+              for test, triggers in tooling.items() if set(paths) & triggers]
+    if any(p in ("Cargo.toml", "scripts/feature_matrix.py") or
+           (p.startswith("crates/") and p.endswith("/Cargo.toml")) for p in paths):
+        checks.append({"name": "feature-coverage",
+                       "argv": ["python3", "-B", str(repo / "scripts/feature_matrix.py"), "--check-coverage"],
+                       "cwd": str(repo)})
+    return checks
 
 
 def build_plan(repo: Path, paths=None):

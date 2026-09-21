@@ -13,6 +13,23 @@ import run_ui_flows
 
 
 class PlannerTests(unittest.TestCase):
+    def test_worktree_safety_checks_are_selected(self):
+        repo = Path(__file__).resolve().parents[1]
+        for path in ("scripts/agent-worktree.py", "scripts/test_agent_worktree.py"):
+            checks = codex_checks.tooling_checks(repo, [path])
+            self.assertEqual([c["name"] for c in checks], ["scripts/test_agent_worktree.py"])
+
+    def test_feature_coverage_is_checked_without_builds(self):
+        repo = Path(__file__).resolve().parents[1]
+        for path in ("Cargo.toml", "crates/manifold-renderer/Cargo.toml", "scripts/feature_matrix.py"):
+            checks = codex_checks.tooling_checks(repo, [path])
+            coverage = [c for c in checks if c["name"] == "feature-coverage"]
+            self.assertEqual(len(coverage), 1)
+            self.assertEqual(coverage[0]["argv"],
+                             ["python3", "-B", str(repo / "scripts/feature_matrix.py"), "--check-coverage"])
+        self.assertNotIn("feature-coverage", [c["name"] for c in
+                         codex_checks.tooling_checks(repo, ["docs/README.md"])])
+
     def test_ui_trigger_matching_and_flow_file(self):
         manifest = {"path_triggers": {"crates/manifold-ui/src/panels/rt_quality_panel.rs": ["rt-quality"]}}
         filters, hits = run_ui_flows.filters_for_paths(
