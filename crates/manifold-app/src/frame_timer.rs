@@ -313,15 +313,28 @@ mod tests {
 
     #[test]
     fn wait_for_deadline_returns_at_deadline() {
+        let timer = FrameTimer::new(60.0);
+        let deadline = timer.last_tick_time + timer.target_frame_duration;
+        timer.wait_for_deadline();
+        // BUG-wwxh: scheduling delays can make a correct wait return late.
+        // Check the timer's actual deadline, not elapsed time from a later
+        // sample, and leave wakeup latency to the opt-in performance check.
+        assert!(Instant::now() >= deadline, "Returned before the deadline");
+    }
+
+    // Run explicitly on an idle machine with --features perf-soak and the
+    // wait_for_deadline_wakeup_latency filter. This is a latency measurement,
+    // not a correctness requirement under workspace-wide test contention.
+    #[cfg(feature = "perf-soak")]
+    #[test]
+    fn wait_for_deadline_wakeup_latency() {
         let mut timer = FrameTimer::new(60.0);
         timer.consume_tick();
-        let start = Instant::now();
+        let deadline = timer.last_tick_time + timer.target_frame_duration;
         timer.wait_for_deadline();
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(14),
-            "Returned too early: {elapsed:?}"
-        );
+        let returned = Instant::now();
+        assert!(returned >= deadline, "Returned before the deadline");
+        let elapsed = returned - timer.last_tick_time;
         assert!(
             elapsed < Duration::from_millis(30),
             "Returned too late: {elapsed:?}"
