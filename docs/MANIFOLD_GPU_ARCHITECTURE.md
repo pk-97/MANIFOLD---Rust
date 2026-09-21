@@ -70,6 +70,15 @@ is reported and does not prevent project loading. System memory pressure can
 still delay GPU access. Warmup telemetry records the request, allocation count,
 tracked bytes and budget rather than claiming hitch-free playback.
 
+**Temporary arrays:** `plan_array_allocations` shares an existing physical slot
+only between arrays with identical channel layout and byte capacity whose
+execution-plan lifetimes do not overlap. Outputs acquire storage before the
+current step releases inputs. Held, persistent, prebound, atomic, explicit
+in-place, canvas-dependent and carried/exported resources remain dedicated. Buffers stay allocated
+for the runtime; ordered encoding and native hazard tracking govern GPU access.
+Executor storage revisions detect overwritten cached outputs. This changes
+neither cross-runtime sharing nor GPU retirement/residency policy.
+
 **Resolution changes:** The content thread prepares compositor, upscaler, generator,
 effect-chain and Math View replacements before publishing new dimensions. GPU
 allocation/admission errors discard the candidate and preserve the live renderer,

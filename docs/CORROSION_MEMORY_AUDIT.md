@@ -2,13 +2,14 @@
 
 <!-- index: Bounded Azalea/Vortex Fragments/Ordered Recon/Math View memory audit; measured allocation classes, source-derived costs and unverified recovery candidates. -->
 
-**Status:** Bounded audit and identical cut-remap reuse implemented and measured, 2026-09-21. Broader memory investigation remains open: BUG-dl16.
+**Status:** Cut-remap reuse, CPU source-copy release, conservative temporary-array reuse and pool telemetry implemented and measured, 2026-09-21. Broader memory investigation remains open: BUG-dl16.
 
 Reusing identical cut remaps before fusion reduced Corrosion's measured peak
 Metal allocations by **1,926,807,552 bytes (1.794 GiB, 9.40%)**, with 0/191
 intervals late by more than 1 ms in the same eight-second headless window.
-This is a GPU allocation saving, not a measured process RAM reduction. General
-buffer lifetime reuse remains a separate follow-up.
+This is a GPU allocation saving, not a measured process RAM reduction. A second
+bounded batch below adds temporary-array reuse, with only a small additional
+Metal saving in this scene, and reports process memory separately.
 
 ## Scope and evidence
 
@@ -180,6 +181,91 @@ establish faster loading or a repeatable GPU-time improvement. Headless timing
 excludes display presentation and audio hardware, and this run is not a visual
 before/after comparison. CPU heap, physical footprint, unused texture-pool
 capacity and future scene combinations remain unmeasured.
+
+## CPU-copy release and temporary-array reuse
+
+`GltfMeshSource` now releases the CPU vertex vector immediately after its
+successful shared-buffer upload. Existing `uploaded` state distinguishes a
+ready staging buffer from an unloaded source; subsequent destination changes
+still copy from staging. GPU tests cover retained output, replacement output
+storage and changed source-fit parameters. The three Azalea instances account
+for about **491,241,600 bytes of source vertex payload** in those vectors before
+release. That is a source-derived retention estimate, not an OS footprint delta;
+allocator capacity and transient loading copies are separate.
+
+The existing pure array planner now shares exact-type, exact-capacity temporary
+roots after their last reader, using the backend's existing same-slot alias
+action. Current-step inputs cannot share storage with that step's outputs.
+Held, feedback/persistent, prebound, atomic, explicit in-place, canvas-dependent
+and carried/exported resources remain dedicated. Canvas-dependent families are
+excluded to preserve staged-resize storage identity. No resources are freed
+between dispatches or frames, and residency/retirement policy is unchanged.
+This is deliberately conservative and does not share between layer runtimes.
+
+A native GPU comparison gives identical final geometry with shared and dedicated
+buffers across five animated/repeated frames; the reference uses separately
+prebound buffers. The four-wave test uses four physical buffers instead of five,
+while retaining the cached source and carried final geometry. Existing planner
+proofs cover feedback, explicit aliases, borrowed Math View inputs, atomic
+initialization and invalid capacities.
+
+One fresh baseline used the previously verified remap-reuse executable; one
+verification used this batch's release executable. Both used the unchanged
+project, start beat 56, eight seconds, retained disk caches and `/usr/bin/time -l`.
+
+| Measurement | Remap-reuse baseline | This batch |
+|---|---:|---:|
+| Peak Metal allocated bytes | 18,570,297,344 | 18,569,117,696 |
+| Warmup tracked residency bytes | 17,904,566,872 | 17,903,387,224 |
+| Warmup tracked allocations | 1,263 | 1,251 |
+| Maximum resident set size, bytes | 4,174,299,136 | 3,865,427,968 |
+| Peak memory footprint, bytes | 23,905,440,064 | 24,320,807,016 |
+| Loading | 19.457 s | 19.256 s |
+| Intervals late by over 1 ms | 0 / 191 | 0 / 191 |
+| Maximum interval | 41.671500 ms | 41.671042 ms |
+| Playback cold touches | 0 | 0 |
+| End-of-capture free texture pool | Not instrumented | 0 textures / 0 payload bytes |
+
+The additional Metal saving is **1,179,648 bytes (1.125 MiB)** and 12 allocations.
+This confirms that ordinary temporary reuse alone recovers little from this
+particular protected/exported stack. Peak RSS decreased by 308,871,168 bytes,
+but peak footprint increased by 415,366,952 bytes: this pair does **not** establish
+an overall physical-memory improvement. Process peaks include loading and have
+different accounting from Metal; none of these values should be added. No
+repeatable load-time improvement, displayed-frame parity or audio result is
+claimed. The pool measurement covers free entries only at capture end, not
+temporary high-water occupancy or backing held inside live runtimes.
+
+Commands, project/binary hashes, source diff, full captures and summaries are in
+`/tmp/manifold-memory-overnight-20260921/{baseline,after}/`. The retained tested
+executable is `/tmp/manifold-memory-overnight-20260921/manifold`.
+
+## Follow-up static accounting
+
+Resolving the six layers through `GeneratorRenderer`'s inline-graph override
+and project preset catalog gives **17 glTF texture sources and six HDRI
+sources**. Layers 1–2 use embedded preset 25; layers 3–6 use inline graphs.
+There are no clip string overrides. Five 4096² texture identities occur three
+times each; one 1024² identity occurs twice. All HDRI bindings have empty paths.
+These are authored source identities, not a new measurement of live GPU images.
+The full saved project also contains unused preset graphs; counting those as
+live allocations would overstate memory use. Census artifacts are under
+`/tmp/manifold-memory-overnight-20260921/texture-census*`.
+
+Repeated sources are a concrete follow-up candidate, but sharing their current
+mutable output textures would be incorrect: layers retain independent path,
+conversion and parameter bindings. A shared immutable image would need exact
+content identity and separate ownership of writable conversion outputs. The
+existing disk decode cache does not establish that GPU sharing contract.
+
+Static review also found existing duration-related protections:
+`unique_clip_chain_topologies` deduplicates clip preparation; additional
+topologies are prepared through one scratch runtime, rather than retaining a
+runtime for every clip. Generator state is retained per layer, and video
+lookahead already uses bounded prewarm candidates. Evicting inactive generator
+runtimes would require preserving feedback/simulation state and preparing GPU
+resources without delaying playback. Those changes are not implied by the
+array planner's ordinary within-frame lifetimes.
 
 ## Source anchors
 
