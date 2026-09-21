@@ -1565,7 +1565,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.last_frame_status
     }
 
-    #[cfg(all(test, feature = "journey-proofs"))]
+    #[cfg(any(feature = "perf-soak", all(test, feature = "journey-proofs")))]
     pub(crate) fn frame_rt_observation(&self) -> (manifold_gpu::raytrace::RtAccelUpdate, u32, u32) {
         (self.last_rt_updates, self.last_rt_dispatches, self.last_rt_history_resets)
     }
