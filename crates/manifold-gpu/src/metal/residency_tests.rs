@@ -134,17 +134,29 @@ fn budget_transition_ends_and_restores_residency() {
     let retained = device.create_buffer(4096);
     manager.drain();
     assert!(manager.stats().requested);
+    device
+        .create_encoder("residency-attached")
+        .try_commit_and_wait_completed()
+        .unwrap();
     manager.budget_bytes = manager.stats().allocated_bytes;
 
     let extra = device.create_buffer(64 * 1024);
     manager.drain();
     assert_eq!(manager.stats().allocation_count, 2);
     assert!(!manager.stats().requested);
+    device
+        .create_encoder("residency-over-budget-detached")
+        .try_commit_and_wait_completed()
+        .unwrap();
 
     drop(extra);
     manager.drain();
     assert_eq!(manager.stats().allocation_count, 1);
     assert!(manager.stats().requested);
+    device
+        .create_encoder("residency-reattached")
+        .try_commit_and_wait_completed()
+        .unwrap();
     drop(retained);
     manager.drain();
     assert_eq!(manager.stats().allocation_count, 0);
@@ -166,5 +178,9 @@ fn manager_drop_clears_native_set() {
     assert_eq!(set.allocationCount(), 1);
     drop(manager);
     assert_eq!(set.allocationCount(), 0);
+    device
+        .create_encoder("residency-manager-dropped")
+        .try_commit_and_wait_completed()
+        .unwrap();
     drop(buffer);
 }

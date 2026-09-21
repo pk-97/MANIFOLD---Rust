@@ -60,11 +60,15 @@ drawable wraps, memoryless storage and raw RT acceleration structures are not
 registered by this manager. Existing resource declarations and hazard tracking
 remain authoritative.
 
-Residency is requested within Metal's recommended working-set limit. Over-budget
-sets release their request and report the condition; they do not prevent project
-loading. Requests are advisory, so system memory pressure can still delay GPU
-access. Warmup telemetry records the request, allocation count, tracked bytes and
-budget rather than claiming that all memory is physically resident.
+Within Metal's recommended working-set limit, the manager requests residency
+ahead of use and attaches the set to the device's command queue for execution.
+The queue attachment carries the set into committed command buffers; a standalone
+ahead-of-time request is not a substitute for that execution contract. Over-budget
+or empty sets detach from the queue and release their request; re-entering the
+budget restores both. Teardown detaches before clearing the set. Budget rejection
+is reported and does not prevent project loading. System memory pressure can
+still delay GPU access. Warmup telemetry records the request, allocation count,
+tracked bytes and budget rather than claiming hitch-free playback.
 
 **Resolution changes:** The content thread prepares compositor, upscaler, generator,
 effect-chain and Math View replacements before publishing new dimensions. GPU
