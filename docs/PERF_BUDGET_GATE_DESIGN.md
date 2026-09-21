@@ -183,6 +183,11 @@ project-budget exceedances, cold-touch categories, and sampled Metal allocation.
 is content-thread paced and has no display-present deadline, audio hardware, or UI surface;
 diagnostic mode additionally forces serial compositing for attribution. Tick work timings exclude the pre-tick
 GPU surface wait; reports include that wait separately alongside missed ticks.
+Measurement version 3 includes the tick prelude and UI state publication in CPU
+work, with separate phase aggregates. Profiler metadata capture is reported as
+`profiler_overhead_ms` and excluded from that work total. End-of-frame autorelease
+draining and display presentation remain outside this measurement. Earlier
+baseline versions must be regenerated rather than compared across these scopes.
 
 For a release baseline, use `cargo run --release -p manifold-app --features perf-soak
 --bin manifold -- perf-soak <project> --seconds 30 --report-only` under the existing

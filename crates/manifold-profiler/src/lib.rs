@@ -70,7 +70,7 @@ pub struct FrameRecord {
     /// Number of content thread ticks missed (frame drops).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub missed_frames: u64,
-    /// Profiler buffer readback overhead in ms.
+    /// CPU time spent capturing profiler metadata, excluded from wall_time_ms.
     pub profiler_overhead_ms: f64,
     /// GPU memory estimate for this frame.
     pub memory: MemorySnapshot,
@@ -198,12 +198,18 @@ pub struct MemorySnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContentTimings {
     pub total_ms: f64,
+    /// Tick setup, still-export polling and completed device discovery results.
+    #[serde(default)]
+    pub prelude_ms: f64,
     pub midi_input_ms: f64,
     pub sync_controllers_ms: f64,
     pub engine_tick_ms: f64,
     pub render_content_ms: f64,
     pub gpu_poll_ms: f64,
     pub cleanup_ms: f64,
+    /// Reclaim tick scratch, build the UI snapshot and send it.
+    #[serde(default)]
+    pub state_publish_ms: f64,
 }
 
 // ─── Summary ───────────────────────────────────────────────────────
@@ -306,12 +312,16 @@ pub struct WorstFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PhaseAggregates {
+    #[serde(default)]
+    pub prelude: PercentileStat,
     pub midi_input: PercentileStat,
     pub sync_controllers: PercentileStat,
     pub engine_tick: PercentileStat,
     pub render_content: PercentileStat,
     pub gpu_poll: PercentileStat,
     pub cleanup: PercentileStat,
+    #[serde(default)]
+    pub state_publish: PercentileStat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -476,6 +486,7 @@ impl ProfileSession {
 
         // Phase aggregates
         let phase_aggregates = PhaseAggregates {
+            prelude: percentile_stat(&self.frames, |f| f.content_thread.prelude_ms),
             midi_input: percentile_stat(&self.frames, |f| f.content_thread.midi_input_ms),
             sync_controllers: percentile_stat(&self.frames, |f| {
                 f.content_thread.sync_controllers_ms
@@ -484,6 +495,7 @@ impl ProfileSession {
             render_content: percentile_stat(&self.frames, |f| f.content_thread.render_content_ms),
             gpu_poll: percentile_stat(&self.frames, |f| f.content_thread.gpu_poll_ms),
             cleanup: percentile_stat(&self.frames, |f| f.content_thread.cleanup_ms),
+            state_publish: percentile_stat(&self.frames, |f| f.content_thread.state_publish_ms),
         };
 
         // Hotspot detection: find contiguous bar ranges where >50% of frames exceed budget

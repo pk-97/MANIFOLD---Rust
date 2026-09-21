@@ -94,6 +94,12 @@ one of those happened.
 
 ## 3. The frame, end to end
 
+MIDI source-name discovery runs on a dedicated worker using one retained discovery
+client. The content tick only polls completed snapshots; CoreMIDI enumeration and
+client creation must not block playback. The worker refreshes names every two
+seconds and preserves the last complete list on errors. This does not change MIDI
+event processing or clock-source connections.
+
 Order is load-bearing; it ports Unity's execution order and the comments pin it.
 
 ```

@@ -2564,7 +2564,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 led_preview_version: 0,
                 still_export: None,
                 cached_midi_device_names: Vec::new(),
-                last_midi_device_scan_time: manifold_core::Seconds(-10.0),
+                midi_source_discovery: manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
                 cached_project_snapshot: None,
                 watched_graph_target: None,
                 preview_graph_node: None,

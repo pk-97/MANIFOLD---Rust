@@ -432,7 +432,7 @@ fn run_soak(
             "missed_ticks_total": frame_summary.missed_ticks_total,
             "max_missed_ticks": frame_summary.max_missed_ticks,
             "max_gpu_fence_wait_ms": frame_summary.max_gpu_fence_wait_ms,
-            "timing_scope": "content-thread work; excludes pre-tick GPU fence wait and display presentation",
+            "timing_scope": "content-thread tick through state publication; excludes profiler capture overhead, pre-tick GPU fence wait, autorelease drain and display presentation",
             "active_clip_frames": frame_summary.active_clip_frames,
             "peak_active_clips": frame_summary.peak_active_clips,
             "frames_over_project_budget": frame_summary.frames_over_project_budget,
@@ -572,7 +572,7 @@ const PROFILE_WORST_FRAMES_K: usize = 5;
 
 /// Bumped when startup or pacing semantics change enough to invalidate
 /// existing comparison baselines (shared production warmup + surface pacing).
-const MEASUREMENT_VERSION: u32 = 2;
+const MEASUREMENT_VERSION: u32 = 3;
 
 /// One node's accumulated attribution within a single profiled frame, keyed
 /// by the scoped tag (`"{scope}:s{idx}"`) that both the CPU `StepProfile` and
