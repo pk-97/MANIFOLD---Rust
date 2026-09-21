@@ -8,7 +8,8 @@ use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
+    MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor, MTLBuffer,
+    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
@@ -394,6 +395,40 @@ impl GpuEncoder {
         self.cmd_buf
             .blitCommandEncoder()
             .expect("blitCommandEncoder failed")
+    }
+
+    /// Create an acceleration-structure encoder, attaching boundary timestamp
+    /// samples when profiling. The caller owns the returned encoder and must
+    /// end it after encoding its build/refit work.
+    pub(crate) fn make_acceleration_structure_encoder(
+        &mut self,
+        label: &str,
+    ) -> Retained<ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>> {
+        self.end_current();
+        if let Some((start, end)) = self
+            .profile
+            .as_mut()
+            .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure))
+        {
+            let sample_buffer = self
+                .profile
+                .as_ref()
+                .map(|p| p.sampler.buffer.clone())
+                .expect("profile state present");
+            let desc = MTLAccelerationStructurePassDescriptor::accelerationStructurePassDescriptor();
+            unsafe {
+                let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
+                att.setSampleBuffer(Some(&sample_buffer));
+                att.setStartOfEncoderSampleIndex(start);
+                att.setEndOfEncoderSampleIndex(end);
+            }
+            return self
+                .cmd_buf
+                .accelerationStructureCommandEncoderWithDescriptor(&desc);
+        }
+        self.cmd_buf
+            .accelerationStructureCommandEncoder()
+            .expect("accelerationStructureCommandEncoder failed")
     }
 
     /// Dispatch a compute shader.
