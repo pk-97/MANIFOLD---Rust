@@ -23,6 +23,7 @@ manifold-audio = { path = "../manifold-audio" }
 # renderer (the worker, via manifold-audio, uses the CPU CQT only).
 manifold-spectral = { path = "../manifold-spectral", features = ["gpu"] }
 manifold-recording = { path = "../manifold-recording" }
+sha2 = { version = "0.10", optional = true }
 winit = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
@@ -82,7 +83,7 @@ journey-proofs = ["dep:image"]
 # `manifold-profiler`'s per-frame section-timing collector (min/p50/p95/max +
 # worst-frame breakdown come from its FrameRecord/SessionSummary, not a new
 # timing framework).
-perf-soak = ["profiling"]
+perf-soak = ["profiling", "dep:sha2"]
 
 [dev-dependencies]
 sha2 = "0.10"

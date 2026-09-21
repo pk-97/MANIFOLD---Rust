@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 /// Frame pacing and timing statistics.
 ///
 /// Timer-based pacing at `target_fps`. On macOS, uses `mach_wait_until`
-/// for precise kernel-level frame deadlines with zero CPU overhead.
+/// for kernel-assisted frame deadlines followed by a short spin wait.
 /// Presentation timing is handled independently by CAMetalLayer.
 ///
 /// FPS is measured via exponentially weighted moving average (EWMA) on
@@ -16,13 +16,19 @@ pub struct FrameTimer {
     last_tick_time: Instant,
     app_start_time: Instant,
     last_dt: f64,
+    // Wall-clock pacing is independent of the optional deterministic engine clock.
+    #[cfg(any(feature = "profiling", test))]
+    last_wall_interval: Option<f64>,
+    #[cfg(any(feature = "profiling", test))]
+    has_previous_tick: bool,
 
     /// EWMA-smoothed frame time in seconds. FPS derived as 1/smoothed_dt.
     smoothed_dt: f64,
     /// Current FPS derived from smoothed_dt. Updated every frame.
     current_fps: f64,
 
-    /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
+    /// Whole tick intervals skipped: floor(wall interval / target) - 1.
+    /// This coarse count does not establish deadline compliance or presentation.
     missed_ticks: u64,
 
     /// BUG-jbxt (rt-capture frame clock): when true, `consume_tick` returns
@@ -101,6 +107,10 @@ impl FrameTimer {
             last_tick_time: now,
             app_start_time: now,
             last_dt: 0.0,
+            #[cfg(any(feature = "profiling", test))]
+            last_wall_interval: None,
+            #[cfg(any(feature = "profiling", test))]
+            has_previous_tick: false,
             smoothed_dt: initial_dt,
             current_fps: target_fps,
             missed_ticks: 0,
@@ -119,6 +129,11 @@ impl FrameTimer {
         self.smoothed_dt = self.target_frame_duration.as_secs_f64();
         self.current_fps = self.target_fps;
         self.missed_ticks = 0;
+        #[cfg(any(feature = "profiling", test))]
+        {
+            self.last_wall_interval = None;
+            self.has_previous_tick = false;
+        }
     }
 
     /// Returns true if enough time has passed for the next frame.
@@ -179,8 +194,16 @@ impl FrameTimer {
 
     /// Consume the tick, returning delta time in seconds.
     pub fn consume_tick(&mut self) -> f64 {
-        let now = Instant::now();
+        self.consume_tick_at(Instant::now())
+    }
+
+    fn consume_tick_at(&mut self, now: Instant) -> f64 {
         let wall_dt = (now - self.last_tick_time).as_secs_f64();
+        #[cfg(any(feature = "profiling", test))]
+        {
+            self.last_wall_interval = self.has_previous_tick.then_some(wall_dt);
+            self.has_previous_tick = true;
+        }
         self.last_tick_time = now;
         let dt = if self.frame_clocked {
             self.target_frame_duration.as_secs_f64()
@@ -189,9 +212,9 @@ impl FrameTimer {
         };
         self.last_dt = dt;
         self.frame_clock_seconds += dt;
-        // Detect missed ticks: if dt exceeds 2× target, we dropped frames.
-        // Wall dt even when frame-clocked — a slow render IS a dropped
-        // frame, the engine just doesn't feel it.
+        // Legacy coarse count, retained for diagnostics only. A late tick can
+        // report zero here; actual wall interval/lateness determines pacing.
+        // Presentation is not measured by this timer.
         let target_secs = self.target_frame_duration.as_secs_f64();
         self.missed_ticks = if target_secs > 0.0 {
             ((wall_dt / target_secs).floor() as u64).saturating_sub(1)
@@ -202,10 +225,18 @@ impl FrameTimer {
         dt
     }
 
-    /// Number of ticks missed this frame (0 = on time, 1+ = frame drops).
+    /// Whole tick intervals skipped. Zero does not mean on time.
     #[cfg(feature = "profiling")]
     pub fn missed_ticks(&self) -> u64 {
         self.missed_ticks
+    }
+
+    /// Actual elapsed seconds between tick starts, including work, GPU waits,
+    /// profiler overhead, autorelease draining and scheduling. The first tick
+    /// after creation/load/target change has no comparable predecessor.
+    #[cfg(any(feature = "profiling", test))]
+    pub fn last_wall_interval(&self) -> Option<f64> {
+        self.last_wall_interval
     }
 
     /// Seconds since application start.
@@ -236,6 +267,11 @@ impl FrameTimer {
 
     /// Change target FPS at runtime.
     pub fn set_target_fps(&mut self, fps: f64) {
+        #[cfg(any(feature = "profiling", test))]
+        if fps != self.target_fps {
+            self.has_previous_tick = false;
+            self.last_wall_interval = None;
+        }
         self.target_fps = fps;
         self.target_frame_duration = Duration::from_secs_f64(1.0 / fps);
     }
@@ -297,7 +333,46 @@ mod tests {
         assert_eq!(timer.missed_ticks, 0);
         assert_eq!(timer.frame_clock_seconds, 7.0);
         assert!(timer.realtime_since_start() >= 30.0);
-        assert!(timer.consume_tick() < 1.0, "load time leaked into playback delta");
+        assert!(
+            timer.consume_tick() < 1.0,
+            "load time leaked into playback delta"
+        );
+    }
+
+    #[test]
+    fn telemetry_retains_short_hitches_that_coarse_counter_misses() {
+        let mut timer = FrameTimer::new(24.0);
+        let start = timer.last_tick_time;
+        timer.consume_tick_at(start + Duration::from_millis(42));
+        assert_eq!(timer.last_wall_interval(), None);
+        timer.consume_tick_at(start + Duration::from_millis(112));
+        assert_eq!(timer.last_wall_interval(), Some(0.070));
+        assert_eq!(timer.missed_ticks, 0);
+        let lateness = timer.last_wall_interval().unwrap() - 1.0 / timer.target_fps();
+        assert!(lateness > 0.028);
+        timer.consume_tick_at(start + Duration::from_millis(710));
+        assert_eq!(timer.last_wall_interval(), Some(0.598));
+    }
+
+    #[test]
+    fn telemetry_uses_wall_time_even_with_deterministic_engine_clock() {
+        let mut timer = FrameTimer::new(24.0);
+        timer.set_frame_clocked(true);
+        let start = timer.last_tick_time;
+        timer.consume_tick_at(start);
+        let engine_dt = timer.consume_tick_at(start + Duration::from_millis(70));
+        assert!((engine_dt - 1.0 / 24.0).abs() < 1e-9);
+        assert_eq!(timer.last_wall_interval(), Some(0.070));
+        timer.resume_after_load();
+        assert_eq!(timer.last_wall_interval(), None);
+        timer.consume_tick();
+        assert_eq!(timer.last_wall_interval(), None);
+        timer.consume_tick();
+        assert!(timer.last_wall_interval().is_some());
+        timer.set_target_fps(30.0);
+        assert_eq!(timer.last_wall_interval(), None);
+        timer.consume_tick();
+        assert_eq!(timer.last_wall_interval(), None);
     }
 
     #[test]
