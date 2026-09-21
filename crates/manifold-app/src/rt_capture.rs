@@ -468,16 +468,12 @@ pub fn run(args: &[String]) -> ! {
         .spawn(move || while state_rx.recv().is_ok() {})
         .expect("spawn drain");
 
-    ct.handle_command(ContentCommand::LoadProject(Box::new(real_project)));
-    // Mirror the production drain loop (content_thread.rs LoadProject arm):
-    // the load-time warmup pass runs right after the load. Without this call
-    // the harness exercises a load path production never takes.
-    {
-        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
-        let warm_start = std::time::Instant::now();
-        ct.run_warmup(&cmd_rx, &cmd_tx, &state_tx);
-        eprintln!("[rt-capture] warmup pass took {:.1?}", warm_start.elapsed());
-    }
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &cmd_tx, &state_tx);
+    eprintln!("[rt-capture] warmup pass took {:.1}ms (completed={})",
+        load.warmup.elapsed_ms, load.warmup.completed);
+    // This tool deliberately permits an FPS override after the production load.
+    ct.timer.set_target_fps(fr);
 
     // Phase 1: Play N frames (rotation, beat advancing).
     ct.handle_command(ContentCommand::Play);

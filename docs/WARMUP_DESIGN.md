@@ -19,6 +19,13 @@ with a guarantee beats a three-second load with a hitch hiding in bar sixty-four
 Companion: `FREEZE_COMPILER_MAP.md` (fusion prewarm, untouched by this design),
 `EFFECT_CHAIN_LIFECYCLE.md` (chain pool — orthogonal), BUG-93o6 (first-play-warmup-3d-scenes-heavy-generators — the originating bead, closes with P1).
 
+The app command drains (including the GPU-surface wait), `perf-soak`, and
+`rt-capture` share `ContentThread::load_project_and_warmup`. Its report records
+installation time, per-layer preparation time and sampled Metal allocation,
+and known incomplete preparation. The frame timer resumes after loading so
+stopped preparation time cannot become the first playback delta. A completed
+warmup report does not prove that subsequent frames meet their time budget.
+
 ## 1. Audit — what exists (verified 2026-08-20)
 
 ### Already warm — do not rebuild

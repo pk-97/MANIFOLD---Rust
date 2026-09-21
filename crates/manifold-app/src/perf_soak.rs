@@ -25,12 +25,15 @@
 //! dispatcher, see `run()`), 3 = run failure (import/convergence); it never
 //! returns exit code 1 (I3/I4 don't apply to it).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use manifold_profiler::FrameRecord;
 
 use crate::content_command::ContentCommand;
+use crate::content_state::ContentState;
+use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
 
 /// Entry dispatched from `main()` when `argv[1] == "perf-soak"`. `args` is
@@ -38,6 +41,11 @@ use crate::headless_harness::headless_content_thread;
 /// every path ends in `std::process::exit` (mirrors `ui_snapshot::run`'s
 /// convention).
 pub fn run(args: &[String]) -> ! {
+    // Subcommand dispatch happens before the normal app logger setup. Keep
+    // production load/warmup diagnostics visible for the headless path too.
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+
     let project_path = match args.get(1) {
         Some(p) if !p.starts_with("--") => p.clone(),
         _ => usage_exit("missing <project|glb> argument"),
@@ -50,7 +58,7 @@ pub fn run(args: &[String]) -> ! {
         // D7 flag matrix: `--seconds`/`--start`/`--update-baseline` are
         // project-mode-only — reject rather than silently ignore
         // (no-silent-fallbacks).
-        for flag in ["--seconds", "--start", "--update-baseline"] {
+        for flag in ["--seconds", "--start", "--update-baseline", "--report-only"] {
             if args.iter().any(|a| a == flag) {
                 usage_exit(&format!(
                     "{flag} is only valid for a .manifold project input (D7); import-graph mode \
@@ -77,7 +85,7 @@ pub fn run(args: &[String]) -> ! {
 
     let seconds = match arg_value(args, "--seconds") {
         Some(s) => match s.parse::<f64>() {
-            Ok(v) if v > 0.0 => v,
+            Ok(v) if v.is_finite() && v > 0.0 => v,
             _ => usage_exit("--seconds must be a positive number"),
         },
         None => usage_exit("--seconds N is required"),
@@ -85,26 +93,30 @@ pub fn run(args: &[String]) -> ! {
 
     let start_beats = match arg_value(args, "--start") {
         Some(s) => match s.parse::<f64>() {
-            Ok(v) => Some(v),
-            Err(_) => usage_exit("--start must be a number of beats"),
+            Ok(v) if v.is_finite() => Some(v),
+            _ => usage_exit("--start must be a finite number of beats"),
         },
         None => None,
     };
 
     let update_baseline = args.iter().any(|a| a == "--update-baseline");
     let profile_mode = args.iter().any(|a| a == "--profile");
+    let report_only = args.iter().any(|a| a == "--report-only");
 
-    // I4: a profiled run never reaches the baseline write and never sets a
-    // failing exit code — rejected outright rather than silently ignoring
-    // one of the two flags (no-silent-fallbacks).
-    if profile_mode && update_baseline {
-        usage_exit("--profile cannot be combined with --update-baseline (I4: profiled runs never write a baseline)");
+    if has_conflicting_flags(profile_mode, update_baseline, report_only) {
+        usage_exit("--profile, --report-only, and --update-baseline are mutually exclusive");
     }
 
     let result = if profile_mode {
         run_profile(&project_path, seconds, start_beats)
     } else {
-        run_soak(&project_path, seconds, start_beats, update_baseline)
+        run_soak(
+            &project_path,
+            seconds,
+            start_beats,
+            update_baseline,
+            report_only,
+        )
     };
 
     match result {
@@ -122,7 +134,7 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!("perf-soak: {msg}");
     eprintln!(
         "usage: cargo xtask perf-soak <project.manifold> --seconds N \
-         [--start <beats>] [--update-baseline] [--profile]"
+         [--start <beats>] [--update-baseline] [--report-only] [--profile]"
     );
     eprintln!(
         "   or: cargo xtask perf-soak <file.glb|.gltf> [--size WxH] [--frames N] [--profile] \
@@ -132,7 +144,159 @@ fn usage_exit(msg: &str) -> ! {
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+fn has_conflicting_flags(profile_mode: bool, update_baseline: bool, report_only: bool) -> bool {
+    (profile_mode && update_baseline) || (report_only && (profile_mode || update_baseline))
+}
+
+struct PreparedProject {
+    ct: ContentThread,
+    cmd_tx: crossbeam_channel::Sender<ContentCommand>,
+    cmd_rx: crossbeam_channel::Receiver<ContentCommand>,
+    state_tx: crossbeam_channel::Sender<ContentState>,
+    drain: std::thread::JoinHandle<()>,
+    project_path: PathBuf,
+    width: u32,
+    height: u32,
+    frame_rate: f64,
+    bpm: manifold_core::Bpm,
+    startup: serde_json::Value,
+}
+
+/// Load a project into the same empty headless context used by the production
+/// content thread, then run the shared production install/warmup path. Both
+/// normal and diagnostic runs use this helper so startup telemetry describes
+/// the same lifecycle in both modes.
+fn prepare_project(project_path_str: &str, mode: &str) -> Result<PreparedProject, String> {
+    let startup_started = Instant::now();
+    let project_path = Path::new(project_path_str).to_path_buf();
+
+    let parse_started = Instant::now();
+    let project = manifold_io::loader::load_project_with(
+        &project_path,
+        crate::project_io::install_embedded_presets,
+    )
+    .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
+    let parse_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
+
+    let width = project.settings.output_width.max(1) as u32;
+    let height = project.settings.output_height.max(1) as u32;
+    let frame_rate = project.settings.frame_rate as f64;
+    let bpm = project.settings.bpm;
+
+    // Set up the progress channel before entering the shared warmup. The
+    // drain keeps the unbounded state queue bounded during long fixture loads.
+    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let drain = std::thread::Builder::new()
+        .name("perf-soak-load-drain".into())
+        .spawn(move || while state_rx.recv().is_ok() {})
+        .map_err(|e| format!("spawn load drain thread: {e}"))?;
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+
+    let setup_started = Instant::now();
+    // Deliberately construct an empty context. Loading the fixture through the
+    // shared lifecycle below is what makes this path representative of the
+    // app's production startup sequence.
+    let mut ct = headless_content_thread(manifold_core::project::Project::default(), width, height);
+    let setup_ms = setup_started.elapsed().as_secs_f64() * 1000.0;
+
+    let load_started = Instant::now();
+    let load_report = ct.load_project_and_warmup(Box::new(project), &cmd_rx, &cmd_tx, &state_tx);
+    let load_ms = load_started.elapsed().as_secs_f64() * 1000.0;
+    let total_ms = startup_started.elapsed().as_secs_f64() * 1000.0;
+
+    let startup = serde_json::json!({
+        "mode": mode,
+        "parse_ms": parse_ms,
+        "device_context_setup_ms": setup_ms,
+        "shared_load_warmup_ms": load_ms,
+        "total_startup_ms": total_ms,
+        "load_report": load_report,
+        "headless": {
+            "ticks": "content-thread ticks",
+            "display_present_deadlines": false,
+            "audio_hardware": false,
+            "ui_surfaces": false,
+        },
+    });
+
+    eprintln!(
+        "perf-soak ({mode}): startup parse={parse_ms:.1}ms setup={setup_ms:.1}ms \
+         load+warmup={load_ms:.1}ms total={total_ms:.1}ms"
+    );
+
+    Ok(PreparedProject {
+        ct,
+        cmd_tx,
+        cmd_rx,
+        state_tx,
+        drain,
+        project_path,
+        width,
+        height,
+        frame_rate,
+        bpm,
+        startup,
+    })
+}
+
+#[derive(Default)]
+struct MemorySamples {
+    count: usize,
+    first: Option<u64>,
+    last: Option<u64>,
+    min: Option<u64>,
+    max: Option<u64>,
+}
+
+impl MemorySamples {
+    fn sample(&mut self, ct: &ContentThread) {
+        if let Some(snapshot) = ct
+            .content_pipeline
+            .native_device()
+            .and_then(manifold_gpu::GpuDevice::modifier_memory_snapshot)
+        {
+            let bytes = snapshot.current_allocated_bytes;
+            self.count += 1;
+            self.first.get_or_insert(bytes);
+            self.last = Some(bytes);
+            self.min = Some(self.min.map_or(bytes, |min| min.min(bytes)));
+            self.max = Some(self.max.map_or(bytes, |max| max.max(bytes)));
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "samples": self.count,
+            "first_bytes": self.first,
+            "min_bytes": self.min,
+            "max_bytes": self.max,
+            "last_bytes": self.last,
+        })
+    }
+}
+
+fn cold_touch_summary() -> serde_json::Value {
+    use manifold_core::cold_touch::{ColdTouchKind, cold_touch_count};
+    let mut categories = BTreeMap::new();
+    for (kind, label) in [
+        (ColdTouchKind::PipelineCompile, "pipeline_compile"),
+        (ColdTouchKind::GlbParse, "glb_parse"),
+        (ColdTouchKind::HdriDecode, "hdri_decode"),
+        (ColdTouchKind::ModelLoad, "model_load"),
+        (ColdTouchKind::ChainConstruction, "chain_construction"),
+    ] {
+        categories.insert(label, cold_touch_count(kind));
+    }
+    serde_json::json!({
+        "categories": categories,
+        "total": manifold_core::cold_touch::total_cold_touches(),
+    })
 }
 
 /// Returns `Ok(true)` if the gate passed, `Ok(false)` if it failed a
@@ -143,26 +307,22 @@ fn run_soak(
     seconds: f64,
     start_beats: Option<f64>,
     update_baseline: bool,
+    report_only: bool,
 ) -> Result<bool, String> {
-    let project_path = Path::new(project_path_str);
-
-    // Same load path `fixtures.rs`'s `project_scene` uses — the app's real
-    // `ProjectIOService::open_project_from_path` route, with the
-    // embedded-preset install hook so project-local forked presets resolve
-    // correctly (BUG-036).
-    let project = manifold_io::loader::load_project_with(
+    let PreparedProject {
+        mut ct,
+        cmd_tx,
+        cmd_rx,
+        state_tx,
+        drain,
         project_path,
-        crate::project_io::install_embedded_presets,
-    )
-    .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
+        width,
+        height,
+        frame_rate,
+        bpm,
+        startup,
+    } = prepare_project(project_path_str, "normal")?;
 
-    let width = project.settings.output_width.max(1) as u32;
-    let height = project.settings.output_height.max(1) as u32;
-    let frame_rate = project.settings.frame_rate as f64;
-    let bpm = project.settings.bpm;
-
-    let mut ct = headless_content_thread(project, width, height);
-    ct.timer.set_target_fps(frame_rate);
     // Same real-time thread scheduling `ContentThread::run()` applies before
     // its own loop — without it `wait_for_deadline`'s `mach_wait_until` calls
     // pace at roughly half rate on a normally-scheduled thread (see
@@ -191,31 +351,26 @@ fn run_soak(
         gpu_name,
     ));
 
-    // Unbounded (not the production bounded-4 channel): this harness never
-    // reads it for its own purposes, and an unbounded `send` never blocks —
-    // draining on a background thread just keeps memory bounded over a long
-    // soak (same convention `journey_proof.rs`'s `run_headless_export` uses).
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
-    let drain = std::thread::Builder::new()
-        .name("perf-soak-drain".into())
-        .spawn(move || while state_rx.recv().is_ok() {})
-        .map_err(|e| format!("spawn drain thread: {e}"))?;
-
     eprintln!(
         "perf-soak: soaking '{}' for {seconds:.1}s at {frame_rate:.1} fps \
          ({width}x{height}, bpm={:.1}{})",
         project_path.display(),
         bpm.0,
-        start_beats.map(|b| format!(", start={b:.1} beats")).unwrap_or_default(),
+        start_beats
+            .map(|b| format!(", start={b:.1} beats"))
+            .unwrap_or_default(),
     );
 
     // Real-time pacing, D5: the SAME `FrameTimer::wait_for_deadline` +
     // `tick_frame` pair the production `ContentThread::run()` loop calls —
     // no separate sleep/pacing logic invented here.
     let deadline = Instant::now() + Duration::from_secs_f64(seconds);
+    let mut memory_samples = MemorySamples::default();
     while Instant::now() < deadline {
-        ct.timer.wait_for_deadline();
-        ct.tick_frame(&state_tx);
+        if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+            break;
+        }
+        memory_samples.sample(&ct);
     }
 
     let session_dir = ct
@@ -226,9 +381,11 @@ fn run_soak(
         .map_err(|e| format!("profiler dump failed: {e}"))?;
 
     drop(state_tx);
-    drain.join().map_err(|_| "drain thread panicked".to_string())?;
+    drain
+        .join()
+        .map_err(|_| "drain thread panicked".to_string())?;
 
-    let (stats, worst_frame_breakdown) = load_stats(&session_dir)?;
+    let (stats, worst_frame_breakdown, frame_summary) = load_stats(&session_dir)?;
     eprintln!(
         "perf-soak: {} frames — min={:.2}ms p50={:.2}ms p95={:.2}ms max={:.2}ms",
         stats.frame_count, stats.min_ms, stats.p50_ms, stats.p95_ms, stats.max_ms
@@ -250,7 +407,7 @@ fn run_soak(
         );
     }
 
-    let baseline_path = baseline_path_for(project_path);
+    let baseline_path = baseline_path_for(&project_path);
     let machine = current_machine();
 
     // Stats JSON: written every run (not flag-gated — only the BASELINE
@@ -258,6 +415,8 @@ fn run_soak(
     // for a human/agent to read the acceptance-demo evidence from.
     let stats_json = serde_json::json!({
         "mode": "project",
+        "measurement_version": MEASUREMENT_VERSION,
+        "run_mode": "normal",
         "project": project_path.display().to_string(),
         "machine": machine,
         "seconds": seconds,
@@ -268,16 +427,37 @@ fn run_soak(
         "p95_ms": stats.p95_ms,
         "max_ms": stats.max_ms,
         "worst_frame": worst_frame_breakdown,
+        "startup": startup,
+        "telemetry": {
+            "missed_ticks_total": frame_summary.missed_ticks_total,
+            "max_missed_ticks": frame_summary.max_missed_ticks,
+            "max_gpu_fence_wait_ms": frame_summary.max_gpu_fence_wait_ms,
+            "timing_scope": "content-thread work; excludes pre-tick GPU fence wait and display presentation",
+            "active_clip_frames": frame_summary.active_clip_frames,
+            "peak_active_clips": frame_summary.peak_active_clips,
+            "frames_over_project_budget": frame_summary.frames_over_project_budget,
+            "frames_over_regression_guard": frame_summary.frames_over_regression_guard,
+            "regression_guard_ms": 20.0,
+            "cold_touches": cold_touch_summary(),
+            "metal_allocated_bytes": memory_samples.json(),
+        },
         "profiling_session_dir": session_dir.display().to_string(),
     });
     let stats_path = session_dir.join("perf_soak_stats.json");
-    std::fs::write(&stats_path, serde_json::to_string_pretty(&stats_json).unwrap())
-        .map_err(|e| format!("write {}: {e}", stats_path.display()))?;
+    std::fs::write(
+        &stats_path,
+        serde_json::to_string_pretty(&stats_json).unwrap(),
+    )
+    .map_err(|e| format!("write {}: {e}", stats_path.display()))?;
     eprintln!("perf-soak: stats written to {}", stats_path.display());
 
     // I1 — hard fail: any frame over 20ms (max_ms > 20 <=> some frame > 20ms).
     const HARD_FAIL_MS: f64 = 20.0;
     let hard_fail = stats.max_ms > HARD_FAIL_MS;
+    if report_only {
+        eprintln!("perf-soak: report-only — baseline comparison and writes skipped");
+        return Ok(true);
+    }
     if hard_fail {
         eprintln!(
             "perf-soak: FAIL (I1) — max frame {:.2}ms exceeds the {HARD_FAIL_MS}ms hard budget",
@@ -289,6 +469,7 @@ fn run_soak(
         // D4/I3: baseline write is flag-gated — this is the ONLY place the
         // baseline file is written.
         let baseline = serde_json::json!({
+            "measurement_version": MEASUREMENT_VERSION,
             "machine": machine,
             "project": project_path.display().to_string(),
             "seconds": seconds,
@@ -300,10 +481,14 @@ fn run_soak(
             "recorded_at": iso_now(),
         });
         if let Some(parent) = baseline_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
-        std::fs::write(&baseline_path, serde_json::to_string_pretty(&baseline).unwrap())
-            .map_err(|e| format!("write {}: {e}", baseline_path.display()))?;
+        std::fs::write(
+            &baseline_path,
+            serde_json::to_string_pretty(&baseline).unwrap(),
+        )
+        .map_err(|e| format!("write {}: {e}", baseline_path.display()))?;
         eprintln!("perf-soak: baseline written to {}", baseline_path.display());
         return Ok(!hard_fail);
     }
@@ -319,7 +504,21 @@ fn run_soak(
     })?;
     let baseline: serde_json::Value = serde_json::from_str(&baseline_raw)
         .map_err(|e| format!("parse {}: {e}", baseline_path.display()))?;
-    let baseline_p95 = baseline["p95_ms"].as_f64().ok_or("baseline missing p95_ms")?;
+    let baseline_version = baseline["measurement_version"].as_u64().ok_or_else(|| {
+        format!(
+            "baseline at {} predates measurement version {MEASUREMENT_VERSION}; regenerate with --update-baseline",
+            baseline_path.display()
+        )
+    })?;
+    if baseline_version != MEASUREMENT_VERSION as u64 {
+        return Err(format!(
+            "baseline at {} has measurement version {baseline_version}, expected {MEASUREMENT_VERSION}; regenerate with --update-baseline",
+            baseline_path.display()
+        ));
+    }
+    let baseline_p95 = baseline["p95_ms"]
+        .as_f64()
+        .ok_or("baseline missing p95_ms")?;
     let baseline_machine = baseline["machine"].as_str().unwrap_or("unknown");
     if baseline_machine != machine {
         eprintln!(
@@ -329,7 +528,11 @@ fn run_soak(
         );
     }
 
-    let regression_ratio = if baseline_p95 > 0.0 { stats.p95_ms / baseline_p95 } else { 1.0 };
+    let regression_ratio = if baseline_p95 > 0.0 {
+        stats.p95_ms / baseline_p95
+    } else {
+        1.0
+    };
     const REGRESSION_BAND: f64 = 1.15;
     let regressed = regression_ratio > REGRESSION_BAND;
     if regressed {
@@ -366,6 +569,10 @@ const PROFILE_SAMPLER_MAX_SPANS: usize = 8192;
 
 /// Worst-frame count reported in the attribution JSON (D6/P2 default).
 const PROFILE_WORST_FRAMES_K: usize = 5;
+
+/// Bumped when startup or pacing semantics change enough to invalidate
+/// existing comparison baselines (shared production warmup + surface pacing).
+const MEASUREMENT_VERSION: u32 = 2;
 
 /// One node's accumulated attribution within a single profiled frame, keyed
 /// by the scoped tag (`"{scope}:s{idx}"`) that both the CPU `StepProfile` and
@@ -406,22 +613,25 @@ struct ProfiledFrame {
 /// profiled mode reports, it never judges pass/fail — and it never touches
 /// the baseline file (see `run()`'s `--update-baseline` rejection above).
 /// `Err` is a run failure (load/tick/device error), matching `run_soak`.
-fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -> Result<bool, String> {
-    let project_path = Path::new(project_path_str);
-
-    let project = manifold_io::loader::load_project_with(
+fn run_profile(
+    project_path_str: &str,
+    seconds: f64,
+    start_beats: Option<f64>,
+) -> Result<bool, String> {
+    let PreparedProject {
+        mut ct,
+        cmd_tx,
+        cmd_rx,
+        state_tx,
+        drain,
         project_path,
-        crate::project_io::install_embedded_presets,
-    )
-    .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
+        width,
+        height,
+        frame_rate,
+        bpm,
+        startup,
+    } = prepare_project(project_path_str, "diagnostic")?;
 
-    let width = project.settings.output_width.max(1) as u32;
-    let height = project.settings.output_height.max(1) as u32;
-    let frame_rate = project.settings.frame_rate as f64;
-    let bpm = project.settings.bpm;
-
-    let mut ct = headless_content_thread(project, width, height);
-    ct.timer.set_target_fps(frame_rate);
     crate::content_thread::apply_realtime_thread_policy(frame_rate);
 
     if let Some(beats) = start_beats {
@@ -446,32 +656,47 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
     for renderer in ct.engine.renderers_mut() {
         if let Some(gen_renderer) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
-        {
+            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+        ) {
             gen_renderer.set_profiling(true);
         }
     }
+
+    let gpu_name = ct
+        .content_pipeline
+        .native_device()
+        .map(|d| d.device_name())
+        .unwrap_or_else(|| "unknown".to_string());
+    ct.profiler = Some(manifold_profiler::ProfileSession::new(
+        project_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".to_string()),
+        project_path.display().to_string(),
+        (width, height),
+        frame_rate as f32,
+        gpu_name,
+    ));
 
     eprintln!(
         "perf-soak --profile: profiling '{}' for {seconds:.1}s at {frame_rate:.1} fps \
          ({width}x{height}, bpm={:.1}{}) — forced composite_serial (D6)",
         project_path.display(),
         bpm.0,
-        start_beats.map(|b| format!(", start={b:.1} beats")).unwrap_or_default(),
+        start_beats
+            .map(|b| format!(", start={b:.1} beats"))
+            .unwrap_or_default(),
     );
 
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
-    let drain = std::thread::Builder::new()
-        .name("perf-soak-profile-drain".into())
-        .spawn(move || while state_rx.recv().is_ok() {})
-        .map_err(|e| format!("spawn drain thread: {e}"))?;
-
     let mut frames: Vec<ProfiledFrame> = Vec::new();
+    let mut memory_samples = MemorySamples::default();
     let mut frame_idx: u64 = 0;
     let deadline = Instant::now() + Duration::from_secs_f64(seconds);
     while Instant::now() < deadline {
-        ct.timer.wait_for_deadline();
-        ct.tick_frame(&state_tx);
+        if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+            break;
+        }
+        memory_samples.sample(&ct);
 
         let gpu_profiles = ct.content_pipeline.take_gpu_profiles();
         let mut cpu_profiles = ct.content_pipeline.take_step_profiles();
@@ -481,14 +706,16 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
         for renderer in ct.engine.renderers_mut() {
             if let Some(gen_renderer) = renderer
                 .as_any_mut()
-                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
-            {
+                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+            ) {
                 cpu_profiles.extend(gen_renderer.take_step_profiles());
             }
         }
 
-        let cpu_by_tag: std::collections::HashMap<&str, &manifold_renderer::node_graph::StepProfile> =
-            cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
+        let cpu_by_tag: std::collections::HashMap<
+            &str,
+            &manifold_renderer::node_graph::StepProfile,
+        > = cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
 
         let mut frame = ProfiledFrame {
             index: frame_idx,
@@ -509,13 +736,15 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
                 // reported explicitly, never silently dropped (D6).
                 match cpu_by_tag.get(span.tag.as_str()) {
                     Some(cpu) => {
-                        let entry = frame.nodes.entry(span.tag.clone()).or_insert_with(|| {
-                            ProfiledNode {
-                                type_id: cpu.type_id.clone(),
-                                gpu_ms: 0.0,
-                                cpu_us: cpu.cpu_nanos as f64 / 1000.0,
-                            }
-                        });
+                        let entry =
+                            frame
+                                .nodes
+                                .entry(span.tag.clone())
+                                .or_insert_with(|| ProfiledNode {
+                                    type_id: cpu.type_id.clone(),
+                                    gpu_ms: 0.0,
+                                    cpu_us: cpu.cpu_nanos as f64 / 1000.0,
+                                });
                         entry.gpu_ms += span.millis;
                     }
                     None => frame.untagged_ms += span.millis,
@@ -527,17 +756,30 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
     }
 
     drop(state_tx);
-    drain.join().map_err(|_| "drain thread panicked".to_string())?;
+    drain
+        .join()
+        .map_err(|_| "drain thread panicked".to_string())?;
 
     if frames.is_empty() {
         return Err("no frames recorded — soak duration too short?".to_string());
     }
 
+    let session_dir = ct
+        .profiler
+        .as_mut()
+        .expect("diagnostic profiler set above")
+        .stop_and_dump()
+        .map_err(|e| format!("profiler dump failed: {e}"))?;
+    let (diagnostic_stats, _diagnostic_worst, diagnostic_summary) = load_stats(&session_dir)?;
+
     // D6 capacity check: report, never silently truncate. `max_spans` is the
     // sampler's capacity in spans; a frame using >= it means dispatches were
     // dropped (already visible per-frame as `overflow`, surfaced here as one
     // whole-run verdict too).
-    let sampler_capacity_spans = ct.content_pipeline.profiling_sampler_capacity().unwrap_or(0);
+    let sampler_capacity_spans = ct
+        .content_pipeline
+        .profiling_sampler_capacity()
+        .unwrap_or(0);
     let max_frame_spans_used = frames.iter().map(|f| f.spans_used).max().unwrap_or(0);
     let any_overflow = frames.iter().any(|f| f.overflow > 0);
     if any_overflow {
@@ -555,16 +797,26 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
 
     // Worst-K frames by total GPU time.
     let mut ranked: Vec<&ProfiledFrame> = frames.iter().collect();
-    ranked.sort_by(|a, b| b.total_gpu_ms.partial_cmp(&a.total_gpu_ms).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.total_gpu_ms
+            .partial_cmp(&a.total_gpu_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let worst: Vec<serde_json::Value> = ranked
         .iter()
         .take(PROFILE_WORST_FRAMES_K)
         .map(|f| {
             let mut node_rows: Vec<(&String, &ProfiledNode)> = f.nodes.iter().collect();
             node_rows.sort_by(|a, b| {
-                b.1.gpu_ms.partial_cmp(&a.1.gpu_ms).unwrap_or(std::cmp::Ordering::Equal)
+                b.1.gpu_ms
+                    .partial_cmp(&a.1.gpu_ms)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
-            let share_denom = if f.total_gpu_ms > 0.0 { f.total_gpu_ms } else { 1.0 };
+            let share_denom = if f.total_gpu_ms > 0.0 {
+                f.total_gpu_ms
+            } else {
+                1.0
+            };
             let mut nodes_json: Vec<serde_json::Value> = node_rows
                 .iter()
                 .map(|(tag, n)| {
@@ -598,15 +850,37 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
 
     let profile_json = serde_json::json!({
         "mode": "project",
+        "measurement_version": MEASUREMENT_VERSION,
+        "run_mode": "diagnostic",
         "profile": true,
         "project": project_path.display().to_string(),
         "seconds": seconds,
         "start_beats": start_beats,
         "forced_composite_serial": true,
         "frames_measured": frames.len(),
+        "frame_stats": {
+            "min_ms": diagnostic_stats.min_ms,
+            "p50_ms": diagnostic_stats.p50_ms,
+            "p95_ms": diagnostic_stats.p95_ms,
+            "max_ms": diagnostic_stats.max_ms,
+        },
         "sampler_capacity_spans": sampler_capacity_spans,
         "max_frame_spans_used": max_frame_spans_used,
         "capacity_overflow": any_overflow,
+        "startup": startup,
+        "telemetry": {
+            "missed_ticks_total": diagnostic_summary.missed_ticks_total,
+            "max_missed_ticks": diagnostic_summary.max_missed_ticks,
+            "max_gpu_fence_wait_ms": diagnostic_summary.max_gpu_fence_wait_ms,
+            "active_clip_frames": diagnostic_summary.active_clip_frames,
+            "peak_active_clips": diagnostic_summary.peak_active_clips,
+            "frames_over_project_budget": diagnostic_summary.frames_over_project_budget,
+            "frames_over_regression_guard": diagnostic_summary.frames_over_regression_guard,
+            "regression_guard_ms": 20.0,
+            "cold_touches": cold_touch_summary(),
+            "metal_allocated_bytes": memory_samples.json(),
+        },
+        "profiling_session_dir": session_dir.display().to_string(),
         "worst_frames": worst,
     });
 
@@ -617,9 +891,15 @@ fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "project".to_string());
     let out_path = out_dir.join(format!("{stem}-profile.json"));
-    std::fs::write(&out_path, serde_json::to_string_pretty(&profile_json).unwrap())
-        .map_err(|e| format!("write {}: {e}", out_path.display()))?;
-    eprintln!("perf-soak --profile: attribution JSON written to {}", out_path.display());
+    std::fs::write(
+        &out_path,
+        serde_json::to_string_pretty(&profile_json).unwrap(),
+    )
+    .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+    eprintln!(
+        "perf-soak --profile: attribution JSON written to {}",
+        out_path.display()
+    );
     if let Some(worst) = ranked.first() {
         eprintln!(
             "perf-soak --profile: worst frame #{} = {:.3}ms GPU ({} nodes + untagged {:.3}ms)",
@@ -642,11 +922,40 @@ struct Stats {
     max_ms: f64,
 }
 
+struct FrameSummary {
+    missed_ticks_total: u64,
+    max_missed_ticks: u64,
+    max_gpu_fence_wait_ms: f64,
+    active_clip_frames: usize,
+    peak_active_clips: usize,
+    frames_over_project_budget: usize,
+    frames_over_regression_guard: usize,
+}
+
+fn summarize_frames(frames: &[FrameRecord]) -> FrameSummary {
+    FrameSummary {
+        missed_ticks_total: frames.iter().map(|f| f.missed_frames).sum(),
+        max_gpu_fence_wait_ms: frames
+            .iter()
+            .map(|f| f.content_thread.gpu_poll_ms)
+            .fold(0.0, f64::max),
+        max_missed_ticks: frames.iter().map(|f| f.missed_frames).max().unwrap_or(0),
+        active_clip_frames: frames.iter().filter(|f| !f.active_clips.is_empty()).count(),
+        peak_active_clips: frames
+            .iter()
+            .map(|f| f.active_clips.len())
+            .max()
+            .unwrap_or(0),
+        frames_over_project_budget: frames.iter().filter(|f| f.budget_exceeded).count(),
+        frames_over_regression_guard: frames.iter().filter(|f| f.wall_time_ms > 20.0).count(),
+    }
+}
+
 /// Read `summary.json` (for `max_ms`/`p95_ms`, already computed) and
 /// `frames.jsonl` (for `min_ms`/`p50_ms`, missing from `SessionSummary`, and
 /// the worst frame's own per-section breakdown — `worst_frame.index` only
 /// names which frame; the section ms live in that frame's own `FrameRecord`).
-fn load_stats(session_dir: &Path) -> Result<(Stats, Option<FrameRecord>), String> {
+fn load_stats(session_dir: &Path) -> Result<(Stats, Option<FrameRecord>, FrameSummary), String> {
     let summary_raw = std::fs::read_to_string(session_dir.join("summary.json"))
         .map_err(|e| format!("read summary.json: {e}"))?;
     let summary: manifold_profiler::SessionSummary =
@@ -668,6 +977,7 @@ fn load_stats(session_dir: &Path) -> Result<(Stats, Option<FrameRecord>), String
     wall_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let min_ms = wall_times[0];
     let p50_ms = wall_times[wall_times.len() / 2];
+    let frame_summary = summarize_frames(&frames);
 
     let worst_frame = summary
         .worst_frame
@@ -675,8 +985,15 @@ fn load_stats(session_dir: &Path) -> Result<(Stats, Option<FrameRecord>), String
         .and_then(|w| frames.iter().find(|f| f.index == w.index).cloned());
 
     Ok((
-        Stats { frame_count: frames.len(), min_ms, p50_ms, p95_ms: summary.p95_frame_ms, max_ms: summary.max_frame_ms },
+        Stats {
+            frame_count: frames.len(),
+            min_ms,
+            p50_ms,
+            p95_ms: summary.p95_frame_ms,
+            max_ms: summary.max_frame_ms,
+        },
         worst_frame,
+        frame_summary,
     ))
 }
 
@@ -687,8 +1004,16 @@ fn baseline_path_for(project_path: &Path) -> PathBuf {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "project".to_string());
-    let sanitized: String =
-        stem.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let sanitized: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     PathBuf::from("docs/perf-baselines").join(format!("{sanitized}.json"))
 }
 
@@ -710,4 +1035,53 @@ fn iso_now() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("unix:{secs}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameRecord, has_conflicting_flags, summarize_frames};
+
+    #[test]
+    fn summary_keeps_gpu_wait_separate_from_tick_work() {
+        let frame = FrameRecord {
+            index: 0,
+            beat: 56.0,
+            bar: 15,
+            wall_time_ms: 5.0,
+            budget_exceeded: false,
+            content_thread: manifold_profiler::ContentTimings {
+                gpu_poll_ms: 150.0,
+                ..Default::default()
+            },
+            gpu_passes: vec![],
+            active_clips: vec![],
+            active_effects: vec![],
+            active_layer_count: 0,
+            gpu_pass_count: 0,
+            gpu_total_ms: 0.0,
+            layer_states: vec![],
+            missed_frames: 3,
+            profiler_overhead_ms: 0.0,
+            memory: Default::default(),
+        };
+        let mut slow_cpu = frame.clone();
+        slow_cpu.wall_time_ms = 50.0;
+        slow_cpu.budget_exceeded = true;
+        slow_cpu.missed_frames = 1;
+        slow_cpu.content_thread.gpu_poll_ms = 0.0;
+        let summary = summarize_frames(&[frame, slow_cpu]);
+        assert_eq!(summary.missed_ticks_total, 4);
+        assert_eq!(summary.max_gpu_fence_wait_ms, 150.0);
+        assert_eq!(summary.frames_over_project_budget, 1);
+        assert_eq!(summary.frames_over_regression_guard, 1);
+    }
+
+    #[test]
+    fn report_only_conflicts_with_baseline_or_profile() {
+        assert!(!has_conflicting_flags(false, false, false));
+        assert!(!has_conflicting_flags(false, false, true));
+        assert!(has_conflicting_flags(true, true, false));
+        assert!(has_conflicting_flags(true, false, true));
+        assert!(has_conflicting_flags(false, true, true));
+    }
 }

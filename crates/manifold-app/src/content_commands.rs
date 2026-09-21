@@ -13,6 +13,40 @@ use crate::content_state::ContentState;
 use crate::content_thread::ContentThread;
 use crossbeam_channel::{Receiver, Sender};
 
+/// Measurements from the shared production project installation and preparation path.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectLoadReport {
+    pub install_ms: f64,
+    pub install_error: Option<String>,
+    pub warmup: WarmupReport,
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WarmupReport {
+    pub elapsed_ms: f64,
+    /// Preparation finished without a known failure, timeout, or pending worker.
+    /// This is not a guarantee that every future frame fits its time budget.
+    pub completed: bool,
+    pub budget_exhausted: bool,
+    pub install_failed: bool,
+    pub interrupted: bool,
+    pub total_layers: u32,
+    pub pending_workers: usize,
+    pub layers: Vec<WarmupLayerReport>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WarmupLayerReport {
+    pub id: String,
+    pub name: String,
+    pub elapsed_ms: f64,
+    pub allocated_gpu_bytes: Option<u64>,
+    pub completed: bool,
+}
+
 fn commit_recording(
     engine: &mut manifold_playback::engine::PlaybackEngine,
     editing: &mut manifold_editing::service::EditingService,
@@ -150,6 +184,28 @@ impl ContentThread {
         }
     }
 
+    /// Shared by the app command loops and headless project measurements.
+    pub(crate) fn load_project_and_warmup(
+        &mut self,
+        project: Box<manifold_core::project::Project>,
+        cmd_rx: &Receiver<ContentCommand>,
+        cmd_tx: &Sender<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) -> ProjectLoadReport {
+        let start = std::time::Instant::now();
+        let previous_diagnostic = self.graph_edit_diagnostic.as_ref().map(|event| event.sequence);
+        self.handle_command(ContentCommand::LoadProject(project));
+        let install_error = self.graph_edit_diagnostic.as_ref()
+            .filter(|event| Some(event.sequence) != previous_diagnostic)
+            .map(|event| event.message.clone());
+        let install_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let warmup = self.run_warmup(cmd_rx, cmd_tx, state_tx);
+        // Loading is stopped transport time, not a giant first playback tick.
+        // Preserve the application clock used by sync; reset only frame pacing.
+        self.timer.resume_after_load();
+        ProjectLoadReport { install_ms, install_error, warmup }
+    }
+
     /// Load-time warmup pass (WARMUP_DESIGN.md P1). Runs inside the
     /// `LoadProject` handler after the project is initialized and resized.
     /// Blocks the content thread, publishes per-layer progress, and aborts
@@ -159,12 +215,12 @@ impl ContentThread {
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
         state_tx: &Sender<ContentState>,
-    ) {
+    ) -> WarmupReport {
         // Warmup precedes render_content: install the new project's live
         // quality now rather than inheriting defaults or a previous export.
         self.content_pipeline.apply_rt_quality(&mut self.engine, false);
         let Some(project) = self.engine.project() else {
-            return;
+            return WarmupReport::default();
         };
 
         // Collect layers that need warmup: generator layers plus any layer
@@ -188,6 +244,7 @@ impl ContentThread {
         let budget = manifold_core::WarmupBudget::default();
         let start = std::time::Instant::now();
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
+        let mut report = WarmupReport { total_layers: total, ..WarmupReport::default() };
         let mut any_budget_exhausted = false;
         let mut any_install_failed = false;
 
@@ -230,7 +287,9 @@ impl ContentThread {
                     // Re-queue — consuming it here would swallow the quit:
                     // the main loop must still see it after load unwinds.
                     let _ = cmd_tx.send(ContentCommand::Shutdown);
-                    return;
+                    report.interrupted = true;
+                    report.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    return report;
                 }
                 Ok(cmd) => {
                     // Other commands address the new project and should run
@@ -251,6 +310,8 @@ impl ContentThread {
                 break;
             }
 
+            let layer_start = std::time::Instant::now();
+            let mut layer_completed = true;
             let label = format!("Loading {}...", layer_name.as_str());
             let _ = state_tx.send(ContentState {
                 warmup: Some(manifold_core::WarmupProgress {
@@ -291,6 +352,7 @@ impl ContentThread {
                                 _layer_id.as_str()
                             );
                             any_budget_exhausted = true;
+                            layer_completed = false;
                         }
                         manifold_core::WarmupOutcome::InstallFailed => {
                             log::error!(
@@ -300,6 +362,7 @@ impl ContentThread {
                                 _layer_id.as_str()
                             );
                             any_install_failed = true;
+                            layer_completed = false;
                         }
                         manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
                     manifold_core::WarmupOutcome::Quiescent => {}
@@ -320,6 +383,11 @@ impl ContentThread {
                     .and_then(|p| p.timeline.layers.get(*layer_index))
                 {
                     let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
+                    if chain_outcome == manifold_core::WarmupOutcome::InstallFailed {
+                        any_install_failed = true;
+                        layer_completed = false;
+                        log::error!("[ContentThread] Warmup chain install failed for layer {}", layer_name);
+                    }
                     if chain_outcome == manifold_core::WarmupOutcome::GpuFailed {
                         crate::abort_gpu_work("GPU failure during layer-chain warmup");
                     }
@@ -331,6 +399,7 @@ impl ContentThread {
                             _layer_id.as_str()
                         );
                         any_budget_exhausted = true;
+                            layer_completed = false;
                         break;
                     }
                 }
@@ -355,6 +424,7 @@ impl ContentThread {
                             drain_start.elapsed()
                         );
                         any_budget_exhausted = true;
+                            layer_completed = false;
                         break;
                     }
                     manifold_renderer::node_graph::freeze::install::pump_segment_results();
@@ -377,6 +447,16 @@ impl ContentThread {
                     renderer.stop_clip(clip_id.as_str());
                 }
             }
+            report.layers.push(WarmupLayerReport {
+                id: _layer_id.to_string(),
+                name: layer_name.clone(),
+                elapsed_ms: layer_start.elapsed().as_secs_f64() * 1000.0,
+                completed: layer_completed && start.elapsed() < budget.total
+                    && manifold_renderer::preset_runtime::prewarm_worker_pending_count() == 0,
+                allocated_gpu_bytes: self.content_pipeline.native_device()
+                    .and_then(|device| device.modifier_memory_snapshot())
+                    .map(|memory| memory.current_allocated_bytes),
+            });
         }
 
         // Clear progress and re-clear trigger latches so warmup frames don't
@@ -575,6 +655,10 @@ impl ContentThread {
             }
         }
 
+        // Later chain phases are guarded by the total budget too. Reaching
+        // that bound can skip them without entering a phase-specific timeout.
+        any_budget_exhausted |= start.elapsed() >= budget.total;
+        let pending_workers = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
         let gpu_faults = manifold_gpu::gpu_fault::fault_count().saturating_sub(initial_gpu_faults);
         let status = if gpu_faults > 0 {
             log::error!(
@@ -585,6 +669,8 @@ impl ContentThread {
             "completed with install failure(s)"
         } else if any_budget_exhausted {
             "completed with budget exhaustion"
+        } else if pending_workers > 0 {
+            "completed with pending compilation work"
         } else {
             "completed"
         };
@@ -598,6 +684,13 @@ impl ContentThread {
         // detector after the pass so only first-touches that happen during the
         // subsequent playback window are counted against the warm guarantee.
         manifold_core::cold_touch::reset_cold_touch_counts();
+        report.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        report.budget_exhausted = any_budget_exhausted;
+        report.install_failed = any_install_failed;
+        report.pending_workers = pending_workers;
+        report.completed = !any_budget_exhausted && !any_install_failed
+            && gpu_faults == 0 && pending_workers == 0;
+        report
     }
 
     fn report_graph_edit_rejection(&mut self, message: String) {

@@ -111,6 +111,16 @@ impl FrameTimer {
         }
     }
 
+    /// Exclude stopped project preparation from the first playback delta.
+    /// Keep the application and deterministic frame clocks intact.
+    pub fn resume_after_load(&mut self) {
+        self.last_tick_time = Instant::now();
+        self.last_dt = 0.0;
+        self.smoothed_dt = self.target_frame_duration.as_secs_f64();
+        self.current_fps = self.target_fps;
+        self.missed_ticks = 0;
+    }
+
     /// Returns true if enough time has passed for the next frame.
     pub fn should_tick(&self) -> bool {
         self.last_tick_time.elapsed() >= self.target_frame_duration
@@ -275,6 +285,20 @@ impl FrameTimer {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn load_pause_does_not_advance_playback_or_reset_application_time() {
+        let mut timer = FrameTimer::new(24.0);
+        timer.last_tick_time = Instant::now() - Duration::from_secs(20);
+        timer.app_start_time = Instant::now() - Duration::from_secs(30);
+        timer.frame_clock_seconds = 7.0;
+        timer.missed_ticks = 100;
+        timer.resume_after_load();
+        assert_eq!(timer.missed_ticks, 0);
+        assert_eq!(timer.frame_clock_seconds, 7.0);
+        assert!(timer.realtime_since_start() >= 30.0);
+        assert!(timer.consume_tick() < 1.0, "load time leaked into playback delta");
+    }
 
     #[test]
     fn should_tick_respects_target_fps() {
