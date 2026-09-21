@@ -2,12 +2,13 @@
 
 <!-- index: Bounded Azalea/Vortex Fragments/Ordered Recon/Math View memory audit; measured allocation classes, source-derived costs and unverified recovery candidates. -->
 
-**Status:** Audit complete, 2026-09-21; no allocation change implemented or validated. Follow-up: BUG-dl16.
+**Status:** Bounded audit and identical cut-remap reuse implemented and measured, 2026-09-21. Broader memory investigation remains open: BUG-dl16.
 
-The smallest GPU-memory candidate is to reuse identical cut remaps before
-fusion. One redundant first-stage mesh set costs **192.16 MiB per Azalea
-instance**. This is an estimated saving, not a measured improvement. General
-buffer lifetime reuse is a larger follow-up, not necessary for this first change.
+Reusing identical cut remaps before fusion reduced Corrosion's measured peak
+Metal allocations by **1,926,807,552 bytes (1.794 GiB, 9.40%)**, with 0/191
+intervals late by more than 1 ms in the same eight-second headless window.
+This is a GPU allocation saving, not a measured process RAM reduction. General
+buffer lifetime reuse remains a separate follow-up.
 
 ## Scope and evidence
 
@@ -18,8 +19,9 @@ clip `f1a62b3a` at beats 65–78. Authored order: **Vortex Fragments → Math
 View → Ordered Recon**; layer effect: EdgeStretch. The other two Azalea
 layers have the same modifier types, with independent parameters/state.
 
-No new playback, rendering, compilation or GPU sweep was run. This audit
-reanalyses the existing diagnostic trace and reads the current source.
+The initial audit below reanalysed the existing diagnostic trace and read the
+source without a new GPU run. The subsequent implementation and its one
+bounded verification are recorded separately below.
 
 - Clean verification remains authoritative for its measurement: 19.784 s
   loading, peak Metal allocation 20,497,104,896 bytes, tracked residency
@@ -101,11 +103,11 @@ admission includes current device allocations plus fresh candidate storage;
 the temporary edit peak can exceed the final steady-state increase. Turning
 an enabled parameter off does not by itself remove the prepared capacity.
 
-## Recovery estimate and smallest useful change
+## Initial recovery estimate and smallest useful change
 
-`fragment_cuts::apply` creates distinct current/reference remaps unconditionally.
-`align_mesh` has an existing `(source address, map)` reuse cache, but the directly
-created remaps do not populate it. At the first stage, current and reference
+Before this change, `fragment_cuts::apply` created distinct current/reference
+remaps unconditionally. `align_mesh` had an existing `(source address, map)`
+reuse cache, but directly created remaps did not populate it. At the first stage, current and reference
 resolve to the same source, and later alignment can request that same pair again.
 
 Reuse that existing remap cache for direct remaps, keyed by exact source/map
@@ -138,6 +140,46 @@ Project duration is not the direct multiplier for these geometry costs: these
 are per-runtime resources. More distinct prepared content, layers and states
 still increases retention. This audit does not establish duration-independent
 RAM, safe eviction/lookahead budgets, or guaranteed frame-time improvement.
+
+## Implemented reuse and bounded verification
+
+Direct fragment remaps and later alignment now use the same preparation-time
+cache, keyed by exact source node/port, cut-map ID and mesh/scalar kind. The
+runtime remapper still tracks mesh/map content revisions. No shader, array
+capacity, residency lease, GPU retirement or temporal-state policy changed.
+Focused structural tests pass for direct-to-alignment reuse, repeated-key
+reuse, preparation idempotence and source/port/map/type isolation.
+
+One release-build verification used the unchanged project hash above, retained
+disk caches, start beat 56 and eight seconds at 24 fps. Source diff, binary hash,
+command, complete logs and comparison are retained at
+`/tmp/manifold-corrosion-remap-reuse-20260921/verification/`; the tested executable
+is `/tmp/manifold-corrosion-remap-reuse-20260921/manifold`.
+
+| Measurement | Earlier clean baseline | With remap reuse |
+|---|---:|---:|
+| Peak Metal allocated bytes | 20,497,104,896 | 18,570,297,344 |
+| Warmup tracked residency bytes | 19,831,374,424 | 17,904,566,872 |
+| Warmup tracked allocations | 1,290 | 1,263 |
+| Loading | 19.784 s | 19.393 s |
+| Intervals late by over 1 ms | 0 / 191 | 0 / 191 |
+| Maximum interval | 41.670791 ms | 41.671709 ms |
+| Maximum recorded GPU fence wait | 22.230167 ms | 0.002542 ms |
+| Playback cold resource touches | 0 | 0 |
+
+The cumulative allocation snapshots diverge by **642,269,184 bytes** after
+each of the three Azalea warmups; other layer increments are unchanged. The
+27 fewer tracked allocations and rounded byte saving match three avoided mesh
+sets per instance: two first-stage sets and one second-stage set. This supports
+the larger initial recovery candidate, beyond the first duplicate pair alone;
+it is not a new resource-by-resource trace census.
+
+Residency and peak allocations overlap and must not be added. The comparison
+uses separate processes/builds and uncontrolled machine load; one run does not
+establish faster loading or a repeatable GPU-time improvement. Headless timing
+excludes display presentation and audio hardware, and this run is not a visual
+before/after comparison. CPU heap, physical footprint, unused texture-pool
+capacity and future scene combinations remain unmeasured.
 
 ## Source anchors
 
