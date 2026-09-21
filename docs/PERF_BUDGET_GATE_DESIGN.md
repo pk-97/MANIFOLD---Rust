@@ -45,7 +45,12 @@ measurement system.
 - **D3 — Two thresholds, one absolute and one relative.** Hard fail: any frame >20 ms
   (the line DESIGN_DOC_STANDARD section 5 already canonizes). Regression fail: p95 frame time
   >15% above the checked-in baseline. Rejected: absolute-only — it never catches the bleed
-  until the cliff; relative-only — it lets a slow baseline ratchet quietly.
+  until the cliff; relative-only — it lets a slow baseline ratchet quietly. The fixed 20 ms
+  value is a regression guard, not a claim that every project is ready for its configured FPS;
+  reports retain the project's own frame-budget exceed count. `--report-only` writes the
+  profiler result and telemetry while skipping baseline comparison and baseline writes. The
+  checked-in baseline carries a measurement version; a startup or pacing contract change
+  requires regenerating it instead of comparing incompatible runs.
 - **D4 — Baseline is a checked-in JSON, updated deliberately.** `docs/perf-baselines/…json`
   (machine-tagged; Peter's rig is THE machine — the gate's numbers are only meaningful
   there, stated honestly). Updating the baseline is a reviewed commit with a one-line
@@ -160,6 +165,20 @@ stats JSON plus the worst-frame breakdown, read by the orchestrator — L2. Forb
 a new timing framework beside the trace sections; averaging away spikes (p95 and max are
 the deliverable, not the mean); running windowed instead of headless. Test scope: focused
 (`-p` the harness crate); no workspace sweep.
+
+Normal and diagnostic project runs construct an empty headless context, then use the
+production project install and warmup lifecycle. Their report records parse, device/context
+setup, shared load/warmup, and total startup timings, plus missed ticks, active clips,
+project-budget exceedances, cold-touch categories, and sampled Metal allocation. The run
+is content-thread paced and has no display-present deadline, audio hardware, or UI surface;
+diagnostic mode additionally forces serial compositing for attribution. Tick work timings exclude the pre-tick
+GPU surface wait; reports include that wait separately alongside missed ticks.
+
+For a release baseline, use `cargo run --release -p manifold-app --features perf-soak
+--bin manifold -- perf-soak <project> --seconds 30 --report-only` under the existing
+build lock. If the compiler-cache wrapper fails but direct `rustc -vV` succeeds,
+`RUSTC_WRAPPER=` on that command is an explicit uncached workaround; do not change
+shared compiler configuration or treat it as a cache-service repair.
 
 **P2 — profiled attribution pass (one session, Sonnet).**
 Entry: P1 landed; read `manifold-gpu` `metal/profiling.rs` top-of-module doc (the

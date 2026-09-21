@@ -365,6 +365,21 @@ pub(crate) fn apply_realtime_thread_policy(target_fps: f64) {
 }
 
 impl ContentThread {
+    #[cfg(target_os = "macos")]
+    fn handle_command_with_preparation(
+        &mut self,
+        cmd: ContentCommand,
+        cmd_rx: &Receiver<ContentCommand>,
+        cmd_tx: &Sender<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) -> bool {
+        match cmd {
+            ContentCommand::LoadProject(project) =>
+                self.load_project_and_warmup(project, cmd_rx, cmd_tx, state_tx).warmup.interrupted,
+            cmd => self.handle_command(cmd),
+        }
+    }
+
     /// Run the content loop. Blocks until Shutdown is received.
     pub fn run(
         mut self,
@@ -412,11 +427,10 @@ impl ContentThread {
                             log::info!("[ContentThread] shutdown received");
                             return;
                         }
-                        if self.handle_command(ContentCommand::LoadProject(project)) {
-                            log::info!("[ContentThread] shutdown received");
+                        let report = self.load_project_and_warmup(project, &cmd_rx, &cmd_tx, &state_tx);
+                        if report.warmup.interrupted {
                             return;
                         }
-                        self.run_warmup(&cmd_rx, &cmd_tx, &state_tx);
                     }
                     Ok(cmd @ ContentCommand::SeekTo(_))
                     | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
@@ -457,40 +471,55 @@ impl ContentThread {
             }
             self.publish_snapshot_if_dirty(&state_tx);
 
-            // 1b. Wait for GPU surface, draining commands while waiting.
-            // In the common case (99%+) this returns immediately — the GPU
-            // finished the surface from 2 frames ago long before now.
-            // Under heavy GPU load, keeps processing transport/MIDI/parameter
-            // commands instead of busy-spinning. Zero CPU during the wait.
-            #[cfg(target_os = "macos")]
-            {
-                let fence_start = std::time::Instant::now();
-                if self.wait_for_surface_draining_commands(&cmd_tx, &cmd_rx, &state_tx) {
-                    log::info!("[ContentThread] shutdown received during surface wait");
-                    return;
-                }
-                self.content_pipeline
-                    .set_last_fence_wait_ms(fence_start.elapsed().as_secs_f64() * 1000.0);
+            if self.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+                return;
             }
-
-            // 2. Wait for next content frame (skip tick+render when paused)
-            if self.rendering_paused {
-                std::thread::sleep(std::time::Duration::from_millis(16));
-                continue;
-            }
-
-            // Precision frame pacing: block until the next frame deadline.
-            // mach_wait_until for the bulk, spin for the final 2ms.
-            self.timer.wait_for_deadline();
-            // Drain autoreleased ObjC Metal objects at the end of each frame,
-            // preventing memory accumulation and random GC-like pauses.
-            #[cfg(target_os = "macos")]
-            objc2::rc::autoreleasepool(|_| {
-                self.tick_frame(&state_tx);
-            });
-            #[cfg(not(target_os = "macos"))]
-            self.tick_frame(&state_tx);
         }
+    }
+
+    /// One production-paced frame shared by the app and headless profiler.
+    /// Preserves surface backpressure and the per-frame autorelease pool.
+    /// Returns true when command processing requests shutdown.
+    pub(crate) fn run_paced_frame(
+        &mut self,
+        cmd_tx: &Sender<ContentCommand>,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) -> bool {
+        // Wait for GPU surface, draining commands while waiting.
+        // In the common case (99%+) this returns immediately — the GPU
+        // finished the surface from 2 frames ago long before now.
+        // Under heavy GPU load, keeps processing transport/MIDI/parameter
+        // commands instead of busy-spinning. Zero CPU during the wait.
+        #[cfg(target_os = "macos")]
+        {
+            let fence_start = std::time::Instant::now();
+            if self.wait_for_surface_draining_commands(cmd_tx, cmd_rx, state_tx) {
+                log::info!("[ContentThread] shutdown received during surface wait");
+                return true;
+            }
+            self.content_pipeline
+                .set_last_fence_wait_ms(fence_start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        // 2. Wait for next content frame (skip tick+render when paused)
+        if self.rendering_paused {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            return false;
+        }
+
+        // Precision frame pacing: block until the next frame deadline.
+        // mach_wait_until for the bulk, spin for the final 2ms.
+        self.timer.wait_for_deadline();
+        // Drain autoreleased ObjC Metal objects at the end of each frame,
+        // preventing memory accumulation and random GC-like pauses.
+        #[cfg(target_os = "macos")]
+        objc2::rc::autoreleasepool(|_| {
+            self.tick_frame(state_tx);
+        });
+        #[cfg(not(target_os = "macos"))]
+        self.tick_frame(state_tx);
+        false
     }
 
     /// Wait for the GPU to finish with the surface we're about to render to,
@@ -564,7 +593,7 @@ impl ContentThread {
                     {
                         return true;
                     }
-                    if self.handle_command(cmd) {
+                    if self.handle_command_with_preparation(cmd, cmd_rx, cmd_tx, state_tx) {
                         return true; // shutdown
                     }
                     // Drain any additional queued commands.
@@ -581,7 +610,7 @@ impl ContentThread {
                                 {
                                     return true;
                                 }
-                                if self.handle_command(cmd) {
+                                if self.handle_command_with_preparation(cmd, cmd_rx, cmd_tx, state_tx) {
                                     return true;
                                 }
                             }
