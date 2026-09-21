@@ -30,6 +30,15 @@ class PlannerTests(unittest.TestCase):
         self.assertNotIn("feature-coverage", [c["name"] for c in
                          codex_checks.tooling_checks(repo, ["docs/README.md"])])
 
+    def test_rt_gate_configuration_selects_synthetic_checks(self):
+        repo = Path(__file__).resolve().parents[1]
+        for path in ("scripts/rt_noise_gate.py", "scripts/test_rt_noise_gate.py",
+                     "scripts/rt_noise_baseline.json", "scripts/trunk_health.py"):
+            checks = codex_checks.tooling_checks(repo, [path])
+            self.assertEqual([c["name"] for c in checks], ["scripts/test_rt_noise_gate.py"])
+            self.assertEqual(checks[0]["argv"],
+                             ["python3", "-B", str(repo / "scripts/test_rt_noise_gate.py")])
+
     def test_ui_trigger_matching_and_flow_file(self):
         manifest = {"path_triggers": {"crates/manifold-ui/src/panels/rt_quality_panel.rs": ["rt-quality"]}}
         filters, hits = run_ui_flows.filters_for_paths(
