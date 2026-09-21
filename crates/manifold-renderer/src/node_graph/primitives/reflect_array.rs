@@ -39,6 +39,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
+use crate::node_graph::content_revision::ContentVersion;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -59,18 +60,19 @@ struct ReflectUniforms {
 
 /// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
 /// dependency set — every resolved uniform value PLUS the input array's
-/// write generation (params alone are NOT sufficient: the input buffer's
+/// logical content version (params alone are NOT sufficient: the input buffer's
 /// content can change while every reflect param holds constant, e.g. an
 /// animated loop count upstream). `None` = unwired `in` (the constant
 /// identity fallback). Skip-and-declare-unchanged when equal, so static
-/// scenes hold their slot generation and the RT path pays zero per-frame
+/// scenes hold their content version and the RT path pays zero per-frame
 /// cost. `rebuild_epoch` folds in the executor lifetime (D6).
 #[derive(Clone, Copy, PartialEq)]
 pub struct ReflectStasisKey {
     pub axis: u32,
     pub plane_offset: f32,
     pub enabled: f32,
-    pub in_generation: Option<u64>,
+    pub in_content: Option<ContentVersion>,
+    pub out_identity: usize,
     pub rebuild_epoch: u64,
 }
 
@@ -186,7 +188,7 @@ impl Primitive for ReflectArray {
             return;
         }
 
-        // INV-RTI4 stasis: uniform values + the INPUT's write generation —
+        // INV-RTI4 stasis: uniform values + the INPUT's logical content —
         // the mirror's output depends on the input buffer's content, which
         // can change with every reflect param held constant. Skip the
         // rewrite (declaring the output unchanged) only when all of it
@@ -196,10 +198,15 @@ impl Primitive for ReflectArray {
             axis,
             plane_offset,
             enabled,
-            in_generation: ctx.inputs.slot_generation("in"),
+            in_content: ctx.inputs.content_version("in"),
+            out_identity: out_buf.identity_key(),
             rebuild_epoch: ctx.rebuild_epoch,
         };
-        if self.stasis_key == Some(stasis) {
+        let wired_unknown = ctx.inputs.slot("in").is_some() && stasis.in_content.is_none();
+        let content_unchanged = !wired_unknown && self.stasis_key.is_some_and(|previous| {
+            ReflectStasisKey { out_identity: stasis.out_identity, ..previous } == stasis
+        });
+        if content_unchanged && self.stasis_key == Some(stasis) && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
             return;
         }
@@ -271,6 +278,7 @@ impl Primitive for ReflectArray {
             "node.reflect_array",
         );
         self.stasis_key = Some(stasis);
+        if content_unchanged { ctx.mark_output_content_unchanged(); }
     }
 }
 

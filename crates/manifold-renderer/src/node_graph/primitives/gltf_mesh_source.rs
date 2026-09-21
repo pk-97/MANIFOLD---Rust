@@ -291,6 +291,7 @@ crate::primitive! {
         // ran for. Sentinel values guarantee the first real copy runs.
         last_copied_content_version: u64 = u64::MAX,
         last_copied_dst_identity: usize = 0,
+        last_copied_dst_size: u64 = 0,
         trace_pending_logged: bool = false,
         trace_pending_destination: (usize, u64) = (0, 0),
     },
@@ -532,9 +533,12 @@ impl Primitive for GltfMeshSource {
             let dst_identity = dst.identity_key();
             let unchanged = self.content_version == self.last_copied_content_version
                 && dst_identity == self.last_copied_dst_identity;
-            if unchanged {
+            if unchanged && ctx.outputs_retained() {
                 ctx.mark_outputs_unchanged();
             } else {
+                let content_unchanged = self.published
+                    && self.content_version == self.last_copied_content_version
+                    && dst.size == self.last_copied_dst_size;
                 let copy_size = self.staging_len_bytes.min(dst.size);
                 if copy_size > 0 {
                     if source_trace_enabled() {
@@ -558,11 +562,15 @@ impl Primitive for GltfMeshSource {
                 }
                 self.last_copied_content_version = self.content_version;
                 self.last_copied_dst_identity = dst_identity;
+                self.last_copied_dst_size = dst.size;
                 // The copy lands with this frame's command buffer; the
                 // buffer becomes observable content at the NEXT run()'s
                 // top-of-frame flip, once that buffer has been submitted.
-                self.copy_in_flight = true;
-                self.published = false;
+                self.copy_in_flight = !content_unchanged;
+                self.published = content_unchanged;
+                if content_unchanged {
+                    ctx.mark_output_content_unchanged();
+                }
             }
         }
         if !self.published {
@@ -809,7 +817,8 @@ mod gpu_tests {
         let unchanged;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(true);
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }

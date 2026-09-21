@@ -263,7 +263,7 @@ impl Primitive for GltfSkinnedMeshSource {
 
         if let Some(staging) = &self.staging_verts {
             let dst_identity = dst_verts.identity_key();
-            if content_unchanged && dst_identity == self.last_copied_verts_identity {
+            if ctx.outputs_retained() && content_unchanged && dst_identity == self.last_copied_verts_identity {
                 // skip
             } else {
                 let copy_size = self.staging_len_bytes.min(dst_verts.size);
@@ -276,7 +276,7 @@ impl Primitive for GltfSkinnedMeshSource {
         }
         if let Some(staging) = &self.staging_joints {
             let dst_identity = dst_joints.identity_key();
-            if content_unchanged && dst_identity == self.last_copied_joints_identity {
+            if ctx.outputs_retained() && content_unchanged && dst_identity == self.last_copied_joints_identity {
                 // skip
             } else {
                 let n = self.cached_verts.len().min(capacity as usize);
@@ -290,7 +290,7 @@ impl Primitive for GltfSkinnedMeshSource {
         }
         if let Some(staging) = &self.staging_weights {
             let dst_identity = dst_weights.identity_key();
-            if content_unchanged && dst_identity == self.last_copied_weights_identity {
+            if ctx.outputs_retained() && content_unchanged && dst_identity == self.last_copied_weights_identity {
                 // skip
             } else {
                 let n = self.cached_verts.len().min(capacity as usize);
@@ -304,8 +304,10 @@ impl Primitive for GltfSkinnedMeshSource {
         }
 
         self.last_copied_content_version = self.content_version;
-        if !any_copy_ran {
+        if !any_copy_ran && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
+        } else if content_unchanged {
+            ctx.mark_output_content_unchanged();
         }
     }
 }
@@ -417,7 +419,8 @@ mod gpu_tests {
         let unchanged;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(true);
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }

@@ -272,6 +272,13 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// API is always treated as having produced fresh output this frame,
     /// which is the safe (never-stale) direction.
     pub outputs_unchanged: bool,
+    /// The logical output content matches the preceding successful
+    /// evaluation. This may be true even when the executor copies those
+    /// bytes into a different physical slot.
+    pub output_content_unchanged: bool,
+    /// Whether the executor verified that every output still has the same
+    /// physical slot and storage revision as its last commit.
+    output_storage_retained: bool,
     /// Set by [`Self::mark_outputs_pending`], read by the executor after
     /// `run`/`evaluate` returns and recorded per output slot. `false` by
     /// default: a node that never calls the API always reports ready —
@@ -280,10 +287,10 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     pub outputs_pending: bool,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — the evaluating
     /// [`Executor`](crate::node_graph::execution::Executor)'s rebuild epoch:
-    /// a process-global monotonic counter assigned once at `Executor::new()`
-    /// (never changes for that executor's lifetime). Exists so a node that
-    /// caches a dirty-check key derived from [`NodeInputs::slot_generation`]
-    /// (e.g. `render_scene`'s shadow-map cache) can fold in "which executor
+    /// a process-global monotonic counter renewed at creation and reset.
+    /// Exists so a node that
+    /// caches a dirty-check key derived from [`NodeInputs::storage_revision`]
+    /// can fold in "which executor
     /// lifetime this key was computed under" — a topology rebuild
     /// (`PresetRuntime::harvest_state_from`) can carry the node's own Rust
     /// state across into a BRAND NEW executor whose generation counters
@@ -325,6 +332,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             errors: None,
             texture_swap_request: None,
             outputs_unchanged: false,
+            output_content_unchanged: false,
+            output_storage_retained: false,
             outputs_pending: false,
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
@@ -361,6 +370,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             errors: None,
             texture_swap_request: None,
             outputs_unchanged: false,
+            output_content_unchanged: false,
+            output_storage_retained: false,
             outputs_pending: false,
             rebuild_epoch,
             rt_quality,
@@ -402,6 +413,28 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// fresh-executor frame 1 readback) are the enforcement (I3).
     pub fn mark_outputs_unchanged(&mut self) {
         self.outputs_unchanged = true;
+        self.output_content_unchanged = true;
+    }
+
+    /// Declare that this evaluation produced the same logical content as
+    /// the preceding successful evaluation. Physical copies are allowed;
+    /// the executor will retain the logical content revision while advancing
+    /// physical storage freshness as needed.
+    pub fn mark_output_content_unchanged(&mut self) {
+        self.output_content_unchanged = true;
+    }
+
+    /// True when output storage was retained across the frame boundary.
+    /// Producers may use this to decide whether a no-write fast path is
+    /// physically safe after pool recycling.
+    pub fn outputs_retained(&self) -> bool {
+        self.output_storage_retained
+    }
+
+    /// Executor-only builder for the output-storage retention proof.
+    pub(crate) fn with_outputs_retained(mut self, retained: bool) -> Self {
+        self.output_storage_retained = retained;
+        self
     }
 
     /// Declare that this node's outputs this frame are allocated but not

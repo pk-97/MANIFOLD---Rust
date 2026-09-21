@@ -18,6 +18,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::layer_skin::LayerSkinRegistry;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+use crate::node_graph::content_revision::{ContentVersion, StorageRevision};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
 use crate::node_graph::execution_plan::{CompiledMeshRevisionRule, ExecutionPlan, ExecutionStep, ResourceId};
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevision};
@@ -249,11 +250,9 @@ pub struct Executor {
     /// bumps, immediately below it), UNLESS `node_declared_unchanged[idx]`
     /// is `true` for this step. Grows on demand as new physical slots are
     /// allocated (same pattern as `live_steps`'s per-frame resize). Read
-    /// side: [`crate::node_graph::bindings::NodeInputs::slot_generation`].
-    /// Never reset within an executor's lifetime — only ever grows or
-    /// increments, so two frames of the SAME executor comparing generation
-    /// numbers is always sound. See `rebuild_epoch` for the cross-executor-
-    /// lifetime hazard this alone does not cover.
+    /// side: [`crate::node_graph::bindings::NodeInputs::storage_revision`].
+    /// Monotonic within one rebuild epoch. Reset renews the epoch, so a
+    /// physical cache must compare both storage identity and lifetime.
     slot_generations: Vec<u64>,
     /// Per-physical-slot content-availability flag, indexed by `Slot.0`:
     /// `true` = the producing step declared its outputs pending this frame
@@ -295,42 +294,30 @@ pub struct Executor {
     /// `mesh_revisions`. Read side:
     /// [`crate::node_graph::bindings::NodeInputs::mesh_revision`].
     slot_mesh_revisions: Vec<crate::node_graph::mesh_change::MeshRevision>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — per-step
-    /// "last frame's param-driven alias" state: `(aliased-from resource,
-    /// destination slot, in-resource's write generation at alias time)`,
-    /// indexed like `node_declared_unchanged`/`step_memo`. Populated ONLY
-    /// on the `performed_alias && !data_skip` path (a node's
-    /// `skip_passthrough` declaration, e.g. `mux_texture`'s
-    /// inline-selector fast path) — `None` for every other step, and reset
-    /// to `None` whenever that step does not take that exact path this
-    /// frame (an alias that fails `compatible()`, a step whose alias
-    /// source flips to the data-skip contract, or a step that stops
-    /// aliasing altogether must not let a stale match fire later). The
-    /// resource (not the physical destination-input slot) is the identity
-    /// term for the ALIASED-FROM side deliberately: the compiled edge a
-    /// `skip_passthrough` declaration selects is stable frame to frame
-    /// unless the node's own param-driven branch choice changes, whereas
-    /// pool recycling can legitimately hand the SAME resource a different
-    /// physical slot between frames (the `last_mip_identity` precedent);
-    /// keying the input side on physical slot would treat that ordinary
-    /// recycling as "a different source" and never stabilize. The
-    /// destination side stays a physical `Slot` on purpose: the generation
-    /// bookkeeping this state guards is itself slot-indexed
-    /// (`slot_generations`), so a destination slot reassignment
-    /// invalidates any generation comparison and must fall through to a
-    /// conservative bump. This is the trust prerequisite for declaring
-    /// `node_declared_unchanged[idx]` on an alias step: same aliased-from
-    /// resource AND same destination slot as last frame AND the resource's
-    /// generation hasn't moved since ⇒ the aliased output is provably the
-    /// same content as last frame's, safe to skip downstream. The empty-
-    /// propagation data-skip alias path is explicitly excluded (never
-    /// populates or reads this) — its identity can flip between different
-    /// pruned producers frame to frame with no generation signal backing
-    /// it, so it keeps the conservative bump. Cleared (all `None`) on
-    /// rebuild alongside `step_memo`/`node_declared_unchanged`.
-    alias_propagation_state: Vec<Option<(ResourceId, Slot, u64)>>,
+    /// Per-physical-slot logical content snapshots, published at the output
+    /// commit point. A recycled slot is overwritten with its new logical
+    /// resource's version before any downstream step reads it.
+    slot_content_versions: Vec<Option<ContentVersion>>,
+    /// Last observed concrete shape for each logical resource. Shape changes
+    /// force a fresh logical publication even when a producer declares its
+    /// bytes unchanged.
+    content_shapes: Vec<Option<ContentShape>>,
+    /// Last committed physical `(slot, storage revision)` for each logical
+    /// resource. A same-numbered slot that was recycled through another
+    /// tenant is not a safe no-write destination.
+    resource_storage_state: Vec<Option<StorageSnapshot>>,
+    /// Selected source, destination storage and logical content observed at
+    /// the previous alias or passthrough copy. Logical equality preserves
+    /// content across relocation; storage equality only controls physical
+    /// freshness. Unknown source content never establishes semantic reuse.
+    alias_propagation_state: Vec<Option<AliasPropagationState>>,
+    /// Whether a step declared logical output content unchanged this frame.
+    node_content_unchanged: Vec<bool>,
+    /// Resources whose logical content revision changed at the current
+    /// commit. Reused to drive memo epochs without allocating per frame.
+    content_changed_resources: Vec<ResourceId>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — this executor
-    /// instance's rebuild epoch, assigned once at construction from
+    /// instance's rebuild epoch, renewed at construction and reset from
     /// [`NEXT_REBUILD_EPOCH`] (a process-global monotonic counter; precedent:
     /// `chain_dispatch.rs`'s `CHAIN_REBUILD_COUNT`, `bundled_presets.rs`'s
     /// `generation: AtomicU64`). `PresetRuntime::harvest_state_from`
@@ -409,6 +396,28 @@ struct StepMemo {
     input_epochs: Vec<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContentShape {
+    Texture2D(u32, u32, manifold_gpu::GpuTextureFormat),
+    Array(u64),
+    DeclaredTexture(u32, u32, Option<manifold_gpu::GpuTextureFormat>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StorageSnapshot {
+    slot: Slot,
+    revision: StorageRevision,
+    identity: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct AliasPropagationState {
+    source: ResourceId,
+    destination: Slot,
+    source_storage: StorageRevision,
+    source_content: Option<ContentVersion>,
+}
+
 /// One step's CPU-side cost from a profiled frame: acquire + evaluate
 /// (= GPU command encoding) + scalar drains. GPU time lives in the
 /// command buffer's [`manifold_gpu::GpuFrameProfile`], joined by `tag`
@@ -478,8 +487,13 @@ impl Executor {
             mesh_dep_snapshots: Vec::new(),
             mesh_revision_counter: 0,
             slot_mesh_revisions: Vec::new(),
+            slot_content_versions: Vec::new(),
+            content_shapes: Vec::new(),
+            resource_storage_state: Vec::new(),
             slot_generations: Vec::new(),
             alias_propagation_state: Vec::new(),
+            node_content_unchanged: Vec::new(),
+            content_changed_resources: Vec::new(),
             rebuild_epoch: NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             memo_steps_len: None,
             empty_resources: ahash::AHashSet::default(),
@@ -517,6 +531,8 @@ impl Executor {
         self.step_memo.clear();
         self.resource_epoch.clear();
         self.alias_propagation_state.clear();
+        self.node_content_unchanged.clear();
+        self.content_changed_resources.clear();
         self.initialized_persistent.clear();
         self.slot_pending.fill(false);
         self.mesh_pending.fill(false);
@@ -524,9 +540,13 @@ impl Executor {
             .fill(crate::node_graph::mesh_change::MeshRevision::default());
         self.slot_mesh_revisions
             .fill(crate::node_graph::mesh_change::MeshRevision::default());
+        self.slot_content_versions.fill(None);
+        self.content_shapes.fill(None);
+        self.resource_storage_state.fill(None);
         self.mesh_dep_snapshots.iter_mut().for_each(|snapshot| *snapshot = None);
         self.slot_generations.clear();
         self.mesh_revision_counter = 0;
+        self.rebuild_epoch = NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Enable per-step attribution profiling (CPU encode cost + GPU span
@@ -989,50 +1009,36 @@ impl Executor {
     /// slot count grows to "max over all branches ever selected"
     /// rather than "max over currently-selected branches," which is
     /// the right tradeoff for live-perform mode switches.
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: commit mesh revisions for one
-    /// step's `MeshVertex`-layout outputs at the single output-commit
-    /// choke point (the `slot_generations` bump site). `wrote` is the
-    /// step's actual-write signal (`!node_declared_unchanged`): a memo/
-    /// hoist/unchanged skip retains tokens while still refreshing the
-    /// published slot snapshot below, so pool rebinds never leave the
-    /// slot reading another resource's revision. Token rules per output:
-    /// content revises on every actual write (a new positions token
-    /// therefore always implies content); topology/positions follow the
-    /// compiled rule — `Written` takes the fresh token, `Fixed` retains,
-    /// `Dependencies` compares the watched input aspects against the
-    /// snapshot recorded at the output's last commit (a missing snapshot
-    /// counts as changed). Pending is the producer's own declaration OR
-    /// any wired input's pending — a pending source stays pending
-    /// through the mesh lineage and no AS work may consume it.
-    ///
-    /// Alias safety: the texture-only alias paths above never carry
-    /// `Array(MeshVertex)` resources, and in-place array I/O needs no
-    /// captured-input special case because the LOGICAL per-resource
-    /// state is the authority — dependency reads hit `mesh_revisions`,
-    /// never the slot snapshot the output's publish overwrites.
-    fn commit_mesh_revisions(&mut self, plan: &ExecutionPlan, step: &ExecutionStep, wrote: bool) {
+    /// Publish logical content and mesh aspects at the shared output commit.
+    /// Identical recopies retain content; first publication, shape changes and
+    /// pending-to-ready transitions revise it. Mesh topology/positions follow
+    /// their compiled rules when content changes. Pending follows the actual
+    /// selected input for aliases/muxes and all inputs for ordinary transforms.
+    /// Logical ResourceId state is authoritative; slot snapshots are refreshed
+    /// even on skips so recycled storage cannot inherit another tenant's stamp.
+    fn commit_mesh_revisions(
+        &mut self,
+        plan: &ExecutionPlan,
+        step: &ExecutionStep,
+        content_unchanged: bool,
+        selected_source: Option<ResourceId>,
+    ) {
+        self.content_changed_resources.clear();
         for &(_, res) in &step.outputs {
             let idx = res.0 as usize;
             if idx >= self.mesh_revisions.len() {
                 continue; // defensive: sized at the plan-shape reset
             }
-            let Some(rule) = plan.mesh_rule(res) else {
-                // Mesh topology can depend on non-mesh content (cut maps,
-                // index maps, scalar controls). Preserve the logical write
-                // token even though these outputs have no mesh aspect rules.
-                if wrote {
-                    self.mesh_revision_counter += 1;
-                    self.mesh_revisions[idx].content = self.mesh_revision_counter;
-                }
-                continue;
-            };
-
+            let previous_pending = self.mesh_pending[idx];
             let declared = self
                 .backend
                 .slot_for(res)
                 .and_then(|s| self.slot_pending.get(s.0 as usize).copied())
                 .unwrap_or(false);
             let input_pending = step.inputs.iter().any(|&(_, r)| {
+                if selected_source.is_some_and(|selected| r != selected) {
+                    return false;
+                }
                 self.mesh_pending.get(r.0 as usize).copied().unwrap_or(false)
                     || self
                         .backend
@@ -1042,39 +1048,104 @@ impl Executor {
             });
             self.mesh_pending[idx] = declared || input_pending;
 
-            if wrote {
+            let shape = self
+                .backend
+                .slot_for(res)
+                .and_then(|slot| self.backend.texture_2d(slot))
+                .map(|texture| ContentShape::Texture2D(texture.width, texture.height, texture.format))
+                .or_else(|| self.backend.slot_for(res)
+                    .and_then(|slot| self.backend.array_buffer(slot))
+                    .map(|buffer| ContentShape::Array(buffer.size)))
+                .or_else(|| {
+                    plan.resource_dims(res)
+                        .map(|(width, height)| ContentShape::DeclaredTexture(width, height, plan.resource_format(res)))
+                });
+            let shape_changed = self.content_shapes[idx] != shape;
+            self.content_shapes[idx] = shape;
+            let ready_transition = previous_pending && !self.mesh_pending[idx];
+            let content_changed = !content_unchanged
+                || self.mesh_revisions[idx].content == 0
+                || shape_changed
+                || ready_transition;
+
+            if content_changed {
                 self.mesh_revision_counter += 1;
                 let token = self.mesh_revision_counter;
-                let old = self.mesh_revisions[idx];
-                let topology = match &rule.topology {
-                    CompiledMeshRevisionRule::Written => token,
-                    CompiledMeshRevisionRule::Fixed => old.topology,
-                    CompiledMeshRevisionRule::Dependencies(deps) => {
-                        if self.mesh_deps_changed(idx, deps) { token } else { old.topology }
-                    }
-                };
-                let positions = match &rule.positions {
-                    CompiledMeshRevisionRule::Written => token,
-                    CompiledMeshRevisionRule::Fixed => old.positions,
-                    CompiledMeshRevisionRule::Dependencies(deps) => {
-                        if self.mesh_deps_changed(idx, deps) { token } else { old.positions }
-                    }
-                };
-                self.mesh_revisions[idx] =
-                    MeshRevision { topology, positions, content: token };
-                self.record_mesh_dep_snapshot(idx, rule);
+                if let Some(rule) = plan.mesh_rule(res) {
+                    let old = self.mesh_revisions[idx];
+                    let topology = match &rule.topology {
+                        CompiledMeshRevisionRule::Written => token,
+                        CompiledMeshRevisionRule::Fixed => old.topology,
+                        CompiledMeshRevisionRule::Dependencies(deps) => {
+                            if self.mesh_deps_changed(idx, deps) { token } else { old.topology }
+                        }
+                    };
+                    let positions = match &rule.positions {
+                        CompiledMeshRevisionRule::Written => token,
+                        CompiledMeshRevisionRule::Fixed => old.positions,
+                        CompiledMeshRevisionRule::Dependencies(deps) => {
+                            if self.mesh_deps_changed(idx, deps) { token } else { old.positions }
+                        }
+                    };
+                    self.mesh_revisions[idx] =
+                        MeshRevision { topology, positions, content: token };
+                    self.record_mesh_dep_snapshot(idx, rule);
+                } else {
+                    // Non-mesh resources still use the existing logical
+                    // content counter as their authority.
+                    self.mesh_revisions[idx].content = token;
+                }
+                self.content_changed_resources.push(res);
             }
 
-            // Publish the logical revision into the physical-slot
-            // snapshot (same growth pattern as `slot_generations`).
+            // Publish every output, including unchanged and pending outputs,
+            // so a recycled slot never retains the previous occupant's
+            // logical metadata.
             if let Some(slot) = self.backend.slot_for(res) {
                 let s = slot.0 as usize;
+                if self.slot_pending.len() <= s { self.slot_pending.resize(s + 1, false); }
+                self.slot_pending[s] = self.mesh_pending[idx];
                 if self.slot_mesh_revisions.len() <= s {
                     self.slot_mesh_revisions.resize(s + 1, MeshRevision::default());
                 }
                 self.slot_mesh_revisions[s] = self.mesh_revisions[idx];
+                if self.slot_content_versions.len() <= s {
+                    self.slot_content_versions.resize(s + 1, None);
+                }
+                self.slot_content_versions[s] = if self.mesh_pending[idx]
+                    || self.mesh_revisions[idx].content == 0
+                {
+                    None
+                } else {
+                    Some(ContentVersion::new(
+                        self.rebuild_epoch,
+                        res,
+                        self.mesh_revisions[idx].content,
+                    ))
+                };
             }
         }
+    }
+
+    /// Prove that every output still owns the same physical slot at the same
+    /// storage revision as its last commit. Pool recycling can reuse a slot
+    /// number for another logical resource, so checking the slot alone is
+    /// insufficient. A producer receives this proof before it chooses a
+    /// no-write fast path.
+    fn outputs_retained(&self, step: &ExecutionStep) -> bool {
+        step.outputs.iter().all(|&(_, res)| {
+            let current = self.storage_snapshot(res);
+            current.is_some()
+                && self.resource_storage_state.get(res.0 as usize).copied().flatten() == current
+        })
+    }
+
+    fn storage_snapshot(&self, resource: ResourceId) -> Option<StorageSnapshot> {
+        let slot = self.backend.slot_for(resource)?;
+        let revision = StorageRevision(*self.slot_generations.get(slot.0 as usize)?);
+        let identity = self.backend.texture_2d(slot).map(|texture| texture.identity_key())
+            .or_else(|| self.backend.array_buffer(slot).map(|buffer| buffer.identity_key()));
+        Some(StorageSnapshot { slot, revision, identity })
     }
 
     /// §3.2 dependency comparison: true when any watched `(resource,
@@ -1158,10 +1229,22 @@ impl Executor {
         // classified at plan compile time — see ExecutionPlan::held_resources.
         if self.memo_steps_len != Some(plan.steps().len()) {
             self.memo_steps_len = Some(plan.steps().len());
+            self.rebuild_epoch = NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.step_memo.clear();
             self.step_memo.resize_with(plan.steps().len(), || None);
             self.resource_epoch.clear();
+            self.slot_pending.clear();
+            self.slot_generations.clear();
+            self.slot_mesh_revisions.clear();
+            self.slot_content_versions.clear();
+            self.mesh_revisions.clear();
+            self.mesh_pending.clear();
+            self.mesh_dep_snapshots.clear();
+            self.content_shapes.clear();
+            self.resource_storage_state.clear();
+            self.mesh_revision_counter = 0;
             self.node_declared_unchanged.resize(plan.steps().len(), false);
+            self.node_content_unchanged.resize(plan.steps().len(), false);
             self.alias_propagation_state.clear();
             self.alias_propagation_state.resize_with(plan.steps().len(), || None);
             // SCENE_MODIFIER_RT_DESIGN.md §3.2: (re)size mesh revision
@@ -1172,11 +1255,14 @@ impl Executor {
                 .resize(plan.resource_count(), crate::node_graph::mesh_change::MeshRevision::default());
             self.mesh_pending.resize(plan.resource_count(), false);
             self.mesh_dep_snapshots.resize_with(plan.resource_count(), || None);
+            self.content_shapes.resize(plan.resource_count(), None);
+            self.resource_storage_state.resize(plan.resource_count(), None);
         }
         // D5: reset every frame (not sticky like `step_memo`) — a node
         // must re-declare on every frame it wants to skip; the executor
         // never carries last frame's declaration forward.
         self.node_declared_unchanged.iter_mut().for_each(|v| *v = false);
+        self.node_content_unchanged.iter_mut().for_each(|v| *v = false);
 
         // Reset preview capture for this frame. Re-resolved below if the
         // target node is live and produces a texture.
@@ -1308,6 +1394,13 @@ impl Executor {
                 && let Some(memo) = &self.step_memo[idx]
                 && memo.param_epoch == inst.param_epoch
                 && memo.input_epochs.len() == step.inputs.len()
+                && step.inputs.iter().all(|&(_, resource)| {
+                    self.backend.slot_for(resource)
+                        .and_then(|slot| self.slot_content_versions.get(slot.0 as usize))
+                        .is_some_and(Option::is_some)
+                        && !self.mesh_pending.get(resource.0 as usize).copied().unwrap_or(true)
+                })
+                && self.outputs_retained(step)
                 && step
                     .inputs
                     .iter()
@@ -1319,7 +1412,8 @@ impl Executor {
                     .outputs
                     .iter()
                     .all(|&(_, res)| self.backend.slot_for(res).is_some())
-            {                // The held output is unchanged but still valid — capture it for
+            {
+                // The held output is unchanged but still valid — capture it for
                 // the dump so a static subgraph keeps its zero-cost skip yet
                 // shows a current thumbnail. Slots are guaranteed bound here:
                 // the memo guard above required slot_for(res).is_some(). Safe
@@ -1330,6 +1424,10 @@ impl Executor {
                 if self.should_dump(step.node) {
                     self.record_dump_outputs(plan, step);
                 }
+                // Re-publish the held logical metadata to the slots that
+                // consumers will read. The authority remains unchanged, but
+                // pool rebinding must never expose a stale occupant token.
+                self.commit_mesh_revisions(plan, step, true, None);
                 continue;
             }
 
@@ -1384,6 +1482,7 @@ impl Executor {
                         if self.should_dump(step.node) {
                             self.record_dump_outputs(plan, step);
                         }
+                        self.commit_mesh_revisions(plan, step, true, None);
                         continue;
                     }
                 }
@@ -1440,9 +1539,25 @@ impl Executor {
             // borrow ends. `None` leaves any prior memo cleared (non-
             // hoistable or missing node).
             let mut executed_pure_epoch: Option<u64> = None;
+            let mut selected_input_resource: Option<ResourceId> = None;
             if let Some(inst) = graph.get_node_mut(step.node) {
-                if plan.step_hoistable(idx) {
+                if inst.node.is_pure() {
                     executed_pure_epoch = Some(inst.param_epoch);
+                    // Pure/fused transforms preserve semantic content when
+                    // their complete input set and parameters are unchanged,
+                    // even when transient output storage still needs a write.
+                    // This does not expand the plan's held-resource set.
+                    self.node_content_unchanged[idx] = self.step_memo[idx].as_ref().is_some_and(|memo| {
+                        memo.param_epoch == inst.param_epoch
+                            && memo.input_epochs.len() == step.inputs.len()
+                            && step.inputs.iter().zip(&memo.input_epochs).all(|(&(_, resource), &epoch)| {
+                                self.resource_epoch.get(&resource).copied() == Some(epoch)
+                                    && self.backend.slot_for(resource)
+                                        .and_then(|slot| self.slot_content_versions.get(slot.0 as usize))
+                                        .is_some_and(Option::is_some)
+                                    && !self.mesh_pending.get(resource.0 as usize).copied().unwrap_or(true)
+                            })
+                    });
                 }
                 // Query skip-passthrough BEFORE building the full context.
                 // If the node declares itself a no-op, alias the input
@@ -1461,6 +1576,15 @@ impl Executor {
                     for &(port_name, _) in &step.inputs {
                         self.wired_scratch.push(port_name);
                     }
+                    selected_input_resource = inst
+                        .node
+                        .selected_input_branch(&inst.params, &self.wired_scratch)
+                        .and_then(|port| {
+                            step.inputs
+                                .iter()
+                                .find(|&&(name, _)| name == port)
+                                .map(|&(_, resource)| resource)
+                        });
                     inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
                 };
                 let mut performed_alias = false;
@@ -1528,45 +1652,52 @@ impl Executor {
                             for &(_, res) in &step.outputs {
                                 self.empty_resources.insert(res);
                             }
-                        } else {
-                            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/
-                            // BUG-197: a param-driven (skip_passthrough)
-                            // alias is a per-pixel identity onto a STABLE
-                            // choice of input WIRE — when this frame's
-                            // aliased-from RESOURCE (the compiled edge
-                            // `skip_passthrough` selected — stable across
-                            // frames unless the node's param-driven branch
-                            // choice itself changes, e.g. a mux selector
-                            // flip) matches last frame's, the destination
-                            // SLOT matches last frame's (pool recycling can
-                            // legitimately hand the same resource a
-                            // DIFFERENT physical slot between frames — the
-                            // `last_mip_identity` precedent this file's own
-                            // comments cite elsewhere; the generation
-                            // bookkeeping below is slot-indexed, so a slot
-                            // reassignment invalidates it and must fall
-                            // through to a conservative bump), AND the
-                            // in-resource's write generation hasn't moved
-                            // since, this step's output is provably
-                            // unchanged, so declare it (propagating the
-                            // input's generation through the alias instead
-                            // of conservatively bumping). Fenced to
-                            // `!data_skip` — the data-skip alias above keeps
-                            // its established conservative bump.
-                            let r_in = step
-                                .inputs
-                                .iter()
-                                .find(|&&(n, _)| n == in_port)
-                                .map(|&(_, r)| r);
-                            let in_generation = self
+                        }
+                        let r_in = step
+                            .inputs
+                            .iter()
+                            .find(|&&(n, _)| n == in_port)
+                            .map(|&(_, r)| r);
+                        if let Some(r) = r_in {
+                            let source_storage = self
                                 .slot_generations
                                 .get(i.0 as usize)
                                 .copied()
-                                .unwrap_or(0);
+                                .map(StorageRevision)
+                                .unwrap_or(StorageRevision(0));
+                            let source_content = self
+                                .slot_content_versions
+                                .get(i.0 as usize)
+                                .copied()
+                                .flatten();
                             let prev = self.alias_propagation_state[idx];
-                            self.alias_propagation_state[idx] = r_in.map(|r| (r, o, in_generation));
-                            if let Some(r) = r_in
-                                && prev == Some((r, o, in_generation))
+                            self.alias_propagation_state[idx] = Some(AliasPropagationState {
+                                source: r,
+                                destination: o,
+                                source_storage,
+                                source_content,
+                            });
+                            // A missing content token is deliberately not
+                            // stable. It represents pending or externally
+                            // prebound bytes, never a synthesized zero.
+                            if prev.is_some_and(|state| {
+                                state.source == r
+                                    && state.source_content.is_some()
+                                    && state.source_content == source_content
+                            }) {
+                                self.node_content_unchanged[idx] = true;
+                            }
+                            // Physical no-write propagation retains its
+                            // established destination and storage guards.
+                            if !data_skip
+                                && source_content.is_some()
+                                && self.outputs_retained(step)
+                                && prev.is_some_and(|state| {
+                                    state.source == r
+                                        && state.destination == o
+                                        && state.source_storage == source_storage
+                                        && state.source_content == source_content
+                                })
                             {
                                 self.node_declared_unchanged[idx] = true;
                             }
@@ -1586,11 +1717,57 @@ impl Executor {
                         g.copy_texture_to_texture(src, dst, dst.width, dst.height);
                         copied_passthrough = true;
                     }
+                    if copied_passthrough {
+                        // A backend may refuse aliasing when the destination is
+                        // host-borrowed. The copy still carries the selected
+                        // input's logical identity and participates in the same
+                        // next-frame content comparison.
+                        if let (Some(i), Some(o), Some(&(_, r))) = (
+                            in_slot,
+                            out_slot,
+                            step.inputs.iter().find(|&&(n, _)| n == in_port),
+                        ) {
+                            let source_storage = self
+                                .slot_generations
+                                .get(i.0 as usize)
+                                .copied()
+                                .map(StorageRevision)
+                                .unwrap_or(StorageRevision(0));
+                            let source_content = self
+                                .slot_content_versions
+                                .get(i.0 as usize)
+                                .copied()
+                                .flatten();
+                            let prev = self.alias_propagation_state[idx];
+                            self.alias_propagation_state[idx] = Some(AliasPropagationState {
+                                source: r,
+                                destination: o,
+                                source_storage,
+                                source_content,
+                            });
+                            if prev.is_some_and(|state| {
+                                state.source == r
+                                    && state.source_content.is_some()
+                                    && state.source_content == source_content
+                            }) {
+                                self.node_content_unchanged[idx] = true;
+                            }
+                        }
+                    }
                 }
-                if !performed_alias || data_skip {
-                    // Any step that didn't take the param-driven alias path
-                    // this frame must not carry a stale prior-frame match
-                    // forward into some future frame that does.
+                if performed_alias || copied_passthrough {
+                    // The alias/copy has no independent pending declaration.
+                    // Its selected logical input supplies readiness at commit.
+                    for &(_, resource) in &step.outputs {
+                        if let Some(slot) = self.backend.slot_for(resource) {
+                            let index = slot.0 as usize;
+                            if self.slot_pending.len() <= index { self.slot_pending.resize(index + 1, false); }
+                            self.slot_pending[index] = false;
+                        }
+                    }
+                }
+                let outputs_retained = self.outputs_retained(step);
+                if !performed_alias && !copied_passthrough {
                     self.alias_propagation_state[idx] = None;
                 }
 
@@ -1608,7 +1785,8 @@ impl Executor {
                         let backend_ref: &dyn Backend = &*self.backend;
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
                             .with_pending(&self.slot_pending)
-                            .with_mesh_revisions(&self.slot_mesh_revisions);
+                            .with_mesh_revisions(&self.slot_mesh_revisions)
+                            .with_content_versions(&self.slot_content_versions);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -1644,9 +1822,17 @@ impl Executor {
                             self.rt_quality,
                             layer_skin_registry,
                         )
-                        .with_errors(&mut self.error_scratch);
+                        .with_errors(&mut self.error_scratch)
+                        .with_outputs_retained(outputs_retained);
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
+                        debug_assert!(
+                            !has_gpu_binding
+                                || !ctx.outputs_unchanged
+                                || ctx.outputs_retained(),
+                            "node `{}` declared physical outputs unchanged without retained output storage",
+                            inst.node.type_id().as_str(),
+                        );
                         evaluated_steps += 1;
                         // Aliased-output contract: a primitive that
                         // declares `aliased_array_io = [(in, out)]`
@@ -1682,12 +1868,13 @@ impl Executor {
                         // frame. `idx` indexes `plan.steps()`, which
                         // `node_declared_unchanged` is sized to match.
                         self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
+                        self.node_content_unchanged[idx] |= ctx.output_content_unchanged;
                         // Content availability: rewrite this step's output
                         // slots from its latest declaration (default ready).
                         // A slot's producer is the single writer of its
                         // flag, so a stale `true` can only survive while
                         // the producer itself is skipped.
-                        let declared_pending = ctx.outputs_pending;
+                        let declared_pending = ctx.outputs_pending || inst.node.io_pending();
                         for &(_, res) in &step.outputs {
                             if let Some(slot) = self.backend.slot_for(res) {
                                 let slot_idx = slot.0 as usize;
@@ -1760,26 +1947,8 @@ impl Executor {
                 }
             }
 
-            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5: bump every output
-            // slot's write generation — the SINGLE choke point for this
-            // signal (same site `resource_epoch` bumps at, immediately
-            // below) — UNLESS this step declared its outputs unchanged this
-            // frame. A step that never calls `mark_outputs_unchanged` (every
-            // node today except R1's gated sources) always lands in this
-            // branch, so its consumers' cached generations always change —
-            // provably never-stale by construction (I3's contract is the
-            // node's side of this; a false declaration is the only way this
-            // could go wrong, and that's per-node-tested, not this site's
-            // job). Now a param-driven alias
-            // (`performed_alias && !data_skip`, e.g. `mux_texture`'s
-            // inline-selector fast path) CAN set it — fenced to that exact
-            // case just above, where `alias_propagation_state[idx]` proves
-            // this frame's (in_slot, out_slot) pair and the in_slot's write
-            // generation both match last frame's. The data-driven
-            // (`data_skip`) passthrough alias is unchanged and still always
-            // conservatively bumps — its aliased identity can flip between
-            // different pruned producers frame to frame with no generation
-            // signal to trust.
+            // Storage freshness advances independently of semantic content:
+            // a physical recopy must remain visible to binding/copy guards.
             if !self.node_declared_unchanged[idx] {
                 for &(_, res) in &step.outputs {
                     if let Some(slot) = self.backend.slot_for(res) {
@@ -1791,22 +1960,33 @@ impl Executor {
                     }
                 }
             }
+            for &(_, res) in &step.outputs {
+                let state = self.storage_snapshot(res);
+                if let Some(previous) = self.resource_storage_state.get_mut(res.0 as usize) {
+                    *previous = state;
+                }
+            }
 
             // SCENE_MODIFIER_RT_DESIGN.md §3.2: commit mesh revisions at
             // the same choke point. Token issuance honors the same skip
             // condition (`node_declared_unchanged` retains revisions);
             // the slot snapshot publish runs either way so pool rebinds
             // never leave a slot reading another resource's revision.
-            let mesh_wrote = !self.node_declared_unchanged[idx];
-            self.commit_mesh_revisions(plan, step, mesh_wrote);
+            self.commit_mesh_revisions(
+                plan,
+                step,
+                self.node_content_unchanged[idx] || self.node_declared_unchanged[idx],
+                self.alias_propagation_state[idx]
+                    .map(|state| state.source)
+                    .or(selected_input_resource),
+            );
 
-            // Memoized-dataflow bookkeeping: this step executed, so every
-            // output resource is new content — bump its epoch so consumers'
-            // memos see the change. Pure steps then snapshot the epochs they
+            // Memo dependencies advance only when logical content changes.
+            // Pure steps then snapshot the input epochs they
             // ran with (the clean-skip compares against this next frame);
             // non-pure steps clear any stale memo. Reuse the input-epoch
             // storage on dirty frames as well as on steady unchanged frames.
-            for &(_, res) in &step.outputs {
+            for &res in &self.content_changed_resources {
                 *self.resource_epoch.entry(res).or_insert(0) += 1;
             }
             if let Some(param_epoch) = executed_pure_epoch {
@@ -2011,6 +2191,7 @@ impl Executor {
                 }
             }
 
+            let capture_outputs_retained = self.outputs_retained(step);
             if let Some(inst) = graph.get_node_mut(step.node) {
                 self.scalar_write_scratch.clear();
                 self.camera_write_scratch.clear();
@@ -2024,7 +2205,8 @@ impl Executor {
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
                     .with_pending(&self.slot_pending)
-                    .with_mesh_revisions(&self.slot_mesh_revisions);
+                    .with_mesh_revisions(&self.slot_mesh_revisions)
+                    .with_content_versions(&self.slot_content_versions);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,
@@ -2050,7 +2232,8 @@ impl Executor {
                     self.rt_quality,
                     layer_skin_registry,
                 )
-                .with_errors(&mut self.error_scratch);
+                .with_errors(&mut self.error_scratch)
+                .with_outputs_retained(capture_outputs_retained);
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
                 for msg in self.error_scratch.drain(..) {
@@ -2082,6 +2265,14 @@ impl Executor {
                         (Some(a), Some(b)) => self.backend.swap_texture_2d(a, b),
                         _ => false,
                     };
+                    if swapped && let Some(slot) = in_slot {
+                        if let Some(snapshot) = self.slot_content_versions.get_mut(slot.0 as usize) {
+                            *snapshot = None;
+                        }
+                        if let Some(revision) = self.slot_generations.get_mut(slot.0 as usize) {
+                            *revision += 1;
+                        }
+                    }
                     // BUG-216: the swap refuses whenever `in_slot` (or
                     // `out_slot`) carries a borrowed shadow — the common
                     // shape is a boundary output (`system.final_output`)
@@ -2129,6 +2320,21 @@ impl Executor {
                                 step.node,
                                 inst.node.type_id().as_str(),
                             );
+                        }
+                    }
+                }
+                // late_capture may swap or copy bytes into a persistent
+                // state output after the normal commit point. Its logical
+                // publication is therefore unknown until the producer runs
+                // again; clear the physical snapshots so consumers cannot
+                // cache against stale content metadata.
+                for &(_, res) in &step.outputs {
+                    if let Some(slot) = self.backend.slot_for(res)
+                        && let Some(snapshot) = self.slot_content_versions.get_mut(slot.0 as usize)
+                    {
+                        *snapshot = None;
+                        if let Some(revision) = self.slot_generations.get_mut(slot.0 as usize) {
+                            *revision += 1;
                         }
                     }
                 }
@@ -4827,7 +5033,9 @@ mod alias_gpu_tests {
             enc.commit_and_wait_completed();
             let bits = unsafe { *buffer.mapped_ptr().unwrap().cast::<u16>() };
             assert_eq!(half::f16::from_bits(bits).to_f32(), 0.25);
-            assert!(exec.alias_propagation_state.iter().all(Option::is_none));
+            assert!(exec.alias_propagation_state.iter().flatten().any(|state| {
+                state.source == src_res && state.source_content.is_some()
+            }), "a physical passthrough copy must retain its selected logical dependency");
         }
     }
 
@@ -4893,7 +5101,7 @@ mod alias_gpu_tests {
     /// the probe for the alias-path propagation test below.
     struct GenObservingNode {
         type_id: EffectNodeType,
-        log: Arc<Mutex<Vec<Option<u64>>>>,
+        log: Arc<Mutex<Vec<Option<StorageRevision>>>>,
     }
 
     impl EffectNode for GenObservingNode {
@@ -4919,7 +5127,7 @@ mod alias_gpu_tests {
             &[]
         }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            self.log.lock().unwrap().push(ctx.inputs.slot_generation("in"));
+            self.log.lock().unwrap().push(ctx.inputs.storage_revision("in"));
         }
     }
 
@@ -5001,6 +5209,423 @@ mod alias_gpu_tests {
         assert_eq!(g2, g1, "static input ⇒ mux alias propagates unchanged, generation stable");
         assert_ne!(g3, g2, "source re-emitting must bump the generation downstream sees");
         assert_eq!(g4, g3, "re-stabilization after a change must also propagate as unchanged");
+    }
+}
+
+#[cfg(test)]
+mod content_revision_tests {
+    use super::*;
+    use crate::node_graph::compile;
+    use crate::node_graph::effect_node::{EffectNode, EffectNodeType, ParamValues};
+    use crate::node_graph::parameters::ParamDef;
+    use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_core::{Beats, Seconds};
+    use std::sync::{Arc, Mutex};
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    struct ContentProbeSource {
+        type_id: EffectNodeType,
+        unchanged: Arc<Mutex<bool>>,
+        pending: Arc<Mutex<bool>>,
+        retained_log: Option<Arc<Mutex<Vec<bool>>>>,
+        force_pure_recopy: bool,
+    }
+
+    impl EffectNode for ContentProbeSource {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn inputs(&self) -> &[NodeInput] { &[] }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn is_pure(&self) -> bool { self.force_pure_recopy }
+        fn skip_passthrough(
+            &self,
+            _params: &ParamValues,
+            _wired_inputs: &[&str],
+        ) -> Option<(&'static str, &'static str)> {
+            self.force_pure_recopy.then_some(("missing", "out"))
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if let Some(log) = &self.retained_log {
+                log.lock().unwrap().push(ctx.outputs_retained());
+            }
+            if *self.unchanged.lock().unwrap() {
+                ctx.mark_output_content_unchanged();
+            }
+            if *self.pending.lock().unwrap() {
+                ctx.mark_outputs_pending();
+            }
+        }
+    }
+
+    type ContentObservation = (
+        Option<ContentVersion>,
+        Option<StorageRevision>,
+        Option<bool>,
+    );
+
+    struct ContentProbeSink {
+        type_id: EffectNodeType,
+        log: Arc<Mutex<Vec<ContentObservation>>>,
+    }
+
+    impl EffectNode for ContentProbeSink {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: true,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] { &[] }
+        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            self.log.lock().unwrap().push((
+                ctx.inputs.content_version("in"),
+                ctx.inputs.storage_revision("in"),
+                ctx.inputs
+                    .slot("in")
+                    .map(|slot| ctx.inputs.slot_content_ready(slot)),
+            ));
+        }
+    }
+
+    #[test]
+    fn content_versions_separate_semantic_copy_pending_and_executor_epoch() {
+        let unchanged = Arc::new(Mutex::new(false));
+        let pending = Arc::new(Mutex::new(false));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.content_source"),
+            unchanged: unchanged.clone(),
+            pending: pending.clone(),
+            retained_log: None,
+            force_pure_recopy: false,
+        }));
+        let sink = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.content_sink"),
+            log: log.clone(),
+        }));
+        graph.connect((source, "out"), (sink, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut executor = Executor::with_mock();
+
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        *unchanged.lock().unwrap() = true;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        let first_two = log.lock().unwrap().clone();
+        assert!(first_two[0].0.is_some());
+        assert_eq!(first_two[1].0, first_two[0].0, "semantic copy retains content");
+        assert_ne!(first_two[1].1, first_two[0].1, "physical copy advances storage");
+
+        *unchanged.lock().unwrap() = false;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        let changed = log.lock().unwrap().last().unwrap().0;
+        assert_ne!(changed, first_two[1].0, "a true write gets a fresh content version");
+
+        *pending.lock().unwrap() = true;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        assert!(log.lock().unwrap().last().unwrap().0.is_none());
+        *pending.lock().unwrap() = false;
+        *unchanged.lock().unwrap() = true;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        let ready = log.lock().unwrap().last().unwrap().0;
+        assert!(ready.is_some());
+        assert_ne!(ready, changed, "pending to ready forces a fresh publication");
+        executor.reset_after_resource_replacement();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        let after_reset = log.lock().unwrap().last().unwrap().0;
+        assert_ne!(after_reset, ready, "resource reset must issue a new epoch identity");
+
+        let epoch_log = Arc::new(Mutex::new(Vec::new()));
+        let mut epoch_graph = Graph::new();
+        let epoch_source = epoch_graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.content_source_epoch"),
+            unchanged: Arc::new(Mutex::new(false)),
+            pending: Arc::new(Mutex::new(false)),
+            retained_log: None,
+            force_pure_recopy: false,
+        }));
+        let epoch_sink = epoch_graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.content_sink_epoch"),
+            log: epoch_log.clone(),
+        }));
+        epoch_graph.connect((epoch_source, "out"), (epoch_sink, "in")).unwrap();
+        let epoch_plan = compile(&epoch_graph).unwrap();
+        let mut second = Executor::with_mock();
+        second.execute_frame(&mut epoch_graph, &epoch_plan, frame_time());
+        assert_ne!(
+            epoch_log.lock().unwrap().last().unwrap().0,
+            log.lock().unwrap().last().unwrap().0,
+            "different executor lifetimes must not collide in content identity"
+        );
+    }
+
+    #[test]
+    fn pending_publication_does_not_invalidate_physical_retention() {
+        let pending = Arc::new(Mutex::new(true));
+        let retained = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.pending_retention"),
+            unchanged: Arc::new(Mutex::new(true)),
+            pending: pending.clone(),
+            retained_log: Some(retained.clone()),
+            force_pure_recopy: false,
+        }));
+        let sink = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.pending_retention_sink"),
+            log: log.clone(),
+        }));
+        graph.connect((source, "out"), (sink, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        *pending.lock().unwrap() = false;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        assert_eq!(*retained.lock().unwrap(), [false, true],
+            "completed physical copy remains retained while publication was pending");
+        let log = log.lock().unwrap();
+        assert!(log[0].0.is_none());
+        assert!(log[1].0.is_some(), "pending publication must be able to become ready");
+    }
+
+    #[test]
+    fn content_version_identity_rejects_equal_counters_from_other_resources() {
+        let left = ContentVersion::new(7, ResourceId(1), 3);
+        let right = ContentVersion::new(7, ResourceId(2), 3);
+        let rebuilt = ContentVersion::new(8, ResourceId(1), 3);
+        assert_ne!(left, right, "resource identity is part of logical content");
+        assert_ne!(left, rebuilt, "executor epoch is part of logical content");
+    }
+
+    #[test]
+    fn recycled_slot_invalidates_output_retention_proof() {
+        let retained_a = Arc::new(Mutex::new(Vec::new()));
+        let retained_b = Arc::new(Mutex::new(Vec::new()));
+        let mut graph = Graph::new();
+        let source_a = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.recycle_source_a"),
+            unchanged: Arc::new(Mutex::new(true)),
+            pending: Arc::new(Mutex::new(false)),
+            retained_log: Some(retained_a.clone()),
+            force_pure_recopy: false,
+        }));
+        let sink_a = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.recycle_sink_a"),
+            log: Arc::new(Mutex::new(Vec::new())),
+        }));
+        let source_b = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.recycle_source_b"),
+            unchanged: Arc::new(Mutex::new(true)),
+            pending: Arc::new(Mutex::new(false)),
+            retained_log: Some(retained_b.clone()),
+            force_pure_recopy: false,
+        }));
+        let sink_b = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.recycle_sink_b"),
+            log: Arc::new(Mutex::new(Vec::new())),
+        }));
+        graph.connect((source_a, "out"), (sink_a, "in")).unwrap();
+        graph.connect((source_b, "out"), (sink_b, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        executor.execute_frame(&mut graph, &plan, frame_time());
+
+        let a = retained_a.lock().unwrap().clone();
+        let b = retained_b.lock().unwrap().clone();
+        assert_eq!(a.len(), 2);
+        assert_eq!(b.len(), 2);
+        assert!(!a[0] && !b[0], "first publication has no retained proof");
+        assert!(
+            !a[1] || !b[1],
+            "at least one source must observe another logical resource overwriting its slot"
+        );
+    }
+
+    #[test]
+    fn selected_ready_alias_ignores_unselected_pending_and_switches_identity() {
+        let pending_b = Arc::new(Mutex::new(true));
+        let mut graph = Graph::new();
+        let source_a = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.alias_source_a"),
+            unchanged: Arc::new(Mutex::new(false)),
+            pending: Arc::new(Mutex::new(false)),
+            retained_log: None,
+            force_pure_recopy: false,
+        }));
+        let source_b = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.alias_source_b"),
+            unchanged: Arc::new(Mutex::new(false)),
+            pending: pending_b.clone(),
+            retained_log: None,
+            force_pure_recopy: false,
+        }));
+        let mux = graph.add_node(Box::new(crate::node_graph::primitives::MuxTexture::new()));
+        let selected_log = Arc::new(Mutex::new(Vec::new()));
+        let selected_sink = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.alias_selected_sink"),
+            log: selected_log.clone(),
+        }));
+        let pending_sink = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.alias_pending_sink"),
+            log: Arc::new(Mutex::new(Vec::new())),
+        }));
+        graph.connect((source_a, "out"), (mux, "in_0")).unwrap();
+        graph.connect((source_b, "out"), (mux, "in_1")).unwrap();
+        graph.connect((mux, "out"), (selected_sink, "in")).unwrap();
+        graph.connect((source_b, "out"), (pending_sink, "in")).unwrap();
+        graph.set_param(
+            mux,
+            "selector",
+            crate::node_graph::parameters::ParamValue::Float(0.0),
+        ).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        let first = selected_log.lock().unwrap().last().copied().unwrap();
+        assert!(first.0.is_some(), "selected ready source publishes content");
+        assert_eq!(first.2, Some(true), "unselected pending input must not poison alias");
+
+        *pending_b.lock().unwrap() = false;
+        graph.set_param(
+            mux,
+            "selector",
+            crate::node_graph::parameters::ParamValue::Float(1.0),
+        ).unwrap();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        let second = selected_log.lock().unwrap().last().copied().unwrap();
+        assert!(second.0.is_some());
+        assert_ne!(first.0, second.0, "switching selected source changes output identity");
+    }
+
+    struct PureProbe {
+        type_id: EffectNodeType,
+        evaluations: Arc<Mutex<u32>>,
+    }
+
+    impl EffectNode for PureProbe {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: true,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn is_pure(&self) -> bool { true }
+        fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {
+            *self.evaluations.lock().unwrap() += 1;
+        }
+    }
+
+    #[test]
+    fn pure_consumer_skips_identical_logical_recopy() {
+        let unchanged = Arc::new(Mutex::new(false));
+        let evaluations = Arc::new(Mutex::new(0));
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.pure_source"),
+            unchanged: unchanged.clone(),
+            pending: Arc::new(Mutex::new(false)),
+            retained_log: None,
+            force_pure_recopy: true,
+        }));
+        let pure = graph.add_node(Box::new(PureProbe {
+            type_id: EffectNodeType::new("test.pure_consumer"),
+            evaluations: evaluations.clone(),
+        }));
+        let sink = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.pure_sink"),
+            log: Arc::new(Mutex::new(Vec::new())),
+        }));
+        graph.connect((source, "out"), (pure, "in")).unwrap();
+        graph.connect((pure, "out"), (sink, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        *unchanged.lock().unwrap() = true;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        assert_eq!(*evaluations.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn pure_consumer_preserves_content_across_transient_io_recopy() {
+        let unchanged = Arc::new(Mutex::new(false));
+        let evaluations = Arc::new(Mutex::new(0));
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(ContentProbeSource {
+            type_id: EffectNodeType::new("test.pure_source"),
+            unchanged: unchanged.clone(),
+            pending: Arc::new(Mutex::new(false)),
+            retained_log: None,
+            force_pure_recopy: false,
+        }));
+        let pure = graph.add_node(Box::new(PureProbe {
+            type_id: EffectNodeType::new("test.pure_consumer"),
+            evaluations: evaluations.clone(),
+        }));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = graph.add_node(Box::new(ContentProbeSink {
+            type_id: EffectNodeType::new("test.pure_sink"),
+            log: log.clone(),
+        }));
+        graph.connect((source, "out"), (pure, "in")).unwrap();
+        graph.connect((pure, "out"), (sink, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        *unchanged.lock().unwrap() = true;
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        executor.execute_frame(&mut graph, &plan, frame_time());
+        assert_eq!(*evaluations.lock().unwrap(), 3, "transient outputs still execute to populate storage");
+        let observations = log.lock().unwrap();
+        assert!(observations[0].0.is_some());
+        assert!(observations.iter().all(|entry| entry.0 == observations[0].0),
+            "pure/fused output content remains stable across identical IO-source recopies");
     }
 }
 

@@ -201,9 +201,9 @@ impl Primitive for GltfMorphDeltasSource {
         // `gltf_mesh_source`'s identical copy gate for the rationale.
         if let Some(staging) = &self.staging {
             let dst_identity = dst.identity_key();
-            let unchanged = self.content_version == self.last_copied_content_version
-                && dst_identity == self.last_copied_dst_identity;
-            if unchanged {
+            let content_unchanged = self.content_version == self.last_copied_content_version;
+            let unchanged = content_unchanged && dst_identity == self.last_copied_dst_identity;
+            if unchanged && ctx.outputs_retained() {
                 ctx.mark_outputs_unchanged();
             } else {
                 let copy_size = self.staging_len_bytes.min(dst.size);
@@ -212,6 +212,7 @@ impl Primitive for GltfMorphDeltasSource {
                 }
                 self.last_copied_content_version = self.content_version;
                 self.last_copied_dst_identity = dst_identity;
+                if content_unchanged { ctx.mark_output_content_unchanged(); }
             }
         }
     }
@@ -310,7 +311,8 @@ mod gpu_tests {
         let unchanged;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(true);
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }

@@ -70,7 +70,7 @@ mod rt_changes;
 pub mod rt_proof;
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::node_graph::mesh_change::MeshRevision;
-use crate::node_graph::bindings::Slot;
+use crate::node_graph::ContentVersion;
 use manifold_gpu::raytrace::RtGeometryChange;
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
@@ -1007,8 +1007,7 @@ pub struct RenderScene {
     brdf_lut_built: bool,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3): the IBL dirty-check
     /// key the prefiltered-specular/irradiance convolution last ran with —
-    /// a hash of (envmap slot write generation, envmap texture identity,
-    /// executor rebuild epoch). `Some(key) == this frame's freshly computed
+    /// a hash of (logical envmap content version, executor rebuild epoch). `Some(key) == this frame's freshly computed
     /// key` means the persisted `prefiltered_specular`/`irradiance_map`
     /// textures already hold this exact envmap's convolution, so both
     /// dispatches are skipped. I2: never served on ANY mismatch, including
@@ -1057,7 +1056,7 @@ pub struct RenderScene {
     rt_accel_key: Option<u64>,
     rt_accel_topo_key: Option<u64>,
     rt_accel_content_key: Option<u64>,
-    rt_appearance_key: Option<u64>,
+    rt_appearance_key: Option<rt_changes::AppearanceKey>,
     rt_mesh_revisions: Vec<RtMeshSnapshot>,
     rt_changes: Vec<RtGeometryChange>,
     rt_source_trace_last_admission: Option<(u64, u64)>,
@@ -1369,7 +1368,7 @@ fn rt_svt_slot(casters: &[crate::node_graph::light::Light]) -> Option<u32> {
 fn compute_rt_lighting_key(
     rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
     ambient_tint: &[f32],
-    envmap_generation: Option<u64>,
+    envmap_content: Option<ContentVersion>,
 ) -> u64 {
     let mut k = 0xcbf2_9ce4_8422_2325u64;
     let mut mix = |bits: u32| {
@@ -1391,19 +1390,14 @@ fn compute_rt_lighting_key(
     for f in ambient_tint {
         mix(f.to_bits());
     }
-    // The environment map is a lighting input too: a rebake
-    // (intensity/rotation/emitter layout, from bake_equirect_envmap or
-    // hdri_source alike) bumps this slot's write generation. Without it
-    // here an env move only tripped the per-texel luma gate where env
-    // was >15% of a pixel's brightness — in a sun-lit scene the env
-    // share is under that, so the fade ran on the IRRADIANCE_ACCUM_ALPHA
-    // floor (~2.5s tail). Peter watched exactly that on the
-    // env-intensity fader. `None` (unwired) mixes as zero: an
-    // unwired-to-wired transition still flips the key.
-    let g = envmap_generation.unwrap_or(0);
-    mix(g as u32);
-    mix((g >> 32) as u32);
-    k
+    // Logical environment content changes lighting; moving identical pixels
+    // between pool allocations does not. Resource identity and lifetime are
+    // part of ContentVersion, so equal local revision numbers cannot collide.
+    use std::hash::{Hash, Hasher};
+    let mut hasher = ahash::AHasher::default();
+    k.hash(&mut hasher);
+    envmap_content.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// RAYTRACING_DESIGN.md section 10 addendum (gesture rule): geometry-only
@@ -1507,7 +1501,7 @@ struct ShaftCompositeUniforms {
 }
 const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
-type RtMeshSnapshot = Option<(MeshRevision, Option<(Slot, u64)>)>;
+type RtMeshSnapshot = Option<(MeshRevision, Option<ContentVersion>)>;
 type RtFrameTables<'a> = (
     arrayvec::ArrayVec<manifold_gpu::raytrace::GiMaterial, { OBJECT_SAFETY_MAX as usize }>,
     manifold_gpu::raytrace::RtMaterialTextures<'a>, u64, u64, bool,
@@ -1571,29 +1565,18 @@ struct ObjectDraw<'ctx> {
     instances: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// `buffer_size / 32` when wired, else 1 (identity stub).
     instance_count: u32,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
-    /// `mesh_n` input slot's write generation this frame
-    /// (`ctx.inputs.slot_generation`) — a component of the shadow
-    /// cache key below. `None` only if the (required) mesh port
-    /// somehow resolved to an unbound slot — can't happen on the
-    /// live path (the `vertices` field above already required a
-    /// resolved array), kept `Option` to mirror `slot_generation`'s
-    /// signature exactly rather than unwrap a should-never-fail case.
-    vertices_generation: Option<u64>,
+    /// Logical content stamps remain stable when identical data moves storage.
+    vertices_content: Option<ContentVersion>,
     mesh_revision: Option<MeshRevision>,
-    topology_hint: Option<(Slot, u64)>,
-    rt_texture_generations: [Option<u64>; 4],
-    /// Same for `instances_n` — `None` both when the port is
-    /// genuinely unwired AND (indistinguishably, which is fine: an
-    /// unwired port never contributes model-specific staleness) if
-    /// somehow unresolved. D6 folds this `Option` into the key
-    /// as-is so "unwired" and "wired-then-unwired" both correctly
-    /// invalidate any cached key computed under the other state.
-    instances_generation: Option<u64>,
-    /// Weight-buffer write generation, folded into shadow dirtiness.
-    weights_generation: Option<u64>,
+    topology_hint: Option<ContentVersion>,
+    rt_texture_content: [Option<ContentVersion>; 4],
+    instances_content: Option<ContentVersion>,
+    weights_content: Option<ContentVersion>,
     /// Per-object appearance gain, folded into the shadow dirtiness key.
     gain: f32,
+    /// Wired resources without published metadata must never hit a cache.
+    geometry_content_known: bool,
+    appearance_content_known: bool,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
     /// model — `Blend` routes into the sorted transparent group and
     /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
@@ -1895,7 +1878,7 @@ impl RenderScene {
             };
             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
             // `mesh_n` write generation, feeds the shadow cache key below.
-            let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
+            let vertices_content = mesh_slot.and_then(|s| ctx.inputs.content_version_of(s));
             let weights_slot = object.weights;
             if weights_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
                 // §5.4 (P5): same pending contract as the mesh slot above.
@@ -2146,7 +2129,7 @@ impl RenderScene {
             // Pass 2 — this object carries no self-owned buffer reference).
             let instances_slot = object.instances;
             let instances = instances_slot.and_then(|s| inputs.array_slot(s));
-            let instances_generation = instances_slot.and_then(|s| inputs.slot_generation_of(s));
+            let instances_content = instances_slot.and_then(|s| inputs.content_version_of(s));
             let instance_count = match instances {
                 Some(buf) => (buf.size / instance_size) as u32,
                 None => 1,
@@ -2191,13 +2174,17 @@ impl RenderScene {
                 sampler_descs,
                 instances,
                 instance_count,
-                vertices_generation,
+                vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
-                topology_hint: object.topology,
-                rt_texture_generations: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map]
-                    .map(|slot| slot.and_then(|slot| ctx.inputs.slot_generation_of(slot))),
-                instances_generation,
-                weights_generation: weights_slot.and_then(|s| inputs.slot_generation_of(s)),
+                topology_hint: object.topology.and_then(|slot| inputs.content_version_of(slot)),
+                geometry_content_known: [object.mesh, object.instances, object.topology]
+                    .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
+                appearance_content_known: [object.weights, object.base_color_map, object.normal_map, object.mr_map, object.emissive_map]
+                    .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
+                rt_texture_content: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map]
+                    .map(|slot| slot.and_then(|slot| ctx.inputs.content_version_of(slot))),
+                instances_content,
+                weights_content: weights_slot.and_then(|s| inputs.content_version_of(s)),
                 gain: object.gain,
                 alpha_mode,
                 sort_depth,
@@ -2484,23 +2471,23 @@ impl RenderScene {
     /// BUG-trh7 stage 2, pass 4: the split-sum IBL convolution — runs
     /// before the main pass so the prefiltered/irradiance/LUT textures are
     /// ready to sample (see `run_ibl_convolution`'s doc comment for the
-    /// cache-vs-correctness tradeoff). Returns the envmap slot generation
+    /// cache-vs-correctness tradeoff). Returns the logical envmap content version
     /// the RT block's lighting key folds in, so an env rebake snaps the
     /// accumulator instead of fading on the EMA floor.
     fn ibl_convolution_pass<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
-    ) -> Option<u64> {
-        let envmap_generation = ctx.inputs.slot_generation("envmap");
+    ) -> Option<ContentVersion> {
+        let envmap_content = ctx.inputs.content_version("envmap");
         {
             let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
-            self.run_ibl_convolution(gpu, &sampler, pre.envmap_wired, envmap_generation, rebuild_epoch);
+            self.run_ibl_convolution(gpu, &sampler, pre.envmap_wired, envmap_content, rebuild_epoch);
             gpu.checkpoint();
         }
-        envmap_generation
+        envmap_content
     }
 
     /// BUG-trh7 stage 2, pass 5: the raster shadow depth pre-passes — one
@@ -2579,9 +2566,9 @@ impl RenderScene {
                 hasher.write_usize(caster_draws.len());
                 for d in &caster_draws {
                     hasher.write(bytemuck::bytes_of(&d.uniforms.model));
-                    d.vertices_generation.hash(&mut hasher);
-                    d.instances_generation.hash(&mut hasher);
-                    d.weights_generation.hash(&mut hasher);
+                    d.vertices_content.hash(&mut hasher);
+                    d.instances_content.hash(&mut hasher);
+                    d.weights_content.hash(&mut hasher);
                     hasher.write_u32(d.gain.to_bits());
                     hasher.write_u32(mesh_vertex_count(d.vertices));
                     hasher.write_u32(d.instance_count);
@@ -2603,7 +2590,8 @@ impl RenderScene {
                 // except on resolution change — see `ensure_shadow_map`)
                 // already holds exactly this content, so the depth-only
                 // batch this caster would otherwise issue is redundant.
-                if self.shadow_cache_keys[slot] == Some(shadow_key) {
+                if caster_draws.iter().all(|draw| draw.geometry_content_known && draw.appearance_content_known)
+                    && self.shadow_cache_keys[slot] == Some(shadow_key) {
                     continue;
                 }
                 self.shadow_cache_keys[slot] = Some(shadow_key);
@@ -2824,46 +2812,44 @@ impl RenderScene {
                 // common case is zero per-frame cost. Kept separate from
                 // mesh revisions: re-scattering updates instance descriptors
                 // without requiring a BLAS rebuild. `None` (unwired) hashes as a distinct state,
-                // mirroring the vertices_generation Option discipline.
-                d.instances_generation.hash(&mut hasher);
+                // mirroring the vertices_content Option discipline.
+                d.instances_content.hash(&mut hasher);
             }
             let accel_key = hasher.finish();
             // Content key is diagnostic only; revisions drive geometry updates.
             let mut content_hasher = ahash::AHasher::default();
             topo_key.hash(&mut content_hasher);
             for d in opaque_draws.clone() {
-                d.vertices_generation.hash(&mut content_hasher);
+                d.vertices_content.hash(&mut content_hasher);
             }
             let content_key = content_hasher.finish();
             // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance state —
-            // weights, gain, material values and texture identity/generation.
+            // weights, gain, material values and logical texture content.
             // Hit shading
             // reads these LIVE through the normal-source table (rebuilt
             // every RT-ready frame below). This key refreshes the baked
             // emissive table and invalidates the shared temporal histories
             // (design dirty rule 4 — refresh tables, no BLAS work).
-            let mut appearance_hasher = ahash::AHasher::default();
+            let mut appearance_hasher = rt_changes::AppearanceKeyBuilder::default();
             for d in opaque_draws.clone() {
-                d.weights_generation.hash(&mut appearance_hasher);
-                appearance_hasher.write_u32(d.gain.to_bits());
+                appearance_hasher.content(d.weights_content);
+                appearance_hasher.parameter_bytes(&d.gain.to_bits().to_ne_bytes());
             }
             for material in &gi_materials_data {
-                appearance_hasher.write(bytemuck::bytes_of(&material.albedo));
-                appearance_hasher.write(bytemuck::bytes_of(&material.emissive));
-                appearance_hasher.write(bytemuck::bytes_of(&material.metallic_roughness));
-                appearance_hasher.write(bytemuck::bytes_of(&material.translucency));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.albedo));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.emissive));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.metallic_roughness));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.translucency));
             }
             for draw in opaque_draws.clone() {
-                draw.rt_texture_generations.hash(&mut appearance_hasher);
-                appearance_hasher.write(bytemuck::bytes_of(&draw.uniforms.alpha_params));
-                for texture in [draw.base_color_map, draw.normal_map, draw.mr_map, draw.emissive_map] {
-                    texture.map(|t| t.identity_key()).hash(&mut appearance_hasher);
-                }
-                appearance_hasher.write(bytemuck::bytes_of(&draw.uniforms.emissive_uv_m));
-                appearance_hasher.write(bytemuck::bytes_of(&draw.uniforms.emissive_uv_t));
+                for content in draw.rt_texture_content { appearance_hasher.content(content); }
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.alpha_params));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.emissive_uv_m));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.emissive_uv_t));
             }
             let appearance_key = appearance_hasher.finish();
-            let appearance_changed = self.rt_appearance_key != Some(appearance_key);
+            let appearance_changed = !opaque_draws.clone().all(|draw| draw.appearance_content_known)
+                || self.rt_appearance_key != Some(appearance_key);
 
             let structural_changed = self.rt_accel_topo_key != Some(topo_key)
                 || self.rt_accel.as_ref().is_none_or(|a| a.check_topology(objects).is_err());
@@ -2871,7 +2857,7 @@ impl RenderScene {
             for (index, draw) in opaque_draws.clone().enumerate() {
                 self.rt_changes.push(rt_changes::classify_mesh_change(
                     self.rt_mesh_revisions[index], draw.mesh_revision,
-                    draw.topology_hint, structural_changed,
+                    draw.topology_hint, structural_changed || !draw.geometry_content_known,
                 ));
             }
             #[cfg(feature = "gpu-proofs")]
@@ -2879,8 +2865,18 @@ impl RenderScene {
                 self.rt_changes.fill(RtGeometryChange::Rebuild);
             }
             let geometry_changed = self.rt_changes.iter().any(|c| *c != RtGeometryChange::Reuse);
-            let history_changed = geometry_changed || appearance_changed;
-            let instance_changed = structural_changed || self.rt_accel_key != Some(accel_key);
+            let changes = rt_changes::SceneChanges {
+                geometry: geometry_changed,
+                appearance: appearance_changed,
+                instances: structural_changed || !opaque_draws.clone().all(|draw| draw.geometry_content_known)
+                    || self.rt_accel_key != Some(accel_key),
+            };
+            let history_changed = changes.reset_history();
+            let instance_changed = changes.update_instances();
+            if rt_source_trace_enabled() {
+                log::info!("[RT-SOURCE] changes geometry={} appearance={} instances={} reset={}",
+                    changes.geometry, changes.appearance, changes.instances, history_changed);
+            }
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
@@ -2970,7 +2966,7 @@ impl RenderScene {
             let accel = self.rt_accel.as_mut().ok_or(FrameRenderFailure::RtNeedsPreparation)?;
             let update = tracer.encode_accel_update(
                 gpu.device, gpu.native_enc, accel, objects, &self.rt_changes,
-                &gi_materials_data, instance_changed, history_changed,
+                &gi_materials_data, instance_changed, changes.refresh_emissive(),
             ).map_err(rt_frame_failure)?;
             gpu.rt_updates.blas_builds += update.blas_builds;
             gpu.rt_updates.blas_refits += update.blas_refits;
@@ -3037,7 +3033,7 @@ impl RenderScene {
         alpha_textures: &[&manifold_gpu::GpuTexture],
         topo_key: u64,
         content_key: u64,
-        envmap_generation: Option<u64>,
+        envmap_content: Option<ContentVersion>,
         shaft_light_data: &mut Vec<[f32; 4]>,
         shaft_light_count: &mut u32,
     ) -> bool {
@@ -3067,7 +3063,7 @@ impl RenderScene {
                             object.instances_buffer.map(|buffer| buffer.identity_key()).unwrap_or(0),
                             object.instance_slots, object.instances_addr
                         );
-                        log::info!("[RT-SOURCE] trace-generations index={} vertices={:?} instances={:?}", index, draw.vertices_generation, draw.instances_generation);
+                        log::info!("[RT-SOURCE] trace-content index={} vertices={:?} instances={:?}", index, draw.vertices_content, draw.instances_content);
                     }
                     self.rt_source_trace_last_admission = Some((topo_key, content_key));
                 }
@@ -3496,9 +3492,10 @@ impl RenderScene {
                 // second reset path. `reset_decision` comes from the single
                 // unconditional `detect_reset` call near the top of this fn;
                 // `rt_just_resumed` covers an off→on accumulate resume.
+                let allocation_reset = std::mem::take(&mut self.rt_irr_needs_reset);
                 let reset = reset_decision
                     || rt_just_resumed
-                    || std::mem::take(&mut self.rt_irr_needs_reset)
+                    || allocation_reset
                     || toggle_flipped;
                 // RT-T1-C: `prev_view_proj` is the SAME local captured
                 // above (BUG-311) before `self.prev_view_proj` was
@@ -3517,7 +3514,7 @@ impl RenderScene {
                 // + svt slot). Gesture detection: two consecutive changes arm
                 // a hold counter.
                 let lighting_key =
-                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_generation);
+                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_content);
                 let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
                     gesture_detect(
                         self.rt_lighting_key,
@@ -3525,6 +3522,7 @@ impl RenderScene {
                         self.rt_lighting_prev_changed,
                         self.rt_lighting_gesture,
                     );
+                let lighting_changed = lighting_changed || (envmap_wired.is_some() && envmap_content.is_none());
                 self.rt_lighting_key = Some(lighting_key);
                 self.rt_lighting_prev_changed = lighting_changed;
                 self.rt_lighting_gesture = new_gesture;
@@ -3547,6 +3545,13 @@ impl RenderScene {
                 // CPU-vouched lighting change that should reset denoiser
                 // history. `gesture_active` = either gesture hold counter
                 // is non-zero.
+                if rt_source_trace_enabled() {
+                    log::info!(
+                        "[RT-SOURCE] history scene={} allocation={} resumed={} toggle={} lighting={} lighting_gesture={} geometry_light={}",
+                        reset_decision, allocation_reset, rt_just_resumed, toggle_flipped,
+                        lighting_changed, lighting_gesture, geo_changed,
+                    );
+                }
                 self.denoiser_lighting_changed = lighting_changed || geo_changed;
                 self.denoiser_gesture_active = lighting_gesture || geo_gesture;
 
@@ -5163,7 +5168,7 @@ impl RenderScene {
                     // pos_scale.w == 0 — and a param change never resizes
                     // the buffer), so a capacity change is topology (topo
                     // key below) and rebuilds the accel; content changes
-                    // ride the accel key via `instances_generation` (D9).
+                    // ride the accel key via `instances_content` (D9).
                     // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
                     // buffer (instance_count == 0 is a legal raster no-op)
                     // normalizes to UNWIRED — the descriptor kernel would
@@ -5615,7 +5620,7 @@ impl RenderScene {
                     .map(|object| (
                         object.mesh,
                         object.mesh.and_then(|slot| ctx.inputs.mesh_revision_of(slot)).map(|r| r.topology),
-                        object.topology,
+                        object.topology.and_then(|slot| ctx.inputs.content_version_of(slot)),
                     ))
             }),
         );
@@ -7370,42 +7375,16 @@ impl RenderScene {
     /// hit every frame after the first (see the `ibl_brdf_lut_builds_once`
     /// gpu-proofs test).
     ///
-    /// **Superseded by RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3):**
-    /// the prefiltered specular chain and irradiance map used to be
-    /// re-convolved on EVERY call this function was invoked with `envmap =
-    /// Some(_)` — this section used to warn that a pointer/size-identity
-    /// skip would silently serve outdated convolution output, because
-    /// `bake_equirect_envmap::run()` mutated its SAME persistent output
-    /// texture in place every frame regardless of whether its params
-    /// changed, so identity alone could never tell "unchanged" from
-    /// "rewritten with different content." That hazard is closed now, at
-    /// the root: `bake_equirect_envmap` (and `hdri_source`)
-    /// no longer rewrite unconditionally — each skips its own dispatch and
-    /// calls `ctx.mark_outputs_unchanged()` only when its full param set
-    /// (or decoded file) AND its output texture's physical identity are
-    /// both unchanged since the last frame it actually wrote (P3's producer
-    /// gate, landed and parity-tested before this consumer gate was
-    /// enabled — D7's load-bearing ordering). That declaration is what
-    /// bumps (or doesn't bump) the envmap slot's write generation (D5): a
-    /// truthful "unchanged" is the ONLY way the generation can fail to
-    /// bump, and a false declaration is a per-node-tested property (I3),
-    /// not this call site's concern. So convolution below is skipped only
-    /// when `ibl_cache_key` — a hash of (envmap generation, envmap texture
-    /// identity, executor rebuild epoch) — matches this frame's freshly
-    /// computed key; any mismatch (including first use, an
-    /// unwired-to-wired transition, or the D7 sun-coherence animated-envmap
-    /// gesture actually changing the bake) falls through to a real
-    /// re-convolution (I2: never served on a partial match). The identity
-    /// term stays in the key as the same belt-and-suspenders precedent
-    /// `shadow_cache_keys` uses, and the rebuild-epoch term is required by
-    /// `NodeInputs::slot_generation`'s own doc comment (never compare a
-    /// generation number alone across executor lifetimes).
+    /// Cached convolution follows logical environment content. Recopying the
+    /// same pixels into recycled storage leaves the persisted convolution valid.
+    /// A content stamp includes resource identity and executor lifetime; unknown
+    /// metadata always recomputes. Physical input bindings are resolved afresh.
     fn run_ibl_convolution(
         &mut self,
         gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
         sampler: &manifold_gpu::GpuSampler,
         envmap: Option<&manifold_gpu::GpuTexture>,
-        envmap_generation: Option<u64>,
+        envmap_content: Option<ContentVersion>,
         rebuild_epoch: u64,
     ) {
         if !self.brdf_lut_built {
@@ -7441,11 +7420,10 @@ impl RenderScene {
 
         use std::hash::{Hash, Hasher};
         let mut hasher = ahash::AHasher::default();
-        envmap_generation.hash(&mut hasher);
-        hasher.write_usize(envmap.identity_key());
+        envmap_content.hash(&mut hasher);
         hasher.write_u64(rebuild_epoch);
         let ibl_key = hasher.finish();
-        if self.ibl_cache_key == Some(ibl_key) {
+        if envmap_content.is_some() && self.ibl_cache_key == Some(ibl_key) {
             // I2: cache hit — the persisted prefiltered-specular/irradiance
             // textures already hold this exact envmap's convolution.
             return;
@@ -8629,7 +8607,7 @@ impl EffectNode for RenderScene {
         // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
         // `ibl_convolution_pass`) — returns the envmap generation the RT
         // block's lighting key folds in.
-        let envmap_generation = self.ibl_convolution_pass(ctx, &pre);
+        let envmap_content = self.ibl_convolution_pass(ctx, &pre);
 
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the opaque/mask draw list — "a
         // window must not throw an opaque shadow". Feeds the shadow
@@ -8697,7 +8675,7 @@ impl EffectNode for RenderScene {
                 &alpha_textures,
                 topo_key,
                 content_key,
-                envmap_generation,
+                envmap_content,
                 &mut shaft_light_data,
                 &mut shaft_light_count,
             ) {

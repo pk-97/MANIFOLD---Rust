@@ -33,7 +33,7 @@ crate::primitive! {
     input_access: [BufferGather, Coincident],
     output_capacity: FusedOutputCapacity::FromInput { input: "map" },
     wgsl_includes: [include_str!("shaders/mesh_cut_map_valid.wgsl")],
-    extra_fields: { last_key: Option<[u64; 7]> = None },
+    extra_fields: { last_key: Option<[u64; 5]> = None },
 }
 
 impl Primitive for RemapMeshCut {

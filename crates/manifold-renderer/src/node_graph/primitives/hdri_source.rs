@@ -172,6 +172,12 @@ crate::primitive! {
         // `fresh_upload`) and a pool recycle/resize (different physical
         // texture) without a per-frame mip pass or blit dispatch.
         last_mip_identity: usize = 0,
+        last_blit_dims: (u32, u32) = (0, 0),
+        last_blit_format: Option<manifold_gpu::GpuTextureFormat> = None,
+        // True after the decoded HDRI has been published once. Recopying the
+        // same logical image into a recycled output still needs a dispatch,
+        // but its content revision remains stable.
+        published_content: bool = false,
     },
 }
 
@@ -240,6 +246,7 @@ impl Primitive for HdriSource {
             self.src_h = 0;
             self.uploaded = false;
             self.pending_upload = None;
+            self.published_content = false;
             if !path.is_empty() {
                 let path_buf = PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
@@ -284,6 +291,7 @@ impl Primitive for HdriSource {
             self.src_w = w;
             self.src_h = h;
             self.uploaded = true;
+            self.published_content = false;
             fresh_upload = true;
         }
 
@@ -321,9 +329,13 @@ impl Primitive for HdriSource {
         // recycle/resize hands back a different texture, which must be
         // re-blit even if the source pixels didn't change).
         let out_identity = out.identity_key();
+        let content_unchanged = self.published_content
+            && !fresh_upload
+            && (w, h) == self.last_blit_dims
+            && Some(out.format) == self.last_blit_format;
         let unchanged = !fresh_upload && out_identity == self.last_mip_identity;
 
-        if unchanged {
+        if unchanged && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
         } else {
             let gpu = ctx.gpu_encoder();
@@ -377,6 +389,12 @@ impl Primitive for HdriSource {
             }
 
             self.last_mip_identity = out_identity;
+            self.last_blit_dims = (w, h);
+            self.last_blit_format = Some(out.format);
+            if content_unchanged {
+                ctx.mark_output_content_unchanged();
+            }
+            self.published_content = true;
         }
     }
 }
@@ -819,7 +837,8 @@ mod gate_gpu_tests {
         let unchanged;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(true);
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }
@@ -927,4 +946,3 @@ mod gate_gpu_tests {
         let _ = std::fs::remove_dir_all(path_2.parent().unwrap());
     }
 }
-
