@@ -31,7 +31,10 @@ This is the standard pattern for real-time video on macOS. CoreAudio uses hardwa
 
 ### Real-Time Thread Scheduling
 
-The content thread uses `THREAD_TIME_CONSTRAINT_POLICY` (the native macOS real-time API, same as CoreAudio):
+The shared paced-frame path requests `THREAD_TIME_CONSTRAINT_POLICY` on its
+calling content thread. It applies once, then refreshes when the target FPS
+changes, so application playback and headless playback use the same policy setup.
+The requested durations retain the existing 75% computation budget:
 
 ```
 period:      16.67ms at 60fps (one frame)
@@ -40,7 +43,22 @@ constraint:  16.67ms (must complete within one period)
 preemptible: true
 ```
 
-This ensures the thread gets immediate CPU time during the spin-wait. `SCHED_RR` (POSIX) was tried first but macOS doesn't honor it — the thread falls back to normal scheduling with 1-2ms of jitter.
+These are durations, not the integer values passed to Mach. The API requires
+absolute clock ticks, converted using the cached `mach_timebase_info` ratio
+already used by `FrameTimer` for deadline waits. A successful request does not
+guarantee timely wakes or display presentation. Kernel rejection and the result
+of the existing interactive-QoS fallback are logged; a rejected request is not
+retried every frame at the same rate.
+
+The September 2026 Corrosion investigation reproduced a units error in the old
+request: it treated nanoseconds as ticks and assumed a 1:1 timebase on Apple
+Silicon. On the tested machine the ratio is 125/3. At 24 fps the old request
+returned `KERN_INVALID_ARGUMENT` (4); conversion produced an accepted policy
+whose kernel readback was a 41.666625 ms period and 31.249958 ms computation.
+This establishes the rejected-policy cause, separately from playback results.
+The [Mach policy contract](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/thread_policy.h)
+specifies absolute units, and the [kernel validation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/thread_policy.c)
+rejects out-of-range computation requests.
 
 ### FPS Measurement
 
@@ -153,8 +171,8 @@ One CVDisplayLink callback doing content notification + presenter blit + UI sign
 
 | File | What |
 |------|------|
-| `manifold-app/src/content_thread.rs` | Content thread run loop, THREAD_TIME_CONSTRAINT, timer wait |
-| `manifold-app/src/frame_timer.rs` | `FrameTimer` with mach_wait_until + spin, EWMA FPS |
+| `manifold-app/src/content_thread.rs` | Shared paced frame path for app and headless playback |
+| `manifold-app/src/frame_timer.rs` | Mach policy conversion/refresh, mach_wait_until + spin, EWMA FPS |
 | `manifold-app/src/content_pipeline.rs` | Direct present path (nextDrawable → blit → present) |
 | `manifold-app/src/display_link.rs` | `UiDisplayLink` (CVDisplayLink for UI thread only) |
 | `manifold-app/src/shared_texture.rs` | IOSurface triple buffer + read fence (workspace preview only) |

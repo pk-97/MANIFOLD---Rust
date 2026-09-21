@@ -46,6 +46,10 @@ pub struct FrameTimer {
     /// Cached at construction — the timebase never changes at runtime.
     #[cfg(target_os = "macos")]
     mach_timebase: MachTimebase,
+
+    /// Target FPS for the most recent thread-policy attempt. Cache failed
+    /// attempts too, so invalid input cannot retry on every frame.
+    last_policy_target_fps_bits: Option<u64>,
 }
 
 /// Cached Mach timebase info for nanosecond ↔ mach unit conversion.
@@ -90,6 +94,22 @@ impl MachTimebase {
         // Use u128 to avoid overflow on large durations.
         ((nanos as u128 * self.denom as u128) / self.numer as u128) as u64
     }
+
+    /// Convert a duration to a native policy field without overflowing u32.
+    fn duration_to_mach_units_u32(self, d: Duration) -> Option<u32> {
+        if self.numer == 0 || self.denom == 0 {
+            return None;
+        }
+        let units = d
+            .as_nanos()
+            .checked_mul(self.denom as u128)?
+            .checked_div(self.numer as u128)?;
+        u32::try_from(units).ok().filter(|units| *units > 0)
+    }
+
+    fn mach_units_to_millis(self, units: u32) -> f64 {
+        units as f64 * self.numer as f64 / self.denom as f64 / 1_000_000.0
+    }
 }
 
 /// EWMA smoothing time constant in seconds. Controls how quickly the
@@ -116,6 +136,7 @@ impl FrameTimer {
             missed_ticks: 0,
             frame_clocked: false,
             frame_clock_seconds: 0.0,
+            last_policy_target_fps_bits: None,
             #[cfg(target_os = "macos")]
             mach_timebase: MachTimebase::query(),
         }
@@ -189,6 +210,145 @@ impl FrameTimer {
             while !self.should_tick() {
                 std::hint::spin_loop();
             }
+        }
+    }
+
+    /// Apply the native real-time scheduling policy once per target FPS.
+    /// A target change causes one new attempt; repeated frames reuse the
+    /// result, including failed attempts.
+    pub(crate) fn ensure_thread_policy(&mut self) {
+        if !self.take_policy_refresh() {
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        self.apply_thread_policy();
+    }
+
+    fn take_policy_refresh(&mut self) -> bool {
+        let target = self.target_fps().to_bits();
+        self.last_policy_target_fps_bits.replace(target) != Some(target)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_thread_policy(&self) {
+        #[repr(C)]
+        struct ThreadTimeConstraintPolicy {
+            period: u32,
+            computation: u32,
+            constraint: u32,
+            preemptible: i32,
+        }
+
+        unsafe extern "C" {
+            fn thread_policy_set(
+                thread: u32,
+                flavor: u32,
+                policy_info: *const ThreadTimeConstraintPolicy,
+                count: u32,
+            ) -> i32;
+            fn pthread_mach_thread_np(thread: libc::pthread_t) -> u32;
+        }
+
+        // THREAD_TIME_CONSTRAINT_POLICY = 2
+        const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+        // Count = struct size in natural_t (u32) units.
+        const POLICY_COUNT: u32 =
+            (std::mem::size_of::<ThreadTimeConstraintPolicy>() / std::mem::size_of::<u32>()) as u32;
+
+        let Some(frame_duration) = self
+            .target_fps
+            .is_finite()
+            .then_some(self.target_fps)
+            .filter(|fps| *fps > 0.0)
+            .and_then(|fps| Duration::try_from_secs_f64(1.0 / fps).ok())
+        else {
+            log::warn!(
+                "[ContentThread] invalid target FPS for THREAD_TIME_CONSTRAINT ({:.4}); \
+                 falling back to QOS_CLASS_USER_INTERACTIVE",
+                self.target_fps,
+            );
+            Self::apply_qos_fallback();
+            return;
+        };
+
+        let Some(period) = self
+            .mach_timebase
+            .duration_to_mach_units_u32(frame_duration)
+        else {
+            log::warn!(
+                "[ContentThread] invalid THREAD_TIME_CONSTRAINT policy conversion \
+                 (fps={:.4}); falling back to QOS_CLASS_USER_INTERACTIVE",
+                self.target_fps,
+            );
+            Self::apply_qos_fallback();
+            return;
+        };
+
+        // Computation budget: allow up to 75% of the frame for render work.
+        // The remaining 25% is headroom for the scheduler.
+        let Some(computation) = u64::from(period)
+            .checked_mul(3)
+            .and_then(|units| units.checked_div(4))
+            .and_then(|units| u32::try_from(units).ok())
+            .filter(|units| *units > 0)
+        else {
+            log::warn!(
+                "[ContentThread] invalid THREAD_TIME_CONSTRAINT computation \
+                 (fps={:.4}); falling back to QOS_CLASS_USER_INTERACTIVE",
+                self.target_fps,
+            );
+            Self::apply_qos_fallback();
+            return;
+        };
+
+        let policy = ThreadTimeConstraintPolicy {
+            period,
+            computation,
+            constraint: period,
+            preemptible: 1,
+        };
+
+        let mach_thread = unsafe { pthread_mach_thread_np(libc::pthread_self()) };
+        let ret = unsafe {
+            thread_policy_set(
+                mach_thread,
+                THREAD_TIME_CONSTRAINT_POLICY,
+                &policy,
+                POLICY_COUNT,
+            )
+        };
+
+        if ret == 0 {
+            log::info!(
+                "[ContentThread] Real-time thread policy set \
+                 (THREAD_TIME_CONSTRAINT: period={:.3}ms, \
+                 computation={:.3}ms, timebase={}/{})",
+                self.mach_timebase.mach_units_to_millis(period),
+                self.mach_timebase.mach_units_to_millis(computation),
+                self.mach_timebase.numer,
+                self.mach_timebase.denom,
+            );
+        } else {
+            log::warn!(
+                "[ContentThread] THREAD_TIME_CONSTRAINT failed (err={}), \
+                 falling back to QOS_CLASS_USER_INTERACTIVE",
+                ret,
+            );
+            Self::apply_qos_fallback();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_qos_fallback() {
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        let qos_ret = unsafe { pthread_set_qos_class_self_np(0x21, 0) };
+        if qos_ret != 0 {
+            log::warn!("[ContentThread] QoS fallback also failed (err={})", qos_ret);
+        } else {
+            log::info!("[ContentThread] QoS set to USER_INTERACTIVE (fallback)");
         }
     }
 
@@ -321,6 +481,38 @@ impl FrameTimer {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mach_timebase_conversion_uses_numerator_and_denominator() {
+        let duration = Duration::from_secs(1);
+        assert_eq!(
+            (MachTimebase {
+                numer: 125,
+                denom: 3,
+            })
+            .duration_to_mach_units_u32(duration),
+            Some(24_000_000)
+        );
+        assert_eq!(
+            (MachTimebase { numer: 1, denom: 1 }).duration_to_mach_units_u32(duration),
+            Some(1_000_000_000)
+        );
+    }
+
+    #[test]
+    fn thread_policy_refresh_is_once_then_target_change() {
+        let mut timer = FrameTimer::new(60.0);
+        assert!(timer.take_policy_refresh());
+        assert!(!timer.take_policy_refresh());
+
+        timer.set_target_fps(30.0);
+        assert!(timer.take_policy_refresh());
+        assert!(!timer.take_policy_refresh());
+
+        timer.set_target_fps(30.0);
+        assert!(!timer.take_policy_refresh());
+    }
 
     #[test]
     fn load_pause_does_not_advance_playback_or_reset_application_time() {

@@ -529,12 +529,6 @@ fn run_soak(
         startup,
     } = prepare_project(project_path_str, "normal")?;
 
-    // Same real-time thread scheduling `ContentThread::run()` applies before
-    // its own loop — without it `wait_for_deadline`'s `mach_wait_until` calls
-    // pace at roughly half rate on a normally-scheduled thread (see
-    // `apply_realtime_thread_policy`'s doc comment for the measured gap).
-    crate::content_thread::apply_realtime_thread_policy(frame_rate);
-
     if let Some(beats) = start_beats {
         ct.handle_command(ContentCommand::SeekToBeat(manifold_core::Beats(beats)));
     }
@@ -951,8 +945,6 @@ fn run_profile(
         bpm,
         startup,
     } = prepare_project(project_path_str, "diagnostic")?;
-
-    crate::content_thread::apply_realtime_thread_policy(frame_rate);
 
     if let Some(beats) = start_beats {
         ct.handle_command(ContentCommand::SeekToBeat(manifold_core::Beats(beats)));
