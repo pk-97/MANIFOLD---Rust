@@ -1043,11 +1043,21 @@ impl ContentThread {
                 .map_or(4, |p| p.settings.time_signature_numerator.max(1));
             let bar = (current_beat.as_f32() / time_sig as f32).floor() as u32;
             let budget_ms = 1000.0 / self.timer.target_fps();
-            let active_layers = self.engine.project().map_or(0, |p| p.timeline.layers.len());
+            let active_layers = tick_result
+                .ready_clips
+                .iter()
+                .enumerate()
+                .filter(|(i, clip)| {
+                    !tick_result.ready_clips[..*i]
+                        .iter()
+                        .any(|previous| previous.layer_index == clip.layer_index)
+                })
+                .count();
 
-            // GPU pass-level profiling not yet available on native Metal.
-            let gpu_pass_count = 0u32;
-            let gpu_total_ms = 0.0f64;
+            // Normal captures do not collect pass-level native Metal samples.
+            // Unavailable must remain distinct from measured zero GPU work.
+            let gpu_pass_count = None;
+            let gpu_total_ms = None;
             let gpu_passes = Vec::new();
 
             // Helper: build named params from values + registry
@@ -1126,7 +1136,7 @@ impl ContentThread {
                 })
                 .collect();
 
-            // Collect active effect info with named live params + group_id
+            // Configuration snapshot of enabled effects; not execution attribution.
             let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
             for layer in layers {
                 if let Some(layer_fxs) = layer.effects.as_deref() {
@@ -1198,6 +1208,15 @@ impl ContentThread {
                 gpu_total_ms,
                 layer_states,
                 missed_frames: self.timer.missed_ticks(),
+                pacing: self.timer.last_wall_interval().map(|interval| {
+                    let interval_ms = interval * 1000.0;
+                    let target_interval_ms = 1000.0 / self.timer.target_fps();
+                    manifold_profiler::FramePacing {
+                        interval_ms,
+                        target_interval_ms,
+                        deadline_lateness_ms: (interval_ms - target_interval_ms).max(0.0),
+                    }
+                }),
                 profiler_overhead_ms: 0.0,
                 memory: manifold_profiler::MemorySnapshot {
                     estimated_texture_bytes: estimated_tex_bytes,

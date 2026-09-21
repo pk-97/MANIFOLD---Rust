@@ -3,16 +3,22 @@
 use serde::Serialize;
 use std::path::Path;
 
-use crate::SessionSummary;
+use crate::{PROFILER_SCHEMA_VERSION, SessionSummary};
 
 /// Result of comparing two profiling sessions.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionComparison {
     pub baseline_session: String,
     pub current_session: String,
+    #[serde(rename = "content_work_delta_ms", alias = "overall_delta_ms")]
     pub overall_delta_ms: f64,
-    pub overall_delta_pct: f64,
-    pub budget_improvement_pct: f64,
+    #[serde(rename = "content_work_delta_pct", alias = "overall_delta_pct")]
+    pub overall_delta_pct: Option<f64>,
+    #[serde(
+        rename = "content_work_budget_improvement_pct",
+        alias = "budget_improvement_pct"
+    )]
+    pub budget_improvement_pct: Option<f64>,
     pub per_pass_deltas: Vec<PassDelta>,
     pub new_passes: Vec<String>,
     pub removed_passes: Vec<String>,
@@ -26,7 +32,7 @@ pub struct PassDelta {
     pub before_mean_ms: f64,
     pub after_mean_ms: f64,
     pub delta_ms: f64,
-    pub delta_pct: f64,
+    pub delta_pct: Option<f64>,
 }
 
 /// Compare two profiling sessions. Reads summary.json from each directory.
@@ -36,9 +42,9 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
 
     let overall_delta = summary_b.mean_frame_ms - summary_a.mean_frame_ms;
     let overall_delta_pct = if summary_a.mean_frame_ms > 0.0 {
-        overall_delta / summary_a.mean_frame_ms * 100.0
+        Some(overall_delta / summary_a.mean_frame_ms * 100.0)
     } else {
-        0.0
+        None
     };
 
     // Per-pass comparison
@@ -64,9 +70,9 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
         if let Some(&after) = b_by_name.get(pass.name.as_str()) {
             let delta = after - pass.mean_ms;
             let pct = if pass.mean_ms > 0.0 {
-                delta / pass.mean_ms * 100.0
+                Some(delta / pass.mean_ms * 100.0)
             } else {
-                0.0
+                None
             };
             per_pass_deltas.push(PassDelta {
                 name: pass.name.clone(),
@@ -96,23 +102,19 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
     });
 
     // Budget improvement
-    let budget_improvement = if summary_a.mean_frame_ms > 0.0 {
-        (1.0 - summary_b.mean_frame_ms / summary_a.mean_frame_ms) * 100.0
-    } else {
-        0.0
-    };
+    let budget_improvement = overall_delta_pct.map(|pct| -pct);
 
     // Generate recommendations
     let mut recs = Vec::new();
     if overall_delta < -0.5 {
         recs.push(format!(
-            "Frame time improved by {:.1}ms ({:.1}% faster).",
-            -overall_delta, -overall_delta_pct
+            "Observed content work decreased by {:.1}ms.",
+            -overall_delta
         ));
     } else if overall_delta > 0.5 {
         recs.push(format!(
-            "Frame time regressed by {:.1}ms ({:.1}% slower).",
-            overall_delta, overall_delta_pct
+            "Observed content work increased by {:.1}ms.",
+            overall_delta
         ));
     }
     for delta in per_pass_deltas.iter().take(3) {
@@ -123,11 +125,10 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
                 "regressed"
             };
             recs.push(format!(
-                "{}: {} by {:.2}ms ({:.1}%)",
+                "{}: {} by {:.2}ms",
                 delta.name,
                 direction,
-                delta.delta_ms.abs(),
-                delta.delta_pct.abs()
+                delta.delta_ms.abs()
             ));
         }
     }
@@ -150,5 +151,15 @@ fn load_summary(dir: &Path) -> Result<SessionSummary, String> {
     let path = dir.join("summary.json");
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    let summary: SessionSummary = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+    if summary.schema_version != PROFILER_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported profiler summary schema {} in {}; expected {}",
+            summary.schema_version,
+            path.display(),
+            PROFILER_SCHEMA_VERSION
+        ));
+    }
+    Ok(summary)
 }

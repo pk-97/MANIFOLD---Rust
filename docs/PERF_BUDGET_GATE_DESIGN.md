@@ -42,20 +42,31 @@ measurement system.
   render-path landing (Peter 2026-07-29: time+GPU waste; the relative baseline is
   also noisy on a loaded machine). Rejected: per-commit CI — wall-time cost and
   contention flake would rot the gate into being ignored.
-- **D3 — Two thresholds, one absolute and one relative.** Hard fail: any frame >20 ms
-  (the line DESIGN_DOC_STANDARD section 5 already canonizes). Regression fail: p95 frame time
-  >15% above the checked-in baseline. Rejected: absolute-only — it never catches the bleed
-  until the cliff; relative-only — it lets a slow baseline ratchet quietly. The fixed 20 ms
-  value is a regression guard, not a claim that every project is ready for its configured FPS;
-  reports retain the project's own frame-budget exceed count. `--report-only` writes the
-  profiler result and telemetry while skipping baseline comparison and baseline writes. The
-  checked-in baseline carries a measurement version; a startup or pacing contract change
-  requires regenerating it instead of comparing incompatible runs.
+- **D3 — Gate actual tick pacing separately from content work.** Measurement version 4
+  records elapsed wall time between content tick starts, including GPU backpressure,
+  profiler overhead and autorelease draining between those starts. Lateness is
+  `max(interval - target interval, 0)`; all raw lateness is retained. The headless
+  pacing criterion allows an explicit 1 ms observation tolerance, not a second whole
+  frame. A 70 ms interval at 24 fps fails even when content work takes only 5 ms.
+  Missing or invalid interval coverage cannot pass. The first tick after creation,
+  load or a target-FPS change has no comparable predecessor and is unavailable.
+  The separate 20 ms content-work guard remains a CPU regression criterion, not
+  a presentation budget. Relative regression compares tick-interval p95 against a
+  compatible baseline with a 15% band. A pass means these headless criteria passed;
+  it never establishes display presentation or audio-hardware behaviour.
+  `--report-only` records an explicit `not_evaluated` result. Successful execution
+  and passing performance criteria are separate states in both reports and console output.
 - **D4 — Baseline is a checked-in JSON, updated deliberately.** `docs/perf-baselines/…json`
   (machine-tagged; Peter's rig is THE machine — the gate's numbers are only meaningful
   there, stated honestly). Updating the baseline is a reviewed commit with a one-line
   justification, never a side effect of a green run. Rejected: auto-update on pass — that
   is the ratchet leak D3 exists to stop.
+  Version 4 rejects mismatched measurement version, machine/GPU, build profile,
+  canonical project path/file SHA256, dimensions, FPS, duration, start beat or run
+  mode. Missing/nonpositive/nonfinite baseline timing is invalid; it never substitutes
+  a no-regression ratio. Failed captures or timing criteria cannot replace the baseline.
+  Project-file identity does not fingerprint external asset bytes or control machine
+  load/cache state; those remain explicit comparison limits.
 - **D5 — Real-time pacing, targeted windows.** The soak paces at project FPS: `--seconds 30`
   costs 30 wall-clock seconds. Targeting is the answer to long sets, not speed: a
   `--start <beats>` flag seeks the transport so a run soaks the passage under suspicion
@@ -71,8 +82,8 @@ measurement system.
   diagnosis step when the gate fails (and the optimization map for agents working a heavy
   project). It is structurally separate from the gate because profiled mode trades batching
   for resolution: on Apple silicon counters sample at stage boundaries only, so profiled
-  frames give every dispatch its own encoder — per-span *shares* are trustworthy, absolute
-  totals are inflated. Gate numbers (I1/I2, baselines) therefore come exclusively from
+  frames give every dispatch its own encoder — spans are calibrated estimates and can
+  over-attribute time; absolute totals are perturbed. Gate numbers (I1/I2, baselines) come from
   unprofiled frames; a profiled run never writes a baseline and never sets the exit code.
   Two granularity honesty notes: under the freeze compiler a fused pipeline is one dispatch,
   so attribution is per *compiled step* (fused-kernel), not per source node — identical to
@@ -147,9 +158,10 @@ measurement system.
 
 ## 3. Invariants & enforcement
 
-- **I1 — On the canonical fixture, no content-thread frame exceeds 20 ms.**
-  Enforcement: P1's soak gate, exit non-zero.
-- **I2 — p95 frame time does not regress >15% against the recorded baseline.**
+- **I1 — Recorded tick intervals meet the project period plus the explicit 1 ms
+  tolerance, and content work meets the separate 20 ms CPU guard.** Missing or
+  invalid pacing coverage cannot pass. Enforcement: soak evaluation, exit non-zero.
+- **I2 — Tick-interval p95 does not regress >15% against a compatible baseline.**
   Enforcement: same gate, comparison step.
 - **I3 — Baseline changes are deliberate.** Enforcement: baseline file lives in `docs/`
   (review surface); the soak tool refuses to write it without `--update-baseline`.
@@ -178,16 +190,26 @@ the deliverable, not the mean); running windowed instead of headless. Test scope
 
 Normal and diagnostic project runs construct an empty headless context, then use the
 production project install and warmup lifecycle. Their report records parse, device/context
-setup, shared load/warmup, and total startup timings, plus missed ticks, active clips,
-project-budget exceedances, cold-touch categories, and sampled Metal allocation. The run
+setup, shared load/warmup, and total startup timings, plus actual tick intervals,
+deadline lateness, active clips, content-work budget exceedances, cold-touch categories,
+and sampled Metal allocation. The run
 is content-thread paced and has no display-present deadline, audio hardware, or UI surface;
 diagnostic mode additionally forces serial compositing for attribution. Tick work timings exclude the pre-tick
-GPU surface wait; reports include that wait separately alongside missed ticks.
-Measurement version 3 includes the tick prelude and UI state publication in CPU
-work, with separate phase aggregates. Profiler metadata capture is reported as
-`profiler_overhead_ms` and excluded from that work total. End-of-frame autorelease
-draining and display presentation remain outside this measurement. Earlier
-baseline versions must be regenerated rather than compared across these scopes.
+GPU surface wait; reports include that wait separately. Measurement version 4
+serializes work as `content_work_ms`, not wall/frame duration. It includes the tick
+prelude and UI state publication but excludes separately reported profiler capture
+overhead, pre-tick GPU wait and end-of-tick autorelease drain. Actual tick intervals
+include all elapsed work/waits between starts; jitter uses those intervals.
+`whole_tick_intervals_skipped` retains the legacy coarse count only as a diagnostic:
+zero does not establish an on-time tick or a displayed frame. Missing GPU timing
+and aggregate usage are null, not zero. A first-use spike is an observation with
+unknown cause, not proof of shader compilation. Earlier baseline versions must be
+regenerated. Display presentation is explicitly not measured by this collector.
+Project fingerprinting is a separately timed preflight and can warm the file cache;
+startup timings exclude that preflight and process launch. Profiling setup precedes
+the observed playback window, whose identity records the actual starting beat.
+Generic session comparisons describe content-work differences only; percentage
+changes with a zero denominator are unavailable, never a fabricated zero percent.
 
 For a release baseline, use `cargo run --release -p manifold-app --features perf-soak
 --bin manifold -- perf-soak <project> --seconds 30 --report-only` under the existing

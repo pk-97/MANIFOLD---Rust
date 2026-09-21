@@ -46,6 +46,17 @@ This ensures the thread gets immediate CPU time during the spin-wait. `SCHED_RR`
 
 EWMA (exponentially weighted moving average) on frame time with tau=0.3s. Updates every frame. Responds to frame drops within ~5 frames while filtering single-frame jitter.
 
+Profiler pacing records retain the actual wall-clock interval between content tick
+starts, even when deterministic engine time is enabled. They include GPU surface
+backpressure, profiling work and autorelease draining between starts. The first
+tick after creation/load/target change has no comparable predecessor and is null.
+Deadline lateness is `max(interval - target interval, 0)`; reports retain raw
+lateness and state the 1 ms headless acceptance tolerance explicitly. The legacy
+whole-interval skip count can be zero on a late tick and is not an on-time flag.
+Content-work duration and pacing are separate measurements. Neither establishes
+when a drawable actually appeared on screen; presentation remains unmeasured by
+the content profiler.
+
 ## Output Presentation
 
 **File:** `manifold-app/src/content_pipeline.rs` (render path, lines ~730-773)

@@ -224,11 +224,17 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         warmup_frame
     };
 
-    let stats_json = if profile_mode {
+    let mut stats_json = if profile_mode {
         run_profiled(&mut runtime, &device, &target, &manifest, width, height, frames, warmup_frame)?
     } else {
         run_measured(&mut runtime, &device, &target, &manifest, width, height, frames, warmup_frame)?
     };
+    stats_json["execution"] = serde_json::json!({"completed": true});
+    stats_json["evaluation"] = crate::perf_soak::Evaluation::not_evaluated(
+        "Import measurements are report-only; no performance criteria were evaluated",
+        "headless_import_measurement",
+    )
+    .json();
 
     let out_dir = Path::new("target/perf-profile");
     std::fs::create_dir_all(out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;

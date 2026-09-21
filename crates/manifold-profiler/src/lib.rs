@@ -17,11 +17,17 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// Version of the profiler capture schema written by this crate.
+pub const PROFILER_SCHEMA_VERSION: u32 = 4;
+/// Explicit tolerance for deciding whether a measured interval missed its deadline.
+pub const DEADLINE_TOLERANCE_MS: f64 = 1.0;
+
 // ─── Session Metadata ──────────────────────────────────────────────
 
 /// Top-level session info written to session.json.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionMetadata {
+    pub schema_version: u32,
     pub project_name: String,
     pub project_path: String,
     pub resolution: (u32, u32),
@@ -31,6 +37,8 @@ pub struct SessionMetadata {
     pub start_time: String,
     pub duration_seconds: f64,
     pub total_frames: u64,
+    /// The profiler observes content-thread work and tick intervals only.
+    pub presentation: &'static str,
 }
 
 // ─── Per-Frame Data ────────────────────────────────────────────────
@@ -48,36 +56,96 @@ pub struct FrameRecord {
     pub index: u64,
     pub beat: f32,
     pub bar: u32,
+    #[serde(rename = "content_work_ms", alias = "wall_time_ms")]
     pub wall_time_ms: f64,
+    #[serde(rename = "content_work_budget_exceeded", alias = "budget_exceeded")]
     pub budget_exceeded: bool,
+    /// Elapsed wall interval since the preceding content tick, when observed.
+    #[serde(default)]
+    pub pacing: Option<FramePacing>,
     pub content_thread: ContentTimings,
     /// Per-pass GPU timing from timestamp queries (empty if unavailable).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpu_passes: Vec<GpuPassRecord>,
     /// Active clips this frame with generator type info.
     pub active_clips: Vec<ActiveClipInfo>,
-    /// Active effects this frame with type and parameter info.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Enabled effect configuration observed this frame; this does not prove
+    /// that an effect executed on the GPU.
+    #[serde(
+        rename = "enabled_effects",
+        alias = "active_effects",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub active_effects: Vec<ActiveEffectInfo>,
     pub active_layer_count: usize,
-    /// Total GPU passes this frame.
-    pub gpu_pass_count: u32,
-    /// Sum of all GPU pass durations (ms).
-    pub gpu_total_ms: f64,
+    /// Total GPU passes this frame, when timestamp collection measured it.
+    #[serde(default)]
+    pub gpu_pass_count: Option<u32>,
+    /// Sum of sampled GPU pass durations (ms), when available. Zero is a
+    /// measured zero; `None` means GPU timing was unavailable.
+    #[serde(default)]
+    pub gpu_total_ms: Option<f64>,
     /// Per-layer state (opacity, mute, solo).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_states: Vec<LayerState>,
-    /// Number of content thread ticks missed (frame drops).
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    /// Whole tick intervals skipped, approximately floor(interval / target) - 1.
+    /// This is not a presentation frame-drop or on-time indicator.
+    #[serde(
+        rename = "whole_tick_intervals_skipped",
+        alias = "missed_frames",
+        default,
+        skip_serializing_if = "is_zero_u64"
+    )]
     pub missed_frames: u64,
-    /// CPU time spent capturing profiler metadata, excluded from wall_time_ms.
+    /// CPU time spent capturing profiler metadata, excluded from content_work_ms.
     pub profiler_overhead_ms: f64,
     /// GPU memory estimate for this frame.
     pub memory: MemorySnapshot,
 }
 
+/// Measured elapsed interval and deadline residual for one content tick.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FramePacing {
+    pub interval_ms: f64,
+    pub target_interval_ms: f64,
+    pub deadline_lateness_ms: f64,
+}
+
+impl FramePacing {
+    /// Validate a measured interval and its derived lateness without hiding
+    /// inconsistent residuals. The epsilon only covers numeric round trips.
+    pub fn is_valid(&self) -> bool {
+        self.interval_ms.is_finite()
+            && self.interval_ms > 0.0
+            && self.target_interval_ms.is_finite()
+            && self.target_interval_ms > 0.0
+            && self.deadline_lateness_ms.is_finite()
+            && self.deadline_lateness_ms >= 0.0
+            && (self.deadline_lateness_ms - (self.interval_ms - self.target_interval_ms).max(0.0))
+                .abs()
+                <= 1e-6
+    }
+}
+
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
+}
+
+fn content_timings_are_valid(timings: &ContentTimings) -> bool {
+    [
+        timings.total_ms,
+        timings.prelude_ms,
+        timings.midi_input_ms,
+        timings.sync_controllers_ms,
+        timings.engine_tick_ms,
+        timings.render_content_ms,
+        timings.gpu_poll_ms,
+        timings.cleanup_ms,
+        timings.state_publish_ms,
+    ]
+    .iter()
+    .all(|value| value.is_finite() && *value >= 0.0)
 }
 
 /// GPU pass timing from timestamp queries.
@@ -197,6 +265,7 @@ pub struct MemorySnapshot {
 /// CPU timing breakdown for a single content thread tick.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContentTimings {
+    #[serde(rename = "content_work_total_ms", alias = "total_ms")]
     pub total_ms: f64,
     /// Tick setup, still-export polling and completed device discovery results.
     #[serde(default)]
@@ -205,6 +274,7 @@ pub struct ContentTimings {
     pub sync_controllers_ms: f64,
     pub engine_tick_ms: f64,
     pub render_content_ms: f64,
+    #[serde(rename = "gpu_surface_wait_ms", alias = "gpu_poll_ms")]
     pub gpu_poll_ms: f64,
     pub cleanup_ms: f64,
     /// Reclaim tick scratch, build the UI snapshot and send it.
@@ -217,11 +287,19 @@ pub struct ContentTimings {
 /// Aggregated statistics computed at dump time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(rename = "content_work_over_budget", alias = "frames_over_budget")]
     pub frames_over_budget: u64,
+    #[serde(rename = "worst_content_work", alias = "worst_frame")]
     pub worst_frame: Option<WorstFrame>,
+    #[serde(rename = "content_work_mean_ms", alias = "mean_frame_ms")]
     pub mean_frame_ms: f64,
+    #[serde(rename = "content_work_p95_ms", alias = "p95_frame_ms")]
     pub p95_frame_ms: f64,
+    #[serde(rename = "content_work_p99_ms", alias = "p99_frame_ms")]
     pub p99_frame_ms: f64,
+    #[serde(rename = "content_work_max_ms", alias = "max_frame_ms")]
     pub max_frame_ms: f64,
     pub phase_aggregates: PhaseAggregates,
     /// Per-GPU-pass aggregated stats (e.g. "generator:fluid_sim" → mean/p95/max).
@@ -230,16 +308,21 @@ pub struct SessionSummary {
     pub hotspots: Vec<Hotspot>,
 
     // ── Extended analysis ─────────────────────────────────────────
-    /// Frame pacing / jitter analysis.
-    pub jitter: JitterAnalysis,
-    /// First-use spike detection (shader compilation).
+    /// Jitter derived from measured pacing intervals, when at least two are valid.
+    #[serde(default)]
+    pub jitter: Option<JitterAnalysis>,
+    /// Observed first-use timing spikes; no cause is inferred.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub first_use_spikes: Vec<FirstUseSpike>,
     /// Idle (0 clips) vs active (1+ clips) comparison.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_vs_active: Option<IdleActiveComparison>,
     /// GPU pass count stats.
-    pub pass_count: PassCountStats,
+    #[serde(default)]
+    pub pass_count: Option<PassCountStats>,
+    /// Pacing statistics over valid measured intervals.
+    #[serde(default)]
+    pub pacing: Option<PacingSummary>,
     /// Automated actionable recommendations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendations: Vec<String>,
@@ -256,7 +339,18 @@ pub struct JitterAnalysis {
     pub frames_with_significant_jitter: u64,
 }
 
-/// Shader compilation spike on first use of a GPU pass.
+/// Aggregated frame pacing measurements.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PacingSummary {
+    pub interval_ms: PercentileStat,
+    pub deadline_lateness_ms: PercentileStat,
+    pub late_intervals: u64,
+    pub sample_count: u64,
+    pub deadline_tolerance_ms: f64,
+}
+
+/// Timing spike observed on the first occurrence of a GPU pass. The profiler
+/// does not attribute the spike to shader compilation or another cause.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirstUseSpike {
     pub pass_name: String,
@@ -283,7 +377,12 @@ pub struct PassCountStats {
     pub mean_pass_count: f64,
     pub max_pass_count: u32,
     pub mean_gpu_total_ms: f64,
-    /// mean_gpu_total / frame_budget * 100.
+    /// Mean sampled GPU pass time / frame budget * 100. This is not GPU
+    /// utilization or wall-clock occupancy.
+    #[serde(
+        rename = "gpu_pass_time_budget_usage_pct",
+        alias = "gpu_budget_usage_pct"
+    )]
     pub gpu_budget_usage_pct: f64,
 }
 
@@ -305,6 +404,7 @@ pub struct GpuPassAggregate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorstFrame {
     pub index: u64,
+    #[serde(rename = "content_work_ms", alias = "ms")]
     pub ms: f64,
     pub beat: f32,
     pub bar: u32,
@@ -318,6 +418,7 @@ pub struct PhaseAggregates {
     pub sync_controllers: PercentileStat,
     pub engine_tick: PercentileStat,
     pub render_content: PercentileStat,
+    #[serde(rename = "gpu_surface_wait", alias = "gpu_poll")]
     pub gpu_poll: PercentileStat,
     pub cleanup: PercentileStat,
     #[serde(default)]
@@ -336,7 +437,9 @@ pub struct PercentileStat {
 pub struct Hotspot {
     pub beat_range: (f32, f32),
     pub bar_range: (u32, u32),
+    #[serde(rename = "content_work_mean_ms", alias = "mean_frame_ms")]
     pub mean_frame_ms: f64,
+    #[serde(rename = "content_work_over_budget", alias = "frames_over_budget")]
     pub frames_over_budget: u64,
     pub total_frames: u64,
 }
@@ -419,9 +522,25 @@ impl ProfileSession {
     /// Returns the output directory path on success.
     pub fn stop_and_dump(&mut self) -> Result<PathBuf, String> {
         self.recording = false;
+        if let Some(frame) = self.frames.iter().find(|frame| {
+            !frame.wall_time_ms.is_finite()
+                || frame.wall_time_ms < 0.0
+                || !content_timings_are_valid(&frame.content_thread)
+                || !frame.profiler_overhead_ms.is_finite()
+                || frame.profiler_overhead_ms < 0.0
+                || frame
+                    .gpu_total_ms
+                    .is_some_and(|ms| !ms.is_finite() || ms < 0.0)
+        }) {
+            return Err(format!(
+                "Invalid timing measurement at frame {}; capture cannot be summarized",
+                frame.index
+            ));
+        }
         let duration = self.start_instant.elapsed().as_secs_f64();
 
         let metadata = SessionMetadata {
+            schema_version: PROFILER_SCHEMA_VERSION,
             project_name: self.project_name.clone(),
             project_path: self.project_path.clone(),
             resolution: self.resolution,
@@ -431,6 +550,7 @@ impl ProfileSession {
             start_time: self.start_time_str.clone(),
             duration_seconds: duration,
             total_frames: self.frames.len() as u64,
+            presentation: "not_measured",
         };
 
         let summary = self.compute_summary(&metadata);
@@ -441,6 +561,7 @@ impl ProfileSession {
     fn compute_summary(&self, metadata: &SessionMetadata) -> SessionSummary {
         if self.frames.is_empty() {
             return SessionSummary {
+                schema_version: PROFILER_SCHEMA_VERSION,
                 frames_over_budget: 0,
                 worst_frame: None,
                 mean_frame_ms: 0.0,
@@ -450,32 +571,47 @@ impl ProfileSession {
                 phase_aggregates: PhaseAggregates::default(),
                 gpu_pass_aggregates: Vec::new(),
                 hotspots: Vec::new(),
-                jitter: JitterAnalysis::default(),
+                jitter: None,
                 first_use_spikes: Vec::new(),
                 idle_vs_active: None,
-                pass_count: PassCountStats::default(),
+                pass_count: None,
+                pacing: None,
                 recommendations: Vec::new(),
             };
         }
 
         let budget = metadata.frame_budget_ms as f64;
-        let n = self.frames.len();
-
+        let invalid_content_work_samples = self
+            .frames
+            .iter()
+            .filter(|f| {
+                !f.wall_time_ms.is_finite()
+                    || f.wall_time_ms < 0.0
+                    || !content_timings_are_valid(&f.content_thread)
+            })
+            .count() as u64;
         // Collect wall times for percentile calculation
-        let mut wall_times: Vec<f64> = self.frames.iter().map(|f| f.wall_time_ms).collect();
-        wall_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut wall_times: Vec<f64> = self
+            .frames
+            .iter()
+            .map(|f| f.wall_time_ms)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .collect();
+        wall_times.sort_by(f64::total_cmp);
 
         let frames_over_budget = self
             .frames
             .iter()
-            .filter(|f| f.wall_time_ms > budget)
+            .filter(|f| {
+                f.wall_time_ms.is_finite() && f.wall_time_ms >= 0.0 && f.wall_time_ms > budget
+            })
             .count() as u64;
 
-        let worst = self.frames.iter().max_by(|a, b| {
-            a.wall_time_ms
-                .partial_cmp(&b.wall_time_ms)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let worst = self
+            .frames
+            .iter()
+            .filter(|f| f.wall_time_ms.is_finite() && f.wall_time_ms >= 0.0)
+            .max_by(|a, b| a.wall_time_ms.total_cmp(&b.wall_time_ms));
 
         let worst_frame = worst.map(|f| WorstFrame {
             index: f.index,
@@ -504,10 +640,16 @@ impl ProfileSession {
         // GPU pass aggregates — group by label, compute stats
         let gpu_pass_aggregates = self.compute_gpu_pass_aggregates();
 
-        let mean_frame = wall_times.iter().sum::<f64>() / n as f64;
+        let mean_frame = if wall_times.is_empty() {
+            0.0
+        } else {
+            wall_times.iter().sum::<f64>() / wall_times.len() as f64
+        };
 
-        // Jitter analysis
-        let jitter = self.compute_jitter(budget);
+        // Pacing and jitter are based on measured elapsed tick intervals, never
+        // on content work duration.
+        let (pacing, invalid_pacing_samples) = self.compute_pacing();
+        let jitter = self.compute_jitter(pacing.as_ref());
 
         // First-use spikes
         let first_use_spikes = self.detect_first_use_spikes(&gpu_pass_aggregates);
@@ -519,15 +661,16 @@ impl ProfileSession {
         let pass_count = self.compute_pass_count_stats(budget);
 
         // Automated recommendations
-        let recommendations = self.generate_recommendations(
-            &gpu_pass_aggregates,
-            &jitter,
-            idle_vs_active.as_ref(),
-            &pass_count,
-            budget,
+        let recommendations = Self::generate_recommendations(
+            &first_use_spikes,
+            jitter.as_ref(),
+            pacing.is_some(),
+            invalid_pacing_samples,
+            invalid_content_work_samples,
         );
 
         SessionSummary {
+            schema_version: PROFILER_SCHEMA_VERSION,
             frames_over_budget,
             worst_frame,
             mean_frame_ms: mean_frame,
@@ -541,6 +684,7 @@ impl ProfileSession {
             first_use_spikes,
             idle_vs_active,
             pass_count,
+            pacing,
             recommendations,
         }
     }
@@ -551,17 +695,31 @@ impl ProfileSession {
         struct PassData {
             times: Vec<f64>,
             first_seen_frame: u64,
+            first_ms: Option<f64>,
         }
         let mut by_label: std::collections::HashMap<String, PassData> =
             std::collections::HashMap::new();
         for frame in &self.frames {
+            // An empty pass list with an explicit zero count is a measured
+            // zero-pass frame. Missing count means GPU collection was
+            // unavailable, so it cannot contribute to pass aggregates.
+            if frame.gpu_pass_count.is_none() {
+                continue;
+            }
             for pass in &frame.gpu_passes {
+                if !pass.ms.is_finite() || pass.ms < 0.0 {
+                    continue;
+                }
                 let entry = by_label
                     .entry(pass.name.clone())
                     .or_insert_with(|| PassData {
                         times: Vec::new(),
                         first_seen_frame: frame.index,
+                        first_ms: None,
                     });
+                if entry.first_ms.is_none() {
+                    entry.first_ms = Some(pass.ms);
+                }
                 entry.times.push(pass.ms);
             }
         }
@@ -574,7 +732,7 @@ impl ProfileSession {
                 let n = data.times.len();
                 let steady_state_mean = if n > 1 {
                     // Exclude first occurrence for steady-state mean
-                    let first_ms = data.times.first().copied().unwrap_or(0.0);
+                    let first_ms = data.first_ms.unwrap_or(0.0);
                     let total: f64 = data.times.iter().sum();
                     (total - first_ms) / (n - 1) as f64
                 } else {
@@ -611,6 +769,9 @@ impl ProfileSession {
         // Group frames by bar
         let mut bar_frames: Vec<(u32, Vec<&FrameRecord>)> = Vec::new();
         for frame in &self.frames {
+            if !frame.wall_time_ms.is_finite() || frame.wall_time_ms < 0.0 {
+                continue;
+            }
             if let Some(last) = bar_frames.last_mut()
                 && last.0 == frame.bar
             {
@@ -668,28 +829,91 @@ impl ProfileSession {
         hotspots
     }
 
-    /// Frame pacing / jitter analysis.
-    fn compute_jitter(&self, budget_ms: f64) -> JitterAnalysis {
-        if self.frames.len() < 2 {
-            return JitterAnalysis::default();
+    /// Aggregate pacing intervals and deadline residuals, retaining only
+    /// finite, positive intervals and finite, non-negative lateness values.
+    /// Invalid samples are reported by the caller rather than converted to 0.
+    fn compute_pacing(&self) -> (Option<PacingSummary>, u64) {
+        let mut intervals = Vec::new();
+        let mut lateness = Vec::new();
+        let mut late_intervals = 0u64;
+        let mut invalid_samples = 0u64;
+
+        for (index, frame) in self.frames.iter().enumerate() {
+            let Some(pacing) = &frame.pacing else {
+                if index > 0 {
+                    invalid_samples += 1;
+                }
+                continue;
+            };
+            if !pacing.is_valid() {
+                invalid_samples += 1;
+                continue;
+            }
+            intervals.push(pacing.interval_ms);
+            lateness.push(pacing.deadline_lateness_ms);
+            if pacing.deadline_lateness_ms > DEADLINE_TOLERANCE_MS {
+                late_intervals += 1;
+            }
         }
-        let times: Vec<f64> = self.frames.iter().map(|f| f.wall_time_ms).collect();
+
+        if intervals.is_empty() || invalid_samples > 0 {
+            return (None, invalid_samples);
+        }
+
+        let mut sorted_intervals = intervals.clone();
+        let mut sorted_lateness = lateness.clone();
+        sorted_intervals.sort_by(f64::total_cmp);
+        sorted_lateness.sort_by(f64::total_cmp);
+        (
+            Some(PacingSummary {
+                interval_ms: percentile_stat_from_values(&sorted_intervals),
+                deadline_lateness_ms: percentile_stat_from_values(&sorted_lateness),
+                late_intervals,
+                sample_count: intervals.len() as u64,
+                deadline_tolerance_ms: DEADLINE_TOLERANCE_MS,
+            }),
+            invalid_samples,
+        )
+    }
+
+    /// Compute jitter from measured pacing intervals. Two valid intervals are
+    /// required before variability is reported.
+    fn compute_jitter(&self, pacing: Option<&PacingSummary>) -> Option<JitterAnalysis> {
+        let pacing = pacing?;
+        if pacing.sample_count < 2 {
+            return None;
+        }
+        let times: Vec<f64> = self
+            .frames
+            .iter()
+            .filter_map(|f| {
+                let pacing = f.pacing.as_ref()?;
+                pacing.is_valid().then_some(pacing.interval_ms)
+            })
+            .collect();
+        if times.len() < 2 {
+            return None;
+        }
         let n = times.len() as f64;
         let mean = times.iter().sum::<f64>() / n;
         let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / (n - 1.0);
         let stddev = variance.sqrt();
         let cv = if mean > 0.0 { stddev / mean } else { 0.0 };
-        let jitter_threshold = budget_ms * 1.5;
-        let jitter_count = times.iter().filter(|&&t| t > jitter_threshold).count() as u64;
-        JitterAnalysis {
+        let jitter_count = self
+            .frames
+            .iter()
+            .filter_map(|f| f.pacing.as_ref())
+            .filter(|p| p.is_valid() && p.interval_ms > p.target_interval_ms * 1.5)
+            .count() as u64;
+        Some(JitterAnalysis {
             mean_dt_ms: mean,
             stddev_dt_ms: stddev,
             coefficient_of_variation: cv,
             frames_with_significant_jitter: jitter_count,
-        }
+        })
     }
 
-    /// Detect first-use spikes (shader compilation on first occurrence).
+    /// Detect first-use timing spikes without attributing their cause.
     fn detect_first_use_spikes(&self, aggregates: &[GpuPassAggregate]) -> Vec<FirstUseSpike> {
         let mut spikes = Vec::new();
         for agg in aggregates {
@@ -735,13 +959,17 @@ impl ProfileSession {
         let idle: Vec<f64> = self
             .frames
             .iter()
-            .filter(|f| f.active_clips.is_empty())
+            .filter(|f| {
+                f.wall_time_ms.is_finite() && f.wall_time_ms >= 0.0 && f.active_clips.is_empty()
+            })
             .map(|f| f.wall_time_ms)
             .collect();
         let active: Vec<f64> = self
             .frames
             .iter()
-            .filter(|f| !f.active_clips.is_empty())
+            .filter(|f| {
+                f.wall_time_ms.is_finite() && f.wall_time_ms >= 0.0 && !f.active_clips.is_empty()
+            })
             .map(|f| f.wall_time_ms)
             .collect();
         if idle.is_empty() || active.is_empty() {
@@ -759,25 +987,27 @@ impl ProfileSession {
     }
 
     /// GPU pass count statistics.
-    fn compute_pass_count_stats(&self, budget_ms: f64) -> PassCountStats {
-        if self.frames.is_empty() {
-            return PassCountStats::default();
+    fn compute_pass_count_stats(&self, budget_ms: f64) -> Option<PassCountStats> {
+        if self.frames.is_empty() || !budget_ms.is_finite() || budget_ms <= 0.0 {
+            return None;
         }
-        let counts: Vec<u32> = self
-            .frames
-            .iter()
-            .map(|f| f.gpu_passes.len() as u32)
-            .collect();
-        let totals: Vec<f64> = self
-            .frames
-            .iter()
-            .map(|f| f.gpu_passes.iter().map(|p| p.ms).sum::<f64>())
-            .collect();
+        let mut counts = Vec::with_capacity(self.frames.len());
+        let mut totals = Vec::with_capacity(self.frames.len());
+        for frame in &self.frames {
+            let (Some(count), Some(total)) = (frame.gpu_pass_count, frame.gpu_total_ms) else {
+                return None;
+            };
+            if !total.is_finite() || total < 0.0 {
+                return None;
+            }
+            counts.push(count);
+            totals.push(total);
+        }
         let n = counts.len() as f64;
         let mean_count = counts.iter().map(|&c| c as f64).sum::<f64>() / n;
         let max_count = counts.iter().copied().max().unwrap_or(0);
         let mean_total = totals.iter().sum::<f64>() / n;
-        PassCountStats {
+        Some(PassCountStats {
             mean_pass_count: mean_count,
             max_pass_count: max_count,
             mean_gpu_total_ms: mean_total,
@@ -786,93 +1016,43 @@ impl ProfileSession {
             } else {
                 0.0
             },
-        }
+        })
     }
 
-    /// Generate automated actionable recommendations.
+    /// Describe observed conditions without inferring an unmeasured cause.
     fn generate_recommendations(
-        &self,
-        gpu_passes: &[GpuPassAggregate],
-        jitter: &JitterAnalysis,
-        idle_active: Option<&IdleActiveComparison>,
-        pass_count: &PassCountStats,
-        budget_ms: f64,
+        first_use_spikes: &[FirstUseSpike],
+        jitter: Option<&JitterAnalysis>,
+        pacing_available: bool,
+        invalid_pacing_samples: u64,
+        invalid_content_work_samples: u64,
     ) -> Vec<String> {
-        let mut recs = Vec::new();
-
-        // Most expensive always-on effects (present in >80% of active frames)
-        let active_frame_count = self
-            .frames
-            .iter()
-            .filter(|f| !f.active_clips.is_empty())
-            .count() as u64;
-        if active_frame_count > 0 {
-            for pass in gpu_passes.iter().take(5) {
-                let usage_pct = pass.frame_count as f64 / active_frame_count as f64 * 100.0;
-                if usage_pct > 80.0 && pass.mean_ms > 0.5 {
-                    recs.push(format!(
-                        "{} is the most expensive always-on pass ({:.2}ms mean, active {:.0}% of frames). \
-                         Consider half-resolution intermediate buffers.",
-                        pass.name, pass.mean_ms, usage_pct
-                    ));
-                }
-            }
+        let mut observations = Vec::new();
+        if invalid_content_work_samples > 0 {
+            observations.push(format!(
+                "{invalid_content_work_samples} content work samples were invalid; coverage is incomplete."
+            ));
         }
-
-        // High variance passes
-        for pass in gpu_passes {
-            if pass.max_ms > pass.mean_ms * 10.0 && pass.mean_ms > 0.1 {
-                recs.push(format!(
-                    "{} has {:.0}x variance (mean {:.2}ms, max {:.2}ms). \
-                     Investigate spike at frame {}.",
-                    pass.name,
-                    pass.max_ms / pass.mean_ms,
-                    pass.mean_ms,
-                    pass.max_ms,
-                    pass.first_seen_frame
-                ));
-            }
+        if !pacing_available {
+            observations.push(format!(
+                "Pacing summary unavailable: missing or invalid interval coverage ({invalid_pacing_samples} invalid or missing samples after the first tick)."
+            ));
         }
-
-        // Jitter warning
-        if jitter.coefficient_of_variation > 0.3 {
-            recs.push(format!(
-                "High frame time jitter (CV={:.2}). {} frames exceed 1.5x budget. \
-                 Check for allocation spikes or GC pauses.",
+        for spike in first_use_spikes {
+            observations.push(format!(
+                "Observed first-use timing spike for {} at frame {} ({:.1}x subsequent mean); cause unknown.",
+                spike.pass_name, spike.first_use_frame, spike.spike_ratio
+            ));
+        }
+        if let Some(jitter) = jitter
+            && jitter.coefficient_of_variation > 0.3
+        {
+            observations.push(format!(
+                "High pacing interval variation (CV={:.2}); {} intervals exceeded 1.5x their target. Cause is not measured.",
                 jitter.coefficient_of_variation, jitter.frames_with_significant_jitter
             ));
         }
-
-        // Pass count overhead
-        if pass_count.mean_pass_count > 20.0 {
-            recs.push(format!(
-                "{:.0} GPU passes per frame on average. Each pass incurs barrier/scheduling \
-                 overhead. Consider combining passes or reducing active effects.",
-                pass_count.mean_pass_count
-            ));
-        }
-
-        // Budget usage
-        if pass_count.gpu_budget_usage_pct > 80.0 {
-            recs.push(format!(
-                "GPU pass time uses {:.0}% of frame budget ({:.2}ms / {:.2}ms). \
-                 Little headroom for additional effects.",
-                pass_count.gpu_budget_usage_pct, pass_count.mean_gpu_total_ms, budget_ms
-            ));
-        }
-
-        // Idle vs active delta
-        if let Some(ia) = idle_active
-            && ia.overhead_ms > budget_ms * 0.8
-        {
-            recs.push(format!(
-                "Rendering overhead is {:.1}ms (idle: {:.1}ms, active: {:.1}ms). \
-                 Active content alone nearly exceeds the {:.1}ms budget.",
-                ia.overhead_ms, ia.idle_mean_ms, ia.active_mean_ms, budget_ms
-            ));
-        }
-
-        recs
+        observations
     }
 
     /// Write session.json, frames.jsonl, and summary.json to disk.
@@ -941,14 +1121,26 @@ fn percentile_stat(
     if frames.is_empty() {
         return PercentileStat::default();
     }
-    let mut values: Vec<f64> = frames.iter().map(&extract).collect();
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut values: Vec<f64> = frames
+        .iter()
+        .map(&extract)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect();
+    values.sort_by(f64::total_cmp);
+
+    percentile_stat_from_values(&values)
+}
+
+fn percentile_stat_from_values(sorted_values: &[f64]) -> PercentileStat {
+    if sorted_values.is_empty() {
+        return PercentileStat::default();
+    }
 
     PercentileStat {
-        mean_ms: values.iter().sum::<f64>() / values.len() as f64,
-        p95_ms: percentile_value(&values, 0.95),
-        p99_ms: percentile_value(&values, 0.99),
-        max_ms: values.last().copied().unwrap_or(0.0),
+        mean_ms: sorted_values.iter().sum::<f64>() / sorted_values.len() as f64,
+        p95_ms: percentile_value(sorted_values, 0.95),
+        p99_ms: percentile_value(sorted_values, 0.99),
+        max_ms: sorted_values.last().copied().unwrap_or(0.0),
     }
 }
 
