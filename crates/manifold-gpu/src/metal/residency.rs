@@ -11,7 +11,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLAllocation, MTLDevice, MTLResidencySet, MTLResidencySetDescriptor};
+use objc2_metal::{
+    MTLAllocation, MTLCommandQueue, MTLDevice, MTLResidencySet, MTLResidencySetDescriptor,
+};
 
 use super::device::GpuDevice;
 
@@ -70,6 +72,7 @@ pub struct GpuResidencyStats {
 /// The one mutable residency-set owner for a Metal device.
 pub struct GpuResidencyManager {
     set: Retained<ProtocolObject<dyn MTLResidencySet>>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     rx: Receiver<ResidencyChange>,
     allocations: AHashMap<usize, RegisteredAllocation>,
     allocated_bytes: u64,
@@ -99,14 +102,14 @@ impl GpuResidencyManager {
             .raw_device()
             .newResidencySetWithDescriptor_error(&descriptor)
             .map_err(|error| format!("MTLResidencySet creation failed: {error:?}"))?;
-        // Explicit requests prepare memory ahead of command submission. Do not
-        // attach the set to the queue: every commit would then request the
-        // entire set even when our working-set budget has disabled preparation.
+        // Ahead-of-time requests prepare memory; queue attachment carries the
+        // set into command execution. Both must stop when over budget.
         let (tx, rx) = channel();
         let sender = ResidencySender { tx };
         Ok((
             Self {
                 set,
+                queue: device.clone_queue(),
                 rx,
                 allocations: AHashMap::new(),
                 allocated_bytes: 0,
@@ -163,6 +166,7 @@ impl GpuResidencyManager {
                 self.warned_over_budget = true;
             }
             if self.requested {
+                self.queue.removeResidencySet(&self.set);
                 self.set.endResidency();
                 self.requested = false;
             }
@@ -171,12 +175,14 @@ impl GpuResidencyManager {
         }
 
         if self.allocations.is_empty() && self.requested {
+            self.queue.removeResidencySet(&self.set);
             self.set.endResidency();
             self.requested = false;
         }
         self.set.commit();
         if !over_budget && !self.allocations.is_empty() && !self.requested {
             self.set.requestResidency();
+            self.queue.addResidencySet(&self.set);
             self.requested = true;
         }
     }
@@ -194,6 +200,7 @@ impl GpuResidencyManager {
 impl Drop for GpuResidencyManager {
     fn drop(&mut self) {
         if self.requested {
+            self.queue.removeResidencySet(&self.set);
             self.set.endResidency();
             self.requested = false;
         }
