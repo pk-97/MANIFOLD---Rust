@@ -79,6 +79,17 @@ for the runtime; ordered encoding and native hazard tracking govern GPU access.
 Executor storage revisions detect overwritten cached outputs. This changes
 neither cross-runtime sharing nor GPU retirement/residency policy.
 
+**Immutable imported images:** glTF source uploads may share an immutable
+RGBA8 texture within one execution thread and device resource scope. The key
+includes the decoded pixel SHA256, source dimensions and colour format. Hashing
+runs in the existing decode worker. A cache miss publishes only after synchronous
+CPU upload completes; published textures are never uploaded into again. Each
+layer keeps its own writable conversion/mipmap output and content revisions.
+The cache holds weak references, prunes expired entries on upload lookup, and
+does not retain image memory after the last source owner releases it. A unique
+`GpuDevice::resource_scope_id` prevents sharing across independent queue,
+residency and retirement owners, including after a renderer is recreated.
+
 **Resolution changes:** The content thread prepares compositor, upscaler, generator,
 effect-chain and Math View replacements before publishing new dimensions. GPU
 allocation/admission errors discard the candidate and preserve the live renderer,

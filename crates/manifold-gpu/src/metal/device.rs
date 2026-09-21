@@ -133,6 +133,9 @@ use super::shader_compiler::{
 
 /// Native Metal device + command queue for the content thread.
 pub struct GpuDevice {
+    /// Distinguishes resource ownership even when native devices or Rust
+    /// addresses are reused by a later renderer.
+    resource_scope_id: u64,
     allocation_counts: [std::sync::atomic::AtomicU64; 3],
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -192,11 +195,21 @@ impl GpuDevice {
     /// Create from the system default Metal device.
     /// Uses a dedicated command queue for content-thread work.
     pub fn new() -> Self {
+        static NEXT_RESOURCE_SCOPE: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let resource_scope_id = NEXT_RESOURCE_SCOPE
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |id| id.checked_add(1),
+            )
+            .expect("GPU resource scope identifiers exhausted");
         let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("No Metal device found");
         let queue = device
             .newCommandQueue()
             .expect("Failed to create command queue");
         Self {
+            resource_scope_id,
             allocation_counts: [const { std::sync::atomic::AtomicU64::new(0) }; 3],
             device,
             queue,
@@ -212,6 +225,13 @@ impl GpuDevice {
             retirement: std::sync::OnceLock::new(),
             residency_sender: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Process-local identity for this device wrapper's resource ownership.
+    /// Shared immutable assets must stay within one queue/residency/retirement
+    /// scope, even when two wrappers use the same physical Metal device.
+    pub fn resource_scope_id(&self) -> u64 {
+        self.resource_scope_id
     }
 
     /// Capture the Metal allocator state used by scene-modifier admission.

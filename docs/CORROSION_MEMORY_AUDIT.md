@@ -2,7 +2,15 @@
 
 <!-- index: Bounded Azalea/Vortex Fragments/Ordered Recon/Math View memory audit; measured allocation classes, source-derived costs and unverified recovery candidates. -->
 
-**Status:** Cut-remap reuse, CPU source-copy release, conservative temporary-array reuse and pool telemetry implemented and measured, 2026-09-21. Broader memory investigation remains open: BUG-dl16.
+**Status:** Cut-remap reuse, CPU source-copy release, conservative temporary-array reuse, immutable source-image sharing and pool telemetry implemented and measured, 2026-09-21. Broader memory investigation remains open: BUG-dl16.
+
+The latest combined build measures **17,888,559,104 bytes** of peak Metal
+allocations, **2,608,545,792 bytes (12.73%) below the original clean capture**.
+Peak process footprint measures **22,747,876,784 bytes**, compared with
+23,905,440,064 bytes at the start of the overnight follow-up. These are separate,
+overlapping measures from bounded headless captures, not additive memory savings.
+Loading remains about 20 seconds; duration-independent RAM and arbitrary modifier
+complexity are not established.
 
 Reusing identical cut remaps before fusion reduced Corrosion's measured peak
 Metal allocations by **1,926,807,552 bytes (1.794 GiB, 9.40%)**, with 0/191
@@ -240,6 +248,57 @@ Commands, project/binary hashes, source diff, full captures and summaries are in
 `/tmp/manifold-memory-overnight-20260921/{baseline,after}/`. The retained tested
 executable is `/tmp/manifold-memory-overnight-20260921/manifold`.
 
+## Immutable source-image sharing
+
+The next bounded change shares identical glTF **source uploads**, while retaining
+each node's writable conversion/mipmap output. A private thread-local cache uses
+decoded RGBA8 SHA256, source dimensions, colour format and a unique device
+resource-scope ID. The existing decode worker computes the digest. A miss creates
+a fresh texture and completes its synchronous CPU upload before publishing it;
+an existing shared texture is never overwritten. Weak entries do not keep images
+alive after their source owners disappear, and expired entries are pruned during
+upload lookup. Existing GPU retirement and residency still govern final release.
+No new mutex, image-quality change, serialization field or runtime eviction policy
+was introduced.
+
+Eight focused native proofs pass. New synthetic tests verify shared native
+identity and equal independent outputs; changing one source leaves the other
+able to regenerate its original pixels. Equal payloads with different dimensions,
+colour formats or device wrappers remain separate. Dropping both owners expires
+the weak entry, and the next upload prunes it. The existing mode-flip proof now
+also verifies that independent conversions use the same immutable source.
+
+One release verification reused the preceding batch's saved capture as baseline;
+there was no additional baseline reproduction. Project, settings, beat 56 start,
+eight-second window and retained disk-cache policy are unchanged.
+
+| Measurement | Before source sharing | With source sharing |
+|---|---:|---:|
+| Peak Metal allocated bytes | 18,569,117,696 | 17,888,559,104 |
+| Warmup tracked residency bytes | 17,903,387,224 | 17,222,828,632 |
+| Warmup tracked allocations | 1,251 | 1,240 |
+| Maximum resident set size, bytes | 3,865,427,968 | 2,980,888,576 |
+| Peak memory footprint, bytes | 24,320,807,016 | 22,747,876,784 |
+| Loading | 19.256 s | 19.905 s |
+| Intervals late by over 1 ms | 0 / 191 | 0 / 191 |
+| Maximum interval | 41.671042 ms | 41.672083 ms |
+| Playback cold touches | 0 | 0 |
+| End-of-capture free texture pool | 0 textures / 0 bytes | 0 textures / 0 bytes |
+
+The additional **680,558,592 bytes** of Metal recovery and 11 fewer tracked
+allocations match ten avoided 4096² source textures and one avoided 1024² source
+texture at the earlier trace's rounded sizes. This supports the source-census
+attribution; it is not a new per-owner allocation trace. This batch's process
+footprint peak is 1,572,930,232 bytes lower than its immediate baseline, and
+1,157,563,280 bytes lower than the first overnight baseline. Those single-run
+process differences include transient loading and uncontrolled machine conditions;
+they are not precise attribution to the cache alone. The loading samples do not
+show an improvement. No displayed-playback or audio claim is made.
+
+Evidence, hashes, source diff, comparison and the retained tested executable are
+under `/tmp/manifold-memory-images-20260921/`. Full required landing transcripts
+are kept outside the managed slot cache in that directory's `landing-logs/`.
+
 ## Follow-up static accounting
 
 Resolving the six layers through `GeneratorRenderer`'s inline-graph override
@@ -252,11 +311,11 @@ The full saved project also contains unused preset graphs; counting those as
 live allocations would overstate memory use. Census artifacts are under
 `/tmp/manifold-memory-overnight-20260921/texture-census*`.
 
-Repeated sources are a concrete follow-up candidate, but sharing their current
-mutable output textures would be incorrect: layers retain independent path,
-conversion and parameter bindings. A shared immutable image would need exact
-content identity and separate ownership of writable conversion outputs. The
-existing disk decode cache does not establish that GPU sharing contract.
+Repeated source uploads are now shared as described above. The converted output
+textures still have independent path, conversion and parameter bindings and
+remain separately owned. Sharing those writable outputs, or replacing them with
+an immutable-output contract, remains a separate unimplemented change. The disk
+decode cache alone does not establish GPU sharing or ownership.
 
 Static review also found existing duration-related protections:
 `unique_clip_chain_topologies` deduplicates clip preparation; additional
@@ -269,7 +328,7 @@ array planner's ordinary within-frame lifetimes.
 
 ## Source anchors
 
-All paths below are under `crates/manifold-renderer/src/`, except the last:
+Paths below are under `crates/manifold-renderer/src/` unless prefixed with `crates/`:
 
 - `generators/mesh_common.rs`: `MeshVertex` stride.
 - `node_graph/primitives/mesh_cut_map.rs`: `map_capacity`, `scratch_bytes`.
@@ -278,6 +337,8 @@ All paths below are under `crates/manifold-renderer/src/`, except the last:
 - `node_graph/metal_backend.rs`: `pre_bind_array`, `release`, `clear`.
 - `node_graph/execution_plan.rs`: `free_after`, held/persistent resources.
 - `node_graph/primitives/gltf_mesh_source.rs`: `cached_verts`, staging upload.
+- `node_graph/primitives/gltf_texture_source.rs`: immutable source upload cache.
 - `preset_runtime/math_view.rs`: shared resources, variants, presentation.
 - `node_graph/scene_modifier_expand/buffer_budget.rs`: candidate admission.
 - `crates/manifold-gpu/src/metal/texture_pool.rs`: cap, report, recycling.
+- `crates/manifold-gpu/src/metal/device.rs`: resource-scope identity.
