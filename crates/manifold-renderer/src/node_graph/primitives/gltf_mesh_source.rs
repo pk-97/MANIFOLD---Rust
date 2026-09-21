@@ -6,10 +6,9 @@
 //! File I/O + the CPU flatten (`gltf_load::load_gltf_mesh`) happen on a
 //! background thread (`std::thread::spawn` + `mpsc::channel`), same
 //! pattern as `node.image_folder`, so the content thread never stalls on
-//! a multi-megabyte glTF parse. The last successful parse stays resident
-//! (`cached_verts`) and re-uploads to a staging buffer only when the
-//! parse result actually changes; the GPU copy into the pre-bound output
-//! buffer runs every frame via a cheap blit.
+//! a multi-megabyte glTF parse. The last successful parse is retained in
+//! `cached_verts` only until it is uploaded to staging; the GPU copy into the
+//! pre-bound output buffer runs when content or destination storage changes.
 
 use std::borrow::Cow;
 use std::sync::mpsc;
@@ -256,21 +255,21 @@ crate::primitive! {
         // BUG-221: translate_x/y/z joined the tuple the same way.
         last_key: (String, i32, i32, i32, u32, bool, f32, f32, f32) =
             (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, 0.0, 0.0, 0.0),
-        // Last successfully parsed geometry (CPU-side). Stays resident
-        // across frames — only re-uploaded to `staging` when it changes.
+        // Last successfully parsed geometry (CPU-side), retained only until
+        // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
-        // Shared-memory buffer holding `cached_verts`' bytes, copied into
-        // the output buffer every frame via a blit.
+        // Shared-memory buffer holding uploaded geometry for subsequent
+        // content/destination changes without retaining the CPU vertex vector.
         staging: Option<manifold_gpu::GpuBuffer> = None,
         staging_len_bytes: u64 = 0,
         // Background loader channel. `Some` means a parse is in flight;
         // we don't spawn another until it returns.
         pending_load: Option<mpsc::Receiver<Result<Vec<MeshVertex>, String>>> = None,
-        // Whether `staging` currently reflects `cached_verts`.
+        // Whether `staging` currently reflects the latest parsed geometry.
         uploaded: bool = false,
         // Content availability, distinct from `uploaded` (staging is CPU-
         // side) and from the copy gate below: `true` only when the output
-        // buffer provably holds `cached_verts` — i.e. the frame that
+        // buffer provably holds the uploaded geometry — i.e. the frame that
         // encoded the staging→dst copy has been submitted (observed at
         // the next run()'s top), so any accel build enqueued from now on
         // is GPU-ordered after the copy on the single in-order queue.
@@ -481,7 +480,7 @@ impl Primitive for GltfMeshSource {
             }
         }
 
-        if self.cached_verts.is_empty() {
+        if !self.uploaded && self.cached_verts.is_empty() {
             // Nothing parsed yet (or the path is empty / failed) — leave
             // the pre-bound buffer's existing contents; downstream nodes
             // see whatever they last saw (or zeros on first run). The
@@ -510,6 +509,10 @@ impl Primitive for GltfMeshSource {
             unsafe {
                 staging.write(0, bytemuck::cast_slice(bytes));
             }
+            // The shared staging buffer is now the retained copy. Release
+            // this backing allocation so the source does not keep a second
+            // CPU copy alive for its lifetime.
+            self.cached_verts = Vec::new();
             self.staging = Some(staging);
             self.staging_len_bytes = len_bytes;
             self.uploaded = true;
@@ -841,7 +844,7 @@ mod gpu_tests {
     ) {
         for _ in 0..200 {
             run_once(prim, backend, device, output_scratch, params, frame_time());
-            if !prim.cached_verts.is_empty() {
+            if prim.uploaded && prim.staging.is_some() {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -869,18 +872,45 @@ mod gpu_tests {
             return;
         }
         let device = crate::test_device();
-        let (backend, _r_out, slot) = make_buffer_backend(&device);
+        let (mut backend, r_out, slot) = make_buffer_backend(&device);
         let scratch: Vec<(&'static str, Slot)> = vec![("vertices", slot)];
 
         let params = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
         let mut prim = GltfMeshSource::new();
         settle(&mut prim, &backend, &device, &scratch, &params);
+        assert!(prim.cached_verts.is_empty(), "staging upload should release CPU vertices");
+        assert_eq!(prim.cached_verts.capacity(), 0, "staging upload should free CPU vertex backing");
         let frame1 = readback(&backend, slot);
 
         let unchanged = run_once(&mut prim, &backend, &device, &scratch, &params, frame_time());
         assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
         let frame2 = readback(&backend, slot);
         assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+
+        // A replacement destination still receives the retained staging copy
+        // after the CPU vertex backing has been released.
+        let replacement = device.create_buffer_shared(
+            (CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64,
+        );
+        let replacement_slot = backend.pre_bind_array(r_out, replacement);
+        let replacement_scratch: Vec<(&'static str, Slot)> = vec![("vertices", replacement_slot)];
+        let replacement_unchanged = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &replacement_scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            !replacement_unchanged,
+            "a replacement destination must encode a staging copy"
+        );
+        assert_eq!(
+            readback(&backend, replacement_slot),
+            frame1,
+            "replacement destination must receive the same geometry"
+        );
     }
 
     /// A content-affecting param change (`fit` toggled on) must NOT be
@@ -913,6 +943,9 @@ mod gpu_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        assert!(prim_a.uploaded, "replacement content must reach staging");
+        assert!(prim_a.cached_verts.is_empty(), "replacement upload should release CPU vertices");
+        assert_eq!(prim_a.cached_verts.capacity(), 0, "replacement upload should free CPU vertex backing");
         let a_output = readback(&backend_a, slot_a);
 
         let (backend_b, _r_out_b, slot_b) = make_buffer_backend(&device);

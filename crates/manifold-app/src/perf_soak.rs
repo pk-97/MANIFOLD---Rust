@@ -30,6 +30,17 @@ const HARD_FAIL_MS: f64 = 20.0;
 const REGRESSION_BAND: f64 = 1.15;
 const DEADLINE_TOLERANCE_MS: f64 = manifold_profiler::DEADLINE_TOLERANCE_MS;
 
+fn cached_texture_memory(ct: &ContentThread) -> serde_json::Value {
+    ct.content_pipeline.cached_texture_memory().map_or(
+        serde_json::Value::Null,
+        |(count, bytes)| serde_json::json!({
+            "texture_count": count,
+            "payload_bytes": bytes,
+            "scope": "end-of-capture free texture pool; excludes live textures and Metal alignment; overlaps Metal allocations",
+        }),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ProjectFingerprint {
     canonical_path: String,
@@ -693,6 +704,7 @@ fn run_soak(
             "max_sampled_gpu_pass_time_ms": frame_summary.gpu_total_ms,
             "cold_touches": cold_touch_summary(),
             "metal_allocated_bytes": memory_samples.json(),
+            "cached_texture_memory": cached_texture_memory(&ct),
         },
         "profiling_session_dir": session_dir.display().to_string(),
     });
@@ -1252,6 +1264,7 @@ fn run_profile(
             "regression_guard_ms": 20.0,
             "cold_touches": cold_touch_summary(),
             "metal_allocated_bytes": memory_samples.json(),
+            "cached_texture_memory": cached_texture_memory(&ct),
         },
         "profiling_session_dir": session_dir.display().to_string(),
         "execution": {"completed": true},

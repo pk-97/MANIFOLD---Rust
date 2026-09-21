@@ -4,7 +4,7 @@
 //! consume its actions to create buffers, while tests and budget admission can
 //! inspect the exact same sizing decisions without allocating GPU resources.
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 
 use super::effect_node::NodeInstanceId;
 use super::execution_plan::{ExecutionPlan, ResourceId};
@@ -28,7 +28,8 @@ pub struct ArrayAllocation {
     pub zero_init: bool,
 }
 
-/// A fresh allocation or a declared in-place alias.
+/// A fresh allocation, a lifetime-safe temporary reuse, or a declared
+/// in-place alias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayAllocationAction {
     Allocate(ArrayAllocation),
@@ -39,6 +40,8 @@ pub enum ArrayAllocationAction {
         resource: ResourceId,
         root: ResourceId,
     },
+    /// Bind to the same physical slot for either declared in-place IO or
+    /// temporary reuse after the prior logical resource's `free_after` step.
     Alias {
         resource: ResourceId,
         input: ResourceId,
@@ -57,8 +60,8 @@ pub struct ArrayAllocationPlan {
 ///
 /// `prebound` describes storage already supplied by a caller (for example a
 /// persistent input).  It is copied into the result and never mutated.  The
-/// returned `storage` additionally records every allocation and declared alias
-/// discovered while walking the plan.
+/// returned `storage` additionally records every allocation and alias,
+/// including temporary reuse discovered while walking the plan.
 pub fn plan_array_allocations(
     graph: &Graph,
     plan: &ExecutionPlan,
@@ -73,6 +76,84 @@ pub fn plan_array_allocations(
     let mut actions = Vec::new();
     let mut warnings = Vec::new();
     let mut input_capacities = Vec::with_capacity(8);
+    // These resources either escape the ordinary step-local lifetime model or
+    // participate in an intentional alias. Their physical roots must remain
+    // dedicated even when a free_after entry would otherwise make them look
+    // reusable.
+    let mut excluded_resources = AHashSet::default();
+    for &resource in plan
+        .persistent_resources()
+        .iter()
+        .chain(plan.held_resources())
+    {
+        excluded_resources.insert(resource);
+    }
+    let mut excluded_roots = AHashSet::default();
+    for (&resource, storage_entry) in prebound {
+        excluded_resources.insert(resource);
+        excluded_roots.insert(storage_entry.root);
+    }
+    for step in plan.steps() {
+        let Some(node_inst) = graph.get_node(step.node) else {
+            continue;
+        };
+        for (input_port, output_port) in node_inst.node.aliased_array_io() {
+            if let Some((_, resource)) = step.inputs.iter().find(|(name, _)| *name == *input_port)
+            {
+                excluded_resources.insert(*resource);
+            }
+            if let Some((_, resource)) = step.outputs.iter().find(|(name, _)| *name == *output_port)
+            {
+                excluded_resources.insert(*resource);
+            }
+        }
+        for (port_name, resource) in &step.outputs {
+            if node_inst.node.atomic_outputs().contains(port_name) {
+                excluded_resources.insert(*resource);
+            }
+        }
+        if node_inst.node.carries_resources() {
+            for (_, resource) in &step.inputs {
+                if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
+                    excluded_resources.insert(*resource);
+                }
+            }
+        }
+    }
+    // Staged resize retains prebound physical roots. Keep canvas-sized array
+    // families dedicated: two equally sized temporaries can require different
+    // capacities after resize, while a prebound root still names the old shared
+    // slot. Include connected array inputs/outputs (also across feedback edges)
+    // so indirect capacity propagation cannot introduce that split.
+    let mut canvas_arrays = AHashSet::default();
+    for step in plan.steps() {
+        if let Some(node) = graph.get_node(step.node) {
+            for (port, resource) in &step.outputs {
+                if node.node.canvas_sized_array_outputs().contains(port) {
+                    canvas_arrays.insert(*resource);
+                }
+            }
+        }
+    }
+    if !canvas_arrays.is_empty() {
+        loop {
+            let previous_count = canvas_arrays.len();
+            for step in plan.steps() {
+                if step.inputs.iter().chain(&step.outputs)
+                    .any(|(_, resource)| canvas_arrays.contains(resource))
+                {
+                    for (_, resource) in step.inputs.iter().chain(&step.outputs) {
+                        if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
+                            canvas_arrays.insert(*resource);
+                        }
+                    }
+                }
+            }
+            if canvas_arrays.len() == previous_count { break; }
+        }
+        excluded_resources.extend(canvas_arrays);
+    }
+    let mut reusable: AHashMap<(PortType, u64), ResourceId> = AHashMap::default();
 
     for step in plan.steps() {
         let Some(node_inst) = graph.get_node(step.node) else {
@@ -116,6 +197,7 @@ pub fn plan_array_allocations(
             input_capacities.push((*port_name, count));
         }
 
+        let mut current_output_roots = AHashSet::default();
         for (port_name, resource) in &step.outputs {
             let Some(PortType::Array(layout)) = plan.resource_type(*resource) else {
                 continue;
@@ -156,6 +238,9 @@ pub fn plan_array_allocations(
                         input,
                     });
                     storage.insert(*resource, input_storage);
+                    current_output_roots.insert(input_storage.root);
+                    excluded_roots.insert(input_storage.root);
+                    reusable.retain(|_, root| *root != input_storage.root);
                     continue;
                 }
                 warnings.push(format!(
@@ -249,21 +334,70 @@ pub fn plan_array_allocations(
                     root: existing.root,
                 });
                 storage.insert(*resource, *existing);
+                current_output_roots.insert(existing.root);
             } else {
-                actions.push(ArrayAllocationAction::Allocate(ArrayAllocation {
-                    node: step.node,
-                    resource: *resource,
-                    bytes,
-                    zero_init,
-                }));
-                storage.insert(
-                    *resource,
-                    ArrayStorage {
-                        root: *resource,
+                let storage_type = PortType::Array(layout);
+                if !zero_init
+                    && !excluded_resources.contains(resource)
+                    && let Some(root) = reusable.remove(&(storage_type, bytes))
+                {
+                    actions.push(ArrayAllocationAction::Alias {
+                        resource: *resource,
+                        input: root,
+                    });
+                    storage.insert(
+                        *resource,
+                        ArrayStorage {
+                            root,
+                            bytes,
+                        },
+                    );
+                    current_output_roots.insert(root);
+                } else {
+                    actions.push(ArrayAllocationAction::Allocate(ArrayAllocation {
+                        node: step.node,
+                        resource: *resource,
                         bytes,
-                    },
-                );
+                        zero_init,
+                    }));
+                    storage.insert(
+                        *resource,
+                        ArrayStorage {
+                            root: *resource,
+                            bytes,
+                        },
+                    );
+                    current_output_roots.insert(*resource);
+                    if excluded_resources.contains(resource) {
+                        excluded_roots.insert(*resource);
+                    }
+                }
             }
+        }
+
+        // Return only ordinary temporary roots after all outputs of this step
+        // have been assigned. This ordering prevents same-step input/output
+        // reuse, and roots still used by a current output remain unavailable.
+        for &resource in &step.free_after {
+            let Some(entry) = storage.get(&resource).copied() else {
+                continue;
+            };
+            if excluded_resources.contains(&resource)
+                || current_output_roots.contains(&entry.root)
+                || excluded_roots.contains(&entry.root)
+            {
+                continue;
+            }
+            let Some(resource_type) = plan.resource_type(resource) else {
+                continue;
+            };
+            if !matches!(resource_type, PortType::Array(_)) {
+                continue;
+            }
+            if plan.resource_type(entry.root) != Some(resource_type) {
+                continue;
+            }
+            reusable.entry((resource_type, entry.bytes)).or_insert(entry.root);
         }
     }
 
@@ -314,22 +448,32 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn array_allocation_plan_cube_wave_wave_propagates_capacity() {
+    fn wave_graph() -> (Graph, Vec<NodeInstanceId>) {
         let mut graph = Graph::new();
         let cube = graph.add_node(Box::new(GenerateCubeMesh::new()));
-        let wave_a = graph.add_node(Box::new(WaveShearMesh::new()));
-        let wave_b = graph.add_node(Box::new(WaveShearMesh::new()));
-        graph.connect((cube, "vertices"), (wave_a, "in")).unwrap();
-        graph.connect((wave_a, "out"), (wave_b, "in")).unwrap();
+        let mut previous = cube;
+        let mut previous_port = "vertices";
+        let mut waves = Vec::new();
+        for _ in 0..4 {
+            let wave = graph.add_node(Box::new(WaveShearMesh::new()));
+            graph.connect((previous, previous_port), (wave, "in")).unwrap();
+            waves.push(wave);
+            previous = wave;
+            previous_port = "out";
+        }
         let object = graph.add_node(Box::new(SceneObjectNode::new()));
         graph
-            .connect((wave_b, "out"), (object, "vertices"))
+            .connect((previous, previous_port), (object, "vertices"))
             .unwrap();
+        (graph, waves)
+    }
 
+    #[test]
+    fn array_allocation_plan_reuses_four_temporary_wave_stages() {
+        let (graph, _) = wave_graph();
         let plan = compile(&graph).unwrap();
         let arrays = array_outputs(&plan);
-        assert_eq!(arrays.len(), 3);
+        assert_eq!(arrays.len(), 5);
         let expected_bytes = 36_u64 * u64::from(arrays[0].2);
         let planned =
             plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
@@ -341,12 +485,129 @@ mod tests {
                 ArrayAllocationAction::Reuse { .. } | ArrayAllocationAction::Alias { .. } => None,
             })
             .collect();
-        assert_eq!(allocations.len(), 3);
+        // The held cube and the final carried geometry stay dedicated; only
+        // wave 3 reuses wave 1, after wave 2 has consumed it.
+        assert_eq!(allocations.len(), 4);
         assert!(
             allocations
                 .iter()
                 .all(|allocation| allocation.bytes == expected_bytes)
         );
+        assert_eq!(
+            planned
+                .actions
+                .iter()
+                .filter(|action| matches!(action, ArrayAllocationAction::Alias { .. }))
+                .count(),
+            1
+        );
+        for step in plan.steps() {
+            for (_, output) in &step.outputs {
+                let Some(ArrayAllocationAction::Alias { input, .. }) = planned
+                    .actions
+                    .iter()
+                    .find(|action| matches!(action, ArrayAllocationAction::Alias { resource, .. } if resource == output))
+                else {
+                    continue;
+                };
+                assert!(
+                    step.inputs.iter().all(|(_, input_resource)| {
+                        planned.storage.get(input_resource).is_none_or(|storage| {
+                            storage.root != planned.storage[output].root
+                        })
+                    }),
+                    "temporary reuse must not alias a same-step input"
+                );
+                assert_eq!(plan.resource_type(*output), plan.resource_type(*input));
+                assert_eq!(planned.storage[output].bytes, planned.storage[input].bytes);
+            }
+        }
+        for &held in plan.held_resources() {
+            assert_eq!(planned.storage[&held].root, held);
+        }
+    }
+
+    #[test]
+    fn temporary_reuse_preserves_prebound_roots_and_exact_capacity() {
+        let (graph, waves) = wave_graph();
+        let plan = compile(&graph).unwrap();
+        let resource = |node| plan.steps().iter().find(|step| step.node == node)
+            .unwrap().outputs[0].1;
+        let first = resource(waves[0]);
+        let third = resource(waves[2]);
+        // An oversized borrowed buffer must not become an exact-size scratch
+        // allocation even when its logical resource reaches its last reader.
+        let prebound = AHashMap::from_iter([(first, ArrayStorage {
+            root: first, bytes: 72 * 64,
+        })]);
+        let planned = plan_array_allocations(&graph, &plan, (64, 64), &prebound).unwrap();
+        assert_ne!(planned.storage[&third].root, first);
+        assert_eq!(prebound[&first].bytes, 72 * 64);
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn temporary_arrays_match_dedicated_storage_across_animated_and_repeat_frames() {
+        use crate::gpu_encoder::GpuEncoder;
+        use crate::node_graph::backend::Backend;
+        use crate::node_graph::graph_loader::pre_allocate_resources;
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::{Executor, FrameTime, MetalBackend};
+        use manifold_core::{Beats, Seconds};
+        use manifold_gpu::GpuTextureFormat;
+
+        let device = crate::test_device();
+        let make_runtime = |dedicated| {
+            let (graph, waves) = wave_graph();
+            let plan = compile(&graph).unwrap();
+            let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            let final_resource = plan.steps().iter().find(|step| step.node == waves[3])
+                .unwrap().outputs[0].1;
+            let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
+            if dedicated {
+                // Prebound dedicated storage disables planner reuse without
+                // introducing a production toggle or a second planner.
+                for (&resource, storage) in &planned.storage {
+                    backend.pre_bind_array(resource, device.create_buffer_shared(storage.bytes));
+                }
+            }
+            pre_allocate_resources(&graph, &plan, &device, &mut backend).unwrap();
+            let unique: AHashSet<_> = planned.storage.keys()
+                .map(|resource| backend.slot_for(*resource).unwrap()).collect();
+            assert_eq!(unique.len(), if dedicated { 5 } else { 4 });
+            (graph, waves, plan, Executor::new(Box::new(backend)), final_resource)
+        };
+        let mut shared = make_runtime(false);
+        let mut dedicated = make_runtime(true);
+        let mut prior = None;
+        for (frame, phase) in [0.13, 0.13, 0.37, 0.62, 0.62].into_iter().enumerate() {
+            let mut outputs = Vec::new();
+            for (graph, waves, plan, executor, output) in [&mut shared, &mut dedicated] {
+                for (index, node) in waves.iter().enumerate() {
+                    graph.set_param(*node, "phase", ParamValue::Float(phase + index as f32 * 0.11)).unwrap();
+                }
+                let mut encoder = device.create_encoder("temporary-array-proof");
+                {
+                    let mut gpu = GpuEncoder::new(&mut encoder, &device);
+                    executor.execute_frame_with_gpu(graph, plan, FrameTime {
+                        beats: Beats(f64::from(phase)), seconds: Seconds(f64::from(phase)),
+                        delta: Seconds(1.0 / 24.0), frame_count: frame as i64,
+                    }, &mut gpu);
+                }
+                encoder.commit_and_wait_completed();
+                let backend = executor.backend();
+                let buffer = backend.array_buffer(backend.slot_for(*output).unwrap()).unwrap();
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(buffer.mapped_ptr().unwrap(), buffer.size() as usize)
+                }.to_vec();
+                outputs.push(bytes);
+            }
+            assert_eq!(outputs[0], outputs[1], "shared output differs at frame {frame}");
+            if frame == 2 {
+                assert_ne!(prior.as_ref().unwrap(), &outputs[0], "animation must change geometry");
+            }
+            prior = Some(outputs.remove(0));
+        }
     }
 
     #[test]

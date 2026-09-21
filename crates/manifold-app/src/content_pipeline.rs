@@ -1544,6 +1544,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.native_device.as_deref()
     }
 
+    /// Free pool payload only; excludes live targets and Metal alignment.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    pub(crate) fn cached_texture_memory(&self) -> Option<(usize, u64)> {
+        self.texture_pool
+            .as_ref()
+            .map(|pool| (pool.cached_count(), pool.cached_bytes()))
+    }
+
     /// Prepare newly allocated memory during loading and release requests for
     /// resources whose retirement fence has completed. The request is advisory:
     /// Metal can still postpone residency under system memory pressure.
