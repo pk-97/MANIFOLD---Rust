@@ -460,7 +460,7 @@ pub fn run(args: &[String]) -> ! {
     let mut ct = headless_content_thread(empty, w, h);
     ct.timer.set_target_fps(fr);
     ct.timer.set_frame_clocked(frame_clock);
-    crate::content_thread::apply_realtime_thread_policy(fr);
+    ct.timer.ensure_thread_policy();
 
     let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
     let drain = std::thread::Builder::new()
