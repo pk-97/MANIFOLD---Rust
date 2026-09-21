@@ -173,6 +173,8 @@ pub struct GpuDevice {
     /// every texture this device allocates afterwards carries the mark.
     /// `OnceLock` — set-once config, read on the allocation path.
     retirement: std::sync::OnceLock<Arc<super::retire::RetireMark>>,
+    /// One content-thread-owned residency manager endpoint per device.
+    residency_sender: std::sync::OnceLock<Option<super::residency::ResidencySender>>,
 }
 
 // Safety: MTLDevice and MTLCommandQueue are thread-safe (Metal guarantee).
@@ -208,6 +210,7 @@ impl GpuDevice {
             capture_scope: std::sync::OnceLock::new(),
             mtl4_bridge: std::sync::OnceLock::new(),
             retirement: std::sync::OnceLock::new(),
+            residency_sender: std::sync::OnceLock::new(),
         }
     }
 
@@ -294,6 +297,55 @@ impl GpuDevice {
         &self.device
     }
 
+    /// Create the device's single content-thread residency manager.
+    pub fn create_residency_manager(&self) -> Option<super::residency::GpuResidencyManager> {
+        if self.residency_sender.get().is_some() {
+            log::warn!("GpuDevice::create_residency_manager called more than once");
+            return None;
+        }
+        let (manager, sender) = match super::residency::GpuResidencyManager::new(self) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!("GPU residency unavailable: {error}");
+                let _ = self.residency_sender.set(None);
+                return None;
+            }
+        };
+        if self.residency_sender.set(Some(sender)).is_err() {
+            log::warn!("GpuDevice::create_residency_manager raced with another owner");
+            return None;
+        }
+        Some(manager)
+    }
+
+    pub(crate) fn residency_sender(&self) -> Option<super::residency::ResidencySender> {
+        self.residency_sender.get().and_then(Clone::clone)
+    }
+
+    fn residency_texture_lease(
+        &self,
+        raw: &ProtocolObject<dyn MTLTexture>,
+    ) -> Option<std::sync::Arc<super::residency::GpuResidencyLease>> {
+        self.residency_sender()
+            .map(|sender| super::residency::lease_for_texture(&sender, raw))
+    }
+
+    fn residency_buffer_lease(
+        &self,
+        raw: &ProtocolObject<dyn MTLBuffer>,
+    ) -> Option<std::sync::Arc<super::residency::GpuResidencyLease>> {
+        self.residency_sender()
+            .map(|sender| super::residency::lease_for_buffer(&sender, raw))
+    }
+
+    pub(crate) fn residency_heap_lease(
+        &self,
+        raw: &ProtocolObject<dyn MTLHeap>,
+    ) -> Option<std::sync::Arc<super::residency::GpuResidencyLease>> {
+        self.residency_sender()
+            .map(|sender| super::residency::lease_for_heap(&sender, raw))
+    }
+
     /// Human-readable Metal device name (e.g. `"Apple M4 Max"`). Used as the
     /// fingerprint for per-device tuning decisions (the freeze perf gate keys
     /// its fuse/don't-fuse verdicts on this) and for logging. Stable for the
@@ -363,12 +415,13 @@ impl GpuDevice {
             .expect("Metal: texture allocation failed — GPU memory exhausted");
         self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GpuTexture {
-            raw,
+            raw: raw.clone(),
             width: desc.width,
             height: desc.height,
             depth: desc.depth,
             format: desc.format,
             retire: self.retirement_mark(),
+            residency: self.residency_texture_lease(&raw),
         }
     }
 
@@ -395,12 +448,13 @@ impl GpuDevice {
             })?;
         self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(GpuTexture {
-            raw,
+            raw: raw.clone(),
             width: desc.width,
             height: desc.height,
             depth: desc.depth,
             format: desc.format,
             retire: self.retirement_mark(),
+            residency: self.residency_texture_lease(&raw),
         })
     }
 
@@ -417,10 +471,11 @@ impl GpuDevice {
             });
         self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GpuBuffer {
-            raw,
+            raw: raw.clone(),
             size,
             mapped_ptr: None,
             retire: self.retirement_mark(),
+            residency: self.residency_buffer_lease(&raw),
         }
     }
 
@@ -435,10 +490,11 @@ impl GpuDevice {
             .ok_or_else(|| format!("Metal: buffer allocation failed ({size} bytes)"))?;
         self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(GpuBuffer {
-            raw,
+            raw: raw.clone(),
             size,
             mapped_ptr: None,
             retire: self.retirement_mark(),
+            residency: self.residency_buffer_lease(&raw),
         })
     }
 
@@ -460,10 +516,11 @@ impl GpuDevice {
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
         self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GpuBuffer {
-            raw,
+            raw: raw.clone(),
             size,
             mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
             retire: self.retirement_mark(),
+            residency: self.residency_buffer_lease(&raw),
         }
     }
 
@@ -482,10 +539,11 @@ impl GpuDevice {
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
         self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(GpuBuffer {
-            raw,
+            raw: raw.clone(),
             size,
             mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
             retire: self.retirement_mark(),
+            residency: self.residency_buffer_lease(&raw),
         })
     }
 
@@ -1887,7 +1945,8 @@ impl GpuDevice {
             .newHeapWithDescriptor(&desc)
             .expect("newHeapWithDescriptor failed");
         unsafe { heap.setLabel(Some(&NSString::from_str("MANIFOLD TexturePool Heap"))) };
-        GpuHeap::new(heap, self.retirement_mark())
+        let residency = self.residency_heap_lease(&heap);
+        GpuHeap::new(heap, self.retirement_mark(), residency)
     }
 
     /// Query the heap size and alignment needed for a texture with the given
@@ -1937,6 +1996,7 @@ impl GpuDevice {
             depth: desc.depth,
             format: desc.format,
             retire: self.retirement_mark(),
+            residency: None,
         }
     }
 
@@ -1976,6 +2036,7 @@ impl GpuDevice {
             depth: 1,
             format,
             retire: self.retirement_mark(),
+            residency: None,
         }
     }
 
@@ -2015,12 +2076,13 @@ impl GpuDevice {
             .unwrap_or_else(|| panic!("{label}: MSAA texture allocation failed"));
         unsafe { raw.setLabel(Some(&NSString::from_str(label))) };
         GpuTexture {
-            raw,
+            raw: raw.clone(),
             width,
             height,
             depth: 1,
             format,
             retire: self.retirement_mark(),
+            residency: self.residency_texture_lease(&raw),
         }
     }
 
@@ -2203,6 +2265,7 @@ impl GpuDevice {
             // presentation-owned — deliberately NOT marked.)
             let mut texture = GpuTexture::from_raw(mtl_texture, width, height, 1, format);
             texture.retire = self.retirement_mark();
+            texture.residency = self.residency_texture_lease(texture.raw());
             texture
         }
     }

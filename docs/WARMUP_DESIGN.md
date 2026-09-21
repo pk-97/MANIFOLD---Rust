@@ -26,6 +26,13 @@ and known incomplete preparation. The frame timer resumes after loading so
 stopped preparation time cannot become the first playback delta. A completed
 warmup report does not prove that subsequent frames meet their time budget.
 
+After each layer and the final chain pass, the content pipeline requests GPU
+residency for prepared textures, buffers and heaps within Metal's recommended
+memory budget. These requests follow live resource and fence-retirement lifetimes.
+The report's `residency` field distinguishes a requested working set from an
+unavailable or over-budget request; it does not certify physical residency or
+first-play smoothness. See `MANIFOLD_GPU_ARCHITECTURE.md` for ownership and scope.
+
 ## 1. Audit — what exists (verified 2026-08-20)
 
 ### Already warm — do not rebuild

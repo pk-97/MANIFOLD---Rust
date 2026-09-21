@@ -45,8 +45,8 @@ use super::types::GpuEvent;
 
 /// A dropped GPU resource waiting for its stamp to signal.
 enum RetireResource {
-    Tex(SendTexture),
-    Buf(SendBuffer),
+    Tex(SendTexture, Option<std::sync::Arc<super::residency::GpuResidencyLease>>),
+    Buf(SendBuffer, Option<std::sync::Arc<super::residency::GpuResidencyLease>>),
 }
 
 /// One resource drop waiting for its stamp to signal on the GPU timeline.
@@ -111,7 +111,11 @@ impl RetireMark {
     /// Consume a texture drop: stamp and enqueue for fence retirement.
     /// Called from `GpuTexture::drop` — takes the raw handle (clone) and
     /// never blocks.
-    pub(crate) fn retire_texture(&self, raw: &Retained<ProtocolObject<dyn MTLTexture>>) {
+    pub(crate) fn retire_texture(
+        &self,
+        raw: &Retained<ProtocolObject<dyn MTLTexture>>,
+        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ) {
         if defer_drop::backtrace_enabled() {
             let label = unsafe { raw.label() }
                 .map(|s| s.to_string())
@@ -119,7 +123,7 @@ impl RetireMark {
                 .unwrap_or_else(|| "(unlabeled)".into());
             eprintln!("[retire] enqueue texture {label} (fence-stamped retirement)");
         }
-        self.enqueue(RetireResource::Tex(SendTexture(raw.clone())));
+        self.enqueue(RetireResource::Tex(SendTexture(raw.clone()), residency));
     }
 
     /// Consume a buffer drop. Same contract as [`Self::retire_texture`];
@@ -127,6 +131,7 @@ impl RetireMark {
     pub(crate) fn retire_buffer(
         &self,
         raw: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
     ) {
         if defer_drop::backtrace_enabled() {
             let label = unsafe { raw.label() }
@@ -135,7 +140,7 @@ impl RetireMark {
                 .unwrap_or_else(|| "(unlabeled)".into());
             eprintln!("[retire] enqueue buffer {label} (fence-stamped retirement)");
         }
-        self.enqueue(RetireResource::Buf(SendBuffer(raw.clone())));
+        self.enqueue(RetireResource::Buf(SendBuffer(raw.clone()), residency));
     }
 }
 
@@ -222,8 +227,14 @@ impl RetireQueue {
 /// env-gated harness stays composable with retirement on.
 fn release(resource: RetireResource) {
     match resource {
-        RetireResource::Tex(t) => defer_drop::drop_texture(t.0),
-        RetireResource::Buf(b) => defer_drop::drop_buffer(b.0),
+        RetireResource::Tex(t, residency) => {
+            defer_drop::drop_texture(t.0);
+            drop(residency);
+        }
+        RetireResource::Buf(b, residency) => {
+            defer_drop::drop_buffer(b.0);
+            drop(residency);
+        }
     }
 }
 

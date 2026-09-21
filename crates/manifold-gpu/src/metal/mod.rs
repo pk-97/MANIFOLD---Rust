@@ -23,6 +23,7 @@ mod frame_fence;
 pub mod gpu_fault;
 mod msl_cache;
 mod profiling;
+mod residency;
 pub mod raytrace;
 mod retire;
 mod shader_compiler;
@@ -40,6 +41,7 @@ pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, GpuEncod
 pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;
 pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind};
+pub use residency::{GpuResidencyManager, GpuResidencyStats};
 pub use retire::{RetireMark, RetireQueue, RetireSender};
 pub use surface::{GpuDrawable, GpuSurface};
 pub use texture_pool::TexturePool;
