@@ -16,7 +16,11 @@
 //! dimensions so that stretch is a 1:1 copy in the common case.
 
 use std::borrow::Cow;
-use std::sync::mpsc;
+use std::cell::RefCell;
+use std::sync::{mpsc, Arc, Weak};
+
+use ahash::AHashMap;
+use sha2::{Digest, Sha256};
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -24,6 +28,20 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::gltf_load::load_gltf_texture;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SourceTextureKey {
+    rgba8_sha256: [u8; 32],
+    width: u32,
+    height: u32,
+    format: manifold_gpu::GpuTextureFormat,
+    device_scope_id: u64,
+}
+
+thread_local! {
+    static SOURCE_TEXTURE_CACHE: RefCell<AHashMap<SourceTextureKey, Weak<manifold_gpu::GpuTexture>>> =
+        RefCell::new(AHashMap::new());
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -105,19 +123,19 @@ crate::primitive! {
         // (path, texture_index) last parsed (or in flight). Any change
         // re-triggers a background decode.
         last_key: (String, i32) = (String::new(), i32::MIN),
-        // The decoded source image, resident on its own GPU texture.
+        // Immutable decoded source image, shared with identical live sources.
         // `None` until the first successful decode lands.
-        source_texture: Option<manifold_gpu::GpuTexture> = None,
+        source_texture: Option<Arc<manifold_gpu::GpuTexture>> = None,
         // Dimensions of `source_texture`.
         src_w: u32 = 0,
         src_h: u32 = 0,
         // Background loader channel. `Some` means a decode is in
         // flight; we don't spawn another until it returns.
-        pending_load: Option<mpsc::Receiver<Result<(u32, u32, Vec<u8>), String>>> = None,
+        pending_load: Option<mpsc::Receiver<Result<(u32, u32, Vec<u8>, [u8; 32]), String>>> = None,
         // A decoded-but-not-yet-uploaded result, handed off from the
         // drain step to the upload step (texture creation needs the
         // GPU device, which only `run()`'s `ctx` has).
-        pending_upload: Option<(u32, u32, Vec<u8>)> = None,
+        pending_upload: Option<(u32, u32, Vec<u8>, [u8; 32])> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
         // Identity of the `out` texture the level-0 blit + mip chain were
@@ -214,7 +232,12 @@ impl Primitive for GltfTextureSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(load_gltf_texture(&path_buf, texture_index as u32));
+                    let decoded =
+                        load_gltf_texture(&path_buf, texture_index as u32).map(|(w, h, rgba)| {
+                            let rgba8_sha256: [u8; 32] = Sha256::digest(&rgba).into();
+                            (w, h, rgba, rgba8_sha256)
+                        });
+                    let _ = tx.send(decoded);
                 });
                 self.pending_load = Some(rx);
             }
@@ -224,8 +247,8 @@ impl Primitive for GltfTextureSource {
         if self.pending_load.is_some() {
             let rx = self.pending_load.take().unwrap();
             match rx.try_recv() {
-                Ok(Ok((w, h, rgba))) => {
-                    self.pending_upload = Some((w, h, rgba));
+                Ok(Ok((w, h, rgba, rgba8_sha256))) => {
+                    self.pending_upload = Some((w, h, rgba, rgba8_sha256));
                     self.uploaded = false;
                 }
                 Ok(Err(e)) => {
@@ -245,7 +268,7 @@ impl Primitive for GltfTextureSource {
         // read here (rather than cached) so it always reflects the
         // param at the moment of upload.
         let mut fresh_upload = false;
-        if let Some((w, h, rgba)) = self.pending_upload.take() {
+        if let Some((w, h, rgba, rgba8_sha256)) = self.pending_upload.take() {
             let color_space = match ctx.params.get("color_space") {
                 Some(ParamValue::Enum(v)) => *v,
                 _ => 0,
@@ -255,12 +278,7 @@ impl Primitive for GltfTextureSource {
             } else {
                 manifold_gpu::GpuTextureFormat::Rgba8Unorm
             };
-            self.ensure_texture(ctx, w, h, format);
-            if let Some(tex) = &self.source_texture {
-                ctx.gpu_encoder()
-                    .native_enc
-                    .upload_texture(tex, w, h, 1, &rgba);
-            }
+            self.upload_source_texture(ctx, w, h, format, rgba8_sha256, &rgba);
             self.src_w = w;
             self.src_h = h;
             self.uploaded = true;
@@ -355,7 +373,7 @@ impl Primitive for GltfTextureSource {
                     },
                     GpuBinding::Texture {
                         binding: 1,
-                        texture: source_texture,
+                        texture: source_texture.as_ref(),
                     },
                     GpuBinding::Sampler {
                         binding: 2,
@@ -410,28 +428,54 @@ impl GltfTextureSource {
         );
     }
 
-    fn ensure_texture(
+    fn upload_source_texture(
         &mut self,
         ctx: &mut EffectNodeContext<'_, '_>,
         w: u32,
         h: u32,
         format: manifold_gpu::GpuTextureFormat,
+        rgba8_sha256: [u8; 32],
+        rgba: &[u8],
     ) {
-        if self.src_w == w && self.src_h == h && self.source_texture.is_some() {
-            return;
-        }
         let device = ctx.gpu_encoder().device;
-        let tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        let key = SourceTextureKey {
+            rgba8_sha256,
             width: w,
             height: h,
-            depth: 1,
             format,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
-                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
-            label: "node.gltf_texture_source source",
-            mip_levels: 1,
+            device_scope_id: device.resource_scope_id(),
+        };
+        let cached = SOURCE_TEXTURE_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.retain(|_, weak| weak.strong_count() != 0);
+            cache.get(&key).and_then(Weak::upgrade)
         });
+
+        let tex = if let Some(tex) = cached {
+            tex
+        } else {
+            let tex = Arc::new(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+                label: "node.gltf_texture_source source",
+                mip_levels: 1,
+            }));
+            // CPU_UPLOAD uses synchronous Metal replaceRegion, so publishing
+            // the weak cache entry after this call makes every shared source
+            // fully initialized before another node can observe it.
+            ctx.gpu_encoder()
+                .native_enc
+                .upload_texture(tex.as_ref(), w, h, 1, rgba);
+            SOURCE_TEXTURE_CACHE.with(|cache| {
+                cache.borrow_mut().insert(key, Arc::downgrade(&tex));
+            });
+            tex
+        };
         self.source_texture = Some(tex);
         self.src_w = w;
         self.src_h = h;
@@ -653,6 +697,298 @@ mod gpu_tests {
         panic!("gltf_texture_source: decode never settled");
     }
 
+    fn synthetic_params(w: u32, h: u32, color_space: u32, mode: u32) -> ParamValues {
+        let mut params = params_at("", 0.0, mode, w as f32, h as f32);
+        params.insert(Cow::Borrowed("color_space"), ParamValue::Enum(color_space));
+        params
+    }
+
+    fn inject_upload(prim: &mut GltfTextureSource, w: u32, h: u32, rgba: Vec<u8>) {
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        prim.last_key = (String::new(), 0);
+        let rgba8_sha256: [u8; 32] = Sha256::digest(&rgba).into();
+        prim.pending_upload = Some((w, h, rgba, rgba8_sha256));
+    }
+
+    fn cache_key(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+        format: GpuTextureFormat,
+        rgba: &[u8],
+    ) -> SourceTextureKey {
+        SourceTextureKey {
+            rgba8_sha256: Sha256::digest(rgba).into(),
+            width: w,
+            height: h,
+            format,
+            device_scope_id: device.resource_scope_id(),
+        }
+    }
+
+    #[test]
+    fn identical_synthetic_sources_share_immutable_input_and_independent_outputs() {
+        let device = crate::test_device();
+        let (w, h) = (2u32, 2u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+        let params = synthetic_params(w, h, 0, 0);
+        let rgba = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+
+        let mut backend_a = MetalBackend::new(device.arc(), w, h, format);
+        let slot_a = backend_a.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(&device, w, h, format, "gltf-source-sharing-a"),
+        );
+        let scratch_a = vec![("out", slot_a)];
+        let mut source_a = GltfTextureSource::new();
+        inject_upload(&mut source_a, w, h, rgba.clone());
+        run_once(
+            &mut source_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params,
+            frame_time(),
+        );
+        let output_a_before = readback(&device, &backend_a, slot_a, w, h);
+
+        let mut backend_b = MetalBackend::new(device.arc(), w, h, format);
+        let slot_b = backend_b.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(&device, w, h, format, "gltf-source-sharing-b"),
+        );
+        let scratch_b = vec![("out", slot_b)];
+        let mut source_b = GltfTextureSource::new();
+        inject_upload(&mut source_b, w, h, rgba.clone());
+        run_once(
+            &mut source_b,
+            &backend_b,
+            &device,
+            &scratch_b,
+            &params,
+            frame_time(),
+        );
+        let output_b_before = readback(&device, &backend_b, slot_b, w, h);
+
+        let texture_a = source_a.source_texture.as_ref().expect("source A uploaded");
+        let texture_b = source_b.source_texture.as_ref().expect("source B uploaded");
+        assert!(Arc::ptr_eq(texture_a, texture_b));
+        assert!(texture_a.ptr_eq(texture_b));
+        assert_eq!(output_a_before, output_b_before);
+
+        let replacement = vec![
+            0, 0, 0, 255, 32, 32, 32, 255, 64, 64, 64, 255, 96, 96, 96, 255,
+        ];
+        inject_upload(&mut source_a, w, h, replacement);
+        run_once(
+            &mut source_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params,
+            frame_time(),
+        );
+        let output_a_after = readback(&device, &backend_a, slot_a, w, h);
+        overwrite_output(&device, &backend_b, slot_b);
+        run_once_with_retention(
+            &mut source_b, &backend_b, &device, &scratch_b, &params, frame_time(), false,
+        );
+        let output_b_after = readback(&device, &backend_b, slot_b, w, h);
+        assert_ne!(output_a_before, output_a_after);
+        assert_eq!(output_b_before, output_b_after);
+        assert!(!source_a
+            .source_texture
+            .as_ref()
+            .expect("source A replacement uploaded")
+            .ptr_eq(source_b.source_texture.as_ref().expect("source B retained")));
+    }
+
+    #[test]
+    fn source_cache_separates_shape_format_and_device_scope_and_expires_weak_entries() {
+        let device = crate::test_device();
+        let (w, h) = (2u32, 2u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+        let rgba = vec![
+            17, 34, 51, 255, 68, 85, 102, 255, 119, 136, 153, 255, 170, 187, 204, 255,
+        ];
+        let params = synthetic_params(w, h, 0, 0);
+
+        let mut backend_shape = MetalBackend::new(device.arc(), w, h, format);
+        let slot_shape = backend_shape.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(&device, w, h, format, "gltf-source-key-shape"),
+        );
+        let scratch_shape = vec![("out", slot_shape)];
+        let mut source_shape = GltfTextureSource::new();
+        inject_upload(&mut source_shape, w, h, rgba.clone());
+        run_once(
+            &mut source_shape,
+            &backend_shape,
+            &device,
+            &scratch_shape,
+            &params,
+            frame_time(),
+        );
+        let shape_key = cache_key(&device, w, h, format, &rgba);
+        let shape_weak = SOURCE_TEXTURE_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .get(&shape_key)
+                .cloned()
+                .expect("shape source cache entry")
+        });
+
+        let mut source_shape_b = GltfTextureSource::new();
+        inject_upload(&mut source_shape_b, w, h, rgba.clone());
+        run_once(
+            &mut source_shape_b,
+            &backend_shape,
+            &device,
+            &scratch_shape,
+            &params,
+            frame_time(),
+        );
+        assert!(Arc::ptr_eq(
+            source_shape.source_texture.as_ref().unwrap(),
+            source_shape_b.source_texture.as_ref().unwrap(),
+        ));
+
+        let mut backend_format = MetalBackend::new(device.arc(), w, h, format);
+        let slot_format = backend_format.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(&device, w, h, format, "gltf-source-key-format"),
+        );
+        let scratch_format = vec![("out", slot_format)];
+        let mut source_format = GltfTextureSource::new();
+        let linear_params = synthetic_params(w, h, 1, 0);
+        inject_upload(&mut source_format, w, h, rgba.clone());
+        run_once(
+            &mut source_format,
+            &backend_format,
+            &device,
+            &scratch_format,
+            &linear_params,
+            frame_time(),
+        );
+        assert!(!source_shape
+            .source_texture
+            .as_ref()
+            .unwrap()
+            .ptr_eq(source_format.source_texture.as_ref().unwrap()));
+        let format_key = cache_key(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba8Unorm,
+            &rgba,
+        );
+
+        let second_device = Arc::new(manifold_gpu::GpuDevice::new());
+        let mut backend_scope = MetalBackend::new(Arc::clone(&second_device), w, h, format);
+        let slot_scope = backend_scope.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(second_device.as_ref(), w, h, format, "gltf-source-key-scope"),
+        );
+        let scratch_scope = vec![("out", slot_scope)];
+        let mut source_scope = GltfTextureSource::new();
+        inject_upload(&mut source_scope, w, h, rgba.clone());
+        run_once(
+            &mut source_scope,
+            &backend_scope,
+            second_device.as_ref(),
+            &scratch_scope,
+            &params,
+            frame_time(),
+        );
+        assert_ne!(
+            device.resource_scope_id(),
+            second_device.resource_scope_id()
+        );
+        assert!(!source_shape
+            .source_texture
+            .as_ref()
+            .unwrap()
+            .ptr_eq(source_scope.source_texture.as_ref().unwrap()));
+        let scope_key = cache_key(
+            second_device.as_ref(),
+            w,
+            h,
+            format,
+            &rgba,
+        );
+
+        let shape_4x1 = (4u32, 1u32);
+        let mut backend_dimensions = MetalBackend::new(device.arc(), shape_4x1.0, shape_4x1.1, format);
+        let slot_dimensions = backend_dimensions.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(
+                &device,
+                shape_4x1.0,
+                shape_4x1.1,
+                format,
+                "gltf-source-key-dimensions",
+            ),
+        );
+        let scratch_dimensions = vec![("out", slot_dimensions)];
+        let mut source_dimensions = GltfTextureSource::new();
+        inject_upload(&mut source_dimensions, shape_4x1.0, shape_4x1.1, rgba.clone());
+        let dimensions_params = synthetic_params(shape_4x1.0, shape_4x1.1, 0, 0);
+        run_once(
+            &mut source_dimensions,
+            &backend_dimensions,
+            &device,
+            &scratch_dimensions,
+            &dimensions_params,
+            frame_time(),
+        );
+        assert!(!source_shape
+            .source_texture
+            .as_ref()
+            .unwrap()
+            .ptr_eq(source_dimensions.source_texture.as_ref().unwrap()));
+
+        drop(source_shape);
+        drop(source_shape_b);
+        drop(source_format);
+        drop(source_scope);
+        assert!(shape_weak.upgrade().is_none());
+
+        let mut backend_prune = MetalBackend::new(device.arc(), shape_4x1.0, shape_4x1.1, format);
+        let slot_prune = backend_prune.pre_bind_texture_2d(
+            ResourceId(0),
+            RenderTarget::new(
+                &device,
+                shape_4x1.0,
+                shape_4x1.1,
+                format,
+                "gltf-source-key-prune",
+            ),
+        );
+        let scratch_prune = vec![("out", slot_prune)];
+        let mut source_prune = GltfTextureSource::new();
+        inject_upload(&mut source_prune, shape_4x1.0, shape_4x1.1, rgba.clone());
+        run_once(
+            &mut source_prune,
+            &backend_prune,
+            &device,
+            &scratch_prune,
+            &dimensions_params,
+            frame_time(),
+        );
+        SOURCE_TEXTURE_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert!(!cache.contains_key(&shape_key));
+            assert!(!cache.contains_key(&format_key));
+            assert!(!cache.contains_key(&scope_key));
+            assert!(cache
+                .get(&cache_key(&device, shape_4x1.0, shape_4x1.1, format, &rgba))
+                .and_then(Weak::upgrade)
+                .is_some());
+        });
+    }
+
     /// Seam-split for the kuma robot's black-body report: its baseColor is
     /// a 4096x4096 embedded JPEG (the conformance corpus tops out at
     /// 2048). The decoded bytes are proven bright CPU-side
@@ -871,6 +1207,10 @@ mod gpu_tests {
         let scratch_b: Vec<(&'static str, Slot)> = vec![("out", slot_b)];
         let mut prim_b = GltfTextureSource::new();
         settle(&mut prim_b, &backend_b, &device, &scratch_b, &params_flipped);
+        assert!(Arc::ptr_eq(
+            prim_a.source_texture.as_ref().expect("source A uploaded"),
+            prim_b.source_texture.as_ref().expect("source B uploaded"),
+        ));
         let fresh_output = readback(&device, &backend_b, slot_b, w, h);
 
         assert_eq!(
