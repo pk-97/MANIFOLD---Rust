@@ -583,9 +583,9 @@ struct ProfiledNode {
     cpu_us: f64,
 }
 
-/// One profiled frame's attribution: every node's share plus whatever GPU
-/// time no executor's tag claimed (compositor/blend/tonemap passes — D6's
-/// "compositor/untagged" row, never dropped).
+/// One profiled frame's attribution, including sampled untagged work and
+/// command-buffer time outside the resolved spans. The latter is a residual,
+/// not a measurement of any particular GPU operation.
 struct ProfiledFrame {
     index: u64,
     total_gpu_ms: f64,
@@ -596,6 +596,9 @@ struct ProfiledFrame {
     /// buffers) — the D6 capacity check compares this against
     /// `PROFILE_SAMPLER_MAX_SPANS` / 2 (max_spans).
     spans_used: usize,
+    invalid_spans: usize,
+    failed_command_buffers: usize,
+    unresolved_ms: f64,
     untagged_ms: f64,
     nodes: std::collections::HashMap<String, ProfiledNode>,
 }
@@ -722,6 +725,9 @@ fn run_profile(
             total_gpu_ms: 0.0,
             overflow: 0,
             spans_used: 0,
+            invalid_spans: 0,
+            failed_command_buffers: 0,
+            unresolved_ms: 0.0,
             untagged_ms: 0.0,
             nodes: std::collections::HashMap::new(),
         };
@@ -729,6 +735,11 @@ fn run_profile(
             frame.total_gpu_ms += profile.total_ms;
             frame.overflow += profile.overflow;
             frame.spans_used += profile.spans.len();
+            frame.invalid_spans += profile.invalid;
+            frame.failed_command_buffers += profile.failed_command_buffers;
+            // Keep the signed residual: overlapping spans or timestamp
+            // calibration can over-attribute time. Do not disguise that as zero.
+            frame.unresolved_ms += profile.total_ms - profile.attributed_ms();
             for span in &profile.spans {
                 // A span whose tag matches no live executor step this frame
                 // (empty scope, or a compositor-owned pass — blend/tonemap/
@@ -843,6 +854,10 @@ fn run_profile(
                 "total_gpu_ms": f.total_gpu_ms,
                 "overflow_dispatches": f.overflow,
                 "spans_used": f.spans_used,
+                "invalid_spans": f.invalid_spans,
+                "failed_command_buffers": f.failed_command_buffers,
+                "unresolved_gpu_ms": f.unresolved_ms,
+                "unresolved_share_of_frame": f.unresolved_ms / share_denom,
                 "nodes": nodes_json,
             })
         })
@@ -857,6 +872,7 @@ fn run_profile(
         "seconds": seconds,
         "start_beats": start_beats,
         "forced_composite_serial": true,
+        "attribution_note": "Node rows contain resolved sampled spans. unresolved_gpu_ms is the signed command-buffer total minus all resolved spans, including untagged spans; it can include uninstrumented work and timing gaps and does not identify their cause. Negative values indicate over-attribution. Span durations use frame-calibrated timestamps.",
         "frames_measured": frames.len(),
         "frame_stats": {
             "min_ms": diagnostic_stats.min_ms,
@@ -902,11 +918,14 @@ fn run_profile(
     );
     if let Some(worst) = ranked.first() {
         eprintln!(
-            "perf-soak --profile: worst frame #{} = {:.3}ms GPU ({} nodes + untagged {:.3}ms)",
+            "perf-soak --profile: worst frame #{} = {:.3}ms GPU ({} nodes + untagged {:.3}ms; unresolved {:.3}ms, {} invalid spans, {} failed command buffers)",
             worst.index,
             worst.total_gpu_ms,
             worst.nodes.len(),
-            worst.untagged_ms
+            worst.untagged_ms,
+            worst.unresolved_ms,
+            worst.invalid_spans,
+            worst.failed_command_buffers
         );
     }
 
