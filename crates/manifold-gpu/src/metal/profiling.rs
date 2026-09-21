@@ -38,6 +38,7 @@ pub enum GpuWorkKind {
     Compute,
     Render,
     Blit,
+    AccelerationStructure,
 }
 
 impl GpuWorkKind {
@@ -46,6 +47,7 @@ impl GpuWorkKind {
             GpuWorkKind::Compute => "compute",
             GpuWorkKind::Render => "render",
             GpuWorkKind::Blit => "blit",
+            GpuWorkKind::AccelerationStructure => "acceleration_structure",
         }
     }
 }
@@ -69,7 +71,8 @@ impl GpuTimestampSampler {
     }
 }
 
-/// One resolved span: a single compute dispatch, render pass, or blit pass.
+/// One resolved span: a single compute dispatch, render pass, blit pass, or
+/// acceleration structure pass.
 #[derive(Clone, Debug)]
 pub struct GpuProfiledSpan {
     /// Attribution tag set by the host via [`GpuEncoder::set_profile_tag`]

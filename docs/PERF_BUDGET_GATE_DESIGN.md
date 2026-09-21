@@ -110,6 +110,11 @@ measurement system.
   timing gaps without assigning a cause; negative values expose over-attribution.
   Span times remain frame-calibrated estimates. Invalid spans and failed command
   buffers are reported separately from sampler overflow.
+  `gpu_ms_by_kind` separates sampled compute, render, blit and acceleration-structure
+  work; these totals include both node-owned and untagged spans.
+  `rt_updates` carries the same frame's existing build/refit, emissive refresh,
+  trace-dispatch and history-reset counters, so expensive acceleration work can
+  be distinguished from an unexpected rebuild.
 
 - **D7 — Bare-glb input runs the import graph on a sibling frame loop; shared plumbing,
   separate loop, report-only.** (Added 2026-07-16; first customer is BUG-189's ~10 ms

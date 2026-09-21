@@ -600,6 +600,10 @@ struct ProfiledFrame {
     failed_command_buffers: usize,
     unresolved_ms: f64,
     untagged_ms: f64,
+    gpu_ms_by_kind: std::collections::BTreeMap<&'static str, f64>,
+    rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
+    rt_dispatches: u32,
+    rt_history_resets: u32,
     nodes: std::collections::HashMap<String, ProfiledNode>,
 }
 
@@ -720,6 +724,7 @@ fn run_profile(
             &manifold_renderer::node_graph::StepProfile,
         > = cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
 
+        let (rt_updates, rt_dispatches, rt_history_resets) = ct.content_pipeline.frame_rt_observation();
         let mut frame = ProfiledFrame {
             index: frame_idx,
             total_gpu_ms: 0.0,
@@ -729,6 +734,10 @@ fn run_profile(
             failed_command_buffers: 0,
             unresolved_ms: 0.0,
             untagged_ms: 0.0,
+            gpu_ms_by_kind: std::collections::BTreeMap::new(),
+            rt_updates,
+            rt_dispatches,
+            rt_history_resets,
             nodes: std::collections::HashMap::new(),
         };
         for (_cb_label, profile) in &gpu_profiles {
@@ -741,6 +750,7 @@ fn run_profile(
             // calibration can over-attribute time. Do not disguise that as zero.
             frame.unresolved_ms += profile.total_ms - profile.attributed_ms();
             for span in &profile.spans {
+                *frame.gpu_ms_by_kind.entry(span.kind.as_str()).or_default() += span.millis;
                 // A span whose tag matches no live executor step this frame
                 // (empty scope, or a compositor-owned pass — blend/tonemap/
                 // LED slicer — with no `Executor` behind it at all) is
@@ -858,6 +868,16 @@ fn run_profile(
                 "failed_command_buffers": f.failed_command_buffers,
                 "unresolved_gpu_ms": f.unresolved_ms,
                 "unresolved_share_of_frame": f.unresolved_ms / share_denom,
+                "gpu_ms_by_kind": f.gpu_ms_by_kind,
+                "rt_updates": {
+                    "blas_builds": f.rt_updates.blas_builds,
+                    "blas_refits": f.rt_updates.blas_refits,
+                    "tlas_builds": f.rt_updates.tlas_builds,
+                    "tlas_refits": f.rt_updates.tlas_refits,
+                    "emissive_refreshes": f.rt_updates.emissive_refreshes,
+                    "dispatches": f.rt_dispatches,
+                    "history_resets": f.rt_history_resets,
+                },
                 "nodes": nodes_json,
             })
         })

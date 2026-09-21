@@ -1336,25 +1336,25 @@ pub(crate) fn encode_accel_update(
         encode_inline_copy(device, encoder, &accel.instance_buffer, 0, bytes);
     }
 
-    let cb = encoder.raw_cmd_buf();
     if accel.instanced {
         let obj_params = accel
             .instance_obj_params
             .as_ref()
             .expect("instanced accel carries instance build params");
-        encode_descriptor_build(
-            device,
-            cb,
-            objects,
-            &accel.instance_buffer,
-            obj_params,
-            accel.topology.iter().map(|t| t.instance_slots).max().unwrap_or(1),
-        );
+        {
+            let cb = encoder.raw_cmd_buf();
+            encode_descriptor_build(
+                device,
+                cb,
+                objects,
+                &accel.instance_buffer,
+                obj_params,
+                accel.topology.iter().map(|t| t.instance_slots).max().unwrap_or(1),
+            );
+        }
     }
 
-    let enc = cb
-        .accelerationStructureCommandEncoder()
-        .expect("accelerationStructureCommandEncoder failed");
+    let enc = encoder.make_acceleration_structure_encoder("RT accel update");
     unsafe { enc.setLabel(Some(&NSString::from_str("RT accel update"))) };
 
     // BUG-84fv declaration discipline: every resource the AS commands
@@ -1442,7 +1442,7 @@ pub(crate) fn encode_accel_update(
     // set's own flag; a superseded set's callback can no longer flip the
     // live one.
     add_ready_completion_handler(
-        cb,
+        encoder.cmd_buf(),
         "RT accel update",
         Arc::clone(&accel.ready),
         CompletionPins(Arc::clone(&accel.pins)),
