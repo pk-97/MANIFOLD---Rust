@@ -152,7 +152,7 @@
         "sv_hold": {
           "mean": 0.0503,
           "p999": 1.0,
-          "min_signal_level": 0.0001,
+          "min_signal_level": 0.0,
           "measured": {
             "mean": 0.0003,
             "mean_min": 0.0003,
@@ -301,7 +301,7 @@
         "sv_hold": {
           "mean": 0.0503,
           "p999": 1.0,
-          "min_signal_level": 0.0001,
+          "min_signal_level": 0.0,
           "measured": {
             "mean": 0.0003,
             "mean_min": 0.0003,
@@ -312,6 +312,30 @@
             "max": 255.0,
             "level": 0.0006
           }
+        }
+      }
+    },
+    "RtMotionHelmet": {
+      "motion": {
+        "validated": true,
+        "sv_hold_median": 0.0263,
+        "moments_center_min": 0.0003,
+        "history_ratio_min": 0.1425,
+        "measured": {
+          "sv_hold_median": 0.0081,
+          "sv_hold_max": 0.0492,
+          "moments_center_min": 0.0005,
+          "moments_center_median": 0.0489,
+          "history_ratio_min": 0.285,
+          "refl_hit_min": 0.0682
+        },
+        "note": "Motion-leg ceilings = measured x headroom (sv_hold median x3+0.002, moments floors x0.7, history ratio x0.5 capped 0.3). Regenerate with scripts/rt_noise_gate.py --motion --record --project tests/fixtures/rt/RtMotionHelmet.manifold after a legitimate RT change and commit this file. RED-validated against boil-era gate behavior (D-64/tr5o reverted) \u2014 see BUG-sz0u.",
+        "provenance": {
+          "recorded": "2026-08-01",
+          "commit": "d4a513f488e793a5c1afbc99c9b23e1e40d14e3c",
+          "project": "RtMotionHelmet.manifold",
+          "restored": "2026-09-21",
+          "note": "Recovered original helmet thresholds after schema-2 migration misplaced them under RtNoiseTesting and later static recording deleted them. This is historical measured evidence, not a fresh GPU measurement."
         }
       }
     }

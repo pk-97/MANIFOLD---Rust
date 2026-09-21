@@ -145,6 +145,11 @@ MIN_PAIRS = 3
 # backstop for a channel that merely dimmed.
 DEAD_CHANNEL_LEVEL = 1e-6
 
+# The shadow visibility hold is a countdown: zero means the settled state, not
+# an absent signal. Keep this exception explicit and limited to that channel;
+# image and reflection channels must still prove that they emitted light.
+ZERO_VALID_CHANNELS = frozenset(("sv_hold",))
+
 
 def log(msg):
     print(msg, flush=True)
@@ -401,8 +406,9 @@ def measure(run_dir):
 
 
 def dead_channels(stats):
-    """Channels that emitted literally nothing this run — see DEAD_CHANNEL_LEVEL."""
-    return sorted(ch for ch, v in stats.items() if v["level"] <= DEAD_CHANNEL_LEVEL)
+    """Image channels with no signal; zero-valued diagnostic counters are valid."""
+    return sorted(ch for ch, v in stats.items()
+                  if ch not in ZERO_VALID_CHANNELS and v["level"] <= DEAD_CHANNEL_LEVEL)
 
 
 def median_across(runs):
@@ -737,7 +743,8 @@ def write_baseline(path, agg, repo, project, frames, repeats, baseline):
         channels[ch] = {
             "mean": round(max(a["mean"] * mm, a["mean"] + mf), 4),
             "p999": round(max(a["p999"] * pm, a["p999"] + pf), 3),
-            "min_signal_level": round(a["level"] * SIGNAL_FLOOR_FRACTION, 4),
+            "min_signal_level": (0.0 if ch in ZERO_VALID_CHANNELS else
+                                  round(a["level"] * SIGNAL_FLOOR_FRACTION, 4)),
             "measured": {k: round(a[k], 4) for k in
                          ("mean", "mean_min", "mean_max", "p999", "p999_min",
                           "p999_max", "max", "level")},
@@ -763,6 +770,11 @@ def write_baseline(path, agg, repo, project, frames, repeats, baseline):
         # Preserve existing fixtures; overwrite only the current one
         doc = baseline
         fixture_stem = Path(project).stem
+        existing_fixture = doc.get("fixtures", {}).get(fixture_stem, {})
+        if isinstance(existing_fixture, dict) and "motion" in existing_fixture:
+            # Static recording must not erase separately validated motion
+            # evidence for the same fixture.
+            fixture_entry["motion"] = existing_fixture["motion"]
         doc.setdefault("fixtures", {})[fixture_stem] = fixture_entry
     else:
         # Schema 1 / legacy / absent: create fresh schema 2 doc

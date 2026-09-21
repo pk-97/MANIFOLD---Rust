@@ -14,6 +14,9 @@ construction and checks the reported number against it. Covers:
   5. median of repeats    → one wild run cannot move the verdict
   6. ceiling breach       → mean and p99.9 each fail on their own
   7. inert channel        → a channel that went dark FAILS, never passes as calm
+  8. zero-valued sv_hold  → settled hold is valid, image/reflection black is not
+  9. recording             → zero hold floor and existing fixture evidence survive
+ 10. committed baseline   → required static and motion fixture evidence is present
 
 Run: scripts/test_rt_noise_gate.py
 """
@@ -178,6 +181,81 @@ def case_ceilings():
     check("live run kept", gate.dead_channels(live), [])
 
 
+def case_zero_valid_hold():
+    """sv_hold settles at zero; image and reflection channels cannot."""
+    print("8. zero-valued sv_hold and required image signal")
+    baseline = {"channels": {
+        "sv_hold": {"mean": 0.1, "p999": 1.0, "min_signal_level": 0.0},
+        "image": {"mean": 1.0, "p999": 10.0, "min_signal_level": 1.0},
+        "refl_raw": {"mean": 1.0, "p999": 10.0, "min_signal_level": 1.0},
+    }}
+    live = {
+        "sv_hold": {"mean": 0.0, "p999": 0.0, "max": 0.0,
+                     "level": 0.0, "runs": 1, "pairs": 5},
+        "image": {"mean": 0.5, "p999": 5.0, "max": 8.0,
+                   "level": 10.0, "runs": 1, "pairs": 5},
+        "refl_raw": {"mean": 0.5, "p999": 5.0, "max": 8.0,
+                      "level": 10.0, "runs": 1, "pairs": 5},
+    }
+    check_true("zero sv_hold compares green", gate.compare(live, baseline, "fixture.manifold")[0] == [])
+    check_true("zero sv_hold is not a dead run", gate.dead_channels(live) == [])
+    loud_hold = dict(live)
+    loud_hold["sv_hold"] = dict(live["sv_hold"], mean=0.2, p999=2.0)
+    failures = gate.compare(loud_hold, baseline, "fixture.manifold")[0]
+    check_true("excessive sv_hold still fails ceilings", any(ch == "sv_hold" for ch, _ in failures))
+    missing = dict(live)
+    missing.pop("sv_hold")
+    failures = gate.compare(missing, baseline, "fixture.manifold")[0]
+    check_true("absent sv_hold still fails", any(ch == "sv_hold" and "absent" in why
+                                                  for ch, why in failures))
+    for channel in ("image", "refl_raw"):
+        dark = {ch: dict(value) for ch, value in live.items()}
+        dark[channel]["level"] = 0.0
+        failures = gate.compare(dark, baseline, "fixture.manifold")[0]
+        check_true(f"zero {channel} fails", any(ch == channel and "INERT" in why
+                                                 for ch, why in failures))
+    check("zero image is dead", gate.dead_channels({"image": dict(live["image"], level=0.0)}),
+          ["image"])
+    check("zero refl_raw is dead", gate.dead_channels({"refl_raw": dict(live["refl_raw"], level=0.0)}),
+          ["refl_raw"])
+
+
+def case_recording_preserves_evidence(tmp):
+    """Static recording keeps same-fixture motion and unrelated fixtures."""
+    print("9. recording preserves motion and other fixtures")
+    path = tmp / "recorded.json"
+    project = tmp / "RtNoiseTesting.manifold"
+    motion = {"validated": True, "sv_hold_median": 0.2,
+              "moments_center_min": 1.0, "history_ratio_min": 0.3}
+    other = {"ceilings_validated": True, "channels": {
+        "composite": {"mean": 1.0, "p999": 2.0, "min_signal_level": 3.0}}}
+    baseline = {"schema": 2, "fixtures": {
+        "RtNoiseTesting": {"ceilings_validated": True, "motion": motion,
+                            "channels": {"old": {"mean": 1.0}}},
+        "RtEmissiveStrength": other,
+    }}
+    expected = copy.deepcopy(baseline)
+    agg = {
+        "sv_hold": {"mean": 0.0, "mean_min": 0.0, "mean_max": 0.0,
+                    "p999": 0.0, "p999_min": 0.0, "p999_max": 0.0,
+                    "max": 0.0, "level": 0.0},
+        "refl_raw": {"mean": 0.5, "mean_min": 0.4, "mean_max": 0.6,
+                     "p999": 2.0, "p999_min": 1.0, "p999_max": 3.0,
+                     "max": 8.0, "level": 10.0},
+    }
+    with patch.object(gate, "run_cmd", side_effect=[(0, "test-commit", "", 0),
+                                                   (0, "", "", 0)]):
+        gate.write_baseline(path, agg, tmp, project, 300, 1, baseline)
+    recorded = json.loads(path.read_text())
+    entry = recorded["fixtures"]["RtNoiseTesting"]
+    check("recorded sv_hold floor", entry["channels"]["sv_hold"]["min_signal_level"], 0.0)
+    check("recorded refl_raw floor", entry["channels"]["refl_raw"]["min_signal_level"], 2.5)
+    check("same-fixture motion preserved", entry["motion"],
+          expected["fixtures"]["RtNoiseTesting"]["motion"])
+    check("other fixture preserved", recorded["fixtures"]["RtEmissiveStrength"],
+          expected["fixtures"]["RtEmissiveStrength"])
+
+
 def case_baseline_prerequisites(tmp):
     """Required mode must reject every unusable baseline before any capture."""
     print("8. baseline prerequisites")
@@ -202,6 +280,23 @@ def case_baseline_prerequisites(tmp):
     check_true("validated baseline is ready",
                gate.baseline_prerequisite(path, healthy, project, False) == (True, ""))
     check_true("record allows absent baseline", gate.baseline_prerequisite(path, None, project, True) == (True, ""))
+
+
+def case_committed_baseline():
+    """The committed baseline must contain all cheap preflight evidence."""
+    print("10. committed baseline prerequisites")
+    path = HERE / "rt_noise_baseline.json"
+    try:
+        baseline = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        check_true(f"committed baseline readable ({exc})", False)
+        return
+    for fixture, motion in (("RtNoiseTesting", False),
+                            ("RtEmissiveStrength", False),
+                            ("RtMotionHelmet", True)):
+        project = Path(f"{fixture}.manifold")
+        ready, reason = gate.baseline_prerequisite(path, baseline, project, False, motion=motion)
+        check_true(f"committed {fixture} prerequisite", ready and not reason)
 
 
 def case_main_prerequisites(tmp):
@@ -308,6 +403,8 @@ def main():
         case_known_delta(tmp)
         case_sparse(tmp)
         case_trailing_window(tmp)
+        case_zero_valid_hold()
+        case_recording_preserves_evidence(tmp)
         case_baseline_prerequisites(tmp)
         case_main_prerequisites(tmp)
         case_main_executed_verdict(tmp)
@@ -315,6 +412,7 @@ def main():
     case_median()
     case_ceilings()
     case_motion_measurements()
+    case_committed_baseline()
     if FAILURES:
         print(f"\nFAILED: {len(FAILURES)} check(s): {', '.join(FAILURES)}")
         return 1
