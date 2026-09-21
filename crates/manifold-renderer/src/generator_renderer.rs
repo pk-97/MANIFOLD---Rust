@@ -2041,7 +2041,7 @@ mod warmup_tests {
 
     fn apricot_fixture_path() -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("../tests/fixtures/rt/apricot_tl05.glb");
+        path.push("../../tests/fixtures/rt/apricot_tl05.glb");
         path
     }
 

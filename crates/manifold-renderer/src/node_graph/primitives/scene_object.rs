@@ -128,8 +128,7 @@ impl Primitive for SceneObjectNode {
         let material = ctx.inputs.material("material");
         let mesh = ctx.inputs.slot_of("vertices");
         let weights = ctx.inputs.slot_of("weights");
-        let topology = ctx.inputs.slot_of("topology")
-            .and_then(|slot| ctx.inputs.slot_generation_of(slot).map(|generation| (slot, generation)));
+        let topology = ctx.inputs.slot_of("topology");
         let base_color_map = ctx.inputs.slot_of("base_color_map");
         let normal_map = ctx.inputs.slot_of("normal_map");
         let mr_map = ctx.inputs.slot_of("mr_map");
@@ -364,7 +363,7 @@ mod tests {
         assert_eq!(object.mesh, Some(mesh_slot));
         assert_eq!(object.base_color_map, Some(color_slot));
         assert_eq!(object.instances, Some(instances_slot));
-        assert_eq!(object.topology, Some((topology_slot, 7)));
+        assert_eq!(object.topology, Some(topology_slot));
         assert_eq!(object.normal_map, None);
     }
 }

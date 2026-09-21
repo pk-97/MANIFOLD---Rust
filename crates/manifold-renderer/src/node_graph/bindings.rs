@@ -17,6 +17,7 @@ use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
 use crate::node_graph::camera::Camera;
+use crate::node_graph::content_revision::{ContentVersion, StorageRevision};
 use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
@@ -42,7 +43,7 @@ pub struct NodeInputs<'a> {
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
     /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
     /// (see `Executor::slot_generations`). Threaded through so
-    /// [`Self::slot_generation`] can resolve a port name to its current
+    /// [`Self::storage_revision`] can resolve a port name to its current
     /// generation without the executor itself being reachable from a node's
     /// `evaluate`.
     ///
@@ -64,6 +65,10 @@ pub struct NodeInputs<'a> {
     /// for externally prebound buffers, never a fallback from malformed
     /// prepared metadata).
     mesh_revisions: &'a [crate::node_graph::mesh_change::MeshRevision],
+    /// Per-physical-slot logical content snapshots, indexed by `Slot.0`.
+    /// Missing and pending content remain `None` so consumers cannot invent
+    /// a stable zero revision for unavailable bytes.
+    content_versions: &'a [Option<ContentVersion>],
 }
 
 impl<'a> NodeInputs<'a> {
@@ -72,7 +77,14 @@ impl<'a> NodeInputs<'a> {
         backend: &'a dyn Backend,
         generations: &'a [u64],
     ) -> Self {
-        Self { bindings, backend, generations, pending: &[], mesh_revisions: &[] }
+        Self {
+            bindings,
+            backend,
+            generations,
+            pending: &[],
+            mesh_revisions: &[],
+            content_versions: &[],
+        }
     }
 
     /// Executor-only: thread the content-availability flags through.
@@ -95,6 +107,28 @@ impl<'a> NodeInputs<'a> {
         self
     }
 
+    /// Executor-only: thread the per-slot logical content snapshots through.
+    pub(crate) fn with_content_versions(
+        mut self,
+        content_versions: &'a [Option<ContentVersion>],
+    ) -> Self {
+        self.content_versions = content_versions;
+        self
+    }
+
+    /// Logical content version of the resource currently bound to `port`.
+    /// Missing, pending, and externally prebound content return `None`.
+    pub fn content_version(&self, port: &str) -> Option<ContentVersion> {
+        let slot = self.slot(port)?;
+        self.content_version_of(slot)
+    }
+
+    /// Logical content version published for a physical slot.
+    pub fn content_version_of(&self, slot: Slot) -> Option<ContentVersion> {
+        if !self.slot_content_ready(slot) { return None; }
+        self.content_versions.get(slot.0 as usize).copied().flatten()
+    }
+
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision of the physical
     /// slot currently bound to `port`, or `None` if the port is unwired
     /// or the slot carries no mesh metadata. `None` reads as
@@ -113,19 +147,13 @@ impl<'a> NodeInputs<'a> {
         self.mesh_revisions.get(slot.0 as usize).copied()
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — write generation of the
-    /// physical slot currently bound to `port`, or `None` if the port is
-    /// unwired. The counter bumps every frame the producing step's output
-    /// slot is committed, UNLESS that step declared its outputs unchanged
-    /// this frame (`ctx.mark_outputs_unchanged()`) — so an unchanging
-    /// generation number across frames is a reliable "this slot's content
-    /// has not changed since the last time a consumer observed this exact
-    /// number" signal, usable as a cache-key component (D6). Never compare
-    /// this alone across executor lifetimes without also folding in the
-    /// executor's `rebuild_epoch` — see D6's rationale.
-    pub fn slot_generation(&self, port: &str) -> Option<u64> {
+    /// Freshness of the physical storage currently bound to a port.
+    /// Use for physical copy/binding guards, paired with storage identity and
+    /// executor lifetime. Identical recopies advance this counter; semantic
+    /// caches must use `content_version` instead.
+    pub fn storage_revision(&self, port: &str) -> Option<StorageRevision> {
         let slot = self.slot(port)?;
-        self.generations.get(slot.0 as usize).copied()
+        self.storage_revision_of(slot)
     }
 
     /// Slot bound to the named input port, or `None` if the port is optional
@@ -298,9 +326,9 @@ impl<'a> NodeInputs<'a> {
     }
 
     /// Write generation of an already-resolved [`Slot`] — no name scan,
-    /// unlike [`Self::slot_generation`].
-    pub fn slot_generation_of(&self, slot: Slot) -> Option<u64> {
-        self.generations.get(slot.0 as usize).copied()
+    /// unlike [`Self::storage_revision`].
+    pub fn storage_revision_of(&self, slot: Slot) -> Option<StorageRevision> {
+        self.generations.get(slot.0 as usize).copied().map(StorageRevision)
     }
 
     /// Content availability of an already-resolved [`Slot`]: `false`

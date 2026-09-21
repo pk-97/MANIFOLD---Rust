@@ -99,10 +99,10 @@ Add `fn mesh_output_rule(&self, port: &str) -> MeshOutputRule<'_>` to both `Prim
 
 Rules mean:
 
-* `Written`: revise after every actual write; honor memo skips and truthful `mark_outputs_unchanged`.
+* `Written`: revise when output content changes; honor memo skips and truthful unchanged-content declarations.
 * `Fixed`: stable across writes while resource identity/layout and executor epoch are stable. Only use when the primitive guarantees fixed triangle connectivity independent of all its live controls.
 * `Dependencies`: revise when any named input aspect changes; an empty dependency list is `Fixed`. Input `Content` works for non-mesh controls such as a cut map. Missing required dependencies are preparation errors, not fixed revisions.
-* Content revises on every actual output write, including normals/UV-only changes. A rule does not suppress data writes or schedule GPU work.
+* Content revises on semantic output changes, including normals/UV-only changes. A physical recopy of identical content is not a semantic change. A rule does not suppress data writes or schedule GPU work.
 
 Static primitive declarations use `Cow::Borrowed` names; fused declarations own `Cow::Owned` names. `WgslCompute` can return borrowed slices of its owned rule vectors without self-referential storage or frame allocations. Examples:
 
@@ -119,7 +119,13 @@ Static primitive declarations use `Cow::Borrowed` names; fused declarations own 
 
 `Fixed` does not permit NaN/invalid vertices. Finite zero-area triangles and their revival are explicit Metal acceptance cases. If the target backend fails that proof, P6 cannot qualify those operations for refit: keep the already-correct rebuild path and escalate the failed acceptance to the lead. Do not invent an inactive-triangle representation to pass the test.
 
-### 3.2 Executor mechanics
+### 3.2 Logical content and executor mechanics
+
+`ContentVersion` is an opaque, runtime-only `(executor epoch, ResourceId, revision)` stamp. `StorageRevision` records writes to a physical slot. They are different Rust types: semantic consumers cannot accidentally substitute a write counter for a content stamp. Both use existing executor addressing and revision storage; there is no second resource registry.
+
+The executor proves output retention from physical identity, slot ownership and storage revision before evaluation. Producers require `outputs_retained()` before skipping a write; unchanged allocation identity alone is insufficient after another tenant overwrites it. A producer may call `mark_output_content_unchanged()` after safely copying identical cached data into a new destination. Storage still changes; logical content does not. `mark_outputs_unchanged()` means no physical write and implies unchanged content. First publication, pending-to-ready, and output shape changes must publish a fresh version. Missing metadata is unknown, never a fabricated zero or evidence for a cache hit.
+
+Pure and fused transforms also retain logical content when their complete input versions and parameter epoch match, even if transient output storage requires another dispatch. This reuses memo dependency state without retaining more GPU allocations. RT appearance, lighting, IBL, shadow, instance, weight and topology-hint consumers use logical content stamps. Physical identities remain necessary for actual GPU bindings and acceleration-structure representation checks. Shared RT change classification drives history invalidation and emissive refresh; transform-only motion retains the existing reprojection policy. The optional `MANIFOLD_RT_SOURCE_TRACE` reports geometry, appearance, instance and reset decisions without readback.
 
 Extend `ExecutionPlan` with compiled rules indexed by existing output `ResourceId`; compiled dependencies are `(ResourceId, MeshAspect)`. Extend `Executor` with pre-sized revision state and dependency snapshots, plus one monotonically increasing revision counter. Tokens are unique within its existing rebuild epoch. Do not use a hash as the equality oracle for revision dependencies.
 
@@ -127,8 +133,8 @@ At the existing output-commit choke point:
 
 1. Snapshot input revisions before overwriting aliased output metadata.
 2. Propagate pending from every actually selected/read dependency; a pending source remains pending through deformers, fusion, scene bundles, and mesh boundaries. No AS work may consume it.
-3. On an actual write, issue a content token. Issue topology/position tokens according to the compiled rules. Position changes also imply content changes. Structural identity/layout changes issue all three regardless of rule.
-4. Memo/hoist/unchanged skips retain tokens only while the physical output remains the same. Selected-input aliases copy revisions and pending status; a selection/source/physical-slot change conservatively changes all revisions. An in-place output uses the captured input tokens, not its just-written output tokens.
+3. On a semantic change, issue a content token. Issue topology/position tokens according to the compiled rules. Position changes also imply content changes. Structural identity/layout changes issue all three regardless of rule.
+4. Memo/hoist skips and declared identical-content recopies retain logical content tokens. Selected-input aliases and copies preserve pending status and retain their output token while the selected logical input version is unchanged; source selection changes revise it. Physical storage movement alone does not revise logical content. Mesh representation changes still revise topology/positions where the AS binding requires it. An in-place output uses captured input tokens, not its just-written output tokens.
 5. Late capture/feedback uses the same commit helper when new bytes become the next observable output. A previous-frame feedback value is valid graph semantics; RT must match the raster's version of it.
 
 Use logical resource state as the authority and publish its snapshot into physical-slot metadata alongside `slot_generations`/`slot_pending`. Pool reuse must never inherit another logical resource's revision. Allocation/resizing happens during plan/resource preparation, not in the frame loop.

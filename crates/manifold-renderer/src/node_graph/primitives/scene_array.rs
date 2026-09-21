@@ -271,7 +271,8 @@ impl Primitive for SceneArray {
             jitter_amount,
             rebuild_epoch: ctx.rebuild_epoch,
         };
-        if self.stasis_key == Some(stasis) {
+        let content_unchanged = self.stasis_key == Some(stasis);
+        if content_unchanged && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
             return;
         }
@@ -311,6 +312,7 @@ impl Primitive for SceneArray {
             "node.scene_array",
         );
         self.stasis_key = Some(stasis);
+        if content_unchanged { ctx.mark_output_content_unchanged(); }
     }
 }
 

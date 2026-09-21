@@ -144,6 +144,10 @@ pub struct MuxTexture {
     /// fold into the same key (a distinct hash arm for "no source bound")
     /// rather than special-casing them — same rule as any resolved source.
     last_gate_key: Option<u64>,
+    /// Semantic key for the selected logical content. This is kept separate
+    /// from the physical dispatch gate so a recycled output can be recopied
+    /// without advancing the content revision.
+    last_content_key: Option<u64>,
 }
 
 impl MuxTexture {
@@ -154,6 +158,7 @@ impl MuxTexture {
             pipeline: None,
             sampler: None,
             last_gate_key: None,
+            last_content_key: None,
         };
         m.rebuild_ports(DEFAULT_INPUTS);
         m
@@ -384,16 +389,36 @@ impl EffectNode for MuxTexture {
         // generation term is load-bearing, not decorative), the output
         // texture's own identity (pool recycling), and the executor rebuild
         // epoch (never compare a generation number alone across executor
-        // lifetimes — `NodeInputs::slot_generation`'s own doc comment). The
+        // lifetimes — `NodeInputs::storage_revision`'s own doc comment). The
         // all-unwired clear-to-black path participates via its own hash arm
         // rather than a sentinel value that could collide with a real
         // (generation, identity) pair.
         use std::hash::{Hash, Hasher};
+        let selected_port = selected.map(|(port, _)| port);
+        let selected_content = selected_port.and_then(|port| ctx.inputs.content_version(port));
+        // A wired source with no published content metadata is explicitly
+        // unknown. It may not establish a stable memo result, even when its
+        // physical identity and storage revision happen to hold.
+        let selected_content_known = selected_port.is_none() || selected_content.is_some();
+        let mut content_hasher = ahash::AHasher::default();
+        idx.hash(&mut content_hasher);
+        self.num_inputs().hash(&mut content_hasher);
+        (w, h).hash(&mut content_hasher);
+        out.format.hash(&mut content_hasher);
+        selected_port.hash(&mut content_hasher);
+        selected_content.hash(&mut content_hasher);
+        if let Some((_, tex)) = selected {
+            tex.width.hash(&mut content_hasher);
+            tex.height.hash(&mut content_hasher);
+            tex.format.hash(&mut content_hasher);
+        }
+        let content_key = content_hasher.finish();
         let mut hasher = ahash::AHasher::default();
         idx.hash(&mut hasher);
         match selected {
             Some((port, tex)) => {
-                ctx.inputs.slot_generation(port).hash(&mut hasher);
+                port.hash(&mut hasher);
+                ctx.inputs.storage_revision(port).hash(&mut hasher);
                 hasher.write_usize(tex.identity_key());
             }
             None => hasher.write_u8(0xFF),
@@ -402,17 +427,23 @@ impl EffectNode for MuxTexture {
         hasher.write_u64(ctx.rebuild_epoch);
         let gate_key = hasher.finish();
 
-        if self.last_gate_key == Some(gate_key) {
+        let content_unchanged = selected_content_known
+            && self.last_content_key == Some(content_key);
+        if self.last_gate_key == Some(gate_key) && selected_content_known && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
             return;
         }
         self.last_gate_key = Some(gate_key);
+        self.last_content_key = selected_content_known.then_some(content_key);
 
         // Every in_N unwired: clear the output to opaque black so the gap is
         // visually obvious instead of leaving sticky pool contents behind.
         let Some(source) = selected.map(|(_, tex)| tex) else {
             let gpu = ctx.gpu_encoder();
             gpu.clear_texture(out, 0.0, 0.0, 0.0, 1.0);
+            if content_unchanged {
+                ctx.mark_output_content_unchanged();
+            }
             return;
         };
 
@@ -444,6 +475,9 @@ impl EffectNode for MuxTexture {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "node.switch_texture",
         );
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
     }
 }
 
@@ -545,6 +579,7 @@ mod gpu_tests {
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::content_revision::ContentVersion;
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::{FrameTime, MetalBackend};
     use crate::render_target::RenderTarget;
@@ -615,7 +650,22 @@ mod gpu_tests {
         let mut render_mode_ws = Vec::new();
         let mut object_ws = Vec::new();
         let backend_ref: &dyn Backend = backend;
-        let inputs = NodeInputs::new(input_scratch, backend_ref, generations);
+        let max_slot = input_scratch
+            .iter()
+            .map(|(_, slot)| slot.0 as usize)
+            .max()
+            .unwrap_or(0);
+        let mut content_versions = vec![None; max_slot + 1];
+        for (_, slot) in input_scratch {
+            let revision = generations
+                .get(slot.0 as usize)
+                .copied()
+                .unwrap_or(0) + 1;
+            content_versions[slot.0 as usize] =
+                Some(ContentVersion::new(1, ResourceId(slot.0), revision));
+        }
+        let inputs = NodeInputs::new(input_scratch, backend_ref, generations)
+            .with_content_versions(&content_versions);
         let outputs = NodeOutputs::new(
             output_scratch,
             backend_ref,
@@ -632,7 +682,8 @@ mod gpu_tests {
         let unchanged;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(true);
             prim.evaluate(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }

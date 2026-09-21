@@ -24,6 +24,7 @@ pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
 mod binding_migration;
+pub mod content_revision;
 mod boundary_nodes;
 mod mesh_boundary;
 pub mod mesh_change;
@@ -78,6 +79,7 @@ pub mod channel_names;
 
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
+pub use content_revision::{ContentVersion, StorageRevision};
 pub use camera::{Camera, CameraMode};
 pub use light::{Light, LightMode, ShadowSoftness};
 pub use material::{Material, MaterialKind};

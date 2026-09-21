@@ -7,7 +7,7 @@
 //! `node.scene_object` binds mesh + transform + material + maps + instances
 //! into one value, produced once per frame and read by `render_scene`
 //! through the same slot-resolution calls it already makes
-//! (`array_slot`, `texture_2d_slot`, `slot_generation_of` —
+//! (`array_slot`, `texture_2d_slot`, `storage_revision_of` —
 //! `bindings.rs:190-196`, `render_scene.rs:2436-2450`) — the Object just
 //! changes where the slot comes from, not how it resolves.
 //!
@@ -54,9 +54,9 @@ pub struct SceneObject {
     pub mesh: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
-    /// Cut-map identity and write generation. Changes invalidate temporal
-    /// correspondence; ordinary deformation leaves this revision unchanged.
-    pub topology: Option<(Slot, u64)>,
+    /// Cut-map slot. The renderer resolves its typed content metadata from
+    /// the slot, just as it does for mesh, weights, and map resources.
+    pub topology: Option<Slot>,
     /// `Texture2D` slot — base colour map.
     pub base_color_map: Option<Slot>,
     /// `Texture2D` slot — normal map.
@@ -143,27 +143,40 @@ impl MeshTopologyHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::content_revision::ContentVersion;
 
     #[test]
     fn cut_topology_resets_history_without_resetting_ordinary_motion() {
         let mut history = MeshTopologyHistory::default();
-        let revision = Some((Slot(4), 1));
+        let revision = Some(ContentVersion::new(1, crate::node_graph::execution_plan::ResourceId(4), 1));
         assert!(!history.update(1, [None, revision].into_iter()));
         // Deformation changes the mesh buffer, not this cut-map revision.
         assert!(!history.update(1, [None, revision].into_iter()));
-        assert!(history.update(1, [None, Some((Slot(4), 2))].into_iter()));
-        assert!(!history.update(1, [None, Some((Slot(4), 2))].into_iter()));
+        assert!(history.update(
+            1,
+            [None, Some(ContentVersion::new(1, crate::node_graph::execution_plan::ResourceId(4), 2))]
+                .into_iter(),
+        ));
+        assert!(!history.update(
+            1,
+            [None, Some(ContentVersion::new(1, crate::node_graph::execution_plan::ResourceId(4), 2))]
+                .into_iter(),
+        ));
         // Recycled resources, changed object order and removal also reset.
-        assert!(history.update(2, [None, Some((Slot(4), 2))].into_iter()));
-        assert!(history.update(2, [Some((Slot(4), 2)), None].into_iter()));
-        assert!(history.update(2, [None::<(Slot, u64)>, None].into_iter()));
-        assert!(!history.update(2, [None::<(Slot, u64)>, None].into_iter()));
+        assert!(history.update(2, [None, revision].into_iter()));
+        assert!(history.update(2, [revision, None].into_iter()));
+        assert!(history.update(2, [None::<ContentVersion>, None].into_iter()));
+        assert!(!history.update(2, [None::<ContentVersion>, None].into_iter()));
     }
 
     #[test]
     fn general_topology_revision_resets_history_without_a_cut_map() {
         let mut history = MeshTopologyHistory::default();
-        let object = (Some(Slot(4)), Some(1_u64), None::<(Slot, u64)>);
+        let object = (
+            Some(Slot(4)),
+            Some(1_u64),
+            None::<ContentVersion>,
+        );
         assert!(!history.update(1, [object].into_iter()));
         assert!(!history.update(1, [object].into_iter()));
         assert!(history.update(1, [(object.0, Some(2_u64), object.2)].into_iter()));

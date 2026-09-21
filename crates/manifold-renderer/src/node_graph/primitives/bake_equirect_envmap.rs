@@ -356,10 +356,11 @@ impl Primitive for BakeEquirectEnvmap {
         // slot must be re-baked even with identical params, the same
         // precedent `gltf_texture_source`'s `last_mip_identity` established.
         let output_identity = envmap.identity_key();
+        let content_unchanged = self.last_uniforms == Some(uniforms);
         let unchanged =
-            self.last_uniforms == Some(uniforms) && self.last_output_identity == Some(output_identity);
+            content_unchanged && self.last_output_identity == Some(output_identity);
 
-        if unchanged {
+        if unchanged && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
             return;
         }
@@ -388,6 +389,9 @@ impl Primitive for BakeEquirectEnvmap {
             [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
             "node.bake_environment",
         );
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
 
         self.last_uniforms = Some(uniforms);
         self.last_output_identity = Some(output_identity);
@@ -938,7 +942,8 @@ mod gate_gpu_tests {
         let unchanged;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(true);
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }

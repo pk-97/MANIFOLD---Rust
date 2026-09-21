@@ -10,6 +10,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEvent};
 
 use crate::generators::mesh_common::{MeshVertex, Vec4Vertex};
+use crate::node_graph::content_revision::ContentVersion;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -114,13 +115,12 @@ fn scratch_words(candidate_count: u32) -> Option<u64> {
     u64::from(candidate_count).checked_add(blocks)
 }
 
-fn hash_key(values: &[u64]) -> u64 {
-    let mut hash = 0xcbf29ce484222325;
-    for value in values {
-        hash ^= *value;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+fn hash_key(values: &[u64], content: Option<ContentVersion>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = ahash::AHasher::default();
+    content.hash(&mut hash);
+    values.hash(&mut hash);
+    hash.finish()
 }
 
 fn ensure_pipeline<'a>(
@@ -358,7 +358,8 @@ fn run_cut_map(
         return;
     }
     let candidate_count = triangle_count;
-    let reference_generation = ctx.inputs.slot_generation("reference").unwrap_or(0);
+    let reference_wired = ctx.inputs.slot("reference").is_some();
+    let reference_content = ctx.inputs.content_version("reference");
     let key = hash_key(&[
         mode as u64,
         bands as u64,
@@ -370,13 +371,12 @@ fn run_cut_map(
         direction[0].to_bits() as u64,
         direction[1].to_bits() as u64,
         direction[2].to_bits() as u64,
-        reference_generation,
-        reference.identity_key() as u64,
-        map.identity_key() as u64,
         output_capacity as u64,
         ctx.rebuild_epoch,
-    ]);
-    if controls_valid && state.last_key == Some(key) {
+    ], reference_content);
+    let content_known = !reference_wired || reference_content.is_some();
+    let content_unchanged = controls_valid && content_known && state.last_key == Some(key);
+    if content_unchanged && ctx.outputs_retained() {
         if state.status_needs_snapshot && state.status.is_some() {
             let gpu = ctx.gpu_encoder();
             ensure_readbacks(state, gpu.device);
@@ -427,6 +427,7 @@ fn run_cut_map(
     }
     if candidate_count == 0 {
         state.last_key = Some(key);
+        if content_unchanged { ctx.mark_output_content_unchanged(); }
         return;
     }
     let Some(scratch_words) = scratch_words(candidate_count) else {
@@ -530,6 +531,7 @@ fn run_cut_map(
         &bindings,
     );
     state.last_key = Some(key);
+    if content_unchanged { ctx.mark_output_content_unchanged(); }
 }
 
 fn cut_map_capacity(port_name: &str, input_capacities: &[(&str, u32)]) -> Option<u32> {

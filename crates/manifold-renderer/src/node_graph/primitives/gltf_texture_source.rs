@@ -134,6 +134,12 @@ crate::primitive! {
         // blit independently of content/identity — a mode flip with
         // everything else unchanged must still re-blit.
         last_blit_mode: f32 = -1.0,
+        last_blit_dims: (u32, u32) = (0, 0),
+        last_blit_format: Option<manifold_gpu::GpuTextureFormat> = None,
+        // True once a decoded image has been copied to an output at least
+        // once. A later copy into a recycled output has the same logical
+        // content even though it must still write physically.
+        published_content: bool = false,
     },
 }
 
@@ -203,6 +209,7 @@ impl Primitive for GltfTextureSource {
             self.src_h = 0;
             self.uploaded = false;
             self.pending_upload = None;
+            self.published_content = false;
             if !path.is_empty() {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
@@ -257,6 +264,7 @@ impl Primitive for GltfTextureSource {
             self.src_w = w;
             self.src_h = h;
             self.uploaded = true;
+            self.published_content = false;
             fresh_upload = true;
         }
 
@@ -309,10 +317,15 @@ impl Primitive for GltfTextureSource {
         // which must be re-blitted even if the source pixels and mode
         // didn't change — the `last_mip_identity` precedent this extends).
         let out_identity = out.identity_key();
+        let content_unchanged = self.published_content
+            && !fresh_upload
+            && mode == self.last_blit_mode
+            && (w, h) == self.last_blit_dims
+            && Some(out.format) == self.last_blit_format;
         let unchanged =
             !fresh_upload && out_identity == self.last_mip_identity && mode == self.last_blit_mode;
 
-        if unchanged {
+        if unchanged && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
         } else {
             let gpu = ctx.gpu_encoder();
@@ -366,6 +379,12 @@ impl Primitive for GltfTextureSource {
 
             self.last_mip_identity = out_identity;
             self.last_blit_mode = mode;
+            self.last_blit_dims = (w, h);
+            self.last_blit_format = Some(out.format);
+            if content_unchanged {
+                ctx.mark_output_content_unchanged();
+            }
+            self.published_content = true;
         }
     }
 }
@@ -525,9 +544,15 @@ mod gpu_tests {
         p
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct RunResult {
+        storage_unchanged: bool,
+        content_unchanged: bool,
+    }
+
     /// Run one frame directly against a real GPU backend (no Graph/Executor
-    /// needed — this Source primitive has zero inputs). Returns whether
-    /// `mark_outputs_unchanged` was declared this frame.
+    /// needed — this Source primitive has zero inputs). Returns both the
+    /// physical storage declaration and the logical content declaration.
     fn run_once(
         prim: &mut GltfTextureSource,
         backend: &MetalBackend,
@@ -535,7 +560,19 @@ mod gpu_tests {
         output_scratch: &[(&'static str, Slot)],
         params: &ParamValues,
         time: FrameTime,
-    ) -> bool {
+    ) -> RunResult {
+        run_once_with_retention(prim, backend, device, output_scratch, params, time, true)
+    }
+
+    fn run_once_with_retention(
+        prim: &mut GltfTextureSource,
+        backend: &MetalBackend,
+        device: &manifold_gpu::GpuDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+        time: FrameTime,
+        outputs_retained: bool,
+    ) -> RunResult {
         let mut scalar_ws = Vec::new();
         let mut camera_ws = Vec::new();
         let mut light_ws = Vec::new();
@@ -559,15 +596,30 @@ mod gpu_tests {
             &mut object_ws,
         );
         let mut native_enc = device.create_encoder("gltf-texture-source-test");
-        let unchanged;
+        let result;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
+                .with_outputs_retained(outputs_retained);
             prim.run(&mut ctx);
-            unchanged = ctx.outputs_unchanged;
+            result = RunResult {
+                storage_unchanged: ctx.outputs_unchanged,
+                content_unchanged: ctx.output_content_unchanged,
+            };
         }
         native_enc.commit_and_wait_completed();
-        unchanged
+        result
+    }
+
+    fn overwrite_output(
+        device: &manifold_gpu::GpuDevice,
+        backend: &MetalBackend,
+        slot: Slot,
+    ) {
+        let texture = backend.texture_2d(slot).expect("output texture retained");
+        let mut enc = device.create_encoder("gltf-texture-source-tenant-overwrite");
+        enc.clear_texture(texture, 1.0, 0.0, 1.0, 1.0);
+        enc.commit_and_wait_completed();
     }
 
     fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
@@ -664,10 +716,120 @@ mod gpu_tests {
         settle(&mut prim, &backend, &device, &output_scratch, &params);
         let frame1 = readback(&device, &backend, out_slot, w, h);
 
-        let unchanged = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
-        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+        let result = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
+        assert!(result.storage_unchanged, "settled static frame must declare mark_outputs_unchanged");
+        assert!(result.content_unchanged, "a physical no-op also preserves logical content");
         let frame2 = readback(&device, &backend, out_slot, w, h);
         assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+    }
+
+    /// A recycled destination has a different physical identity, so the
+    /// source must copy the cached pixels again while retaining the logical
+    /// content version. Alternating the same slot between two targets models
+    /// the executor's physical output recycling without adding a graph
+    /// harness to this source proof.
+    #[test]
+    fn recycled_output_is_rewritten_with_stable_content() {
+        let path = helmet_fixture_path();
+        assert!(path.exists(), "required glTF fixture missing: {}", path.display());
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        let out_slot = backend.allocate_slot(RenderTarget::new(
+            &device,
+            w,
+            h,
+            format,
+            "gltf-texture-source-recycle-a",
+        ));
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+        let params = params_at(path.to_str().unwrap(), 0.0, 0, w as f32, h as f32);
+        let mut prim = GltfTextureSource::new();
+        settle(&mut prim, &backend, &device, &output_scratch, &params);
+        let expected = readback(&device, &backend, out_slot, w, h);
+
+        let old_target = backend
+            .swap_texture_2d(
+                out_slot,
+                RenderTarget::new(
+                    &device,
+                    w,
+                    h,
+                    format,
+                    "gltf-texture-source-recycle-b",
+                ),
+            )
+            .expect("first output target retained");
+        let recycled = run_once_with_retention(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+            false,
+        );
+        assert!(!recycled.storage_unchanged, "a recycled destination must be physically rewritten");
+        assert!(recycled.content_unchanged, "recopying identical pixels must preserve logical content");
+        assert_eq!(expected, readback(&device, &backend, out_slot, w, h));
+
+        let recycled_target = backend
+            .swap_texture_2d(out_slot, old_target)
+            .expect("second output target retained");
+        let recycled_again = run_once_with_retention(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+            false,
+        );
+        assert!(!recycled_again.storage_unchanged, "returning to a prior destination still requires a physical rewrite");
+        assert!(recycled_again.content_unchanged, "alternating destinations must retain logical content");
+        assert_eq!(expected, readback(&device, &backend, out_slot, w, h));
+        drop(recycled_target);
+    }
+
+    /// Regression for the ownership hole in an identity-only physical gate:
+    /// another tenant can overwrite a texture in place before it returns to
+    /// this source. The source must detect that write and restore its cached
+    /// pixels even though the allocation identity is unchanged.
+    #[test]
+    fn overwritten_same_output_identity_forces_refresh() {
+        let path = helmet_fixture_path();
+        assert!(path.exists(), "required glTF fixture missing: {}", path.display());
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        let out_slot = backend.allocate_slot(RenderTarget::new(
+            &device,
+            w,
+            h,
+            format,
+            "gltf-texture-source-overwrite",
+        ));
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+        let params = params_at(path.to_str().unwrap(), 0.0, 0, w as f32, h as f32);
+        let mut prim = GltfTextureSource::new();
+        settle(&mut prim, &backend, &device, &output_scratch, &params);
+        let expected = readback(&device, &backend, out_slot, w, h);
+
+        overwrite_output(&device, &backend, out_slot);
+        let result = run_once_with_retention(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+            false,
+        );
+        assert!(!result.storage_unchanged, "an in-place overwrite by another tenant invalidates the physical no-op declaration");
+        assert!(result.content_unchanged, "restoring identical pixels must preserve logical content");
+        assert_eq!(expected, readback(&device, &backend, out_slot, w, h));
     }
 
     /// A param change (mode flip) must NOT be skipped, and must produce the
@@ -694,11 +856,13 @@ mod gpu_tests {
         let params_pass = params_at(path.to_str().unwrap(), 0.0, 0, w as f32, h as f32);
         let mut prim_a = GltfTextureSource::new();
         settle(&mut prim_a, &backend_a, &device, &scratch_a, &params_pass);
+        let pass_output = readback(&device, &backend_a, slot_a, w, h);
 
         let params_flipped = params_at(path.to_str().unwrap(), 0.0, 1, w as f32, h as f32);
-        let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_flipped, frame_time());
-        assert!(!unchanged, "a mode flip must NOT be gated as unchanged");
+        let result = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_flipped, frame_time());
+        assert!(!result.storage_unchanged, "a mode flip must NOT be gated as unchanged");
         let flipped_output = readback(&device, &backend_a, slot_a, w, h);
+        assert_ne!(flipped_output, pass_output, "mode change must alter the emitted pixels");
 
         // Fresh executor: mode=gloss_to_roughness baked in from the start.
         let mut backend_b = MetalBackend::new(device.arc(), w, h, format);

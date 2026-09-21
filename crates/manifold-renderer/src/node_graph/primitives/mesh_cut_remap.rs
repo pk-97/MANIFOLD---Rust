@@ -2,13 +2,14 @@
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
 use super::standalone_pipeline::standalone_pipeline;
+use crate::node_graph::content_revision::ContentVersion;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 
 pub(super) fn run<P: Primitive>(
     ctx: &mut EffectNodeContext<'_, '_>,
     pipeline: &mut Option<GpuComputePipeline>,
-    last_key: &mut Option<[u64; 7]>,
+    last_key: &mut Option<[u64; 5]>,
     output_stride: u64,
 ) {
     if ["in", "map"].iter().any(|port| {
@@ -33,16 +34,29 @@ pub(super) fn run<P: Primitive>(
         ctx.error("cut remap: output must have the map's vertex capacity");
         return;
     }
+    let hash_content = |content: Option<ContentVersion>| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        content.hash(&mut hasher);
+        hasher.finish()
+    };
+    let in_wired = ctx.inputs.slot("in").is_some();
+    let map_wired = ctx.inputs.slot("map").is_some();
+    let in_content = ctx.inputs.content_version("in");
+    let map_content = ctx.inputs.content_version("map");
+    let content_known = (!in_wired || in_content.is_some()) && (!map_wired || map_content.is_some());
     let key = [
         ctx.rebuild_epoch,
-        ctx.inputs.slot_generation("in").unwrap_or(0),
-        ctx.inputs.slot_generation("map").unwrap_or(0),
-        input.identity_key() as u64,
-        map.identity_key() as u64,
+        hash_content(in_content),
+        hash_content(map_content),
         output.identity_key() as u64,
         count,
     ];
-    if *last_key == Some(key) {
+    let content_unchanged = content_known && last_key.is_some_and(|mut previous| {
+        previous[3] = key[3]; // Destination identity affects copying, not content.
+        previous == key
+    });
+    if content_unchanged && *last_key == Some(key) && ctx.outputs_retained() {
         ctx.mark_outputs_unchanged();
         return;
     }
@@ -78,6 +92,7 @@ pub(super) fn run<P: Primitive>(
         );
     }
     *last_key = Some(key);
+    if content_unchanged { ctx.mark_output_content_unchanged(); }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -88,6 +103,7 @@ mod gpu_tests {
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::content_revision::ContentVersion;
     use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::freeze::classify::CapacityExpr;
@@ -531,8 +547,23 @@ mod gpu_tests {
         let mut render_mode_ws = Vec::new();
         let mut object_ws = Vec::new();
         let backend_ref: &dyn Backend = backend;
-        let inputs =
-            NodeInputs::new(input_bindings, backend_ref, generations).with_pending(pending);
+        let max_slot = input_bindings
+            .iter()
+            .map(|(_, slot)| slot.0 as usize)
+            .max()
+            .unwrap_or(0);
+        let mut content_versions = vec![None; max_slot + 1];
+        for (_, slot) in input_bindings {
+            let revision = generations
+                .get(slot.0 as usize)
+                .copied()
+                .unwrap_or(0) + 1;
+            content_versions[slot.0 as usize] =
+                Some(ContentVersion::new(1, ResourceId(slot.0), revision));
+        }
+        let inputs = NodeInputs::new(input_bindings, backend_ref, generations)
+            .with_pending(pending)
+            .with_content_versions(&content_versions);
         let outputs = NodeOutputs::new(
             output_bindings,
             backend_ref,
@@ -550,7 +581,8 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native, device);
             let params = ParamValues::default();
             let mut ctx =
-                EffectNodeContext::new(frame_time(), &params, inputs, outputs, Some(&mut gpu));
+                EffectNodeContext::new(frame_time(), &params, inputs, outputs, Some(&mut gpu))
+                    .with_outputs_retained(true);
             ctx.rebuild_epoch = rebuild_epoch;
             Primitive::run(prim, &mut ctx);
             (ctx.outputs_unchanged, ctx.outputs_pending)
