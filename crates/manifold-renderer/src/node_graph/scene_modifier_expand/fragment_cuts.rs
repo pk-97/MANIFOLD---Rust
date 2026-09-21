@@ -17,6 +17,28 @@ use super::{SceneModifierExpandError, namespace};
 
 type Address = (u32, String);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RemapKind {
+    Mesh,
+    Scalar,
+}
+
+impl RemapKind {
+    fn type_id(self) -> &'static str {
+        match self {
+            Self::Mesh => "node.remap_mesh_cut",
+            Self::Scalar => "node.remap_cut_weights",
+        }
+    }
+
+    fn stable_name(self) -> &'static str {
+        match self {
+            Self::Mesh => "mesh",
+            Self::Scalar => "scalar",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Lineage {
     source: Address,
@@ -243,6 +265,53 @@ fn longest<'a>(values: impl IntoIterator<Item = &'a Lineage>) -> Option<Lineage>
         .cloned()
 }
 
+fn remap_through_map(
+    def: &mut EffectGraphDef,
+    next_id: &mut u32,
+    source: Address,
+    map_id: u32,
+    cache: &mut BTreeMap<(Address, u32, RemapKind), Address>,
+    kind: RemapKind,
+) -> Result<Address, SceneModifierExpandError> {
+    let key = (source.clone(), map_id, kind);
+    if let Some(cached) = cache.get(&key) {
+        return Ok(cached.clone());
+    }
+
+    let source_node = source.0.to_string();
+    let map_node = map_id.to_string();
+    let owner = namespace::namespace_node_id(&[
+        "fragment_cut_remap",
+        &source_node,
+        source.1.as_str(),
+        &map_node,
+        kind.stable_name(),
+    ]);
+    let remap = generated_node(
+        def,
+        next_id,
+        &owner,
+        "remap",
+        kind.type_id(),
+        BTreeMap::new(),
+    )?;
+    def.wires.push(EffectGraphWire {
+        from_node: source.0,
+        from_port: source.1,
+        to_node: remap,
+        to_port: "in".into(),
+    });
+    def.wires.push(EffectGraphWire {
+        from_node: map_id,
+        from_port: "map".into(),
+        to_node: remap,
+        to_port: "map".into(),
+    });
+    let output = (remap, "out".into());
+    cache.insert(key, output.clone());
+    Ok(output)
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "Structural remapping needs source and target provenance plus shared graph scratch"
@@ -253,8 +322,8 @@ fn align_mesh(
     mut source_addr: Address,
     source: &Lineage,
     target: &Lineage,
-    cache: &mut BTreeMap<(Address, u32), Address>,
-    scalar: bool,
+    cache: &mut BTreeMap<(Address, u32, RemapKind), Address>,
+    kind: RemapKind,
 ) -> Result<Address, SceneModifierExpandError> {
     if source == target {
         return Ok(source_addr);
@@ -272,32 +341,7 @@ fn align_mesh(
         return Ok(source_addr);
     }
     for map_id in &target.maps[source.maps.len()..] {
-        let key = (source_addr.clone(), *map_id);
-        if let Some(cached) = cache.get(&key) {
-            source_addr = cached.clone();
-            continue;
-        }
-        let owner = NodeId::new(format!("{}-{}", source_addr.0, map_id));
-        let remap_type = if scalar {
-            "node.remap_cut_weights"
-        } else {
-            "node.remap_mesh_cut"
-        };
-        let remap = generated_node(def, next_id, &owner, "aligned", remap_type, BTreeMap::new())?;
-        def.wires.push(EffectGraphWire {
-            from_node: source_addr.0,
-            from_port: source_addr.1.clone(),
-            to_node: remap,
-            to_port: "in".into(),
-        });
-        def.wires.push(EffectGraphWire {
-            from_node: *map_id,
-            from_port: "map".into(),
-            to_node: remap,
-            to_port: "map".into(),
-        });
-        source_addr = (remap, "out".into());
-        cache.insert(key, source_addr.clone());
+        source_addr = remap_through_map(def, next_id, source_addr, *map_id, cache, kind)?;
     }
     Ok(source_addr)
 }
@@ -340,7 +384,7 @@ pub(super) fn apply(
     let order = topo_order(def, &ids)?;
     let mut next_id = next_node_id(def)?;
     let mut lineages: BTreeMap<Address, Lineage> = BTreeMap::new();
-    let mut remap_cache: BTreeMap<(Address, u32), Address> = BTreeMap::new();
+    let mut remap_cache: BTreeMap<(Address, u32, RemapKind), Address> = BTreeMap::new();
 
     for id in order {
         let Some(current_node) = node(def, id).cloned() else {
@@ -379,7 +423,7 @@ pub(super) fn apply(
                 &current_lineage,
                 &base,
                 &mut remap_cache,
-                false,
+                RemapKind::Mesh,
             )?;
             let aligned_reference = align_mesh(
                 def,
@@ -388,7 +432,7 @@ pub(super) fn apply(
                 &reference_lineage,
                 &base,
                 &mut remap_cache,
-                false,
+                RemapKind::Mesh,
             )?;
             let controls = if current_node.type_id == "node.ordered_recon_mesh" {
                 BANDS_PORTS
@@ -436,28 +480,24 @@ pub(super) fn apply(
                     });
                 }
             }
-            let remap_current = generated_node(
+            let remap_current = remap_through_map(
                 def,
                 &mut next_id,
-                &current_node.node_id,
-                "current",
-                "node.remap_mesh_cut",
-                BTreeMap::new(),
+                aligned_current,
+                map_id,
+                &mut remap_cache,
+                RemapKind::Mesh,
             )?;
-            let remap_reference = generated_node(
+            let remap_reference = remap_through_map(
                 def,
                 &mut next_id,
-                &current_node.node_id,
-                "reference",
-                "node.remap_mesh_cut",
-                BTreeMap::new(),
+                aligned_reference,
+                map_id,
+                &mut remap_cache,
+                RemapKind::Mesh,
             )?;
-            wire_to(def, remap_current, "in", aligned_current);
-            wire_to(def, remap_current, "map", (map_id, "map".into()));
-            wire_to(def, remap_reference, "in", aligned_reference);
-            wire_to(def, remap_reference, "map", (map_id, "map".into()));
-            wire_to(def, id, "in", (remap_current, "out".into()));
-            wire_to(def, id, "reference", (remap_reference, "out".into()));
+            wire_to(def, id, "in", remap_current);
+            wire_to(def, id, "reference", remap_reference);
             lineages.insert(
                 (id, "out".into()),
                 Lineage {
@@ -484,7 +524,7 @@ pub(super) fn apply(
                 &current_lineage,
                 &target,
                 &mut remap_cache,
-                false,
+                RemapKind::Mesh,
             )?;
             let aligned_other = align_mesh(
                 def,
@@ -493,7 +533,7 @@ pub(super) fn apply(
                 &other_lineage,
                 &target,
                 &mut remap_cache,
-                false,
+                RemapKind::Mesh,
             )?;
             wire_to(def, id, "in", aligned_current);
             wire_to(def, id, "b", aligned_other);
@@ -508,7 +548,7 @@ pub(super) fn apply(
                     weights_lineage,
                     &target,
                     &mut remap_cache,
-                    true,
+                    RemapKind::Scalar,
                 )?;
                 wire_to(def, id, "weights", aligned);
             }
@@ -525,7 +565,7 @@ pub(super) fn apply(
                     &reference_lineage,
                     &current_lineage,
                     &mut remap_cache,
-                    false,
+                    RemapKind::Mesh,
                 )?;
                 wire_to(def, id, "reference", aligned);
             }
@@ -540,7 +580,7 @@ pub(super) fn apply(
                     weights_lineage,
                     &current_lineage,
                     &mut remap_cache,
-                    true,
+                    RemapKind::Scalar,
                 )?;
                 wire_to(def, id, "weights", aligned);
             }
@@ -558,7 +598,7 @@ pub(super) fn apply(
                     weights_lineage,
                     &current_lineage,
                     &mut remap_cache,
-                    true,
+                    RemapKind::Scalar,
                 )?;
                 wire_to(def, id, "weights", aligned);
             }
@@ -593,7 +633,7 @@ pub(super) fn apply(
                 weights_lineage,
                 lineage,
                 &mut remap_cache,
-                true,
+                RemapKind::Scalar,
             )?;
             wire_to(def, object, "weights", aligned);
         }
@@ -643,4 +683,165 @@ fn fan_out_bindings(
         binding_sources.push(source);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: u32, node_id: &str, type_id: &str) -> EffectGraphNode {
+        EffectGraphNode {
+            id,
+            node_id: NodeId::new(node_id),
+            type_id: type_id.into(),
+            handle: None,
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        }
+    }
+
+    fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+        EffectGraphWire {
+            from_node,
+            from_port: from_port.into(),
+            to_node,
+            to_port: to_port.into(),
+        }
+    }
+
+    #[test]
+    fn fragment_remap_is_reused_by_later_alignment_and_prepare_is_idempotent() {
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                node(1, "source", "system.mesh_input"),
+                node(2, "fragment", "node.ordered_recon_mesh"),
+                node(3, "morph", "node.morph_mesh"),
+                node(4, "object", "node.scene_object"),
+            ],
+            wires: vec![
+                wire(1, "out", 2, "in"),
+                wire(1, "out", 2, "reference"),
+                wire(1, "out", 3, "in"),
+                wire(2, "out", 3, "b"),
+                wire(3, "out", 4, "vertices"),
+            ],
+        };
+        let mut binding_sources = Vec::new();
+
+        apply(&mut def, &mut binding_sources).expect("minimal fragment graph prepares");
+
+        let remaps: Vec<_> = def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.remap_mesh_cut")
+            .collect();
+        assert_eq!(remaps.len(), 1, "later alignment reuses the fragment remap");
+        let current = input(&def, 2, "in").expect("fragment current wire");
+        let reference = input(&def, 2, "reference").expect("fragment reference wire");
+        let morph_input = input(&def, 3, "in").expect("morph input wire");
+        assert_eq!(current.from_node, reference.from_node);
+        assert_eq!(current.from_node, morph_input.from_node);
+
+        let prepared = def.clone();
+        apply(&mut def, &mut binding_sources).expect("prepared graph is an idempotent no-op");
+        assert_eq!(def, prepared);
+    }
+
+    #[test]
+    fn remap_cache_keeps_mesh_and_scalar_outputs_distinct() {
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![node(1, "source", "system.mesh_input")],
+            wires: Vec::new(),
+        };
+        let mut next_id = 2;
+        let mut cache = BTreeMap::new();
+        let mesh = remap_through_map(
+            &mut def,
+            &mut next_id,
+            (1, "out".into()),
+            9,
+            &mut cache,
+            RemapKind::Mesh,
+        )
+        .expect("mesh remap");
+        let scalar = remap_through_map(
+            &mut def,
+            &mut next_id,
+            (1, "out".into()),
+            9,
+            &mut cache,
+            RemapKind::Scalar,
+        )
+        .expect("scalar remap");
+        let mesh_again = remap_through_map(
+            &mut def,
+            &mut next_id,
+            (1, "out".into()),
+            9,
+            &mut cache,
+            RemapKind::Mesh,
+        )
+        .expect("cached mesh remap");
+        let other_source = remap_through_map(
+            &mut def,
+            &mut next_id,
+            (2, "out".into()),
+            9,
+            &mut cache,
+            RemapKind::Mesh,
+        )
+        .expect("mesh remap for another source");
+        let other_port = remap_through_map(
+            &mut def,
+            &mut next_id,
+            (1, "weights".into()),
+            9,
+            &mut cache,
+            RemapKind::Mesh,
+        )
+        .expect("mesh remap for another source port");
+        let other_map = remap_through_map(
+            &mut def,
+            &mut next_id,
+            (1, "out".into()),
+            10,
+            &mut cache,
+            RemapKind::Mesh,
+        )
+        .expect("mesh remap for another map");
+
+        assert_ne!(mesh, scalar);
+        assert_eq!(mesh_again, mesh);
+        assert_ne!(mesh, other_source);
+        assert_ne!(mesh, other_port);
+        assert_ne!(mesh, other_map);
+        assert_eq!(cache.len(), 5);
+        assert_eq!(def.nodes.len(), 6);
+        assert!(
+            def.nodes
+                .iter()
+                .any(|node| node.type_id == "node.remap_mesh_cut")
+        );
+        assert!(
+            def.nodes
+                .iter()
+                .any(|node| node.type_id == "node.remap_cut_weights")
+        );
+    }
 }
