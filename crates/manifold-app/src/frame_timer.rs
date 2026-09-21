@@ -294,7 +294,7 @@ mod tests {
         timer.frame_clock_seconds = 7.0;
         timer.missed_ticks = 100;
         timer.resume_after_load();
-        assert_eq!(timer.missed_ticks(), 0);
+        assert_eq!(timer.missed_ticks, 0);
         assert_eq!(timer.frame_clock_seconds, 7.0);
         assert!(timer.realtime_since_start() >= 30.0);
         assert!(timer.consume_tick() < 1.0, "load time leaked into playback delta");
