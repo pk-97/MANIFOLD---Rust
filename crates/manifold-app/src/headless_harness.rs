@@ -102,7 +102,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         led_preview_version: 0,
         still_export: None,
         cached_midi_device_names: Vec::new(),
-        last_midi_device_scan_time: Seconds(-10.0),
+        midi_source_discovery: manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
         cached_project_snapshot: None,
         watched_graph_target: None,
         preview_graph_node: None,

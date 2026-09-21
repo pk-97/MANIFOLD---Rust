@@ -14,6 +14,7 @@ pub mod live_trigger;
 pub mod midi_clock_sync;
 pub mod midi_import;
 pub mod midi_input;
+pub mod midi_source_discovery;
 pub mod midi_parser;
 pub mod modulation;
 pub mod osc_param_router;

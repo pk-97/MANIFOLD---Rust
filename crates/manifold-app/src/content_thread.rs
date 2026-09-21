@@ -133,7 +133,7 @@ pub struct ContentThread {
     // ── MIDI device cache ──
     /// Cached MIDI device names, refreshed every ~2 seconds.
     pub cached_midi_device_names: Vec<String>,
-    pub last_midi_device_scan_time: Seconds,
+    pub midi_source_discovery: manifold_playback::midi_source_discovery::MidiSourceDiscovery,
 
     // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
     pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
@@ -646,6 +646,7 @@ impl ContentThread {
     /// loop) instead of going through the command channel — no behavior
     /// change to this function itself.
     pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
+        let _frame_start = std::time::Instant::now();
         let dt = self.timer.consume_tick();
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
@@ -660,15 +661,14 @@ impl ContentThread {
         #[cfg(target_os = "macos")]
         self.poll_still_export(state_tx);
 
-        // Refresh MIDI device list every ~2 seconds
-        if (self.time_since_start - self.last_midi_device_scan_time).0 >= 2.0 {
-            self.cached_midi_device_names =
-                manifold_playback::midi_clock_sync::MidiClockSyncController::available_source_names(
-                );
-            self.last_midi_device_scan_time = self.time_since_start;
+        // Discovery can block inside CoreMIDI. Only receive completed name
+        // snapshots here; the worker owns enumeration and its refresh cadence.
+        if let Some(names) = self.midi_source_discovery.poll() {
+            self.cached_midi_device_names = names;
         }
 
-        let _frame_start = std::time::Instant::now();
+        #[cfg(feature = "profiling")]
+        let _prelude_ms = _frame_start.elapsed().as_secs_f64() * 1000.0;
 
         // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
         // Drains hardware note events and routes them to ClipLauncher → LiveClipManager.
@@ -1029,11 +1029,12 @@ impl ContentThread {
             }
         }
 
-        // Profiling: record frame data
+        // Capture frame metadata now, but finish its timing after publishing
+        // state so both ends of the content tick remain visible to the profiler.
         #[cfg(feature = "profiling")]
-        if let Some(ref mut profiler) = self.profiler
-            && profiler.is_recording()
-        {
+        let profile_capture_start = std::time::Instant::now();
+        #[cfg(feature = "profiling")]
+        let frame_record = if self.profiler.as_ref().is_some_and(|p| p.is_recording()) {
             let frame_wall_ms = _frame_start.elapsed().as_secs_f64() * 1000.0;
             let current_beat = self.engine.current_beat();
             let time_sig = self
@@ -1172,7 +1173,7 @@ impl ContentThread {
             let estimated_tex_bytes =
                 comp_w as u64 * comp_h as u64 * bytes_per_pixel * rt_count as u64;
 
-            profiler.record_frame(manifold_profiler::FrameRecord {
+            Some(manifold_profiler::FrameRecord {
                 index: self.frame_count - 1,
                 beat: current_beat.as_f32(),
                 bar,
@@ -1180,12 +1181,14 @@ impl ContentThread {
                 budget_exceeded: frame_wall_ms > budget_ms,
                 content_thread: manifold_profiler::ContentTimings {
                     total_ms: frame_wall_ms,
+                    prelude_ms: _prelude_ms,
                     midi_input_ms: _midi_input_ms,
                     sync_controllers_ms: _sync_controllers_ms,
                     engine_tick_ms: _engine_tick_ms,
                     render_content_ms: _render_content_ms,
                     gpu_poll_ms: _gpu_poll_ms,
                     cleanup_ms: _cleanup_ms,
+                    state_publish_ms: 0.0,
                 },
                 gpu_passes,
                 active_clips: active_clip_info,
@@ -1200,12 +1203,31 @@ impl ContentThread {
                     estimated_texture_bytes: estimated_tex_bytes,
                     render_target_count: rt_count,
                 },
-            });
-        }
+            })
+        } else {
+            None
+        };
+        #[cfg(feature = "profiling")]
+        let profiler_overhead_ms = profile_capture_start.elapsed().as_secs_f64() * 1000.0;
 
         // 8. Push state to UI
+        #[cfg(feature = "profiling")]
+        let state_publish_start = std::time::Instant::now();
         self.engine.reclaim_tick_result(tick_result);
         self.send_state(state_tx);
+        #[cfg(feature = "profiling")]
+        if let Some(mut record) = frame_record {
+            record.content_thread.state_publish_ms =
+                state_publish_start.elapsed().as_secs_f64() * 1000.0;
+            record.profiler_overhead_ms = profiler_overhead_ms;
+            record.wall_time_ms =
+                (_frame_start.elapsed().as_secs_f64() * 1000.0 - profiler_overhead_ms).max(0.0);
+            record.content_thread.total_ms = record.wall_time_ms;
+            record.budget_exceeded = record.wall_time_ms > 1000.0 / self.timer.target_fps();
+            if let Some(profiler) = self.profiler.as_mut() {
+                profiler.record_frame(record);
+            }
+        }
     }
 
     /// Build and send a `ContentState` snapshot to the UI. Gated by
