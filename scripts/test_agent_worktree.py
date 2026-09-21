@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import textwrap
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,6 +85,42 @@ def dead_pid():
     return p.pid
 
 
+def subprocess_module_code(repo, argv, body):
+    """Load the script in a child, then point it at this test's temporary pool."""
+    prefix = textwrap.dedent(f"""
+        import importlib.util
+        import sys
+        import time
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("agent_worktree", {str(SCRIPT)!r})
+        aw = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(aw)
+        aw.REPO = Path({str(repo)!r})
+        aw.POOL = aw.REPO / ".claude" / "worktrees"
+        sys.argv = ["agent-worktree.py", *{argv!r}]
+    """)
+    return prefix + body + "\n"
+
+
+def run_module_subprocess(repo, argv, body="aw.main()", **kwargs):
+    return subprocess.run(
+        [sys.executable, "-B", "-c", subprocess_module_code(repo, argv, body)],
+        cwd=str(repo), capture_output=True, text=True, **kwargs)
+
+
+def start_lock_holder(repo):
+    body = 'with aw.pool_lock():\n    print("LOCKED", flush=True)\n    time.sleep(30)'
+    process = subprocess.Popen(
+        [sys.executable, "-B", "-c", subprocess_module_code(repo, [], body)],
+        cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if process.stdout.readline().strip() != "LOCKED":
+        stderr = process.stderr.read()
+        process.kill()
+        process.wait()
+        raise RuntimeError(f"lock holder failed to start: {stderr}")
+    return process
+
+
 # ---------------------------------------------------------------- categories
 
 def test_clean_landed_no_lease_is_idle(repo):
@@ -105,6 +142,16 @@ def test_clean_landed_live_lease_is_in_use(repo):
     write_lease(wt, holder_pid=os.getpid(), age_h=1.0)
     cat, reason, _ = aw.slot_state(wt)
     check("clean+landed, live lease -> IN-USE", cat == aw.IN_USE, f"{cat}: {reason}")
+
+
+def test_live_holder_past_ttl_stays_in_use(repo):
+    wt = add_slot(repo, "slot-2", "lane/live-old")
+    write_lease(wt, owner="lead", task="still-working", holder_pid=os.getpid(),
+                age_h=aw.LEASE_TTL_HOURS + 1.0)
+    blocked, reason = aw.lease_blocks(wt)
+    check("live holder past TTL still blocks", blocked, reason)
+    check("live past-TTL reason names holder",
+          "holder pid" in reason and "alive" in reason, reason)
 
 
 def test_dirty_is_never_reclaimable(repo):
@@ -310,6 +357,45 @@ def test_fixture_pruning_and_process_failure(repo):
         check("existing branch cannot be reset", True)
 
 
+def test_pool_lock_excludes_all_lifecycle_commands(repo):
+    holder = start_lock_holder(repo)
+    try:
+        commands = [
+            (["acquire", "blocked", "lane/blocked"], "acquire"),
+            (["list"], "list"),
+            (["scrub"], "scrub"),
+            (["release", "slot-0"], "release"),
+            (["retire", "slot-0"], "retire"),
+            (["remove", "slot-0"], "remove"),
+        ]
+        for argv, name in commands:
+            result = run_module_subprocess(repo, argv)
+            check(f"pool lock excludes {name}", result.returncode != 0 and
+                  "worktree pool is busy" in result.stderr, result.stderr + result.stdout)
+        check("blocked acquire does not create checkout",
+              not (aw.POOL / "slot-0").exists(), str(list(aw.POOL.iterdir())))
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+
+
+def test_pool_lock_releases_after_failure_and_process_exit(repo):
+    try:
+        with aw.pool_lock():
+            raise RuntimeError("synthetic command failure")
+    except RuntimeError:
+        pass
+    with aw.pool_lock():
+        check("pool lock releases after command failure", True)
+
+    holder = start_lock_holder(repo)
+    holder.terminate()
+    holder.wait(timeout=5)
+    result = run_module_subprocess(repo, ["list"])
+    check("pool lock releases after process exit", result.returncode == 0,
+          result.stderr + result.stdout)
+
+
 # ---------------------------------------------------------------------- main
 
 def test_retire_remote_mismatch_and_concurrent_edit(repo):
@@ -357,6 +443,7 @@ TESTS = [
     test_clean_landed_no_lease_is_idle,
     test_clean_landed_stale_lease_is_reclaimable,
     test_clean_landed_live_lease_is_in_use,
+    test_live_holder_past_ttl_stays_in_use,
     test_dirty_is_never_reclaimable,
     test_unlanded_sole_holder_is_never_reclaimable,
     test_unlanded_duplicate_is_reclaimable,
@@ -364,6 +451,8 @@ TESTS = [
     test_pool_full_groups_each_slot_correctly,
     test_acquire_refuses_a_branch_held_elsewhere,
     test_acquire_allows_the_slot_that_already_holds_it,
+    test_pool_lock_excludes_all_lifecycle_commands,
+    test_pool_lock_releases_after_failure_and_process_exit,
 ]
 
 

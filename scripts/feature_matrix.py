@@ -14,7 +14,7 @@ row to MATRIX below — the selftest cross-checks MATRIX against the workspace's
 Cargo.toml [features] sections, so a new feature that isn't listed (or
 exempted with a reason) fails here too.
 
-Usage: scripts/feature_matrix.py [--list]
+Usage: scripts/feature_matrix.py [--list | --check-coverage]
 """
 
 import argparse
@@ -39,7 +39,7 @@ MATRIX = [
     ("manifold-gpu", "gpu-proofs"),
     ("manifold-gpu", "vulkan"),
     ("manifold-recording", "recording-proofs"),
-    ("manifold-renderer", "gpu-proofs"),
+    ("manifold-renderer", "rt-perf-proofs"),
     ("manifold-spectral", "gpu-proofs"),
 ]
 
@@ -49,6 +49,7 @@ EXEMPT = {
     ("manifold-gpu", "default"): "empty default set",
     ("manifold-spectral", "default"): "empty default set",
     ("manifold-spectral", "gpu"): "strict subset of its gpu-proofs row",
+    ("manifold-renderer", "gpu-proofs"): "strict subset of its rt-perf-proofs row",
 }
 
 FEATURES_RE = re.compile(r"^\[features\]\s*$")
@@ -91,6 +92,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--list", action="store_true",
                         help="print the matrix and exit")
+    parser.add_argument("--check-coverage", action="store_true",
+                        help="validate feature coverage without running builds")
     args = parser.parse_args()
 
     if args.list:
@@ -103,6 +106,9 @@ def main():
         print(f"[FAIL] coverage — {p}")
     if problems:
         return 1
+    if args.check_coverage:
+        print(f"[PASS] feature coverage: {len(MATRIX)} build rows, {len(EXEMPT)} exemptions")
+        return 0
 
     failed = []
     for package, feature in MATRIX:

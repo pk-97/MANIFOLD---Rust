@@ -23,6 +23,7 @@ Confirm the printed acquired HEAD before editing. Never bypass the slot cap.
 
 import argparse
 import errno
+import fcntl
 import json
 import os
 import shutil
@@ -32,6 +33,7 @@ import time
 import uuid
 import tempfile
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
 
 def _main_checkout():
@@ -50,6 +52,7 @@ def _main_checkout():
 
 REPO = _main_checkout()
 POOL = REPO / ".claude" / "worktrees"
+POOL_LOCK_NAME = ".agent-worktree.lock"
 LEASE_NAME = ".worktree-lease.json"  # gitignored; mtime is the staleness clock
 LEASE_TTL_HOURS = 8
 DEAD_HOLDER_GRACE_H = 0.5  # a dead holder pid only shortens the TTL to this, never
@@ -113,6 +116,28 @@ def pid_alive(pid):
         return getattr(e, "errno", None) == errno.EPERM
 
 
+@contextmanager
+def pool_lock():
+    """Serialize all commands that inspect or mutate the shared slot ring.
+
+    The lock file is persistent so its inode remains stable across commands;
+    flock releases the reservation automatically if a process exits.
+    """
+    POOL.mkdir(parents=True, exist_ok=True)
+    with (POOL / POOL_LOCK_NAME).open("a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EAGAIN):
+                sys.exit("REFUSED: worktree pool is busy; another command holds "
+                         "the reservation lock")
+            raise
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def lease_blocks(wt):
     """Does this slot's lease still reserve it? Returns (blocks: bool, why: str).
 
@@ -123,6 +148,8 @@ def lease_blocks(wt):
     age_h, owner, task, holder_pid = lease_info(wt)
     if age_h is None:
         return False, "no lease"
+    if holder_pid is not None and pid_alive(holder_pid):
+        return True, f"holder pid {holder_pid} is alive ({owner}, {task}, {age_h:.1f}h ago)"
     if age_h >= LEASE_TTL_HOURS:
         return False, f"lease expired ({age_h:.1f}h > {LEASE_TTL_HOURS}h TTL)"
     if holder_pid is not None and not pid_alive(holder_pid) and age_h >= DEAD_HOLDER_GRACE_H:
@@ -547,8 +574,9 @@ def main():
     rem.add_argument("--recovery", type=Path, help="local recovery archive with blobs and ignored-files.json")
     sub.add_parser("scrub")
     args = parser.parse_args()
-    {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
-     "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub}[args.cmd](args)
+    with pool_lock():
+        {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
+         "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub}[args.cmd](args)
 
 
 
