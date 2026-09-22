@@ -138,8 +138,8 @@ pub struct ExecutionPlan {
     /// frame. The executor walks this list and calls `Backend::acquire`
     /// (idempotent on existing bindings) before the step loop.
     persistent_resources: Vec<ResourceId>,
-    /// Resources held across frames by the memoized-dataflow (constant-
-    /// subgraph hoisting) path: every output of a hoistable step. The
+    /// Resources held across frames: immutable node-owned textures and every
+    /// output of a hoistable step. The memoized-dataflow (constant-subgraph)
     /// executor serves these from their latched slots on memo-skip frames
     /// instead of re-running the producer, so their lifetime is the
     /// executor's lifetime, NOT their last reader's step. Like
@@ -148,6 +148,8 @@ pub struct ExecutionPlan {
     /// is decided ONCE here, and every plan consumer (the executor's pool
     /// release, the chain runtime's slot planner) inherits it.
     held_resources: Vec<ResourceId>,
+    /// Dedicated node-owned textures, excluding feedback back-edges.
+    provided_texture_resources: Vec<ResourceId>,
     /// `hoistable_steps[i]` — step `i` is a pure node whose inputs are all
     /// produced by hoistable steps (the memoizable closure). Parallel to
     /// [`steps`](Self::steps). Outputs of these steps make up
@@ -273,9 +275,12 @@ impl ExecutionPlan {
         &self.persistent_resources
     }
 
-    /// Resources latched by the memo/hoisting path — excluded from
-    /// `free_after`, must never be aliased or recycled while the plan's
-    /// executor lives. See the field docstring.
+    /// Whether this resource reserves immutable node-owned texture storage.
+    pub fn is_provided_texture(&self, resource: ResourceId) -> bool {
+        self.provided_texture_resources.binary_search(&resource).is_ok()
+    }
+
+    /// Resources held across frames, never aliased or recycled by the plan.
     pub fn held_resources(&self) -> &[ResourceId] {
         &self.held_resources
     }
@@ -943,6 +948,20 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             }
         }
     }
+    let mut provided_texture_resources = Vec::new();
+    for step in &steps {
+        let inst = graph.get_node(step.node).expect("compiled node exists");
+        for &(port, res) in &step.outputs {
+            if resource_types.get(res.0 as usize).is_some_and(|ty| ty.is_texture_2d())
+                && !persistent_seen.contains(&res)
+                && inst.node.provides_texture_output(port)
+            {
+                provided_texture_resources.push(res);
+                held.push(res);
+            }
+        }
+    }
+    provided_texture_resources.sort();
     for res_id in &held {
         last_reader.remove(res_id);
     }
@@ -991,6 +1010,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         requires,
         persistent_resources: persistent,
         held_resources: held,
+        provided_texture_resources,
         hoistable_steps,
         late_capture_steps,
         mesh_rules,
@@ -1164,6 +1184,30 @@ mod tests {
             ty,
             kind: PortKind::Input,
             required,
+        }
+    }
+
+    #[test]
+    fn provided_texture_outputs_are_held_but_feedback_back_edges_stay_writable() {
+        use crate::node_graph::boundary_nodes::FinalOutput;
+        use crate::node_graph::primitives::{GltfTextureSource, Feedback};
+        for feedback in [false, true] {
+            let mut graph = Graph::new();
+            let source = graph.add_node(Box::new(GltfTextureSource::new()));
+            let output = graph.add_node(Box::new(FinalOutput::new()));
+            if feedback {
+                let history = graph.add_node(Box::new(Feedback::new()));
+                graph.connect((source, "out"), (history, "in")).unwrap();
+                graph.connect((history, "out"), (output, "in")).unwrap();
+            } else {
+                graph.connect((source, "out"), (output, "in")).unwrap();
+            }
+            let plan = compile(&graph).unwrap();
+            let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+            assert_eq!(plan.is_provided_texture(resource), !feedback);
+            assert_eq!(plan.persistent_resources().contains(&resource), feedback);
+            assert_eq!(plan.held_resources().contains(&resource), !feedback);
+            assert!(plan.steps().iter().all(|step| !step.free_after.contains(&resource)));
         }
     }
 

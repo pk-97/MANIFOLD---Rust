@@ -56,6 +56,24 @@ pub trait Backend: Send {
         dims: (u32, u32),
     ) -> Slot;
 
+    /// Reserve a dedicated node-owned output without writable backing.
+    /// Unsupported and host-prebound paths use ordinary acquisition.
+    fn acquire_provided_texture(
+        &mut self, id: ResourceId, ty: PortType,
+        format: Option<GpuTextureFormat>, dims: (u32, u32),
+    ) -> Slot {
+        self.acquire(id, ty, format, dims)
+    }
+
+    fn provided_texture_descriptor(&self, _slot: Slot) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+        None
+    }
+
+    /// Publish immutable storage. It must never enter a writable pool.
+    fn install_provided_texture(&mut self, _slot: Slot, _texture: &GpuTexture) {
+        panic!("backend does not support provided textures");
+    }
+
     /// Release `id`'s slot back to the per-`(type, format, dims)` free
     /// pool. Idempotent — releasing an already-released id is a no-op.
     /// `format` and `dims` must match what was passed to

@@ -1565,6 +1565,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         Some(residency.stats())
     }
 
+    /// Loading submits synchronous generator/chain work outside the normal
+    /// frame loop. Advance its retirement clock after that work has completed,
+    /// so replaced warmup images do not remain alive until the first play frame.
+    /// Only call at a loading boundary with no outstanding unsubmitted encoder.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn finish_warmup_gpu_resources(&mut self) -> Option<manifold_gpu::GpuResidencyStats> {
+        if let (Some(device), Some(event)) = (&self.native_device, &self.native_event) {
+            let mut encoder = device.create_encoder("Warmup retirement checkpoint");
+            encoder.signal_event(event);
+            self.native_signal_value = event.current_value();
+            if let Err(error) = encoder.try_commit_and_wait_completed() {
+                log::error!("Warmup retirement checkpoint failed: {error}");
+                crate::abort_gpu_work("GPU failure during warmup retirement checkpoint");
+            }
+        }
+        self.prepare_gpu_residency()
+    }
+
     /// Clone the content device handle for command admission. The handle is
     /// shared with the pipeline, so redo admissions can query fresh allocator
     /// values without introducing another device or synchronization primitive.

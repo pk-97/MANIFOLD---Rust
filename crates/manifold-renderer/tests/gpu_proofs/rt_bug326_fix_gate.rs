@@ -3,8 +3,9 @@
 //! import+RT path (gltf_import -> PresetRuntime). The async-load race
 //! itself (BLAS built over pre-load zero buffers because the staging
 //! copy and the BLAS build are on separate command buffers) is not
-//! reproducible in-harness — the decode completes within one frame
-//! at any resolution. The fix (rebuild-on-first-ready with per-topology
+//! reliably reproducible in-harness. Background decode must settle before
+//! comparing either arm; frame counts alone do not establish readiness.
+//! The fix (rebuild-on-first-ready with per-topology
 //! rerun) is verified via render-import 50ms-paced traces (BUG-326
 //! entry: Helmet frame2=0.146->frame3+=0.239, AMG 0.045->0.168).
 
@@ -154,10 +155,18 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
 
     // Baseline: rt=0.
     let (mut rt_baseline, tex_baseline, base_manifest) = build_helmet_harness(h, false, false);
-    for f in 0..90 {
+    for f in 0..600 {
         frame(&mut rt_baseline, h, &tex_baseline, f, &base_manifest);
+        if !rt_baseline.warmup_pending() && f >= 89 {
+            break;
+        }
+        if rt_baseline.warmup_pending() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
+    assert!(!rt_baseline.warmup_pending(), "baseline import did not finish loading within 600 frames");
     let baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_baseline));
+    assert!(baseline_frac > 0.0, "baseline must contain lit pixels, not a vacuous zero threshold");
 
     // RT on: rt=1+refl=1. Poll until lit: the rerun suppression window
     // skips the composite while the rerun build is in flight, which reads
@@ -169,6 +178,10 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     let mut on_frac = 0.0f64;
     for f in 0..600 {
         frame(&mut rt_on, h, &tex_on, f, &on_manifest);
+        if rt_on.warmup_pending() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            continue;
+        }
         if f >= 84 && f % 5 == 4 {
             on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on)));
             if on_frac >= threshold {

@@ -461,7 +461,7 @@ impl ContentThread {
             // Keep each prepared layer's memory requested while later layers
             // warm, instead of paying for its first GPU use during playback.
             #[cfg(target_os = "macos")]
-            self.content_pipeline.prepare_gpu_residency();
+            self.content_pipeline.finish_warmup_gpu_resources();
             report.layers.push(WarmupLayerReport {
                 id: _layer_id.to_string(),
                 name: layer_name.clone(),
@@ -671,7 +671,7 @@ impl ContentThread {
         }
 
         #[cfg(target_os = "macos")]
-        if let Some(stats) = self.content_pipeline.prepare_gpu_residency() {
+        if let Some(stats) = self.content_pipeline.finish_warmup_gpu_resources() {
             log::info!(
                 "[ContentThread] Warmup memory: {} allocations, {} bytes / {} budget, residency requested={}",
                 stats.allocation_count, stats.allocated_bytes, stats.budget_bytes, stats.requested

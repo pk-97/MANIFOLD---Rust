@@ -329,6 +329,14 @@ pub trait Primitive: PrimitiveSpec {
     /// Override only on `node.wgsl_compute_*` primitives.
     fn set_wgsl_source(&mut self, _source: &str) {}
 
+    /// Mirror of `EffectNode::provides_texture_output`.
+    fn provides_texture_output(&self, _port: &str) -> bool { false }
+
+    /// Mirror of `EffectNode::provided_texture_output`.
+    fn provided_texture_output(&self, _port: &str) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
     /// Per-output-port texture format override — mirror of
     /// [`EffectNode::output_format`](crate::node_graph::effect_node::EffectNode::output_format).
     /// Override on primitives that need a non-default format (most
@@ -725,6 +733,12 @@ impl<P: Primitive + 'static> EffectNode for P {
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Primitive::output_dims(self, port, canvas_dims, input_dims, params)
+    }
+    fn provides_texture_output(&self, port: &str) -> bool {
+        Primitive::provides_texture_output(self, port)
+    }
+    fn provided_texture_output(&self, port: &str) -> Option<&manifold_gpu::GpuTexture> {
+        Primitive::provided_texture_output(self, port)
     }
     fn output_canvas_scale(
         &self,

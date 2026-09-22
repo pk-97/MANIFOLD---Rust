@@ -60,6 +60,13 @@ drawable wraps, memoryless storage and raw RT acceleration structures are not
 registered by this manager. Existing resource declarations and hazard tracking
 remain authoritative.
 
+Warmup submits outside the ordinary frame loop. After each warmed layer and at
+the final loading boundary, with no unsubmitted encoder outstanding, the content
+pipeline signals its normal completion event on the same queue and waits for that
+checkpoint before draining retirement and residency. Synchronous warmup commits
+alone do not advance that event: obsolete images would otherwise remain retained
+until playback. Normal playback keeps its nonblocking drain and frame fence.
+
 Within Metal's recommended working-set limit, the manager requests residency
 ahead of use and attaches the set to the device's command queue for execution.
 The queue attachment carries the set into committed command buffers; a standalone
@@ -83,12 +90,34 @@ neither cross-runtime sharing nor GPU retirement/residency policy.
 RGBA8 texture within one execution thread and device resource scope. The key
 includes the decoded pixel SHA256, source dimensions and colour format. Hashing
 runs in the existing decode worker. A cache miss publishes only after synchronous
-CPU upload completes; published textures are never uploaded into again. Each
-layer keeps its own writable conversion/mipmap output and content revisions.
+CPU upload completes; published textures are never uploaded into again.
 The cache holds weak references, prunes expired entries on upload lookup, and
 does not retain image memory after the last source owner releases it. A unique
 `GpuDevice::resource_scope_id` prevents sharing across independent queue,
 residency and retirement owners, including after a renderer is recreated.
+
+glTF conversion/mipmap outputs can also be immutable and shared. The key extends
+source content identity with output dimensions, format, mip count and repack mode.
+Each producer writes a fresh texture on a cache miss and signals a GPU event after
+conversion and mip generation. Another producer may adopt it only after that
+event is complete; it never waits for an unsubmitted command buffer. Concurrent
+initial misses may temporarily allocate separate images, then converge on the
+ready shared image. Empty or pending sources publish an opaque-black image.
+
+`EffectNode::provides_texture_output` reserves a dedicated held slot with a
+descriptor instead of a duplicate writable render target. The executor publishes
+`provided_texture_output` after evaluation and before revision commit or downstream
+reads. `NodeOutputs::texture_2d` does not expose these images as writable outputs.
+The backend never puts them in a writable pool or feedback swap. Feedback
+back-edges and host-prebound destinations retain the ordinary writable path.
+Effect-chain slot assignment reserves intermediate provided outputs without
+allocating or pinning writable targets; host source and final slots stay writable.
+Staged resize keeps compatible immutable images and clears incompatible candidate
+bindings without changing live storage. Content versions remain per logical
+output; adopting identical pixels in different physical storage changes the
+storage identity without inventing a content change. Weak caches retain no image
+after their last producer releases it; GPU handles still use normal retirement
+and residency leases. This does not add inactive-scene eviction or reduce quality.
 
 **Resolution changes:** The content thread prepares compositor, upscaler, generator,
 effect-chain and Math View replacements before publishing new dimensions. GPU

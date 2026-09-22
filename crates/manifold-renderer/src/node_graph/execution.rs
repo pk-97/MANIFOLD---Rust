@@ -1508,7 +1508,11 @@ impl Executor {
                     .expect("resource type known from compile()");
                 let fmt = plan.resource_format(res_id);
                 let dims = resolve_dims(plan, res_id, canvas_dims);
-                let slot = self.backend.acquire(res_id, ty, fmt, dims);
+                let slot = if plan.is_provided_texture(res_id) {
+                    self.backend.acquire_provided_texture(res_id, ty, fmt, dims)
+                } else {
+                    self.backend.acquire(res_id, ty, fmt, dims)
+                };
                 self.output_scratch.push((port_name, slot));
             }
 
@@ -1882,6 +1886,16 @@ impl Executor {
                                     self.slot_pending.resize(slot_idx + 1, false);
                                 }
                                 self.slot_pending[slot_idx] = declared_pending;
+                            }
+                        }
+                    }
+                    // Publish before revision commit and downstream reads.
+                    for &(port, slot) in &self.output_scratch {
+                        if self.backend.provided_texture_descriptor(slot).is_some() {
+                            if let Some(texture) = inst.node.provided_texture_output(port) {
+                                self.backend.install_provided_texture(slot, texture);
+                            } else {
+                                assert!(gpu.is_none(), "node-owned texture output was not provided");
                             }
                         }
                     }
