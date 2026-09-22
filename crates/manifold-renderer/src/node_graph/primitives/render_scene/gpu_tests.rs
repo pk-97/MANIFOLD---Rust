@@ -1502,6 +1502,310 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert!(!resized_b.ptr_eq(&shared_b));
     }
 
+    /// The reflection prefilter scratch is also the later scene-color resolve
+    /// target.  Queue the real atrous kernel, a real 4x MSAA resolve, and the
+    /// real firefly kernel across several command buffers, comparing that
+    /// shared path with a dedicated scratch control at every frame.
+    #[test]
+    fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
+        use manifold_gpu::raytrace::{AtrousParams, MetalShadowRayTracer, ShadowRayTracer};
+
+        const W: u32 = 9;
+        const H: u32 = 9;
+        const FRAME_COUNT: usize = 4;
+        let pixel_count = (W * H) as usize;
+        let device = crate::test_device();
+        let mut scene = RenderScene::new();
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
+        assert!(!scene.ensure_rt_irradiance(&device, W, H, W, H));
+
+        let shared_scratch = scene.rt_refl_full_b.as_ref().expect("reflection scratch").clone();
+        let firefly_scratch = scene.rt_firefly_scratch.as_ref().expect("firefly alias").clone();
+        assert!(shared_scratch.ptr_eq(&firefly_scratch));
+        assert_eq!(shared_scratch.format, GpuTextureFormat::Rgba16Float);
+        assert_eq!((shared_scratch.width, shared_scratch.height), (W, H));
+        let raw_reflection = scene.rt_refl_full.as_ref().expect("raw reflection");
+        assert_ne!(raw_reflection.identity_key(), shared_scratch.identity_key());
+        for history in scene.rt_refl_history.iter().flatten() {
+            assert_ne!(history.identity_key(), shared_scratch.identity_key());
+            assert_ne!(history.identity_key(), raw_reflection.identity_key());
+        }
+        assert_ne!(scene.rt_refl_history[0].as_ref().unwrap().identity_key(), scene.rt_refl_history[1].as_ref().unwrap().identity_key());
+        for post_scratch in [
+            scene.rt_irr_full_b.as_ref().expect("irradiance post scratch"),
+            scene.rt_normal_full_b.as_ref().expect("normal post scratch"),
+        ] {
+            assert_ne!(post_scratch.identity_key(), shared_scratch.identity_key());
+            assert_ne!(post_scratch.identity_key(), raw_reflection.identity_key());
+        }
+
+        let raw_pixels: Vec<[f32; 4]> = (0..pixel_count)
+            .map(|i| {
+                let x = (i % W as usize) as f32;
+                let y = (i / W as usize) as f32;
+                [0.12 + x * 0.025, 0.18 + y * 0.02, 0.1 + (x + y) * 0.01, 1.0]
+            })
+            .collect();
+        let raw_input = upload_rgba16f(&device, W, H, &raw_pixels, "rt-firefly-raw-input");
+        let depth = upload_r32f(&device, W, H, &vec![0.5; pixel_count], "rt-firefly-depth");
+        let moments = upload_rgba32f(
+            &device,
+            W,
+            H,
+            &raw_pixels
+                .iter()
+                .map(|p| [p[0], p[0] * p[0] + 0.01, 0.0, 0.0])
+                .collect::<Vec<_>>(),
+            "rt-firefly-moments",
+        );
+        let normal = upload_rgba16f(
+            &device,
+            W,
+            H,
+            &(0..pixel_count)
+                .map(|i| {
+                    let x = (i % W as usize) as f32 / W as f32;
+                    let y = (i / W as usize) as f32 / H as f32;
+                    [0.1 * x, 0.1 * y, 0.98, 1.0]
+                })
+                .collect::<Vec<_>>(),
+            "rt-firefly-normal",
+        );
+        let visibility = upload_rgba16f(
+            &device,
+            W,
+            H,
+            &(0..pixel_count)
+                .map(|i| {
+                    let x = (i % W as usize) as f32;
+                    let y = (i / W as usize) as f32;
+                    [0.25 + x * 0.01, 0.35 + y * 0.01, 0.5, 1.0]
+                })
+                .collect::<Vec<_>>(),
+            "rt-firefly-visibility",
+        );
+
+        let dedicated_prefilter = rgba16f_target(&device, W, H, "rt-firefly-dedicated-prefilter");
+        let dedicated_scratch = device.create_texture(&GpuTextureDesc {
+            width: W, height: H, depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            label: "rt-firefly-dedicated-resolve",
+            mip_levels: 1,
+        });
+        let shared_final = rgba16f_target(&device, W, H, "rt-firefly-shared-final");
+        let dedicated_final = rgba16f_target(&device, W, H, "rt-firefly-dedicated-final");
+        let shared_msaa = device.create_texture_msaa(
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            4,
+            "rt-firefly-shared-msaa",
+        );
+        let dedicated_msaa = device.create_texture_msaa(
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            4,
+            "rt-firefly-dedicated-msaa",
+        );
+        let shared_aux: [manifold_gpu::GpuTexture; 5] = std::array::from_fn(|_| {
+            rgba16f_target(&device, W, H, "rt-firefly-shared-atrous")
+        });
+        let dedicated_aux: [manifold_gpu::GpuTexture; 5] = std::array::from_fn(|_| {
+            rgba16f_target(&device, W, H, "rt-firefly-dedicated-atrous")
+        });
+        let shared_reflection_tail = rgba16f_target(&device, W, H, "rt-firefly-shared-reflection-tail");
+        let dedicated_reflection_tail = rgba16f_target(&device, W, H, "rt-firefly-dedicated-reflection-tail");
+        let gi_materials = device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64);
+        gi_materials.zero_fill();
+        let atrous_params_buffer = device.create_buffer_shared(std::mem::size_of::<AtrousParams>() as u64);
+        let firefly_params_buffer = device.create_buffer_shared(16);
+        let tracer = MetalShadowRayTracer::new(&device);
+        let params = AtrousParams::new([W, H], 2, true, 0);
+        let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new([W, H], 8.0, 4.0);
+        let firefly_stats = tracer.zero_emissive_stats();
+
+        const MSAA_WGSL: &str = r#"
+            struct Controls { frame: f32, _pad0: f32, _pad1: f32, _pad2: f32, };
+            @group(0) @binding(0) var<uniform> controls: Controls;
+            struct VsOut { @builtin(position) position: vec4<f32>, };
+            @vertex fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
+                var positions = array<vec2<f32>, 3>(
+                    vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+                var out: VsOut;
+                out.position = vec4<f32>(positions[i], 0.0, 1.0);
+                return out;
+            }
+            @fragment fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
+                let p = input.position.xy;
+                let base = 0.25 + p.x * 0.025 + p.y * 0.02 + controls.frame * 0.03;
+                let low = vec4<f32>(base, base * 0.75, base * 0.5, 0.25 + p.x * 0.025);
+                let hot = vec4<f32>(80.0 + controls.frame, 60.0 + controls.frame, 40.0 + controls.frame, 0.625);
+                return select(low, hot, distance(p, vec2<f32>(4.5, 4.5)) < 0.75);
+            }
+        "#;
+        let msaa_pipeline = device.create_render_pipeline_msaa(
+            MSAA_WGSL,
+            "vs_main",
+            "fs_main",
+            GpuTextureFormat::Rgba16Float,
+            None,
+            4,
+            "rt-firefly-msaa-pipeline",
+        );
+
+        let readback_size = u64::from(W * H * 8);
+        let preclamp_shared: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
+        let preclamp_dedicated: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
+        let output_shared: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
+        let output_dedicated: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
+        let reflection_shared: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
+        let reflection_dedicated: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
+        let raw_readback = device.create_buffer_shared(readback_size);
+        let history_readbacks: [manifold_gpu::GpuBuffer; 2] = std::array::from_fn(|_| device.create_buffer_shared(readback_size));
+        let mut encoder = device.create_encoder("rt-firefly-scratch-parity");
+        let raw_refl = raw_reflection;
+        encoder.copy_texture_to_texture(&raw_input, raw_refl, W, H, 1);
+        for history in scene.rt_refl_history.iter().flatten() {
+            encoder.copy_texture_to_texture(&raw_input, history, W, H, 1);
+        }
+
+        for frame in 0..FRAME_COUNT {
+            let shared_atrous = [&shared_aux[0], &shared_aux[1], &shared_aux[2], &shared_aux[3], &shared_aux[4]];
+            let dedicated_atrous = [&dedicated_aux[0], &dedicated_aux[1], &dedicated_aux[2], &dedicated_aux[3], &dedicated_aux[4]];
+            tracer.atrous_pass(
+                &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
+                &visibility, shared_atrous[0], &visibility, shared_atrous[1], &raw_input,
+                shared_atrous[2], &normal, shared_atrous[3], raw_refl, &shared_scratch,
+                &visibility, shared_atrous[4], "rt-firefly-shared-atrous",
+            );
+            tracer.atrous_pass(
+                &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
+                &visibility, dedicated_atrous[0], &visibility, dedicated_atrous[1], &raw_input,
+                dedicated_atrous[2], &normal, dedicated_atrous[3], raw_refl, &dedicated_prefilter,
+                &visibility, dedicated_atrous[4], "rt-firefly-dedicated-atrous",
+            );
+            // The second real atrous pass reads the shared scratch before the
+            // following MSAA resolve overwrites that same backing.
+            tracer.atrous_pass(
+                &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
+                &visibility, shared_atrous[0], &visibility, shared_atrous[1], &raw_input,
+                shared_atrous[2], &normal, shared_atrous[3], &shared_scratch, &shared_reflection_tail,
+                &visibility, shared_atrous[4], "rt-firefly-shared-atrous-readback",
+            );
+            tracer.atrous_pass(
+                &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
+                &visibility, dedicated_atrous[0], &visibility, dedicated_atrous[1], &raw_input,
+                dedicated_atrous[2], &normal, dedicated_atrous[3], &dedicated_prefilter, &dedicated_reflection_tail,
+                &visibility, dedicated_atrous[4], "rt-firefly-dedicated-atrous-readback",
+            );
+
+            // Cross a real submission boundary without a CPU wait before reuse.
+            encoder.commit_and_continue(&device);
+            let controls = [frame as f32, 0.0, 0.0, 0.0];
+            let bindings = [GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&controls) }];
+            encoder.draw_instanced_msaa(
+                &msaa_pipeline, &shared_msaa, &shared_scratch, &bindings, 3, 1,
+                manifold_gpu::GpuLoadAction::Clear, "rt-firefly-shared-msaa-resolve",
+            );
+            encoder.draw_instanced_msaa(
+                &msaa_pipeline, &dedicated_msaa, &dedicated_scratch, &bindings, 3, 1,
+                manifold_gpu::GpuLoadAction::Clear, "rt-firefly-dedicated-msaa-resolve",
+            );
+            // Read the prefilter result after the alias has been overwritten:
+            // parity catches a queued prefilter read seeing scene color early.
+            encoder.copy_texture_to_buffer(&shared_reflection_tail, &reflection_shared[frame], W, H, W * 8);
+            encoder.copy_texture_to_buffer(&dedicated_reflection_tail, &reflection_dedicated[frame], W, H, W * 8);
+            encoder.copy_texture_to_buffer(&shared_scratch, &preclamp_shared[frame], W, H, W * 8);
+            encoder.copy_texture_to_buffer(&dedicated_scratch, &preclamp_dedicated[frame], W, H, W * 8);
+            if frame == 0 {
+                encoder.copy_texture_to_buffer(&shared_scratch, &output_shared[frame], W, H, W * 8);
+                encoder.copy_texture_to_buffer(&dedicated_scratch, &output_dedicated[frame], W, H, W * 8);
+            } else {
+                tracer.firefly_clamp(
+                    &mut encoder, firefly_stats, &firefly_params, &firefly_params_buffer,
+                    &depth, &shared_scratch, &shared_final, "rt-firefly-shared-clamp",
+                );
+                tracer.firefly_clamp(
+                    &mut encoder, firefly_stats, &firefly_params, &firefly_params_buffer,
+                    &depth, &dedicated_scratch, &dedicated_final, "rt-firefly-dedicated-clamp",
+                );
+                encoder.copy_texture_to_buffer(&shared_final, &output_shared[frame], W, H, W * 8);
+                encoder.copy_texture_to_buffer(&dedicated_final, &output_dedicated[frame], W, H, W * 8);
+            }
+            if frame + 1 != FRAME_COUNT {
+                encoder.commit_and_continue(&device);
+            }
+        }
+        encoder.copy_texture_to_buffer(raw_refl, &raw_readback, W, H, W * 8);
+        for (history, readback) in scene.rt_refl_history.iter().flatten().zip(&history_readbacks) {
+            encoder.copy_texture_to_buffer(history, readback, W, H, W * 8);
+        }
+        encoder.try_commit_and_wait_completed().expect("RT firefly scratch parity GPU completion");
+
+        let assert_exact = |label: &str, a: &[[f32; 4]], b: &[[f32; 4]]| {
+            assert_eq!(a.len(), b.len(), "{label} length mismatch");
+            for (index, (lhs, rhs)) in a.iter().zip(b).enumerate() {
+                for channel in 0..4 {
+                    assert!(lhs[channel].is_finite() && rhs[channel].is_finite(), "{label} non-finite at {index}/{channel}");
+                    assert_eq!(lhs[channel].to_bits(), rhs[channel].to_bits(), "{label} mismatch at {index}/{channel}");
+                }
+            }
+        };
+        let mut saw_clamp = false;
+        let center = (H / 2 * W + W / 2) as usize;
+        for frame in 0..FRAME_COUNT {
+            let shared_pre = decode_rgba16f_readback(&preclamp_shared[frame], pixel_count);
+            let dedicated_pre = decode_rgba16f_readback(&preclamp_dedicated[frame], pixel_count);
+            let shared_out = decode_rgba16f_readback(&output_shared[frame], pixel_count);
+            let dedicated_out = decode_rgba16f_readback(&output_dedicated[frame], pixel_count);
+            assert_exact("prefilter parity after reuse",
+                &decode_rgba16f_readback(&reflection_shared[frame], pixel_count),
+                &decode_rgba16f_readback(&reflection_dedicated[frame], pixel_count));
+            assert_exact("pre-clamp parity", &shared_pre, &dedicated_pre);
+            assert_exact("firefly output parity", &shared_out, &dedicated_out);
+            assert!(shared_out.iter().all(|p| p.iter().all(|v| v.is_finite())));
+            assert!(shared_out.iter().any(|p| p[..3].iter().any(|v| *v != 0.0)));
+            for (output, input) in shared_out.iter().zip(&shared_pre) {
+                assert_eq!(output[3].to_bits(), input[3].to_bits(), "alpha must survive clamp");
+            }
+            assert_eq!(shared_out[center][3], 0.625, "nonopaque alpha must survive resolve/clamp");
+            if frame > 0 {
+                assert!(shared_out[center][0] < shared_pre[center][0], "firefly clamp must reduce the hot center");
+                saw_clamp = true;
+            } else {
+                assert_eq!(shared_out[center][0].to_bits(), shared_pre[center][0].to_bits(), "bypass frame must preserve resolve");
+            }
+        }
+        assert!(saw_clamp);
+        let expected_raw: Vec<[f32; 4]> = raw_pixels.iter()
+            .map(|p| p.map(|v| f16::from_f32(v).to_f32())).collect();
+        assert_exact("raw reflection unchanged from input",
+            &decode_rgba16f_readback(&raw_readback, pixel_count), &expected_raw);
+        assert_exact(
+            "raw reflection preserved",
+            &decode_rgba16f_readback(&raw_readback, pixel_count),
+            &decode_rgba16f_readback(&history_readbacks[0], pixel_count),
+        );
+        assert_exact(
+            "reflection histories preserved",
+            &decode_rgba16f_readback(&history_readbacks[0], pixel_count),
+            &decode_rgba16f_readback(&history_readbacks[1], pixel_count),
+        );
+
+        let old_scratch_id = shared_scratch.identity_key();
+        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W, H));
+        let trace_resized = scene.rt_refl_full_b.as_ref().expect("trace-resized scratch").clone();
+        assert_ne!(trace_resized.identity_key(), old_scratch_id);
+        assert!(trace_resized.ptr_eq(scene.rt_firefly_scratch.as_ref().expect("trace-resized firefly alias")));
+        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W + 1, H + 1));
+        let full_resized = scene.rt_refl_full_b.as_ref().expect("full-resized scratch");
+        assert_ne!(full_resized.identity_key(), trace_resized.identity_key());
+        assert!(full_resized.ptr_eq(scene.rt_firefly_scratch.as_ref().expect("full-resized firefly alias")));
+    }
+
     /// RT-Stage-3 P1 (BUG-mkgh): the firefly clamp's median is a partial
     /// selection over the non-void 3x3 subset's luma, returning the element
     /// at sorted index `n/2` (odd n = the middle; even n = the element at

@@ -813,17 +813,12 @@ pub struct RenderScene {
     rt_temporal_color_scratch: Option<manifold_gpu::GpuTexture>,
     rt_temporal_color_scratch_width: u32,
     rt_temporal_color_scratch_height: u32,
-    /// RT-Stage-3 P1 (BUG-mkgh): dedicated single-sample scratch the forward
-    /// pass resolves into when the firefly clamp is active this frame — the
-    /// clamp then reads it and writes `target`, so source and destination
-    /// never alias (under `temporal_upscale`, `target` IS
-    /// `rt_temporal_color_scratch`, which is exactly the aliasing case the
-    /// clamp must avoid). Same `Rgba16Float` + usage as the temporal scratch
-    /// (a legal MSAA resolve destination + clamp read), plus `SHADER_WRITE`
-    /// is NOT needed here — the clamp only reads it.
+    /// Final scene resolve for the firefly clamp, sharing the completed
+    /// reflection prefilter scratch (`rt_refl_full_b`). Its earlier reads
+    /// finish in GPU queue order before Pass 2 resolves color here. The clamp
+    /// writes a distinct target, including under temporal upscale. This
+    /// alias refreshes with the RT allocations on every resize.
     rt_firefly_scratch: Option<manifold_gpu::GpuTexture>,
-    rt_firefly_scratch_width: u32,
-    rt_firefly_scratch_height: u32,
     /// RT-Stage-3 P1: CPU-mapped upload buffer for `FireflyClampParams`
     /// (separate from the other params buffers for the same non-clobbering
     /// reason `rt_atrous_params_buffer` documents).
@@ -2236,11 +2231,10 @@ impl RenderScene {
             depth_wired, wants_shafts_now, velocity_wired, ao_mask_wired,
             denoise_feed, temporal_upscale, native_width, native_height,
             width, height, rt_enabled, rt_shadows_enabled, rt_trace_w, rt_trace_h,
-            rt_firefly_clamp_enabled, denoise_aux_ready, ..
+            denoise_aux_ready, ..
         } = *pre;
         let preparing = ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_enabled = rt_enabled || preparing;
-        let rt_firefly_clamp_enabled = rt_firefly_clamp_enabled || preparing;
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek color format BEFORE the gpu_encoder block below borrows ctx.
         let opaque_scene_color_target_format =
             has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
@@ -2427,22 +2421,12 @@ impl RenderScene {
                 let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
-                // RT-Stage-3 P1 (BUG-mkgh): firefly-clamp params buffer +
-                // scratch. The scratch is sized to `target` for the
-                // non-denoise path (render-res under `temporal_upscale`,
-                // native-res otherwise) — denoise_active disables the
-                // clamp, so its dims are irrelevant there.
+                // The firefly resolve aliases reflection prefilter scratch,
+                // refreshed by ensure_rt_irradiance at render dimensions.
                 self.ensure_rt_firefly_params_buffer(gpu.device);
                 // RT-Stage-3 P4 (BUG-eytk): atrous_post params buffer —
                 // same one-buffer lifetime as the other params buffers.
                 self.ensure_rt_atrous_post_params_buffer(gpu.device);
-                if rt_firefly_clamp_enabled {
-                    if temporal_upscale {
-                        self.ensure_rt_firefly_scratch(gpu.device, width, height);
-                    } else {
-                        self.ensure_rt_firefly_scratch(gpu.device, native_width, native_height);
-                    }
-                }
                 self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
             }
             // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
@@ -3905,8 +3889,8 @@ impl RenderScene {
         };
         // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the node's
         // final resolved color, before the upscale/denoise tail. When it's
-        // active the forward pass resolves into a DEDICATED scratch
-        // (`rt_firefly_scratch`) and the clamp copies scratch→`target` —
+        // active the forward pass resolves into `rt_firefly_scratch`, whose
+        // reflection-prefilter use has finished, and the clamp writes `target` —
         // never `rt_temporal_color_scratch`, because under temporal upscale
         // `target` IS that scratch and the clamp's source/destination would
         // alias. Gated on RT having actually rendered this frame AND the
@@ -5887,8 +5871,6 @@ impl RenderScene {
             rt_temporal_color_scratch_width: 0,
             rt_temporal_color_scratch_height: 0,
             rt_firefly_scratch: None,
-            rt_firefly_scratch_width: 0,
-            rt_firefly_scratch_height: 0,
             rt_firefly_params_buffer: None,
             rt_irr_filtered: None,
             rt_irr_filtered_b: None,
@@ -6790,34 +6772,6 @@ impl RenderScene {
         self.rt_temporal_color_scratch_height = height;
     }
 
-    /// RT-Stage-3 P1 (BUG-mkgh): (re)allocate the dedicated firefly-clamp
-    /// scratch — the single-sample color the forward pass resolves into when
-    /// the clamp is active this frame, so the clamp reads it and writes
-    /// `target` (never aliased). Same `Rgba16Float` + `RENDER_TARGET |
-    /// SHADER_READ` usage as the temporal scratch — a legal MSAA resolve
-    /// destination read back by the clamp's `texture2d<float>` (the clamp
-    /// writes `target`, not this texture, so no `SHADER_WRITE` here).
-    fn ensure_rt_firefly_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        if self.rt_firefly_scratch_width == width
-            && self.rt_firefly_scratch_height == height
-            && self.rt_firefly_scratch.is_some()
-        {
-            return;
-        }
-        self.rt_firefly_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width,
-            height,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
-            label: "node.render_scene RT firefly-clamp scratch (BUG-mkgh)",
-            mip_levels: 1,
-        }));
-        self.rt_firefly_scratch_width = width;
-        self.rt_firefly_scratch_height = height;
-    }
-
     /// D22: (re)create the live `MetalFxTemporalUpscaler` when the
     /// (render, native) dimension pair changes, or lazily on first use.
     /// Returns `false` (leaves `rt_temporal_upscaler` untouched, i.e. `None`
@@ -7039,16 +6993,14 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        // R16Float has no storage-texture clear pipeline. Keep the hold
-        // histories renderable so `clear_texture` can use its render-pass
-        // fallback for the reset sentinel while the accumulate kernel still
-        // writes them through the normal shader-write path.
-        let make_scalar_history = |w: u32, h: u32, label: &'static str| {
+        // Hold histories need render-pass sentinel clears; reflection
+        // scratch also serves as the later MSAA scene-color resolve.
+        let make_renderable = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::R16Float,
+                format,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
                     | manifold_gpu::GpuTextureUsage::SHADER_WRITE
@@ -7069,7 +7021,12 @@ impl RenderScene {
         // RT-R1 (section 9.3): full-res reflection-radiance output target & atrous
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
         self.rt_refl_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
-        self.rt_refl_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
+        self.rt_refl_full_b = Some(make_renderable(full_w, full_h, rgba16, "node.render_scene reflection/firefly scratch"));
+        // The second prefilter pass finishes reading this backing before
+        // Pass 2 resolves scene color into it. Neither the accumulator nor
+        // the post-filter reads reflection scratch, and there is no CPU
+        // mapped access. Both uses remain ordered across GPU checkpoints.
+        self.rt_firefly_scratch = self.rt_refl_full_b.clone();
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
         self.rt_normal_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
@@ -7112,8 +7069,8 @@ impl RenderScene {
         ]
         .map(Some);
         self.rt_sv_hold_history = [
-            make_scalar_history(full_w, full_h, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
-            make_scalar_history(full_w, full_h, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+            make_renderable(full_w, full_h, manifold_gpu::GpuTextureFormat::R16Float, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
+            make_renderable(full_w, full_h, manifold_gpu::GpuTextureFormat::R16Float, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
         ]
         .map(Some);
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
@@ -7134,8 +7091,8 @@ impl RenderScene {
         ]
         .map(Some);
         self.rt_sv2_hold_history = [
-            make_scalar_history(full_w, full_h, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
-            make_scalar_history(full_w, full_h, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+            make_renderable(full_w, full_h, manifold_gpu::GpuTextureFormat::R16Float, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
+            make_renderable(full_w, full_h, manifold_gpu::GpuTextureFormat::R16Float, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
