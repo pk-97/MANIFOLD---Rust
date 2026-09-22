@@ -27,6 +27,7 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::render_mode::RenderMode;
+use crate::node_graph::physics::RigidBody;
 use crate::node_graph::transform::Transform;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
@@ -246,9 +247,15 @@ pub trait Backend: Send {
         None
     }
 
+    fn rigid_body(&self, _slot: Slot) -> Option<RigidBody> {
+        None
+    }
+
     /// Write a [`RenderMode`] value into a slot. Drained from the per-step
     /// scratch by the executor, same shape as `set_atmosphere`.
     fn set_render_mode(&mut self, _slot: Slot, _value: RenderMode) {}
+
+    fn set_rigid_body(&mut self, _slot: Slot, _value: RigidBody) {}
 
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
@@ -361,6 +368,7 @@ pub struct MockBackend {
     atmospheres: AHashMap<Slot, Atmosphere>,
     /// RenderMode values written via [`Backend::set_render_mode`] — same shape.
     render_modes: AHashMap<Slot, RenderMode>,
+    rigid_bodies: AHashMap<Slot, RigidBody>,
     /// SceneObject values written via [`Backend::set_object`] — same shape.
     objects: AHashMap<Slot, SceneObject>,
     /// Skip-passthrough aliases installed this frame via
@@ -383,6 +391,7 @@ impl MockBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
+            rigid_bodies: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
@@ -509,8 +518,16 @@ impl Backend for MockBackend {
         self.render_modes.get(&slot).copied()
     }
 
+    fn rigid_body(&self, slot: Slot) -> Option<RigidBody> {
+        self.rigid_bodies.get(&slot).copied()
+    }
+
     fn set_render_mode(&mut self, slot: Slot, value: RenderMode) {
         self.render_modes.insert(slot, value);
+    }
+
+    fn set_rigid_body(&mut self, slot: Slot, value: RigidBody) {
+        self.rigid_bodies.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<SceneObject> {

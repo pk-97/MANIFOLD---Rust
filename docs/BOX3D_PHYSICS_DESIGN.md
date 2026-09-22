@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P4); differentiator, not release-gating; box3d MIT license confirmed 2026-07-09 · design 2026-07-07 · Fable**
+**Status: First demo implemented and focused checks passed, 2026-09-22. Original broader design approved 2026-07-09; bulk instancing, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -28,6 +28,58 @@ Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its secti
 (bodies get materials for free through the existing renderers).
 
 ---
+
+## Current demo contract (2026-09-22)
+
+This section supersedes conflicting implementation details below for the first
+Physics Solids demo. The original larger design remains a roadmap.
+
+- `manifold-physics` statically compiles unchanged Box3D v0.1.0 sources pinned to
+  `8441b4a06d6d09dcfb0b0f704df4d847d1437b92` under `native/box3d`. A small C bridge
+  includes the pinned headers; Rust exchanges scalars, opaque IDs and flat arrays,
+  rather than copying native struct layouts. The only internal dependency is
+  `manifold-foundation` for `Seconds`. The MIT license is vendored with the source.
+- Each `node.physics_world` exclusively owns its native world. A private process-wide
+  mutex serializes native entry points because upstream world allocation uses an
+  unsynchronized global registry. Worlds can move between threads but cannot be
+  shared by reference. This is a correctness boundary, not a claim of concurrent
+  multi-world performance. No UI or project state owns native handles.
+- `node.rigid_body` emits a typed immutable `RigidBody` description. Up to sixteen
+  `body_N` inputs share one world; matching `pose_N` outputs are ordinary `Transform`
+  values feeding existing `node.scene_object` and `node.render_scene`. This bounded
+  single-object path makes five separately editable solids practical; it does not
+  implement the roadmap's bulk BodySet/InstanceTransform path.
+- `node.platonic_solid_mesh` and collision hulls use the same normalized CPU corner
+  tables for all five solids. The mesh is a closed flat-normal triangle list, padded
+  to 108 vertices; the native collision shape is the actual convex hull. Authored
+  transform scale applies to both, with mesh radius one. Existing materials, lights
+  and cameras remain authoritative.
+- Transport seconds advance fixed 1/120-second ticks with four solver substeps.
+  A stationary clock or zero speed holds motion. Reset, backward time, and the
+  existing runtime state-clear path restore authored starting poses. Shape, scale
+  or body membership changes rebuild the world. Mass/contact-property edits preserve
+  current motion; editing a starting position/rotation repositions that body.
+  More than 128 pending ticks reports an error and holds the last poses until Reset;
+  no elapsed time is silently discarded. Arbitrary-time seek replay is not provided.
+- The Physics Solids preset exposes each body's shape, motion, mass, friction and
+  bounce through the scene panel's existing exposure and command path. Gravity,
+  simulation speed and Reset belong to World. Graph editing is optional wiring.
+  Demo objects are root-scope; physics discovery through arbitrary nested groups
+  and transform modifiers is deferred. The physics chain is not a splicable
+  transform-modifier stack. Animated motion currently sets authored kinematic poses;
+  velocity-driven moving-platform interaction is not part of this demo.
+
+Steady-state Rust stepping and pose reads use retained storage. Native solver
+allocations, large-scene throughput, multi-world contention and export/replay
+stability have not been performance-qualified. Do not infer a 16K-body capability
+from this six-body integration.
+
+Validation: native ownership/input tests, all five scaled hulls settling, fixed-tick
+frame partition equivalence, pause/reset/property preservation, Metal upload parity,
+and a complete two-second graph render with initial/final images. The scene-panel
+flow covers body/world controls, speed edit/undo, and the Reset button. Physics-aware
+object duplication/removal remains tracked as `BUG-g3c3`; existing scene authoring
+commands do not yet own the shared solver body/pose relationship.
 
 ## 1. Audit — what exists (verified 2026-07-07)
 

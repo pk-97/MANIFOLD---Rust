@@ -19,6 +19,8 @@ static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
 /// Scene-vocabulary type ids — the nodes whose params the scene panel wants to
 /// address. Kept in sync with `scene_vm.rs`.
 const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
+    "node.rigid_body",
+    "node.physics_world",
     "node.transform_3d",
     "node.pbr_material",
     "node.phong_material",
@@ -255,6 +257,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         .or(node.handle.as_deref())
         .unwrap_or("Scene");
     let category = match node.type_id.as_str() {
+        "node.rigid_body" | "node.physics_world" => "Physics".to_string(),
         "node.transform_3d" => "Transform".to_string(),
         "node.pbr_material" | "node.phong_material" | "node.unlit_material" | "node.cel_material" => {
             "Material".to_string()

@@ -239,6 +239,7 @@ fn port_type_str(ty: &PortType) -> String {
         PortType::Transform => "Transform".into(),
         PortType::Atmosphere => "Atmosphere".into(),
         PortType::RenderMode => "RenderMode".into(),
+        PortType::RigidBody => "RigidBody".into(),
         PortType::Object => "Object".into(),
     }
 }

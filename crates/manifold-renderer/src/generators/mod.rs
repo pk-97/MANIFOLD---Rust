@@ -7,3 +7,5 @@ pub mod mesh_common;
 pub mod mesh_pipeline;
 pub mod registry;
 pub mod stateful_base;
+
+pub mod platonic_geometry;

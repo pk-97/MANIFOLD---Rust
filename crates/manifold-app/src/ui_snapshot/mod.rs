@@ -303,6 +303,7 @@ fn render_ui_scene(
         || scene == "paramsteps"
         || scene == "gltfscene"
         || scene == "mushroomscene"
+        || scene == "physicsscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "dmxcard"

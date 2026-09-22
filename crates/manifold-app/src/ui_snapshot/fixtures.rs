@@ -31,6 +31,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
     }
     match scene {
         "timeline" => Some(timeline_scene()),
+        "physicsscene" => Some(physics_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {
@@ -144,6 +145,19 @@ pub(super) fn gltf_scene() -> SceneData {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
     imported_gltf_scene(&path, "gltfscene", "Azalea")
+}
+
+/// The bundled physics demo through the production preset and scene-panel path.
+fn physics_scene() -> SceneData {
+    let mut project = Project::default();
+    let mut layer = Layer::new_generator("Physics Solids".into(), PresetTypeId::new("PhysicsSolids"), 0);
+    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));
+    let id = layer.layer_id.clone();
+    project.timeline.layers.push(layer);
+    project.reconcile_param_manifests();
+    let mut selection = UIState::default();
+    selection.select_layer(id);
+    SceneData { project, content: ContentState::default(), active: Some(0), selection }
 }
 
 /// `mushroomscene`: the compact production photoscan fixture used by the

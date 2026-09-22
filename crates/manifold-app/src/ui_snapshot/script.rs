@@ -143,6 +143,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "paramsteps"
         || scene == "gltfscene"
         || scene == "mushroomscene"
+        || scene == "physicsscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"

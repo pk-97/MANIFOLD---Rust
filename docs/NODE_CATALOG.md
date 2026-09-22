@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 291 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 294 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -159,7 +159,7 @@ _Generated from the node registry. Do not hand-edit. 291 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (80)
+### 3D Geometry (83)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -208,8 +208,10 @@ _Generated from the node registry. Do not hand-edit. 291 nodes registered, group
 | Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
 | Ordered Recon | `node.ordered_recon_mesh` | Filter | Reassembles an incoming mesh in directional bands, with each band settling from a periodic pose blend. |
+| Physics World | `node.physics_world` | Filter | Simulate colliding objects together under gravity, with speed and reset controls. |
 | Plane Mesh | `node.plane_mesh` | Source | Builds a flat rectangular sheet of mesh ready to skin with another layer's output. The surface for placing live video in a 3D scene. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
+| Platonic Solid Mesh | `node.platonic_solid_mesh` | Source | Builds a reusable closed triangle mesh for any of the five Platonic solids. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
@@ -223,6 +225,7 @@ _Generated from the node registry. Do not hand-edit. 291 nodes registered, group
 | Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by any number of shar… |
 | Repeat Outline (rings) | `node.repeat_outline` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
 | Revolve Curve | `node.revolve_curve` | Source | Spins a 2D profile curve around a vertical axis to build a solid of revolution — a lathe. The classic way to build vases, columns, and bells from a cross-secti… |
+| Rigid Body | `node.rigid_body` | Source | Give an object mass, friction and bounce, then connect it to a Physics World. |
 | Ripple | `node.ripple_mesh` | Filter | Pushes every vertex along its normal by a sine wave indexed by position along an axis, making a mesh ripple like water or sheet metal. |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
@@ -421,7 +424,7 @@ _Generated from the node registry. Do not hand-edit. 291 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (87)
+### Effect & generator presets (88)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -490,6 +493,7 @@ _Generated from the node registry. Do not hand-edit. 291 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 730 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `SceneStarter` | Scene Starter | generator | Geometry | 135 |

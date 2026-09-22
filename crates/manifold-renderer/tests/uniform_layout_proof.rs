@@ -492,6 +492,9 @@ const NON_STANDALONE: &[&str] = &[
     "node.track_persist",
     // Custom GPU kernels, reduction/FFI or seed-stage layouts (not codegen Params).
     "node.blob_tracker",
+    // CPU-origin mesh upload uses UploadUniforms, reflected against its actual
+    // shader in uniform_layout_extended rather than codegen dispatch Params.
+    "node.platonic_solid_mesh",
     "node.cylinder_wrap_field",
     "node.remove_drift_3d",
     "node.scatter_on_mesh",
