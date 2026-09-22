@@ -413,6 +413,69 @@ Validation and measurement artifacts are kept in
 `/tmp/manifold-memory-converted-20260922/`. This change does not implement inactive
 scene eviction, simulation checkpoints or a project-wide memory budget.
 
+## Idle owners and scratch reuse (2026-09-22)
+
+This follow-up addresses retention gaps identified by static review. It does
+not change the project-level measurements above.
+
+- `GeneratorRenderer::thumb_gens` kept a full generator runtime for a visible
+  parked clip even after its still image had been copied into the clip atlas.
+  The old length comparison also missed changes between equally sized visible
+  sets. The content pipeline now prunes these owners after atlas work on every
+  frame, including pressure, export and empty-visibility paths. Only visible,
+  uncaptured thumbnails remain. Live layer generators are separate owners.
+- Cold thumbnail output is withheld while runtime preparation or frame validity
+  is pending. Each cold attempt consumes the existing one-per-frame budget;
+  retries preserve the warmup frame counter. Atlas copy encoding precedes owner
+  release; existing frame retirement retains GPU resources until completion.
+- `LayerCompositor` now drops cached layer, group, LED-group and master runtimes
+  when their authored effect list becomes empty, including during empty playback.
+  Disabled and zero-amount effects retain their existing lifecycle. Pool slots
+  and liveness stamps remain paired so later layer deletion can still prune them.
+- `plan_array_allocations` remembered only one free physical root for each exact
+  layout/byte-capacity key. A later free root with the same key was discarded
+  from the reuse inventory. Buckets now retain distinct eligible roots and remove
+  roots claimed by explicit aliases. The existing lifetime, state, host-pinning,
+  atomic, canvas-resize and carried-resource exclusions remain unchanged.
+
+Savings depend on the visible thumbnails and graph lifetimes. A thumbnail runtime
+can contain much more than its 512×288 output texture. Neither that texture's
+payload nor a planner fixture is a measured saving for the Corrosion project.
+There is no new claim about loading speed, process RAM or playback latency here.
+The focused planner fixture needs two 16-byte allocations for four logical arrays;
+the previous single-root inventory would require three. This demonstrates the
+missed reuse case, not its frequency or byte impact in the saved project. Tests
+also cover thumbnail capture surviving owner release before command submission,
+and removal of obsolete effect owners without evicting disabled effects.
+
+### Active/nearby scenes: audit result, not an implemented scheduler
+
+The audited seams are `GeneratorRenderer::layer_generators`,
+`LayerCompositor::trim_excess_buffers`, `PresetRuntime::clear_state`,
+`MetalBackend::prepare_resize`, and `PlaybackEngine::compute_prewarm_candidates`.
+Generator ownership is already per layer rather than per clip. Compositor scratch
+buffers recreate on demand; array backing is prebound and cannot be treated as an
+ordinary free texture slot. Node fields and `StateStore` both carry persistent
+state. Existing idle effect-state clearing is a separate playback policy and
+cannot serve as a state-preserving suspension operation.
+
+Video lookahead is bounded, but does not prepare generators. The existing generator
+and effect warmup methods render synthetic frames and may synchronously wait for
+GPU completion. Reusing them during playback would advance state and could stall
+the frame thread. Dropping an entire distant runtime would instead lose state.
+Neither approach is acceptable for the requested preparation policy.
+
+The next implementation boundary is a side-effect-free preparation/suspension API
+for eligible transient backing, retaining simulation, feedback, immutable content
+identity and output dependencies. It must use the existing resource plan and
+retirement/residency owners, invalidate storage-dependent cached outputs after
+rematerialization, and keep old resources usable until replacements are ready.
+Only after a focused suspend/resume pixel-and-state proof should beat-domain
+lookahead select nearby layers and enforce memory/work budgets. Seek, loop,
+topology, resolution and content changes need explicit invalidation; preparation
+must never activate clips or advance triggers. This remains unfinished work under
+BUG-dl16, not a claim that project duration is now independent of memory.
+
 ## Source anchors
 
 Paths below are under `crates/manifold-renderer/src/` unless prefixed with `crates/`:

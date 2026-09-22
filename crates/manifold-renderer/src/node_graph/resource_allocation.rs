@@ -12,6 +12,31 @@ use super::graph::Graph;
 use super::graph_loader::PreAllocationError;
 use super::ports::PortType;
 
+type ReusableKey = (PortType, u64);
+type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
+
+fn enqueue_reusable_root(reusable: &mut ReusableBuckets, key: ReusableKey, root: ResourceId) {
+    let bucket = reusable.entry(key).or_default();
+    if !bucket.contains(&root) {
+        bucket.push(root);
+    }
+}
+
+fn take_reusable_root(reusable: &mut ReusableBuckets, key: ReusableKey) -> Option<ResourceId> {
+    let root = reusable.get_mut(&key)?.pop();
+    if reusable.get(&key).is_some_and(Vec::is_empty) {
+        reusable.remove(&key);
+    }
+    root
+}
+
+fn remove_reusable_root(reusable: &mut ReusableBuckets, root: ResourceId) {
+    reusable.retain(|_, roots| {
+        roots.retain(|candidate| *candidate != root);
+        !roots.is_empty()
+    });
+}
+
 /// Known storage for a logical array resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArrayStorage {
@@ -153,7 +178,7 @@ pub fn plan_array_allocations(
         }
         excluded_resources.extend(canvas_arrays);
     }
-    let mut reusable: AHashMap<(PortType, u64), ResourceId> = AHashMap::default();
+    let mut reusable: ReusableBuckets = AHashMap::default();
 
     for step in plan.steps() {
         let Some(node_inst) = graph.get_node(step.node) else {
@@ -240,7 +265,7 @@ pub fn plan_array_allocations(
                     storage.insert(*resource, input_storage);
                     current_output_roots.insert(input_storage.root);
                     excluded_roots.insert(input_storage.root);
-                    reusable.retain(|_, root| *root != input_storage.root);
+                    remove_reusable_root(&mut reusable, input_storage.root);
                     continue;
                 }
                 warnings.push(format!(
@@ -339,7 +364,7 @@ pub fn plan_array_allocations(
                 let storage_type = PortType::Array(layout);
                 if !zero_init
                     && !excluded_resources.contains(resource)
-                    && let Some(root) = reusable.remove(&(storage_type, bytes))
+                    && let Some(root) = take_reusable_root(&mut reusable, (storage_type, bytes))
                 {
                     actions.push(ArrayAllocationAction::Alias {
                         resource: *resource,
@@ -397,7 +422,7 @@ pub fn plan_array_allocations(
             if plan.resource_type(entry.root) != Some(resource_type) {
                 continue;
             }
-            reusable.entry((resource_type, entry.bytes)).or_insert(entry.root);
+            enqueue_reusable_root(&mut reusable, (resource_type, entry.bytes), entry.root);
         }
     }
 
@@ -429,10 +454,198 @@ fn unbound_error(
 mod tests {
     use super::*;
     use crate::node_graph::compile;
+    use crate::node_graph::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+    };
+    use crate::node_graph::parameters::ParamDef;
+    use crate::node_graph::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
     use crate::node_graph::primitives::{
         ArrayFeedback, ContainerBounds3D, GenerateCubeMesh, ResolveAccumulator, ScatterParticles,
         SceneObjectNode, SeedParticles, Value, WaveShearMesh,
     };
+
+    struct FixedArrayNode {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        capacity: u32,
+    }
+
+    impl FixedArrayNode {
+        fn new(
+            type_name: &'static str,
+            inputs: Vec<NodeInput>,
+            outputs: Vec<NodeOutput>,
+            capacity: u32,
+        ) -> Self {
+            Self {
+                type_id: EffectNodeType::new(type_name),
+                inputs,
+                outputs,
+                capacity,
+            }
+        }
+    }
+
+    impl EffectNode for FixedArrayNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+
+        fn array_output_capacity(
+            &self,
+            port: &str,
+            _: &ParamValues,
+            _: &[(&str, u32)],
+        ) -> Option<u32> {
+            self.outputs
+                .iter()
+                .any(|output| output.name == port && matches!(output.ty, PortType::Array(_)))
+                .then_some(self.capacity)
+        }
+    }
+
+    fn mock_port(name: &'static str, ty: PortType, kind: PortKind, required: bool) -> NodePort {
+        NodePort {
+            name: std::borrow::Cow::Borrowed(name),
+            ty,
+            kind,
+            required,
+        }
+    }
+
+    #[test]
+    fn reusable_root_buckets_deduplicate_and_remove_across_keys() {
+        let key = (PortType::Array(ArrayType::of::<u32>()), 16);
+        let other_key = (PortType::Array(ArrayType::of::<f32>()), 16);
+        let first = ResourceId(10);
+        let second = ResourceId(11);
+        let mut reusable = ReusableBuckets::default();
+
+        enqueue_reusable_root(&mut reusable, key, first);
+        enqueue_reusable_root(&mut reusable, key, first);
+        enqueue_reusable_root(&mut reusable, key, second);
+        enqueue_reusable_root(&mut reusable, other_key, first);
+        assert_eq!(reusable[&key], vec![first, second]);
+        assert_eq!(reusable[&other_key], vec![first]);
+
+        remove_reusable_root(&mut reusable, first);
+        assert_eq!(reusable[&key], vec![second]);
+        assert!(!reusable.contains_key(&other_key));
+        assert_eq!(take_reusable_root(&mut reusable, key), Some(second));
+        assert!(!reusable.contains_key(&key));
+    }
+
+    #[test]
+    fn array_allocation_plan_reuses_two_same_key_roots_at_multi_output_step() {
+        let array = PortType::Array(ArrayType::of::<u32>());
+        let scalar = PortType::Scalar(ScalarType::F32);
+        let mut graph = Graph::new();
+        let source_a = graph.add_node(Box::new(FixedArrayNode::new(
+            "test.source_a",
+            vec![],
+            vec![mock_port("out", array, PortKind::Output, false)],
+            4,
+        )));
+        let source_b = graph.add_node(Box::new(FixedArrayNode::new(
+            "test.source_b",
+            vec![],
+            vec![mock_port("out", array, PortKind::Output, false)],
+            4,
+        )));
+        let fan_in = graph.add_node(Box::new(FixedArrayNode::new(
+            "test.fan_in",
+            vec![
+                mock_port("left", array, PortKind::Input, true),
+                mock_port("right", array, PortKind::Input, true),
+            ],
+            vec![mock_port("trigger", scalar, PortKind::Output, false)],
+            4,
+        )));
+        let fan_out = graph.add_node(Box::new(FixedArrayNode::new(
+            "test.fan_out",
+            vec![mock_port("trigger", scalar, PortKind::Input, true)],
+            vec![
+                mock_port("left", array, PortKind::Output, false),
+                mock_port("right", array, PortKind::Output, false),
+            ],
+            4,
+        )));
+        let sink = graph.add_node(Box::new(FixedArrayNode::new(
+            "test.sink",
+            vec![
+                mock_port("left", array, PortKind::Input, true),
+                mock_port("right", array, PortKind::Input, true),
+            ],
+            vec![],
+            4,
+        )));
+        graph.connect((source_a, "out"), (fan_in, "left")).unwrap();
+        graph.connect((source_b, "out"), (fan_in, "right")).unwrap();
+        graph
+            .connect((fan_in, "trigger"), (fan_out, "trigger"))
+            .unwrap();
+        graph.connect((fan_out, "left"), (sink, "left")).unwrap();
+        graph.connect((fan_out, "right"), (sink, "right")).unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let planned =
+            plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+        let fan_out_outputs: Vec<_> = plan
+            .steps()
+            .iter()
+            .find(|step| step.node == fan_out)
+            .unwrap()
+            .outputs
+            .iter()
+            .map(|(_, resource)| *resource)
+            .collect();
+        assert_eq!(fan_out_outputs.len(), 2);
+        let roots: Vec<_> = fan_out_outputs
+            .iter()
+            .map(|resource| planned.storage[resource].root)
+            .collect();
+        assert_ne!(roots[0], roots[1]);
+        assert!(fan_out_outputs.iter().all(|resource| {
+            planned.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    ArrayAllocationAction::Alias { resource: aliased, input }
+                        if aliased == resource && *input == planned.storage[resource].root
+                )
+            })
+        }));
+        assert_eq!(
+            planned
+                .actions
+                .iter()
+                .filter(|action| matches!(action, ArrayAllocationAction::Allocate(_)))
+                .count(),
+            2,
+            "both fan-in roots should satisfy the later outputs"
+        );
+    }
+
 
     fn array_outputs(plan: &ExecutionPlan) -> Vec<(NodeInstanceId, ResourceId, u32)> {
         plan.steps()
