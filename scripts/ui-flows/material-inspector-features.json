@@ -145,7 +145,7 @@
         }
       },
       "check": {
-        "Count": 0
+        "TextEquals": "Auto"
       }
     }
   }

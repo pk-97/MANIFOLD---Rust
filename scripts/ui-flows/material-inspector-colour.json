@@ -17,29 +17,6 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "material.swatch.10_color_r"
-        }
-      }
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "name": "material.swatch.10_color_r"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  {
-    "ScrollTo": {
-      "target": {
-        "Query": {
           "name": "param_row.10_color_r.slider"
         }
       }

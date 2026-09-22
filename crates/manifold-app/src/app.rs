@@ -1073,6 +1073,31 @@ impl Application {
                     }
                 }
             }
+            TextInputField::MaterialColour => {
+                if let Some(ctx) = self.text_input.material_colour.take()
+                    && let Some(values) = crate::text_input::parse_material_colour_hex(text)
+                {
+                    // Use the same phased RGB scrub as the swatch drag. Begin
+                    // captures the live baseline, Move previews all channels
+                    // atomically, and Commit records one undo command.
+                    let content_tx = self.content_tx.as_ref().unwrap().clone();
+                    for action in crate::text_input::material_colour_scrub_actions(ctx, values) {
+                        let mut dctx = crate::ui_bridge::DispatchCtx {
+                            project: &mut self.local_project,
+                            content_tx: &content_tx,
+                            content_state: &self.content_state,
+                            ui: &mut self.ws.ui_root,
+                            selection: &mut self.selection,
+                            active_layer: &mut self.active_layer_id,
+                            user_prefs: &mut self.user_prefs,
+                            editor_target: None,
+                            scrub: &mut self.scrub,
+                        };
+                        let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
+                    }
+                    self.needs_rebuild = true;
+                }
+            }
             TextInputField::SceneNumericParam(node_doc_id) => {
                 // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10. Lenient
                 // parse (same convention as InspectorParam): keep only the

@@ -46,13 +46,12 @@ use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
-    ROW_ROLE_SECTION_HEADER, param_row_key_base,
+    ROW_ROLE_SECTION_HEADER, ROW_ROLE_TOGGLE, param_row_key_base,
     build_toggle_trigger_row, ToggleParamIds,
 };
-use super::param_slider_shared::material_placement::MaterialPlacementWidget;
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ModifierObjectRef,
-    ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec, UvComponent,
+    ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec,
 };
 use crate::slider::GAP;
 
@@ -76,7 +75,7 @@ const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
 const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
-const MATERIAL_SWATCH_KEY_BASE: u64 = 96_000;
+const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
@@ -1009,8 +1008,10 @@ pub struct ScenePanel {
     /// `(button, row, scalar ids)` is rebuilt with the live tree and never
     /// used as a second value store.
     material_swatch_ids: Vec<(NodeId, usize, [manifold_foundation::ParamId; 3], crate::param_surface::MaterialColour)>,
-    /// Expanded colour groups, keyed by the stable primary channel id.
-    material_rgb_expanded: ahash::AHashSet<manifold_foundation::ParamId>,
+    /// Feature presence is captured on selection, never inferred during a drag.
+    material_mode_ids: Vec<(NodeId, usize)>,
+    material_feature_context: Option<(LayerId, ModifierObjectRef, ModifierObjectRef)>,
+    material_visible_features: ahash::AHashSet<crate::param_surface::MaterialFeature>,
     /// Named material recipe buttons for the selected object's material.
     material_look_ids: Vec<(NodeId, MaterialLook, ModifierObjectRef, ModifierObjectRef)>,
     /// Add Feature controls and explicit feature mode headers for the selected
@@ -1023,12 +1024,6 @@ pub struct ScenePanel {
         ModifierObjectRef,
     )>,
     active_material_info: Option<MaterialInspectorInfo>,
-    /// One friendly placement widget per supported texture family. A widget
-    /// is active only when its family is connected in the selected material;
-    /// raw matrix and sampler rows remain in the shared Advanced drawer.
-    material_placement_widgets: [MaterialPlacementWidget; 5],
-    material_placement_active: [bool; 5],
-    material_placement_built: [bool; 5],
     panel_rect: Rect,
 }
 
@@ -1071,13 +1066,12 @@ impl Default for ScenePanel {
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
             material_swatch_ids: Vec::new(),
-            material_rgb_expanded: ahash::AHashSet::new(),
+            material_mode_ids: Vec::new(),
+            material_feature_context: None,
+            material_visible_features: ahash::AHashSet::new(),
             material_look_ids: Vec::new(),
             material_feature_ids: Vec::new(),
             active_material_info: None,
-            material_placement_widgets: std::array::from_fn(|_| MaterialPlacementWidget::new()),
-            material_placement_active: [false; 5],
-            material_placement_built: [false; 5],
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
     }
@@ -1214,6 +1208,10 @@ impl ScenePanel {
                 *c = true;
             }
         }
+        for &(node, slot) in &self.material_mode_ids {
+            let label = match card.current_values[slot].round() as i32 { 1 => "Off", 2 => "On", _ => "Auto" };
+            tree.set_text(node, label);
+        }
         for (i, synced) in card.row_value_synced.iter().enumerate() {
             if !*synced {
                 debug_assert!(
@@ -1224,6 +1222,7 @@ impl ScenePanel {
                 crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
             }
         }
+        self.sync_material_swatches(tree);
     }
 
     /// (`ScreenLayout::scene_setup()`). No-op when closed.
@@ -1302,11 +1301,10 @@ impl ScenePanel {
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
         self.material_swatch_ids.clear();
+        self.material_mode_ids.clear();
         self.material_look_ids.clear();
         self.material_feature_ids.clear();
         self.active_material_info = None;
-        self.material_placement_active = [false; 5];
-        self.material_placement_built = [false; 5];
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
         let content_top = y + PAD + TITLE_H;
@@ -1898,7 +1896,7 @@ impl ScenePanel {
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
                     && Self::row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
-                    && self.material_rgb_row_visible(&config.rows, p)
+                    && Self::material_panel_row_visible(p)
                 {
                     retained.push(i);
                 }
@@ -1939,11 +1937,6 @@ impl ScenePanel {
         let mut i = 0usize;
         while i < retained.len() {
             let cur_section = self.material_section_name(&config.rows[retained[i]]);
-            if let Some(name) = cur_section.as_deref()
-                && let Some(family) = Self::material_family_from_section(name)
-            {
-                cy = self.build_material_placement(tree, inner_x, inner_w, cy, family);
-            }
             if let Some(name) = &cur_section {
                 let folded = self.material_section_folded(name);
                 self.section_folded.entry(name.clone()).or_insert(folded);
@@ -1992,7 +1985,7 @@ impl ScenePanel {
                     cy,
                     (inner_w - 2.0 * GAP - triangle_w).max(0.0),
                     ROW_H,
-                    &self.material_section_display_name(name),
+                    name,
                     label_style(),
                 );
                 // Register header for click routing
@@ -2277,9 +2270,6 @@ impl ScenePanel {
         if !self.open {
             return (false, Vec::new());
         }
-        if let Some(actions) = self.handle_material_placement_event(event, tree) {
-            return (true, actions);
-        }
         match event {
             UIEvent::Click { node_id, .. } => {
                 if *node_id == self.close_id {
@@ -2329,6 +2319,7 @@ impl ScenePanel {
                         if !self.material_action_context(object, material, false) {
                             return (true, Vec::new());
                         }
+                        self.material_visible_features.insert(*feature);
                         actions.push(PanelAction::Project(ProjectAction::MaterialParamsSet {
                             target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
                             object: object.clone(),
@@ -2337,17 +2328,13 @@ impl ScenePanel {
                             writes: writes.clone(),
                             description: format!("Add {} feature", Self::material_feature_label(*feature)),
                         }));
-                    } else if let Some((_, slot, _, _)) = self.material_swatch_ids.iter().find(|(id, _, _, _)| *id == *node_id) {
-                        let Some(row) = self.properties_card.rows.get(*slot) else {
-                            return (true, Vec::new());
-                        };
-                        if let Some(anchor) = row.rgb_members.as_ref().map(|_| row.id.clone()) {
-                            if !self.material_rgb_expanded.remove(&anchor) {
-                                self.material_rgb_expanded.insert(anchor);
-                            }
-                            return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
-                        }
-                        return (true, Vec::new());
+                    } else if let Some((_, _, members, _)) = self.material_swatch_ids.iter().find(|(id, _, _, _)| *id == *node_id) {
+                        return (true, vec![PanelAction::Root(RootAction::BeginMaterialColourTextInput {
+                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
+                            param_ids: members.clone(),
+                            anchor: tree.get_bounds(*node_id),
+                            value: members.clone().map(|id| self.material_full_value(&id)),
+                        })]);
                     } else if let Some((_, look, object, material)) =
                         self.material_look_ids.iter().find(|(id, _, _, _)| *id == *node_id)
                     {
