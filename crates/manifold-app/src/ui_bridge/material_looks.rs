@@ -113,8 +113,15 @@ pub(super) fn writes(
         }
     }
     factors.into_iter().map(|(param,value)| {
+        // Imports also expose shared scene controls (such as Ambient) to
+        // the same node input. Default restores the material's own stamp.
+        let prefer_authored = matches!(look, MaterialLook::Default)
+            && meta.bindings.iter().any(|binding| binding.default_mirrors_node_param
+                && matches!(&binding.target, BindingTarget::Node { node_id, param: p }
+                    if *node_id == material.node && p == &param));
         let mut found = meta.bindings.iter().filter(|binding|
-            matches!(&binding.target,BindingTarget::Node {node_id,param:p} if *node_id == material.node && p == &param));
+            (!prefer_authored || binding.default_mirrors_node_param)
+                && matches!(&binding.target,BindingTarget::Node {node_id,param:p} if *node_id == material.node && p == &param));
         let binding = found.next().ok_or_else(|| format!("Material parameter {param} is not exposed"))?;
         if found.next().is_some() { return Err(format!("Material parameter {param} has ambiguous bindings")); }
         if !inst.params.contains(&binding.id) { return Err(format!("Material parameter {param} is unavailable")); }
