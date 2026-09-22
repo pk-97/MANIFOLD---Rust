@@ -99,6 +99,15 @@ scratch writes follow it in the same queue. Native hazard tracking also covers
 existing command-buffer checkpoints. Resize refreshes both aliases with their
 backing. This removes two allocations without adding waits or changing history.
 
+**RT firefly resolve:** `rt_firefly_scratch` shares the renderable RGBA16
+reflection-prefilter scratch `rt_refl_full_b`. The second prefilter pass reads
+that backing before the forward scene pass resolves into it; the firefly clamp
+then reads scene color and writes a distinct output. Current reflection output,
+all histories and the post-filter pair remain separate. These are GPU-only,
+ordered uses, including across command-buffer checkpoints. Initial allocation,
+trace-size changes and render-size changes refresh the alias together. This
+removes one physical texture without changing the clamp or its activation gates.
+
 **RT scalar history:** Each shadow-visibility group keeps its own ping-pong
 snap-hold countdown in `R16Float`. Accumulation reads and writes only the red
 channel, retaining the previous half-float precision. Both histories remain

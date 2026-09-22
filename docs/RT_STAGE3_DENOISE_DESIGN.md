@@ -71,10 +71,10 @@ Constants: `FIREFLY_MEDIAN_GAIN` 8.0 (range 4–16; anchored to `RT_REFL_FIREFLY
 
 ### 3.3 Dispatch wiring (render_scene.rs)
 
-- `ensure_rt_irradiance` allocates `rt_irr_filtered` + `rt_irr_filtered_b` (rgba16, same usage flags and lifecycle as `rt_irr_history`, render_scene.rs:2547-2551 shape).
+- `ensure_rt_irradiance` aliases `rt_irr_filtered` + `rt_irr_filtered_b` to the completed prefilter scratch as described in D1; history remains separate.
 - After `accumulate_irradiance` (render_scene.rs:6213), when the tier ≠ Off, RT accumulated this frame, and not `denoise_active`: dispatch N `atrous_post` passes. Reuse the `rt_atrous_params_buffer` precedent (render_scene.rs:2676-2680) for the params struct.
 - Composite seam: `rt_irr_tex` (render_scene.rs:6433) binds `rt_irr_filtered` when the filter ran this frame, else the raw history slot. One `let`, no downstream change.
-- The clamp: inside the output redirect (render_scene.rs:6311-6321), when RT rendered this frame, `rt_firefly_clamp` param true, and not `denoise_active`: resolve into a **dedicated `rt_firefly_scratch`** (never `rt_temporal_color_scratch` — under temporal upscale `target` IS that scratch, so the clamp's source and destination would alias) and dispatch `firefly_clamp` scratch→target. The scratch is ensured alongside `rt_temporal_color_scratch`.
+- The clamp: inside the output redirect (render_scene.rs:6311-6321), when RT rendered this frame, `rt_firefly_clamp` param true, and not `denoise_active`: resolve into `rt_firefly_scratch`, which shares the completed reflection-prefilter `rt_refl_full_b` backing (2026-09-22 memory follow-up) (never `rt_temporal_color_scratch` — under temporal upscale `target` IS that scratch, so the clamp's source and destination would alias) and dispatch `firefly_clamp` scratch→target. The shared scratch is renderable RGBA16 at render dimensions and refreshes with `ensure_rt_irradiance`; queue ordering ends the earlier prefilter reads before the scene resolve.
 
 ### 3.4 Settings model (foundation), command (editing), panel (ui)
 
