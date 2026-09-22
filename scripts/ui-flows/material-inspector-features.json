@@ -53,6 +53,20 @@
         }
       },
       "check": {
+        "Above": {
+          "name": "param_row.10_clearcoat.value"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_coat_mode.value"
+        }
+      },
+      "check": {
         "TextEquals": "On"
       }
     }
