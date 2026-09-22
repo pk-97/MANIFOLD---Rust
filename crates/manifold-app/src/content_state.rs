@@ -108,6 +108,10 @@ pub struct ContentState {
     pub content_frame_time_ms: f32,
     /// Time spent waiting for a GPU surface (ms). Non-zero = GPU saturation.
     pub gpu_fence_wait_ms: f32,
+    /// CPU time spent stepping physics worlds and extracting poses (ms).
+    pub physics_cpu_ms: f32,
+    /// Bodies evaluated by physics worlds during the live content frame.
+    pub physics_body_count: u32,
     pub active_clips: usize,
 
     // ── Editing ────────────────────────────────────────────────────
@@ -493,6 +497,8 @@ impl Default for ContentState {
             content_fps: 0.0,
             content_frame_time_ms: 0.0,
             gpu_fence_wait_ms: 0.0,
+            physics_cpu_ms: 0.0,
+            physics_body_count: 0,
             active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,

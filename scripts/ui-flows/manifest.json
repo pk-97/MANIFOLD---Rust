@@ -187,7 +187,8 @@
     "material-inspector-colour": "gltfscene",
     "material-inspector-features": "gltfscene",
     "material-inspector-looks": "gltfscene",
-    "material-inspector-textures": "gltfscene"
+    "material-inspector-textures": "gltfscene",
+    "physics-box-count": "physicsboxes"
   },
   "expected_fail": {
     "scene-panel-card-convergence-c-p1b-object-scrub": {

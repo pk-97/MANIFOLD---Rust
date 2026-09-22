@@ -2757,6 +2757,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             // A valid cold-start attempt consumes the existing
                             // one-per-frame budget even when async runtime/GPU
                             // readiness withholds the texture this frame.
+                            // Parked clip thumbnails are offscreen preview work;
+                            // keep their physics evaluations out of the live HUD
+                            // metrics accumulated around render_content().
+                            let _physics_metrics_guard =
+                                manifold_renderer::node_graph::physics_metrics::suspend_recording();
                             let _ = gen_r.render_clip_thumbnail(
                                 &mut gpu_cold,
                                 cid_str,

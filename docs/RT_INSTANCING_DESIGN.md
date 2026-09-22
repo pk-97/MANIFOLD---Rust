@@ -5,6 +5,15 @@
 
 Peter, 2026-09-05: *"if RT does not work with instances it will look horrible and janky."* Scene Loop and Scene Mirror (both landed 2026-09-05) render copies through `Array<InstanceTransform>` buffers consumed by the raster path only; the RT accel structure instances each object once at its base `model` transform, so loop copies and mirrored copies are invisible to RT shadows, AO, GI, and reflections. This wave removes that limitation — the deferred trigger of SCENE_MIRROR_DESIGN.md D7 (rt-inherits-instancing-limitation), pulled forward.
 
+**2026-09-22 live-count amendment (Physics Boxes):** `scene_object.instance_count`
+is an optional CPU scalar. With instances wired, it bounds raster, shadow and RT
+slots to the floored non-negative count clamped to buffer capacity; absent preserves
+the original capacity contract. Non-finite counts draw zero. Zero-count objects
+are excluded from depth/shadow and RT tables rather than normalized to an identity
+copy. This supersedes D13's zero-capacity normalization. D2/D9/INV-RTI5 now use the
+resolved slot count: a live-count change is topology even when backing capacity
+stays fixed. Existing in-band zero-scale producers remain compatible.
+
 ## 1. Anchors (verified 2026-09-05, wave/rt-instancing at origin/main 3ffd6b4bd)
 
 | What | Where | State |

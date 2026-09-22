@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: First demo implemented and focused checks passed, 2026-09-22. Original broader design approved 2026-07-09; bulk instancing, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos implemented, 2026-09-22. Original broader design approved 2026-07-09; general multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -69,10 +69,35 @@ Physics Solids demo. The original larger design remains a roadmap.
   transform-modifier stack. Animated motion currently sets authored kinematic poses;
   velocity-driven moving-platform interaction is not part of this demo.
 
+### Physics Boxes demo
+
+Load **Physics Boxes** from the generator picker. **Box Count**
+selects 0–4,096 boxes; **Reset** rebuilds the starting grid at that count. The
+initial count is 256. The floor, box geometry/contact properties, camera and
+lighting are fixed in the preset. Play advances the drop; pause holds it. The
+Performance HUD shows render frame interval, Physics CPU time and Bodies (including
+the fixed floor). The 4,096 ceiling is a bounded demo capacity, not a measured
+real-time limit or a Box3D engine limit.
+
+The existing `node.physics_world` accepts an optional `copies` rigid-body
+prototype alongside its sixteen individual bodies. Copies share their native
+world and contacts, and start in a centered layered grid. `copy_count`,
+`copy_columns` and `copy_spacing` are sampled on initialization/Reset, not on
+slider motion. Copies require uniform scale because the existing
+`InstanceTransform` wire has one scale component. The `instances` output feeds
+`node.scene_object.instances`; `active_count` feeds its optional `instance_count`
+input, so drawing, shadows and RT use only active copies rather than the 4,096
+buffer capacity. Unwired instance count preserves existing behavior.
+
+Physics timing covers CPU stepping and pose extraction, excludes rebuilding and
+GPU rendering, and sums worlds evaluated during the live content render. It is
+not the total frame cost. No photoscan fragmentation or sand simulation is added.
+
 Steady-state Rust stepping and pose reads use retained storage. Native solver
 allocations, large-scene throughput, multi-world contention and export/replay
 stability have not been performance-qualified. Do not infer a 16K-body capability
-from this six-body integration.
+from these demos. The box-count scene provides a controlled measurement surface;
+large-scene throughput has not been qualified.
 
 Validation: native ownership/input tests, all five scaled hulls settling, fixed-tick
 frame partition equivalence, pause/reset/property preservation, Metal upload parity,

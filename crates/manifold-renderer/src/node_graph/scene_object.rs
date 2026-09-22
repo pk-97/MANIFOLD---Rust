@@ -95,6 +95,10 @@ pub struct SceneObject {
     /// `Array<InstanceTransform>` slot, for instanced draws. `None` for a
     /// single-instance object.
     pub instances: Option<Slot>,
+    /// Optional live instance count for an instanced draw. `None` preserves
+    /// the existing capacity-based behavior; wired values are clamped by the
+    /// renderer to the backing buffer's capacity.
+    pub instance_count: Option<f32>,
     /// Per-object emissive-map strength multiplier. Lives on the object, not
     /// the material, so a skin driving `emissive_map` can be dimmed without
     /// touching the underlying material emission factor. Default 1.0.
@@ -215,6 +219,7 @@ mod tests {
             transmission_map: None,
             volume_thickness_map: None,
             instances: None,
+            instance_count: None,
             emission_strength: 1.0,
             gain: 1.0,
         };
@@ -251,6 +256,7 @@ mod tests {
             transmission_map: None,
             volume_thickness_map: None,
             instances: Some(Slot(2)),
+            instance_count: None,
             emission_strength: 1.0,
             gain: 1.0,
         };

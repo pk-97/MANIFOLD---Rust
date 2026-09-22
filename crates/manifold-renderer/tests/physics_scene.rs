@@ -20,6 +20,51 @@ use manifold_renderer::node_graph::scene_vm::{
 use manifold_renderer::preset_runtime::PresetRuntime;
 
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
+const PHYSICS_BOXES_JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");
+
+#[test]
+fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
+    let registry = PrimitiveRegistry::with_builtin();
+    PresetRuntime::from_json_str(PHYSICS_BOXES_JSON, &registry)
+        .expect("PhysicsBoxes must compile through the production loader");
+    let mut def: EffectGraphDef = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
+    migrate_scene_exposures(&mut def);
+    let vm = SceneVm::from_def(&def).expect("box demo is a scene");
+    assert_eq!(vm.objects.len(), 2);
+    let metadata = def.preset_metadata.as_ref().unwrap();
+    let count = metadata
+        .params
+        .iter()
+        .find(|p| p.id == "40_copy_count")
+        .unwrap();
+    assert_eq!(
+        (count.min, count.max, count.default_value),
+        (0.0, 4096.0, 256.0)
+    );
+    assert!(count.whole_numbers && count.card_visible);
+    assert!(
+        metadata
+            .params
+            .iter()
+            .find(|p| p.id == "40_reset")
+            .unwrap()
+            .is_trigger
+    );
+    for (from, port, to, input) in [
+        (101, "body", 40, "body_0"),
+        (121, "body", 40, "copies"),
+        (40, "instances", 124, "instances"),
+        (40, "active_count", 124, "instance_count"),
+    ] {
+        assert!(def.wires.iter().any(|w| w.from_node == from
+            && w.from_port == port
+            && w.to_node == to
+            && w.to_port == input));
+    }
+    let roundtrip: EffectGraphDef =
+        serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+    assert_eq!(def, roundtrip);
+}
 
 fn parse_preset() -> EffectGraphDef {
     serde_json::from_str(PHYSICS_SOLIDS_JSON).expect("PhysicsSolids preset must parse")

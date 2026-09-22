@@ -38,6 +38,7 @@ mod render_scene_instances;
 mod render_scene_lights;
 mod render_scene_map_set;
 mod physics_solids;
+mod physics_boxes;
 mod render_scene_object_visibility;
 mod render_scene_ao_mask;
 mod render_scene_pcss;

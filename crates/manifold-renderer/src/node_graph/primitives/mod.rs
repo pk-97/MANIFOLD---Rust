@@ -956,6 +956,6 @@ mod tests {
 }
 
 mod rigid_body;
-mod physics_world;
+pub(crate) mod physics_world;
 pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;

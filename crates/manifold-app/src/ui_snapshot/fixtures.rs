@@ -31,7 +31,8 @@ pub fn build(scene: &str) -> Option<SceneData> {
     }
     match scene {
         "timeline" => Some(timeline_scene()),
-        "physicsscene" => Some(physics_scene()),
+        "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
+        "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {
@@ -148,9 +149,9 @@ pub(super) fn gltf_scene() -> SceneData {
 }
 
 /// The bundled physics demo through the production preset and scene-panel path.
-fn physics_scene() -> SceneData {
+fn physics_scene(preset: &str, name: &str) -> SceneData {
     let mut project = Project::default();
-    let mut layer = Layer::new_generator("Physics Solids".into(), PresetTypeId::new("PhysicsSolids"), 0);
+    let mut layer = Layer::new_generator(name.into(), PresetTypeId::new(preset), 0);
     layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));
     let id = layer.layer_id.clone();
     project.timeline.layers.push(layer);
