@@ -4,6 +4,7 @@ use crate::node_graph::primitives::{AudioSpectrum, Gain, Mix};
 use crate::node_graph::{FinalOutput, Graph, Source, compile};
 
 #[test]
+#[cfg(feature = "gpu-proofs")]
 fn chain_reserves_provided_image_without_a_writable_backing() {
     let device = crate::test_device();
     let primitives = PrimitiveRegistry::with_builtin();

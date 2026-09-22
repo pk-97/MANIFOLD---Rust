@@ -401,6 +401,14 @@ exclusion. The 12-test glTF GPU group passes, including four new proofs for:
 - two real executors sharing one image, repeated-frame retention, changing one
   layer without changing its peer's pixels, and weak-entry expiry.
 
+The chain-builder ownership proof and existing fence-retirement/residency proof
+also pass. Landing validation exposed an imported-model test that compared two
+black images before async loading completed. Its existing 600-frame bound now
+checks warmup readiness, yields briefly while loading, and rejects a zero baseline;
+the original RT-dispatch and pixel-ratio assertions remain. Focused verification
+passes. The new chain ownership test is feature-gated so normal CPU checks do not
+require a Metal test device.
+
 Validation and measurement artifacts are kept in
 `/tmp/manifold-memory-converted-20260922/`. This change does not implement inactive
 scene eviction, simulation checkpoints or a project-wide memory budget.
