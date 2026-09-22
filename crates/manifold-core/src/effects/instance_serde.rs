@@ -196,6 +196,7 @@ fn spec_from_binding(
         wraps: false,
         section: None,
         card_visible: true,
+        material_role: None,
     }
 }
 
@@ -226,6 +227,7 @@ fn placeholder_spec(
         wraps: false,
         section: None,
         card_visible: true,
+        material_role: None,
     }
 }
 

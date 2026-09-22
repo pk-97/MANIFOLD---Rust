@@ -2,21 +2,34 @@
   "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flow-name filters (same substring semantics as positional filters). A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
-    "crates/manifold-ui/src/interaction_overlay.rs": ["automation", "toggle-lanes"],
-    "crates/manifold-ui/src/automation_hit_tester.rs": ["automation"],
-    "crates/manifold-ui/src/panels/viewport.rs": ["automation", "toggle-lanes"],
-    "crates/manifold-renderer/src/automation_lane_draw.rs": ["automation", "toggle-lanes"],
+    "crates/manifold-ui/src/interaction_overlay.rs": [
+      "automation",
+      "toggle-lanes"
+    ],
+    "crates/manifold-ui/src/automation_hit_tester.rs": [
+      "automation"
+    ],
+    "crates/manifold-ui/src/panels/viewport.rs": [
+      "automation",
+      "toggle-lanes"
+    ],
+    "crates/manifold-renderer/src/automation_lane_draw.rs": [
+      "automation",
+      "toggle-lanes"
+    ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
       "scene-setup",
       "scene-card",
       "scene-panel",
-      "scene-skin"
+      "scene-skin",
+      "material-inspector"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
-      "scene-skin"
+      "scene-skin",
+      "material-inspector"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
@@ -96,6 +109,18 @@
     ],
     "crates/manifold-app/src/scene_modifier_edit": [
       "scene-modifier-preset"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/material.rs": [
+      "material-inspector"
+    ],
+    "crates/manifold-app/src/ui_bridge/material_looks.rs": [
+      "material-inspector"
+    ],
+    "crates/manifold-app/src/ui_bridge/material_colour.rs": [
+      "material-inspector"
+    ],
+    "crates/manifold-ui/src/panels/param_slider_shared/material_placement.rs": [
+      "material-inspector"
     ]
   },
   "flows": {
@@ -160,7 +185,13 @@
     "scene-modifier-preset": "mushroomscene",
     "render-mode-wireframe": "gltfscene",
     "render-mode-solid": "gltfscene",
-    "render-mode-points": "gltfscene"
+    "render-mode-points": "gltfscene",
+    "material-inspector-groups": "gltfscene",
+    "material-inspector-colour": "gltfscene",
+    "material-inspector-features": "gltfscene",
+    "material-inspector-looks": "gltfscene",
+    "material-inspector-placement": "gltfscene",
+    "material-inspector-textures": "gltfscene"
   },
   "expected_fail": {
     "scene-panel-card-convergence-c-p1b-object-scrub": {

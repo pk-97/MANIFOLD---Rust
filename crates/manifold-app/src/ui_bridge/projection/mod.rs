@@ -3,6 +3,7 @@
 //! file. Reads only; projection never sends commands (INV-G5).
 pub(crate) mod cards;
 pub(crate) mod inspector;
+pub(crate) mod material;
 pub(crate) mod scene;
 pub(crate) mod timeline;
 pub(crate) mod transport;

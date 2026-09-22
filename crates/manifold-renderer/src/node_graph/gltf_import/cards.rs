@@ -43,6 +43,7 @@ pub(super) fn card_param(
         wraps: false,
         section: Some(section.to_string()),
         card_visible: true,
+        material_role: None,
     }
 }
 
@@ -115,6 +116,7 @@ pub(super) fn animation_card_params(
         wraps: false,
         section: Some(section.to_string()),
         card_visible: true,
+        material_role: None,
     };
 
     card_params.push(ParamSpecDef {

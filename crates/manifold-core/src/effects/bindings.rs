@@ -215,6 +215,7 @@ impl UserParamBinding {
             // User-added exposes always show on the card. Curated hiding is
             // only for the scene-vocabulary auto-stamping path.
             card_visible: true,
+            material_role: None,
         }
     }
 

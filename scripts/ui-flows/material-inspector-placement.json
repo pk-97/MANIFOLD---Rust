@@ -1,0 +1,91 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "material.placement.10_uv_m00.offset_u.slider"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "material.placement.10_uv_m00.offset_u.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.00"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "material.placement.10_uv_m00.offset_u.slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 10000.0,
+              "y": 400.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "material.placement.10_uv_m00.offset_u.value"
+        }
+      },
+      "check": {
+        "TextEquals": "128.00"
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "material.placement.10_uv_m00.offset_u.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.00"
+      }
+    }
+  },
+  "Snapshot"
+]

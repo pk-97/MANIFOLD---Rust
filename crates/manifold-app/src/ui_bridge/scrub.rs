@@ -100,6 +100,13 @@ impl ScrubState {
 /// scrubable family — panel-wired and frame-resident alike — the unified
 /// successor to the retired `ActiveInspectorDrag` per-family write logic (P-I).
 pub enum ResolvedScrub {
+    ParamRgb {
+        target: GraphTarget,
+        param_ids: [ParamId; 3],
+        preset: manifold_core::PresetTypeId,
+        baseline: [f32; 3],
+        live: [f32; 3],
+    },
     /// An exposed card param on an effect/generator graph (was the
     /// `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio +
     /// `ActiveInspectorDrag::Param`). `baseline` is the pre-gesture base value
@@ -125,7 +132,11 @@ pub enum ResolvedScrub {
     /// A macro-bank knob (`idx`). Macros ride every ModulationSnapshot block, so
     /// the restore path re-applies through `apply_macro` — the same write Move
     /// uses — or a per-tick apply stomps the in-flight value.
-    Macro { idx: usize, baseline: f32, live: f32 },
+    Macro {
+        idx: usize,
+        baseline: f32,
+        live: f32,
+    },
     /// A layer's audio-input gain (dB) — `layer_id` captured at Begin.
     LayerAudioGain {
         layer_id: LayerId,
@@ -299,6 +310,25 @@ impl ResolvedScrub {
     /// `ActiveInspectorDrag::apply` precedent, generalized).
     fn restore(&self, project: &mut Project) {
         match self {
+            ResolvedScrub::ParamRgb {
+                target,
+                param_ids,
+                preset,
+                live,
+                ..
+            } => {
+                if project
+                    .preset_instance(target)
+                    .is_some_and(|inst| inst.effect_type() == preset)
+                    && super::projection::material::rgb_editable(project, target, param_ids)
+                {
+                    project.with_preset_graph_mut(target, |inst| {
+                        for (id, value) in param_ids.iter().zip(live) {
+                            inst.set_base_param(id, *value);
+                        }
+                    });
+                }
+            }
             ResolvedScrub::Param {
                 target,
                 param_id,
@@ -332,7 +362,10 @@ impl ResolvedScrub {
                 }
             }
             ResolvedScrub::RelightParam {
-                target, field, live, ..
+                target,
+                field,
+                live,
+                ..
             } => {
                 project.with_preset_graph_mut(target, |inst| {
                     field.set(&mut inst.relight_params, *live);
@@ -599,13 +632,25 @@ pub(crate) fn dispatch_scrub(
     let active_layer = &effective_active_layer;
 
     if let ValueRef::Param(gpt, param_id) = value_ref
-        && let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab,
-            active_layer, ctx.selection, ctx.project)
-        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(ctx.project, &target, param_id.as_ref())
+        && let Some(target) = resolve_graph_target(
+            gpt,
+            ctx.editor_target,
+            effective_tab,
+            active_layer,
+            ctx.selection,
+            ctx.project,
+        )
+        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
+            ctx.project,
+            &target,
+            param_id.as_ref(),
+        )
     {
         if matches!(phase, ScrubPhase::Begin) {
-            crate::content_command::ContentCommand::send(ctx.content_tx,
-                crate::content_command::ContentCommand::GraphEditRejected(reason.into()));
+            crate::content_command::ContentCommand::send(
+                ctx.content_tx,
+                crate::content_command::ContentCommand::GraphEditRejected(reason.into()),
+            );
         }
         return DispatchResult::handled();
     }
@@ -618,6 +663,17 @@ pub(crate) fn dispatch_scrub(
     }
 
     match value_ref {
+        ValueRef::ParamRgb(gpt, ids) => {
+            let target = resolve_graph_target(
+                gpt,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                ctx.project,
+            );
+            dispatch_rgb_scrub(target, ids, phase, ctx)
+        }
         ValueRef::Param(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
                 if let Some(target) = resolve_graph_target(
@@ -767,7 +823,10 @@ pub(crate) fn dispatch_scrub(
                     let new_val = ctx.project.settings.master_opacity;
                     if (baseline - new_val).abs() > f32::EPSILON {
                         let cmd = ChangeMasterOpacityCommand::new(baseline, new_val);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::Execute(Box::new(cmd)),
+                        );
                     }
                 }
                 ctx.scrub.active = None;
@@ -807,7 +866,10 @@ pub(crate) fn dispatch_scrub(
                     let new_val = ctx.project.settings.led_brightness;
                     if (baseline - new_val).abs() > f32::EPSILON {
                         let cmd = ChangeLedBrightnessCommand::new(baseline, new_val);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::Execute(Box::new(cmd)),
+                        );
                     }
                 }
                 ctx.scrub.active = None;
@@ -864,7 +926,10 @@ pub(crate) fn dispatch_scrub(
                     let new_val = layer.opacity;
                     if (old_val - new_val).abs() > f32::EPSILON {
                         let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::Execute(Box::new(cmd)),
+                        );
                     }
                 }
                 ctx.scrub.active = None;
@@ -944,7 +1009,8 @@ pub(crate) fn dispatch_scrub(
                     && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id_mut(id)
                 {
                     layer.audio_gain_db = v;
-                    if let Some(ResolvedScrub::LayerAudioGain { live, .. }) = &mut ctx.scrub.active {
+                    if let Some(ResolvedScrub::LayerAudioGain { live, .. }) = &mut ctx.scrub.active
+                    {
                         *live = v;
                     }
                     let id = id.clone();
@@ -974,7 +1040,10 @@ pub(crate) fn dispatch_scrub(
                             old_db,
                             new_db,
                         );
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::Execute(Box::new(cmd)),
+                        );
                     }
                 }
                 ctx.scrub.active = None;
@@ -1022,7 +1091,8 @@ pub(crate) fn dispatch_scrub(
                             ctx.project,
                         ),
                     ) {
-                        if let Some(ResolvedScrub::RelightParam { live, .. }) = &mut ctx.scrub.active
+                        if let Some(ResolvedScrub::RelightParam { live, .. }) =
+                            &mut ctx.scrub.active
                         {
                             *live = v;
                         }
@@ -1065,7 +1135,10 @@ pub(crate) fn dispatch_scrub(
                             && (old_val - new_val).abs() > f32::EPSILON
                         {
                             let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
-                            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                            ContentCommand::send(
+                                ctx.content_tx,
+                                ContentCommand::Execute(Box::new(cmd)),
+                            );
                         }
                     }
                     ctx.scrub.active = None;
@@ -1384,7 +1457,8 @@ pub(crate) fn dispatch_scrub(
                         ctx.project,
                     ),
                 ) {
-                    if let Some(ResolvedScrub::EnvelopeTarget { live, .. }) = &mut ctx.scrub.active {
+                    if let Some(ResolvedScrub::EnvelopeTarget { live, .. }) = &mut ctx.scrub.active
+                    {
                         *live = v;
                     }
                     graph_env_dual_edit(
@@ -1430,7 +1504,10 @@ pub(crate) fn dispatch_scrub(
                     {
                         let cmd =
                             ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::Execute(Box::new(cmd)),
+                        );
                     }
                 }
                 ctx.scrub.active = None;
@@ -1524,7 +1601,10 @@ pub(crate) fn dispatch_scrub(
                     {
                         let cmd =
                             ChangeEnvelopeDecayCommand::new(target, env_idx, old_decay, new_d);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::Execute(Box::new(cmd)),
+                        );
                     }
                 }
                 ctx.scrub.active = None;
@@ -1853,10 +1933,7 @@ pub(crate) fn dispatch_scrub(
                     {
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(SetEnvelopeActionCommand::new(
-                                target,
-                                env_idx,
-                                old_action,
-                                new_action,
+                                target, env_idx, old_action, new_action,
                             ));
                         boxed.execute(ctx.project);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
@@ -1890,7 +1967,8 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let Some(v) = sv.scalar() {
                     let which = *which;
-                    if let Some(ResolvedScrub::AudioTriggerShape { live, .. }) = &mut ctx.scrub.active
+                    if let Some(ResolvedScrub::AudioTriggerShape { live, .. }) =
+                        &mut ctx.scrub.active
                     {
                         match which {
                             AudioShapeParam::Sensitivity => live.sensitivity = v,
@@ -1932,9 +2010,13 @@ pub(crate) fn dispatch_scrub(
                     {
                         let mut old = current.clone();
                         old.shape = old_shape;
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                            SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
-                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetLayerClipTriggerCommand::new(
+                                layer_id.clone(),
+                                *index,
+                                old,
+                                current,
+                            ));
                         boxed.execute(ctx.project);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                     }
@@ -2018,7 +2100,10 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Begin => {
                 // Snapshot the whole pre-drag crossover pair as the undo baseline
                 // (global gesture — no key).
-                let baseline = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
+                let baseline = (
+                    ctx.project.audio_setup.low_hz,
+                    ctx.project.audio_setup.mid_hz,
+                );
                 ctx.scrub.active = Some(ResolvedScrub::AudioCrossover {
                     baseline,
                     live: baseline,
@@ -2032,14 +2117,17 @@ pub(crate) fn dispatch_scrub(
                     // and mid locally + a live, non-undo content edit so the
                     // divider and analysis bands track the cursor.
                     let dragging_low = matches!(band, manifold_ui::BandDivider::Low);
-                    let (cur_low, cur_mid) =
-                        (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
+                    let (cur_low, cur_mid) = (
+                        ctx.project.audio_setup.low_hz,
+                        ctx.project.audio_setup.mid_hz,
+                    );
                     let (low, mid) = if dragging_low {
                         manifold_core::audio_setup::AudioSetup::clamp_crossovers(hz, cur_mid, true)
                     } else {
                         manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, hz, false)
                     };
-                    if let Some(ResolvedScrub::AudioCrossover { live, .. }) = &mut ctx.scrub.active {
+                    if let Some(ResolvedScrub::AudioCrossover { live, .. }) = &mut ctx.scrub.active
+                    {
                         *live = (low, mid);
                     }
                     ctx.project.audio_setup.low_hz = low;
@@ -2063,7 +2151,10 @@ pub(crate) fn dispatch_scrub(
                 };
                 ctx.scrub.active = None;
                 if let Some(old) = baseline {
-                    let new = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
+                    let new = (
+                        ctx.project.audio_setup.low_hz,
+                        ctx.project.audio_setup.mid_hz,
+                    );
                     if new != old {
                         return audio_setup_command(
                             ctx.project,
@@ -2105,7 +2196,8 @@ pub(crate) fn dispatch_scrub(
                     // retired `AbletonMacroTrimChanged` — `MutateProject`, not
                     // `MutateProjectLive`).
                     let slot_idx = *slot_idx;
-                    if let Some(ResolvedScrub::AbletonMacroTrim { live, .. }) = &mut ctx.scrub.active
+                    if let Some(ResolvedScrub::AbletonMacroTrim { live, .. }) =
+                        &mut ctx.scrub.active
                     {
                         *live = (min, max);
                     }
@@ -2161,7 +2253,9 @@ pub(crate) fn dispatch_scrub(
                         || (old_max - new_max).abs() > f32::EPSILON)
                 {
                     let cmd = ChangeAbletonTrimCommand::new(
-                        AbletonMappingTarget::MacroSlot { slot_index: *slot_idx },
+                        AbletonMappingTarget::MacroSlot {
+                            slot_index: *slot_idx,
+                        },
                         old_min,
                         old_max,
                         new_min,
@@ -2173,4 +2267,116 @@ pub(crate) fn dispatch_scrub(
             }
         },
     }
+}
+
+fn dispatch_rgb_scrub(
+    target: Option<GraphTarget>,
+    ids: &[ParamId; 3],
+    phase: &ScrubPhase,
+    ctx: &mut DispatchCtx,
+) -> DispatchResult {
+    use super::projection::material::rgb_editable;
+    use manifold_ui::ScrubValue;
+    match phase {
+        ScrubPhase::Begin => {
+            if let Some(target) = target {
+                if rgb_editable(ctx.project, &target, ids) {
+                    let inst = ctx
+                        .project
+                        .preset_instance(&target)
+                        .expect("preflight checked owner");
+                    let baseline = std::array::from_fn(|i| inst.get_base_param(&ids[i]));
+                    let preset = inst.effect_type().clone();
+                    ctx.scrub.active = Some(ResolvedScrub::ParamRgb {
+                        target,
+                        param_ids: ids.clone(),
+                        preset,
+                        baseline,
+                        live: baseline,
+                    });
+                } else {
+                    ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(
+                        "Colour is controlled by a wire, mapping or custom binding; edit its individual channels.".into()));
+                }
+            }
+        }
+        ScrubPhase::Move(ScrubValue::Rgb(values)) => {
+            if let Some(ResolvedScrub::ParamRgb {
+                target: captured,
+                param_ids,
+                preset,
+                live,
+                ..
+            }) = &mut ctx.scrub.active
+            {
+                if target.as_ref() != Some(captured)
+                    || ids != param_ids
+                    || !values.iter().all(|v| v.is_finite())
+                    || !ctx.project.preset_instance(captured).is_some_and(|inst| {
+                        inst.effect_type() == preset
+                            && param_ids.iter().zip(values).all(|(id, value)| {
+                                inst.params
+                                    .get(id)
+                                    .is_some_and(|p| *value >= p.spec.min && *value <= p.spec.max)
+                            })
+                    })
+                    || !rgb_editable(ctx.project, captured, param_ids)
+                {
+                    return DispatchResult::handled();
+                }
+                let values = *values;
+                *live = values;
+                ctx.project.with_preset_graph_mut(captured, |inst| {
+                    for (id, value) in param_ids.iter().zip(values) {
+                        inst.set_base_param(id, value);
+                    }
+                });
+                let t = captured.clone();
+                let pids = param_ids.clone();
+                let preset = preset.clone();
+                ContentCommand::send(
+                    ctx.content_tx,
+                    ContentCommand::MutateProjectLive(Box::new(move |project| {
+                        if project
+                            .preset_instance(&t)
+                            .is_some_and(|inst| inst.effect_type() == &preset)
+                            && rgb_editable(project, &t, &pids)
+                        {
+                            project.with_preset_graph_mut(&t, |inst| {
+                                for (id, value) in pids.iter().zip(values) {
+                                    inst.set_base_param(id, value);
+                                }
+                            });
+                        }
+                    })),
+                );
+            }
+        }
+        ScrubPhase::Move(_) => {}
+        ScrubPhase::Commit => {
+            if !matches!(&ctx.scrub.active, Some(ResolvedScrub::ParamRgb {param_ids,..}) if param_ids == ids)
+            {
+                return DispatchResult::handled();
+            }
+            if let Some(ResolvedScrub::ParamRgb {
+                target,
+                param_ids,
+                preset,
+                baseline,
+                live,
+            }) = ctx.scrub.active.take()
+                && baseline != live
+            {
+                ContentCommand::send(
+                    ctx.content_tx,
+                    ContentCommand::Execute(Box::new(
+                        super::material_colour::ChangeMaterialColourCommand::new(
+                            target, param_ids, preset, baseline, live,
+                        ),
+                    )),
+                );
+            }
+        }
+    }
+    DispatchResult::handled()
 }

@@ -26,6 +26,8 @@ mod trim_tests;
 mod host_parity_tests;
 #[cfg(test)]
 mod row_gesture_tests;
+#[path = "scene_setup_panel/material_inspector.rs"]
+mod material_inspector;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -37,6 +39,7 @@ use crate::tree::UITree;
 use manifold_foundation::{AudioSendId, LayerId};
 
 use super::{GraphParamTarget, PanelAction, ParamsAction};
+use super::actions::{MaterialEditKind, MaterialParamWrite};
 #[cfg(test)]
 use super::{ScrubPhase, ScrubValue, ValueRef};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
@@ -46,7 +49,11 @@ use super::param_slider_shared::{
     ROW_ROLE_SECTION_HEADER, param_row_key_base,
     build_toggle_trigger_row, ToggleParamIds,
 };
-use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
+use super::param_slider_shared::material_placement::MaterialPlacementWidget;
+use crate::param_surface::{
+    MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ModifierObjectRef,
+    ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec, UvComponent,
+};
 use crate::slider::GAP;
 
 // ── Stable keys ──
@@ -69,6 +76,8 @@ const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
 const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
+const MATERIAL_SWATCH_KEY_BASE: u64 = 96_000;
+const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
 /// Objects are a variable-length list (unlike the four fixed Environment/Fog
@@ -331,6 +340,32 @@ pub enum ObjectMaterialVm {
     None,
 }
 
+/// App-adapted texture ownership facts for the selected object's material.
+/// The UI intentionally receives labels and connection state only; readiness
+/// and asset probing stay out of this DTO.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialTextureInfo {
+    pub port: String,
+    pub label: String,
+    pub source_label: String,
+    pub connected: bool,
+    pub graph_source: bool,
+}
+
+/// Structural material facts shown beside the manifest-backed material rows.
+/// Assignment remains object-owned while placement rows remain material-owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialInspectorInfo {
+    pub object: ModifierObjectRef,
+    pub object_gain: Option<manifold_foundation::ParamId>,
+    pub material: ModifierObjectRef,
+    pub shared_object_count: Option<usize>,
+    pub textures: Vec<MaterialTextureInfo>,
+    /// Exact inner material parameter bindings for the selected material.
+    /// Names are descriptor keys; ids are the exposed graph parameters.
+    pub params: Vec<(String, manifold_foundation::ParamId)>,
+}
+
 /// One modifier-stack entry (D6/P5): the atom's display name, its own
 /// address, and its curated param rows. `index` is this modifier's 0-based
 /// position in wire order (source → … → output) — the same convention
@@ -368,6 +403,9 @@ pub struct ObjectKnownRow {
     pub visible: RowValue,
     pub transform: Option<Box<TransformRowVm>>,
     pub material: ObjectMaterialVm,
+    /// Material inspector facts for this selected object, when the renderer
+    /// resolved a known material producer.
+    pub material_inspector: Option<MaterialInspectorInfo>,
     /// The modifier stack, in wire order (D6/P5) — the interactive list the
     /// panel renders with add/remove/reorder. Not a stored value: rebuilt
     /// from the Vm's own `modifier_chain` trace every sync (D1).
@@ -830,7 +868,9 @@ fn placeholder_param_info() -> ParamRow {
             is_trigger_gate: false,
             value_labels: None,
             section: None,
-            disabled: None,
+        disabled: None,
+        material_role: None,
+        inactive_reason: None,
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
         audio: AudioRowState::default(),
@@ -842,6 +882,8 @@ fn placeholder_param_info() -> ParamRow {
             mappable: false,
         },
         scene_addr: None,
+        rgb_members: None,
+        material_attached: false,
     }
 }
 
@@ -877,6 +919,7 @@ pub struct ScenePanel {
     /// properties body filters this down to the selected item's sections at
     /// build time.
     full_params: Option<ParamSurface>,
+    full_param_id_index: ahash::AHashMap<String, usize>,
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
     /// BUG-hlw8 "+ Plane" — dispatches `SceneSetupAddLayerPlane`.
@@ -952,9 +995,6 @@ pub struct ScenePanel {
     /// P4b: `(button_node_id, scene_object_id, SkinRowVm)` for the Skin row's
     /// target-map picker.
     skin_target_ids: Vec<(NodeId, u32, SkinRowVm)>,
-    /// P4b-skin-strength: row index of the `emission_strength` param deferred
-    /// from the object's section to the Skin row; rebuilt each frame.
-    skin_strength_slot: Option<usize>,
     /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
     /// header's "Remove" button, when a Known light is selected this frame —
     /// resolves to `PanelAction::SceneSetupRemoveLight`. At most one entry
@@ -965,6 +1005,30 @@ pub struct ScenePanel {
     /// selected this frame — mirrors `object_name_ids`, backs
     /// `light_name_rect`.
     light_name_ids: Vec<(u32, NodeId, String)>,
+    /// Canonical material colour swatches built over the shared scalar row.
+    /// `(button, row, scalar ids)` is rebuilt with the live tree and never
+    /// used as a second value store.
+    material_swatch_ids: Vec<(NodeId, usize, [manifold_foundation::ParamId; 3], crate::param_surface::MaterialColour)>,
+    /// Expanded colour groups, keyed by the stable primary channel id.
+    material_rgb_expanded: ahash::AHashSet<manifold_foundation::ParamId>,
+    /// Named material recipe buttons for the selected object's material.
+    material_look_ids: Vec<(NodeId, MaterialLook, ModifierObjectRef, ModifierObjectRef)>,
+    /// Add Feature controls and explicit feature mode headers for the selected
+    /// material. The refs are captured from the current structural projection.
+    material_feature_ids: Vec<(
+        NodeId,
+        crate::param_surface::MaterialFeature,
+        Vec<MaterialParamWrite>,
+        ModifierObjectRef,
+        ModifierObjectRef,
+    )>,
+    active_material_info: Option<MaterialInspectorInfo>,
+    /// One friendly placement widget per supported texture family. A widget
+    /// is active only when its family is connected in the selected material;
+    /// raw matrix and sampler rows remain in the shared Advanced drawer.
+    material_placement_widgets: [MaterialPlacementWidget; 5],
+    material_placement_active: [bool; 5],
+    material_placement_built: [bool; 5],
     panel_rect: Rect,
 }
 
@@ -985,6 +1049,7 @@ impl Default for ScenePanel {
             open_graph_editor_id: None,
             properties_card: SceneCardState::new(),
             full_params: None,
+            full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
             add_light_id: None,
             add_plane_id: None,
@@ -1003,9 +1068,16 @@ impl Default for ScenePanel {
             add_modifier_button_id: None,
             skin_source_ids: Vec::new(),
             skin_target_ids: Vec::new(),
-            skin_strength_slot: None,
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
+            material_swatch_ids: Vec::new(),
+            material_rgb_expanded: ahash::AHashSet::new(),
+            material_look_ids: Vec::new(),
+            material_feature_ids: Vec::new(),
+            active_material_info: None,
+            material_placement_widgets: std::array::from_fn(|_| MaterialPlacementWidget::new()),
+            material_placement_active: [false; 5],
+            material_placement_built: [false; 5],
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
     }
@@ -1061,6 +1133,13 @@ impl ScenePanel {
     /// properties body filters this down to the selected item's sections at
     /// build time — see `build_filtered_properties`.
     pub fn configure_params(&mut self, config: Option<ParamSurface>) {
+        self.full_param_id_index.clear();
+        if let Some(surface) = config.as_ref() {
+            self.full_param_id_index.reserve(surface.rows.len());
+            for (index, row) in surface.rows.iter().enumerate() {
+                self.full_param_id_index.insert(row.id.to_string(), index);
+            }
+        }
         self.full_params = config;
     }
 
@@ -1097,10 +1176,19 @@ impl ScenePanel {
             .live_layer_id()
             .cloned()
             .map(GraphParamTarget::GeneratorOf);
+        let full_params = &mut self.full_params;
+        let full_param_id_index = &self.full_param_id_index;
         let card = &mut self.properties_card;
         card.row_value_synced.clear();
         card.row_value_synced.resize(card.rows.len(), false);
         for (id, slot) in slots {
+            if let Some(&full_index) = full_param_id_index.get(id)
+                && let Some(surface) = full_params.as_mut()
+                && let Some(row) = surface.rows.get_mut(full_index)
+            {
+                row.value.base = slot.base;
+                row.value.effective = slot.value;
+            }
             let Some(&i) = card.row_id_index.get(id) else {
                 continue;
             };
@@ -1213,6 +1301,12 @@ impl ScenePanel {
         self.skin_target_ids.clear();
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
+        self.material_swatch_ids.clear();
+        self.material_look_ids.clear();
+        self.material_feature_ids.clear();
+        self.active_material_info = None;
+        self.material_placement_active = [false; 5];
+        self.material_placement_built = [false; 5];
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
         let content_top = y + PAD + TITLE_H;
@@ -1784,20 +1878,51 @@ impl ScenePanel {
             self.properties_card.resize(0);
             return cy;
         };
-        self.skin_strength_slot = None;
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
                 // Scene exposure IDs are stamped as {owner_doc_id}_{param}.
-                let owned = owner_ids.is_none_or(|ids| {
-                    p.id.as_ref().split('_').next()
+                let selected_material_id = p.spec.material_role.is_some()
+                    && self.active_material_info.as_ref().is_some_and(|info| {
+                        info.params.iter().any(|(_, id)| id == &p.id)
+                    });
+                let owned = selected_material_id || owner_ids.is_none_or(|ids| {
+                    p.id.as_ref()
+                        .split('_')
+                        .next()
                         .and_then(|s| s.parse::<u32>().ok())
                         .is_some_and(|id| ids.contains(&id))
                 });
-                if p.spec.section.as_deref() == Some(section.as_str()) && owned && !retained.contains(&i) {
+                if p.spec.section.as_deref() == Some(section.as_str())
+                    && owned
+                    && !retained.contains(&i)
+                    && self.material_param_selected(p)
+                    && Self::row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
+                    && self.material_rgb_row_visible(&config.rows, p)
+                {
                     retained.push(i);
                 }
             }
+        }
+        // The manifest remains authoritative for row order, but material
+        // presentation uses stable semantic buckets. Stable sorting only
+        // affects material rows; transform/object rows retain their positions.
+        if let Some(position) = retained.iter().position(|&index| self.material_object_gain(&config.rows[index])) {
+            let gain = retained.remove(position);
+            let position = retained.iter().position(|&index| config.rows[index].spec.material_role.is_some())
+                .unwrap_or(retained.len());
+            retained.insert(position, gain);
+        }
+        let material_positions: Vec<usize> = retained
+            .iter()
+            .enumerate()
+            .filter_map(|(position, &index)| (config.rows[index].spec.material_role.is_some()
+                || self.material_object_gain(&config.rows[index])).then_some(position))
+            .collect();
+        let mut material_rows: Vec<usize> = material_positions.iter().map(|&position| retained[position]).collect();
+        material_rows.sort_by_key(|&index| self.material_bucket(&config.rows[index]));
+        for (position, index) in material_positions.into_iter().zip(material_rows) {
+            retained[position] = index;
         }
         self.properties_card.configure_from_filtered(&config, &retained);
         self.properties_card.restore_live(&target);
@@ -1813,9 +1938,15 @@ impl ScenePanel {
 
         let mut i = 0usize;
         while i < retained.len() {
-            let cur_section = config.rows[retained[i]].spec.section.clone();
+            let cur_section = self.material_section_name(&config.rows[retained[i]]);
+            if let Some(name) = cur_section.as_deref()
+                && let Some(family) = Self::material_family_from_section(name)
+            {
+                cy = self.build_material_placement(tree, inner_x, inner_w, cy, family);
+            }
             if let Some(name) = &cur_section {
-                let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                let folded = self.material_section_folded(name);
+                self.section_folded.entry(name.clone()).or_insert(folded);
                 // Build interactive section header row
                 let header_id = tree.add_button_keyed(
                     Some(self.content_parent),
@@ -1833,6 +1964,12 @@ impl ScenePanel {
                     "",
                     param_row_key_base(&config.rows[retained[i]].id) | ROW_ROLE_SECTION_HEADER,
                 );
+                if config.rows[retained[i]].spec.material_role.is_some() {
+                    tree.set_name(
+                        header_id,
+                        format!("material.section.{}", config.rows[retained[i]].id),
+                    );
+                }
                 let triangle_w = 16.0;
                 let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
                 tree.add_label(
@@ -1855,7 +1992,7 @@ impl ScenePanel {
                     cy,
                     (inner_w - 2.0 * GAP - triangle_w).max(0.0),
                     ROW_H,
-                    name.as_str(),
+                    &self.material_section_display_name(name),
                     label_style(),
                 );
                 // Register header for click routing
@@ -1868,375 +2005,21 @@ impl ScenePanel {
                 cy += ROW_H;
                 // Skip folded section's rows
                 if folded {
-                    while i < retained.len() && config.rows[retained[i]].spec.section.as_deref() == Some(name.as_str()) {
+                    while i < retained.len() && self.material_section_name(&config.rows[retained[i]]) == cur_section {
                         i += 1;
                     }
                     continue;
                 }
             }
-            while i < retained.len() && config.rows[retained[i]].spec.section == cur_section {
-                // P4b-skin-strength: the object's `emission_strength` row defers
-                // to the Skin row (rendered by build_object_properties_body).
-                if config.rows[retained[i]].id.as_ref().ends_with("_emission_strength") {
-                    self.skin_strength_slot = Some(i);
-                    i += 1;
-                    continue;
-                }
+            if let Some(name) = &cur_section {
+                cy = self.build_material_section_sources(tree, inner_x, inner_w, cy, name);
+            }
+            while i < retained.len() && self.material_section_name(&config.rows[retained[i]]) == cur_section {
                 cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w, target.clone());
                 i += 1;
             }
         }
         cy + ROW_GAP
-    }
-
-    /// One properties-card row, built through the SAME shared core every
-    /// effect/generator card row uses — no synthesis, no `RowAddr`: `slot`
-    /// indexes `self.properties_card.rows` directly, whose
-    /// `id` IS the real exposed param — the dispatch identity every
-    /// downstream `PanelAction` carries unchanged.
-    fn build_properties_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        cy: f32,
-        slot: usize,
-        label_width: f32,
-        slider_w: f32,
-        target: GraphParamTarget,
-    ) -> f32 {
-        // Scene-relative range substitution for translate params (SCENE_PANEL_UX_DESIGN.md).
-        // When bounds are available, substitute the derived range (center ± 2×extent per axis)
-        // so both slider drag clamp and type-in clamp see the same widened range.
-        if let Some((bounds_min, bounds_max)) = self.state.as_live().and_then(|vm| vm.scene_bounds) {
-            // Extract param ID string from the ParamRow's id field (Cow<'static, str>)
-            let param_id = self.properties_card.rows[slot].id.as_ref();
-
-            // Match transform_3d position params: pos_x, pos_y, pos_z
-            if let Some(axis) = param_id.strip_prefix("pos_").and_then(|suffix| match suffix {
-                "x" => Some(0usize),
-                "y" => Some(1usize),
-                "z" => Some(2usize),
-                _ => None,
-            }) {
-                // Compute center and extent for this axis
-                let center = (bounds_min[axis] + bounds_max[axis]) * 0.5;
-                let mut extent = bounds_max[axis] - bounds_min[axis];
-
-                // Floor extent at 1.0 so tiny scenes keep a usable range
-                extent = extent.max(1.0);
-
-                // Range is center ± 2×extent (per brief decision)
-                let range_min = center - 2.0 * extent;
-                let range_max = center + 2.0 * extent;
-
-                self.properties_card.rows[slot].spec.min = range_min;
-                self.properties_card.rows[slot].spec.max = range_max;
-            }
-        }
-        let info = self.properties_card.rows[slot].clone();
-
-        // Trigger parameters use the same momentary button and ParamFire
-        // dispatch as generator cards; a numeric slider cannot fire Reset.
-        if info.spec.is_trigger {
-            let row = build_toggle_trigger_row(
-                tree, Some(self.content_parent), inner_x, cy, slider_w,
-                &info, &self.properties_card.mod_state, slot, target,
-                color::FONT_LABEL, true, false,
-                Some(param_row_key_base(info.id.as_ref())), None,
-            );
-            let host = &mut self.properties_card.row_host;
-            host.toggle_ids[slot] = Some(ToggleParamIds {
-                label_id: row.label_id, button_id: row.button_id,
-            });
-            host.audio_btn_ids[slot] = row.audio_btn;
-            host.audio_configs[slot] = row.audio_config;
-            host.audio_trigger_mode_badge_ids[slot] = row.mode_badge_id;
-            host.reindex_row(tree, slot);
-            return row.new_cy;
-        }
-
-        // The value this row must SHOW: the sync's last-pushed value (the tree
-        // is minted fresh every frame — a row the dirty-check skipped must
-        // redraw that value here or it snaps back to the default). Never-
-        // pushed (NaN) rows fall back to the synced base, which is what the
-        // sync will compare against and push this same frame.
-        let display_value = match self.properties_card.last_pushed_values.get(slot) {
-            Some(&v) if !v.is_nan() => v,
-            _ => self
-                .properties_card
-                .current_values
-                .get(slot)
-                .copied()
-                .unwrap_or(info.spec.default),
-        };
-        let display_value = self
-            .properties_card
-            .row_host
-            .active_param_value(&target, &info.id)
-            .unwrap_or(display_value);
-
-        let built = build_param_row(
-            tree,
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            slider_w,
-            &info,
-            &self.properties_card.mod_state,
-            slot,
-            target,
-            &crate::slider::SliderColors::default_slider(),
-            color::FONT_LABEL,
-            true,
-            label_width,
-            false,
-            self.properties_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
-            true,
-            Some(param_row_key_base(info.id.as_ref())),
-            None,
-            Some(display_value),
-        );
-        self.properties_card.row_host.install_row(tree, slot, built)
-    }
-
-    fn build_properties(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        vm: &SceneSetupVm,
-        selected: SceneSelection,
-    ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Properties", section_label_style());
-        cy += ROW_H;
-        match selected {
-            SceneSelection::Object(id) => {
-                let Some(row) = vm.objects.iter().find_map(|o| match o {
-                    ObjectRowVm::Known(r) if r.object_node_id == id => Some(r.as_ref()),
-                    _ => None,
-                }) else {
-                    return cy;
-                };
-                cy = self.build_object_properties_header(tree, inner_x, inner_w, cy, row);
-                self.build_object_properties_body(tree, inner_x, inner_w, cy, row)
-            }
-            SceneSelection::Light(id) => {
-                let Some(row) = vm.lights.iter().find_map(|l| match l {
-                    LightRowVm::Known(r) if r.node_doc_id == id => Some(r.as_ref()),
-                    _ => None,
-                }) else {
-                    return cy;
-                };
-                cy = self.build_light_properties_header(tree, inner_x, inner_w, cy, row);
-                self.build_light_properties_body(tree, inner_x, inner_w, cy, row)
-            }
-            SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
-            SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
-            SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
-        }
-    }
-
-    /// Object properties header: editable name (click to rename — same
-    /// single-click-opens-text-input UX the outliner/graph rename affordance
-    /// already uses) + Duplicate + Remove (D11).
-    fn build_object_properties_header(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        row: &ObjectKnownRow,
-    ) -> f32 {
-        let btn_w = STEP_W * 4.0; // Frame + Duplicate + Remove
-        let name_w = inner_w - btn_w - 8.0;
-        let name_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            name_w,
-            ROW_H,
-            drag_value_style(),
-            &row.name,
-            obj_key(row.index, OBJ_OFF_NAME),
-        );
-        // Stable automation name (UX-P1): `scripts/ui-flows/` selects the
-        // Properties header's name text by NAME, not raw text, so a flow can
-        // assert "the header text changed" without hard-coding which object
-        // it changed to.
-        tree.set_name(name_id, "scene_setup.properties.name_value");
-        let identity_node_id = row.group_node_id.unwrap_or(row.object_node_id);
-        self.object_name_ids.push((identity_node_id, name_id, row.name.clone()));
-
-        // Frame button (scene-panel-ux lane)
-        let frame_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "Frame",
-            obj_key(row.index, OBJ_OFF_FRAME),
-        );
-        self.object_frame_ids.push((frame_id, row.index));
-
-        let dup_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0 + STEP_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{29C9}",
-            obj_key(row.index, OBJ_OFF_REMOVE) + 1,
-        );
-        self.object_duplicate_ids.push((dup_id, row.index));
-        let remove_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0 + STEP_W * 2.0,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2715}",
-            obj_key(row.index, OBJ_OFF_REMOVE),
-        );
-        self.object_remove_ids.push((remove_id, row.index));
-        cy + ROW_H + ROW_GAP
-    }
-
-    /// Object properties body: transform triplets, material quick knobs,
-    /// modifier stack — the body `build_object_row` used to render only when
-    /// expanded; now always rendered (there is no fold state left — the
-    /// outliner IS the fold).
-    /// P2 slice 2a: replaced the transform-triplet/material/metallic/
-    /// roughness row builders with one `build_filtered_properties` pass over
-    /// `row.sections` (Transform + Material + the object's own section +
-    /// every modifier's own section — see `ObjectKnownRow::sections`'s doc
-    /// comment). The modifier STACK below stays a structural verb (add/
-    /// remove/reorder, unchanged) — only its per-modifier PARAM rows moved
-    /// into the unified pass above (each modifier's section is already part
-    /// of `row.sections`, so its rows render there, grouped under its own
-    /// section header).
-    fn build_object_properties_body(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        row: &ObjectKnownRow,
-    ) -> f32 {
-        cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
-        // P4b: Skin row sits between the object's manifest params and the
-        // modifier stack — one row, two dropdown buttons.
-        if let Some(skin) = &row.skin {
-            cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
-        }
-        // P4b-skin-strength: render the deferred row via the same ParamSurface machinery.
-        if let Some(slot) = self.skin_strength_slot.take() {
-            let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(inner_w, false);
-            let target = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf).expect("full_params implies live_layer_id");
-            cy = self.build_properties_row(tree, inner_x, cy, slot, label_width, slider_w, target);
-        }
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Modifiers", label_style());
-        cy += ROW_H;
-        if row.modifiers_addable {
-            for m in &row.modifiers {
-                cy = self.build_modifier_stack_row(
-                    tree,
-                    inner_x,
-                    inner_w,
-                    cy,
-                    row.index,
-                    row.group_node_id.unwrap_or(row.object_node_id),
-                    m,
-                    row.modifiers.len(),
-                );
-            }
-            cy = self.build_add_modifier_button(
-                tree, inner_x, inner_w, cy, row.index, row.group_node_id.unwrap_or(row.object_node_id),
-            );
-        } else {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                "Custom chain — edit in graph",
-                label_style(),
-            );
-            cy += ROW_H;
-        }
-        cy + ROW_GAP
-    }
-
-    /// P4b: one Skin row per Known object — source layer dropdown + target-map
-    /// dropdown. Each half is a clickable button (not a bare label) so the
-    /// affordance rule is met. A missing source layer shows a trailing chip.
-    fn build_skin_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        row: &ObjectKnownRow,
-        skin: &SkinRowVm,
-    ) -> f32 {
-        let label_w = crate::slider::label_width_for_row(inner_w);
-        tree.add_label(Some(self.content_parent), inner_x, cy, label_w, ROW_H, "Skin", label_style());
-        let btn_gap = 4.0f32;
-        let remaining = (inner_w - label_w).max(0.0);
-        let chip_w = if skin.source_missing { 80.0f32 } else { 0.0f32 };
-        let chip_gap = if skin.source_missing { btn_gap } else { 0.0f32 };
-        let btn_w = ((remaining - chip_w - chip_gap - btn_gap) / 2.0).max(0.0);
-        let source_label = skin
-            .source
-            .as_ref()
-            .and_then(|id| skin.source_options.iter().find(|(lid, _)| lid == id).map(|(_, name)| name.clone()))
-            .unwrap_or_else(|| "None".to_string());
-        let source_btn = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + label_w,
-            cy,
-            btn_w,
-            ROW_H,
-            btn_style(),
-            &format!("Source: {source_label}"),
-            obj_key(row.index, OBJ_OFF_SKIN_SOURCE),
-        );
-        tree.set_name(source_btn, "scene_setup.skin.source");
-        self.skin_source_ids.push((source_btn, row.object_node_id, skin.clone()));
-        let target_btn = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + label_w + btn_w + btn_gap,
-            cy,
-            btn_w,
-            ROW_H,
-            btn_style(),
-            &format!("Map: {}", skin.target_map.label()),
-            obj_key(row.index, OBJ_OFF_SKIN_TARGET),
-        );
-        tree.set_name(target_btn, "scene_setup.skin.target");
-        self.skin_target_ids.push((target_btn, row.object_node_id, skin.clone()));
-        if skin.source_missing {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x + label_w + btn_w * 2.0 + btn_gap * 2.0,
-                cy,
-                chip_w,
-                ROW_H,
-                "missing layer",
-                UIStyle {
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: color::FONT_LABEL,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-            );
-        }
-        cy + ROW_H + ROW_GAP
     }
 
     /// Light properties header: editable name (NEW, P5) + Remove (D11's
@@ -2494,6 +2277,9 @@ impl ScenePanel {
         if !self.open {
             return (false, Vec::new());
         }
+        if let Some(actions) = self.handle_material_placement_event(event, tree) {
+            return (true, actions);
+        }
         match event {
             UIEvent::Click { node_id, .. } => {
                 if *node_id == self.close_id {
@@ -2535,7 +2321,46 @@ impl ScenePanel {
                 }
                 let mut actions = Vec::new();
                 if let SceneSetupState::Live(vm) = &self.state {
-                    if let Some((_, row_value)) =
+                    if let Some((_, feature, writes, object, material)) = self
+                        .material_feature_ids
+                        .iter()
+                        .find(|(id, _, _, _, _)| *id == *node_id)
+                    {
+                        if !self.material_action_context(object, material, false) {
+                            return (true, Vec::new());
+                        }
+                        actions.push(PanelAction::Project(ProjectAction::MaterialParamsSet {
+                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
+                            object: object.clone(),
+                            material: material.clone(),
+                            kind: MaterialEditKind::Feature,
+                            writes: writes.clone(),
+                            description: format!("Add {} feature", Self::material_feature_label(*feature)),
+                        }));
+                    } else if let Some((_, slot, _, _)) = self.material_swatch_ids.iter().find(|(id, _, _, _)| *id == *node_id) {
+                        let Some(row) = self.properties_card.rows.get(*slot) else {
+                            return (true, Vec::new());
+                        };
+                        if let Some(anchor) = row.rgb_members.as_ref().map(|_| row.id.clone()) {
+                            if !self.material_rgb_expanded.remove(&anchor) {
+                                self.material_rgb_expanded.insert(anchor);
+                            }
+                            return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
+                        }
+                        return (true, Vec::new());
+                    } else if let Some((_, look, object, material)) =
+                        self.material_look_ids.iter().find(|(id, _, _, _)| *id == *node_id)
+                    {
+                        if !self.material_action_context(object, material, true) {
+                            return (true, Vec::new());
+                        }
+                        actions.push(PanelAction::Project(ProjectAction::MaterialLookApply {
+                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
+                            object: object.clone(),
+                            material: material.clone(),
+                            look: *look,
+                        }));
+                    } else if let Some((_, row_value)) =
                         self.outliner_eye_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         // The eye toggle: writes `scene_object.visible`
@@ -2743,6 +2568,7 @@ impl ScenePanel {
                         tree,
                         &target,
                     );
+                    let actions = self.rewrite_material_rgb_actions(actions);
                     if was_dragging
                         || self.properties_card.row_host.is_dragging()
                         || !actions.is_empty()
@@ -2763,6 +2589,7 @@ impl ScenePanel {
                         modifiers.shift,
                         &target,
                     );
+                    let actions = self.rewrite_material_rgb_actions(actions);
                     if was_dragging || !actions.is_empty() {
                         return (true, actions);
                     }
@@ -2772,6 +2599,7 @@ impl ScenePanel {
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 let was_dragging = self.properties_card.row_host.is_dragging();
                 let actions = self.properties_card.row_host.handle_drag_end();
+                let actions = self.rewrite_material_rgb_actions(actions);
                 (was_dragging || !actions.is_empty(), actions)
             }
             // BUG-199: mouse-wheel scroll over the docked body, routed here by
@@ -2796,30 +2624,6 @@ impl ScenePanel {
     /// — the same core `ParamCardPanel` uses (WIDGET_TREE_DESIGN section 4/5b).
     /// `target` is the caller's `GraphParamTarget::GeneratorOf(vm.layer_id)`
     /// (BUG-292), since `SceneCardState` has no `live_layer_id` of its own.
-    fn properties_row_action(
-        &mut self,
-        row: usize,
-        role: RowRole,
-        node: NodeId,
-        target: GraphParamTarget,
-    ) -> Vec<PanelAction> {
-        let card = &mut self.properties_card;
-        let mut copied_flash = CopyToClipboardLabelState::default();
-        card.row_host.row_action(
-            target,
-            row,
-            role,
-            node,
-            &card.rows,
-            &card.current_values,
-            &card.osc_addresses,
-            &mut card.mod_state,
-            &mut card.mod_active_tab,
-            &mut copied_flash,
-            &mut self.section_folded,
-        )
-    }
-
     fn owns_node(&self, node_id: NodeId) -> bool {
         node_id == self.bg_id
     }
@@ -3088,6 +2892,7 @@ mod tests {
                         metallic: mrow(RowValue { addr: RowAddr::root(51, "metallic"), value: 0.0, min: 0.0, max: 1.0, driven: false, exposed: false }),
                         roughness: mrow(RowValue { addr: RowAddr::root(51, "roughness"), value: 0.5, min: 0.01, max: 1.0, driven: false, exposed: false }),
                     },
+                    material_inspector: None,
                     modifiers: vec![ModifierKnownRow {
                         index: 0,
                         node_doc_id: 70,
@@ -3781,6 +3586,8 @@ mod tests {
                     value_labels: None,
                     section: Some("Transform".to_string()),
                     disabled: None,
+                    material_role: None,
+                    inactive_reason: None,
                 },
                 value: crate::param_surface::RowValue {
                     base: 0.0,
@@ -3796,7 +3603,9 @@ mod tests {
                     ableton_range: None,
                     mappable: false,
                 },
-                scene_addr: None,
+                    scene_addr: None,
+                    rgb_members: None,
+                    material_attached: false,
             }],
             string_params: Vec::new(),
             modifier: None,

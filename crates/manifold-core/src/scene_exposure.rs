@@ -33,6 +33,9 @@ pub struct SceneParamMetadata {
     pub is_trigger: bool,
     pub value_labels: Vec<String>,
     pub convert: ParamConvert,
+    /// Optional material-inspector semantic role supplied by the renderer's
+    /// classifier and copied into the persisted manifest descriptor.
+    pub material_role: Option<crate::material_inspector::MaterialParamRole>,
 }
 
 /// Source of per-type param metadata used by the creation-site commands and the
@@ -121,7 +124,9 @@ pub fn stamp_scene_node_exposures(
     // (edit-time only, never on a hot path).
     let node_params = node.params.clone();
 
-    let meta = def.preset_metadata.get_or_insert_with(empty_scene_preset_metadata);
+    let meta = def
+        .preset_metadata
+        .get_or_insert_with(empty_scene_preset_metadata);
 
     stamp_scene_node_exposures_into(
         &mut meta.params,
@@ -192,9 +197,10 @@ pub fn stamp_scene_node_exposures_into(
     let existing_targets: std::collections::BTreeSet<(String, String)> = bindings
         .iter()
         .filter_map(|b| match &b.target {
-            BindingTarget::Node { node_id: nid, param } => {
-                Some((nid.as_str().to_string(), param.clone()))
-            }
+            BindingTarget::Node {
+                node_id: nid,
+                param,
+            } => Some((nid.as_str().to_string(), param.clone())),
             _ => None,
         })
         .collect();
@@ -202,6 +208,35 @@ pub fn stamp_scene_node_exposures_into(
     let mut changed = false;
     for meta in params_metadata {
         if existing_targets.contains(&(node_id.as_str().to_string(), meta.name.clone())) {
+            // Existing exposures are user state. Enrich their additive role
+            // metadata in place so labels, ranges, bindings and automation
+            // remain untouched while old projects gain the material surface.
+            if let Some(binding_id) = bindings.iter().find_map(|binding| {
+                matches!(
+                    &binding.target,
+                    BindingTarget::Node { node_id: nid, param }
+                        if nid == node_id && param == &meta.name
+                )
+                .then_some(binding.id.clone())
+            }) && let Some(spec) = params.iter_mut().find(|spec| spec.id == binding_id)
+            {
+                // A fan-out slot has multiple meanings. Keep its existing
+                // scalar editor rather than claiming one compound owner.
+                let role = if bindings
+                    .iter()
+                    .filter(|binding| binding.id == binding_id)
+                    .count()
+                    == 1
+                {
+                    meta.material_role
+                } else {
+                    None
+                };
+                if spec.material_role != role {
+                    spec.material_role = role;
+                    changed = true;
+                }
+            }
             continue;
         }
 
@@ -244,6 +279,7 @@ pub fn stamp_scene_node_exposures_into(
             wraps: meta.wraps,
             section: Some(section.to_string()),
             card_visible: card_visible_for(type_id, &meta.name),
+            material_role: meta.material_role,
         });
 
         bindings.push(BindingDef {
@@ -275,7 +311,13 @@ fn serialized_default_as_f32(value: &SerializedParamValue) -> f32 {
     match value {
         SerializedParamValue::Float { value } => *value,
         SerializedParamValue::Int { value } => *value as f32,
-        SerializedParamValue::Bool { value } => if *value { 1.0 } else { 0.0 },
+        SerializedParamValue::Bool { value } => {
+            if *value {
+                1.0
+            } else {
+                0.0
+            }
+        }
         SerializedParamValue::Enum { value } => *value as f32,
         _ => 0.0,
     }
@@ -333,14 +375,17 @@ pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f3
         "node.transform_3d" if matches!(param, "pos_x" | "pos_y" | "pos_z") => {
             Some((-2.0 * radius, 2.0 * radius))
         }
-        "node.light" if matches!(param, "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z") => {
+        "node.light"
+            if matches!(
+                param,
+                "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z"
+            ) =>
+        {
             Some((-2.0 * radius, 2.0 * radius))
         }
         "node.light" if param == "range" => Some((0.01, 4.0 * radius)),
         "node.camera_lens" if param == "focus_distance" => Some((0.0, 4.0 * radius)),
-        "node.camera_lens" if param == "f_stop" => {
-            Some((0.5, (32.0_f32).max(64.0 * radius)))
-        }
+        "node.camera_lens" if param == "f_stop" => Some((0.5, (32.0_f32).max(64.0 * radius))),
         "node.orbit_camera" if param == "distance" => Some((0.01, 6.0 * radius)),
         "node.orbit_camera" if param == "near" => Some((0.001, 2.0 * radius)),
         "node.orbit_camera" if param == "far" => Some((1.0, (20.0 * radius).min(10_000.0))),
@@ -351,7 +396,13 @@ pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f3
 
 /// `(doc_id, node_id, type_id, section, params)` for one vocab-matched node,
 /// collected by `collect_vocab_nodes` and consumed by `migrate_scene_exposures`.
-type VocabNodeEntry = (u32, NodeId, String, String, BTreeMap<String, SerializedParamValue>);
+type VocabNodeEntry = (
+    u32,
+    NodeId,
+    String,
+    String,
+    BTreeMap<String, SerializedParamValue>,
+);
 
 /// Walk every node in `def` — INCLUDING every `node.group`'s inner body,
 /// recursively at any depth — and stamp exposures for any whose `type_id` is
@@ -383,7 +434,9 @@ where
         return false;
     }
 
-    let meta = def.preset_metadata.get_or_insert_with(empty_scene_preset_metadata);
+    let meta = def
+        .preset_metadata
+        .get_or_insert_with(empty_scene_preset_metadata);
 
     let mut changed = false;
     for (node_doc_id, node_id, type_id, section, node_params) in &found {
@@ -531,10 +584,7 @@ where
     // and ranges are authored, never copies.
     // Idempotent: a second run re-derives the same values and writes nothing.
     let scene_radius = meta.scene_bounds.map(scene_radius_from_bounds);
-    fn collect_all_nodes(
-        nodes: &[EffectGraphNode],
-        out: &mut Vec<(u32, NodeId, String)>,
-    ) {
+    fn collect_all_nodes(nodes: &[EffectGraphNode], out: &mut Vec<(u32, NodeId, String)>) {
         for node in nodes {
             out.push((node.id, node.node_id.clone(), node.type_id.clone()));
             if let Some(body) = node.group.as_deref() {
@@ -579,7 +629,10 @@ where
                 .and_then(|r| scene_scaled_range(type_id, &meta_entry.name, r))
                 .unwrap_or((meta_entry.min, meta_entry.max));
             let (min, max) = if widen {
-                (base_min.min(spec.default_value), base_max.max(spec.default_value))
+                (
+                    base_min.min(spec.default_value),
+                    base_max.max(spec.default_value),
+                )
             } else {
                 (base_min, base_max)
             };
@@ -663,6 +716,7 @@ mod tests {
             is_trigger: false,
             value_labels: Vec::new(),
             convert: ParamConvert::Float,
+            material_role: None,
         }
     }
 
@@ -682,7 +736,10 @@ mod tests {
             &mut def,
             7,
             "Key Light",
-            &[float_meta("intensity", "Intensity"), float_meta("pos_x", "X")],
+            &[
+                float_meta("intensity", "Intensity"),
+                float_meta("pos_x", "X"),
+            ],
         );
 
         assert!(changed);
@@ -690,10 +747,13 @@ mod tests {
         assert_eq!(meta.params.len(), 2);
         assert_eq!(meta.bindings.len(), 2);
         assert_eq!(meta.params[0].section.as_deref(), Some("Key Light"));
-        assert_eq!(meta.bindings[0].target, BindingTarget::Node {
-            node_id: NodeId::new("n7"),
-            param: "intensity".to_string(),
-        });
+        assert_eq!(
+            meta.bindings[0].target,
+            BindingTarget::Node {
+                node_id: NodeId::new("n7"),
+                param: "intensity".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -709,10 +769,83 @@ mod tests {
         };
         let metadata = vec![float_meta("intensity", "Intensity")];
 
-        assert!(stamp_scene_node_exposures(&mut def, 7, "Key Light", &metadata));
+        assert!(stamp_scene_node_exposures(
+            &mut def,
+            7,
+            "Key Light",
+            &metadata
+        ));
         let after_first = def.clone();
-        assert!(!stamp_scene_node_exposures(&mut def, 7, "Key Light", &metadata));
+        assert!(!stamp_scene_node_exposures(
+            &mut def,
+            7,
+            "Key Light",
+            &metadata
+        ));
         assert_eq!(def, after_first);
+    }
+
+    #[test]
+    fn material_inspector_existing_exposure_gains_role_without_resetting_authored_fields() {
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![make_node(7, "node.pbr_material")],
+            wires: Vec::new(),
+        };
+        let mut metadata = float_meta("metallic", "Metallic");
+        metadata.material_role = Some(crate::material_inspector::MaterialParamRole::Scalar(
+            crate::material_inspector::MaterialGroup::Surface,
+        ));
+        assert!(stamp_scene_node_exposures(
+            &mut def,
+            7,
+            "Material",
+            std::slice::from_ref(&metadata),
+        ));
+        let meta = def.preset_metadata.as_mut().unwrap();
+        let original_id = meta.params[0].id.clone();
+        meta.params[0].name = "Authored metallic label".to_string();
+        meta.params[0].min = -0.25;
+        meta.params[0].material_role = None;
+        meta.bindings[0].label = "Authored binding label".to_string();
+
+        assert!(stamp_scene_node_exposures(
+            &mut def,
+            7,
+            "Material",
+            std::slice::from_ref(&metadata),
+        ));
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta
+            .params
+            .iter()
+            .find(|spec| spec.id == original_id)
+            .unwrap();
+        assert_eq!(spec.name, "Authored metallic label");
+        assert_eq!(spec.min, -0.25);
+        assert_eq!(spec.material_role, metadata.material_role);
+        assert_eq!(meta.bindings[0].label, "Authored binding label");
+        let meta = def.preset_metadata.as_mut().unwrap();
+        let mut fanout = meta.bindings[0].clone();
+        let BindingTarget::Node { param, .. } = &mut fanout.target else {
+            unreachable!()
+        };
+        *param = "roughness".into();
+        meta.bindings.push(fanout);
+        assert!(stamp_scene_node_exposures(
+            &mut def,
+            7,
+            "Material",
+            std::slice::from_ref(&metadata)
+        ));
+        assert_eq!(
+            def.preset_metadata.as_ref().unwrap().params[0].material_role,
+            None
+        );
     }
 
     #[test]
@@ -741,7 +874,12 @@ mod tests {
         let vocab = ["node.light"];
         let section = |_n: &EffectGraphNode| "Light".to_string();
 
-        assert!(migrate_scene_exposures(&mut def, &vocab, section, &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            section,
+            &TestProvider
+        ));
         let after_first = def.clone();
         assert!(!migrate_scene_exposures(
             &mut def,
@@ -757,8 +895,17 @@ mod tests {
     /// on disk, so it deserializes `false` (authored) even though the stamp
     /// produced it. `user_added` says whether the graph editor's expose
     /// checkbox minted it instead.
-    fn pre_fix_exposure(node_id: &NodeId, param: &str, user_added: bool) -> (ParamSpecDef, BindingDef) {
-        let id = format!("{}_{}_{}", node_id.as_str(), param, if user_added { "user" } else { "auto" });
+    fn pre_fix_exposure(
+        node_id: &NodeId,
+        param: &str,
+        user_added: bool,
+    ) -> (ParamSpecDef, BindingDef) {
+        let id = format!(
+            "{}_{}_{}",
+            node_id.as_str(),
+            param,
+            if user_added { "user" } else { "auto" }
+        );
         let spec = ParamSpecDef {
             id: id.clone(),
             name: param.to_string(),
@@ -778,6 +925,7 @@ mod tests {
             wraps: false,
             section: Some("Light".to_string()),
             card_visible: card_visible_for("node.light", param),
+            material_role: None,
         };
         let binding = BindingDef {
             id,
@@ -877,14 +1025,25 @@ mod tests {
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
-        let user = meta.bindings.iter().find(|b| b.user_added).expect("user binding kept");
-        let auto = meta.bindings.iter().find(|b| !b.user_added).expect("auto binding kept");
+        let user = meta
+            .bindings
+            .iter()
+            .find(|b| b.user_added)
+            .expect("user binding kept");
+        let auto = meta
+            .bindings
+            .iter()
+            .find(|b| !b.user_added)
+            .expect("auto binding kept");
         assert!(
             !user.default_mirrors_node_param,
             "a hand-authored exposure is a value someone chose — the migration must \
              leave it authored so its default still plants"
         );
-        assert!(auto.default_mirrors_node_param, "the auto exposure is still repaired");
+        assert!(
+            auto.default_mirrors_node_param,
+            "the auto exposure is still repaired"
+        );
     }
 
     /// P1 Task D: a grouped scene-vocab node (e.g. an added object's own
@@ -894,7 +1053,7 @@ mod tests {
     /// Idempotent on a second run.
     #[test]
     fn migrate_exposes_grouped_node_param_targeting_inner_node_id() {
-        use crate::effect_graph_def::{GroupDef, GroupInterface, GROUP_TYPE_ID};
+        use crate::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface};
 
         struct TestProvider;
         impl SceneExposureMetadataProvider for TestProvider {
@@ -913,7 +1072,11 @@ mod tests {
 
         let mut group_node = make_node(1, GROUP_TYPE_ID);
         group_node.group = Some(Box::new(GroupDef {
-            interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: Vec::new(),
+            },
             nodes: vec![inner],
             wires: Vec::new(),
             tint: None,
@@ -937,9 +1100,15 @@ mod tests {
             &TestProvider
         ));
 
-        let meta = def.preset_metadata.as_ref().expect("stamped into top-level preset_metadata");
+        let meta = def
+            .preset_metadata
+            .as_ref()
+            .expect("stamped into top-level preset_metadata");
         assert_eq!(meta.params.len(), 1);
-        assert_eq!(meta.params[0].section.as_deref(), Some("Object 1 — Transform"));
+        assert_eq!(
+            meta.params[0].section.as_deref(),
+            Some("Object 1 — Transform")
+        );
         assert!(
             meta.bindings.iter().any(|b| matches!(
                 &b.target,
@@ -966,7 +1135,10 @@ mod tests {
     #[test]
     fn stamped_node_value_seeds_both_spec_and_binding_defaults() {
         let mut node = make_node(7, "node.transform_3d");
-        node.params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 7.5 });
+        node.params.insert(
+            "pos_x".to_string(),
+            SerializedParamValue::Float { value: 7.5 },
+        );
         let mut def = EffectGraphDef {
             version: 1,
             name: None,
@@ -987,11 +1159,20 @@ mod tests {
         let meta = def.preset_metadata.as_ref().unwrap();
         let pos_x_spec = meta.params.iter().find(|p| p.name == "X").unwrap();
         let pos_x_binding = meta.bindings.iter().find(|b| b.label == "X").unwrap();
-        assert_eq!(pos_x_spec.default_value, 7.5, "spec default seeded from the node's stamped value");
-        assert_eq!(pos_x_binding.default_value, 7.5, "binding default seeded from the node's stamped value");
+        assert_eq!(
+            pos_x_spec.default_value, 7.5,
+            "spec default seeded from the node's stamped value"
+        );
+        assert_eq!(
+            pos_x_binding.default_value, 7.5,
+            "binding default seeded from the node's stamped value"
+        );
 
         let pos_y_spec = meta.params.iter().find(|p| p.name == "Y").unwrap();
-        assert_eq!(pos_y_spec.default_value, 0.5, "unstamped param falls back to the manifest default");
+        assert_eq!(
+            pos_y_spec.default_value, 0.5,
+            "unstamped param falls back to the manifest default"
+        );
     }
 
     /// BUG-303: a seeded default outside the manifest's declared min/max
@@ -1001,7 +1182,10 @@ mod tests {
     #[test]
     fn seeded_default_outside_manifest_range_widens_min_max() {
         let mut node = make_node(7, "node.orbit_camera");
-        node.params.insert("distance".to_string(), SerializedParamValue::Float { value: 300.0 });
+        node.params.insert(
+            "distance".to_string(),
+            SerializedParamValue::Float { value: 300.0 },
+        );
         let mut def = EffectGraphDef {
             version: 1,
             name: None,
@@ -1022,7 +1206,10 @@ mod tests {
         let meta = def.preset_metadata.as_ref().unwrap();
         let spec = meta.params.iter().find(|p| p.name == "Distance").unwrap();
         assert_eq!(spec.default_value, 300.0);
-        assert!(spec.min <= 300.0 && spec.max >= 300.0, "range widened to contain the seeded default");
+        assert!(
+            spec.min <= 300.0 && spec.max >= 300.0,
+            "range widened to contain the seeded default"
+        );
     }
 
     /// BUG-303 migration repair: a def stamped BEFORE this fix carries an
@@ -1048,7 +1235,10 @@ mod tests {
         }
 
         let mut node = make_node(7, "node.transform_3d");
-        node.params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 7.5 });
+        node.params.insert(
+            "pos_x".to_string(),
+            SerializedParamValue::Float { value: 7.5 },
+        );
         let node_id = node.node_id.clone();
 
         // Simulate a pre-fix def: a spec + binding already stamped at the
@@ -1072,12 +1262,16 @@ mod tests {
             wraps: false,
             section: Some("Transform".to_string()),
             card_visible: true,
+            material_role: None,
         };
         let stale_binding = BindingDef {
             id: "7_pos_x".to_string(),
             label: "X".to_string(),
             default_value: 0.5,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "pos_x".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "pos_x".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1089,7 +1283,10 @@ mod tests {
             id: "user_pos_x".to_string(),
             label: "X (user)".to_string(),
             default_value: 0.5,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "pos_x".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "pos_x".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: true,
             scale: 1.0,
@@ -1112,13 +1309,24 @@ mod tests {
         };
 
         let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Transform".to_string(),
+            &TestProvider
+        ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
         let repaired_spec = meta.params.iter().find(|p| p.id == "7_pos_x").unwrap();
-        assert_eq!(repaired_spec.default_value, 7.5, "spec re-seeded from the node's stamped value");
+        assert_eq!(
+            repaired_spec.default_value, 7.5,
+            "spec re-seeded from the node's stamped value"
+        );
         let repaired_binding = meta.bindings.iter().find(|b| b.id == "7_pos_x").unwrap();
-        assert_eq!(repaired_binding.default_value, 7.5, "binding re-seeded from the node's stamped value");
+        assert_eq!(
+            repaired_binding.default_value, 7.5,
+            "binding re-seeded from the node's stamped value"
+        );
         let untouched_user_binding = meta.bindings.iter().find(|b| b.id == "user_pos_x").unwrap();
         assert_eq!(
             untouched_user_binding.default_value, 0.5,
@@ -1127,7 +1335,12 @@ mod tests {
 
         let after_repair = def.clone();
         assert!(
-            !migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider),
+            !migrate_scene_exposures(
+                &mut def,
+                &vocab,
+                |_n| "Transform".to_string(),
+                &TestProvider
+            ),
             "second migration run is a no-op once repaired"
         );
         assert_eq!(def, after_repair);
@@ -1219,11 +1432,17 @@ mod tests {
             &mut def,
             3,
             "Material",
-            &[float_meta("color_r", "Colour R"), float_meta("roughness", "Roughness")],
+            &[
+                float_meta("color_r", "Colour R"),
+                float_meta("roughness", "Roughness")
+            ],
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
-        assert!(meta.params.iter().all(|p| !p.card_visible), "no material param shows on the card");
+        assert!(
+            meta.params.iter().all(|p| !p.card_visible),
+            "no material param shows on the card"
+        );
     }
 
     /// Migration repair for `card_visible`: a def stamped before the
@@ -1262,7 +1481,10 @@ mod tests {
             id: "7_pos_x".to_string(),
             label: "X".to_string(),
             default_value: 0.5,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "pos_x".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "pos_x".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1273,7 +1495,10 @@ mod tests {
             id: "7_scale_x".to_string(),
             label: "Scale X".to_string(),
             default_value: 0.5,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "scale_x".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "scale_x".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1296,17 +1521,33 @@ mod tests {
         };
 
         let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Transform".to_string(),
+            &TestProvider
+        ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
         let pos_spec = meta.params.iter().find(|p| p.id == "7_pos_x").unwrap();
-        assert!(pos_spec.card_visible, "pos_x was already correct (true) and stays true");
+        assert!(
+            pos_spec.card_visible,
+            "pos_x was already correct (true) and stays true"
+        );
         let scale_spec = meta.params.iter().find(|p| p.id == "7_scale_x").unwrap();
-        assert!(!scale_spec.card_visible, "scale_x repaired from stale true to correct false");
+        assert!(
+            !scale_spec.card_visible,
+            "scale_x repaired from stale true to correct false"
+        );
 
         let after_repair = def.clone();
         assert!(
-            !migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider),
+            !migrate_scene_exposures(
+                &mut def,
+                &vocab,
+                |_n| "Transform".to_string(),
+                &TestProvider
+            ),
             "second migration run is a no-op once repaired"
         );
         assert_eq!(def, after_repair);
@@ -1353,7 +1594,10 @@ mod tests {
             id: "9_f_stop".to_string(),
             label: "Enabled".to_string(),
             default_value: 32.0,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "f_stop".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "f_stop".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1369,7 +1613,10 @@ mod tests {
             id: "aperture_macro".to_string(),
             label: "Aperture".to_string(),
             default_value: 2.8,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "f_stop".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "f_stop".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1392,20 +1639,41 @@ mod tests {
         };
 
         let vocab = ["node.camera_lens"];
-        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Camera".to_string(),
+            &TestProvider
+        ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
         let spec = meta.params.iter().find(|p| p.id == "9_f_stop").unwrap();
         assert_eq!(spec.name, "F-Stop", "stale label refreshed from metadata");
-        assert_eq!((spec.min, spec.max), (0.5, 32.0), "stretched range re-derived from metadata");
         assert_eq!(
-            meta.bindings.iter().find(|b| b.id == "9_f_stop").unwrap().label,
+            (spec.min, spec.max),
+            (0.5, 32.0),
+            "stretched range re-derived from metadata"
+        );
+        assert_eq!(
+            meta.bindings
+                .iter()
+                .find(|b| b.id == "9_f_stop")
+                .unwrap()
+                .label,
             "F-Stop",
             "binding label refreshed too"
         );
-        let curated = meta.params.iter().find(|p| p.id == "aperture_macro").unwrap();
+        let curated = meta
+            .params
+            .iter()
+            .find(|p| p.id == "aperture_macro")
+            .unwrap();
         assert_eq!(curated.name, "Aperture", "curated fan-out label untouched");
-        assert_eq!((curated.min, curated.max), (1.0, 8.0), "curated fan-out range untouched");
+        assert_eq!(
+            (curated.min, curated.max),
+            (1.0, 8.0),
+            "curated fan-out range untouched"
+        );
 
         let after_repair = def.clone();
         assert!(
@@ -1448,7 +1716,10 @@ mod tests {
             id: "5_enabled".to_string(),
             label: "Enabled".to_string(),
             default_value: 1.0,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "enabled".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "enabled".to_string(),
+            },
             convert: ParamConvert::BoolThreshold,
             user_added: false,
             scale: 1.0,
@@ -1475,13 +1746,25 @@ mod tests {
         // existing stamp. (The lens keeps `found` non-empty: every real tail
         // project has one.)
         let vocab = ["node.camera_lens"];
-        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Camera".to_string(),
+            &TestProvider
+        ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
         let spec = meta.params.iter().find(|p| p.id == "5_enabled").unwrap();
-        assert_eq!(spec.name, "Depth of Field", "non-vocab stamp label refreshed");
         assert_eq!(
-            meta.bindings.iter().find(|b| b.id == "5_enabled").unwrap().label,
+            spec.name, "Depth of Field",
+            "non-vocab stamp label refreshed"
+        );
+        assert_eq!(
+            meta.bindings
+                .iter()
+                .find(|b| b.id == "5_enabled")
+                .unwrap()
+                .label,
             "Depth of Field"
         );
 
@@ -1510,7 +1793,10 @@ mod tests {
     #[test]
     fn scene_radius_from_bounds_zero_is_floor() {
         let r = scene_radius_from_bounds(([0.0; 3], [0.0; 3]));
-        assert!((r - 0.01).abs() < 1e-6, "degenerate bbox floors at 0.01, got {r}");
+        assert!(
+            (r - 0.01).abs() < 1e-6,
+            "degenerate bbox floors at 0.01, got {r}"
+        );
     }
 
     #[test]
@@ -1518,7 +1804,10 @@ mod tests {
         // [-10, -10, -10]..[10, 10, 10]: diagonal = sqrt(600), radius = sqrt(600)/2
         let r = scene_radius_from_bounds(([-10.0; 3], [10.0; 3]));
         let expected = (300.0_f32).sqrt(); // sqrt(1200)/2 = sqrt(300)
-        assert!((r - expected).abs() < 1e-3, "symmetric bbox radius, got {r} expected {expected}");
+        assert!(
+            (r - expected).abs() < 1e-3,
+            "symmetric bbox radius, got {r} expected {expected}"
+        );
     }
 
     #[test]
@@ -1537,7 +1826,10 @@ mod tests {
     #[test]
     fn scene_scaled_range_orbit_far_capped_at_10000() {
         let (_, max) = scene_scaled_range("node.orbit_camera", "far", 1000.0).unwrap();
-        assert!((max - 10_000.0).abs() < 1e-6, "far capped at 10_000, got {max}");
+        assert!(
+            (max - 10_000.0).abs() < 1e-6,
+            "far capped at 10_000, got {max}"
+        );
     }
 
     #[test]
@@ -1594,12 +1886,16 @@ mod tests {
             wraps: false,
             section: Some("Camera".to_string()),
             card_visible: true,
+            material_role: None,
         };
         let stale_binding = BindingDef {
             id: "3_distance".to_string(),
             label: "Distance".to_string(),
             default_value: 2.0,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "distance".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "distance".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1687,12 +1983,16 @@ mod tests {
             wraps: false,
             section: Some("Transform".to_string()),
             card_visible: true,
+            material_role: None,
         };
         let stale_binding = BindingDef {
             id: "2_pos_x".to_string(),
             label: "X".to_string(),
             default_value: 0.5,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "pos_x".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "pos_x".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1717,13 +2017,26 @@ mod tests {
         };
 
         let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Transform".to_string(),
+            &TestProvider
+        ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
         let spec = meta.params.iter().find(|p| p.id == "2_pos_x").unwrap();
         let r = scene_radius_from_bounds(([-2.0; 3], [2.0; 3]));
-        assert!((spec.min - -2.0 * r).abs() < 1e-3, "pos_x min = -2·radius ({})", -2.0 * r);
-        assert!((spec.max - 2.0 * r).abs() < 1e-3, "pos_x max = 2·radius ({})", 2.0 * r);
+        assert!(
+            (spec.min - -2.0 * r).abs() < 1e-3,
+            "pos_x min = -2·radius ({})",
+            -2.0 * r
+        );
+        assert!(
+            (spec.max - 2.0 * r).abs() < 1e-3,
+            "pos_x max = 2·radius ({})",
+            2.0 * r
+        );
     }
 
     /// A param NOT in the scene-scaled table keeps the generic metadata
@@ -1770,12 +2083,16 @@ mod tests {
             wraps: false,
             section: Some("Transform".to_string()),
             card_visible: true,
+            material_role: None,
         };
         let stale_binding = BindingDef {
             id: "4_scale_x".to_string(),
             label: "Scale X".to_string(),
             default_value: 1.0,
-            target: BindingTarget::Node { node_id: node_id.clone(), param: "scale_x".to_string() },
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "scale_x".to_string(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -1799,12 +2116,20 @@ mod tests {
         };
 
         let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Transform".to_string(),
+            &TestProvider
+        ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
         let spec = meta.params.iter().find(|p| p.id == "4_scale_x").unwrap();
         // scale_x is NOT in the scene-scaled table, so generic metadata applies
         assert!((spec.min - 0.0).abs() < 1e-6, "scale_x min stays generic");
-        assert!((spec.max - 10.0).abs() < 1e-6, "scale_x max refreshes to generic 10.0");
+        assert!(
+            (spec.max - 10.0).abs() < 1e-6,
+            "scale_x max refreshes to generic 10.0"
+        );
     }
 }

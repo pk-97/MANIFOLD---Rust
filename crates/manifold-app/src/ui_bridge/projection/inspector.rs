@@ -652,6 +652,7 @@ pub fn sync_inspector_data(
                                                 ),
                                                 transform: transform.as_ref().map(&transform_row),
                                                 material: material_row(material),
+                                                material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known)),
                                                 modifiers: modifier_chain
                                                     .iter()
                                                     .enumerate()
@@ -1073,6 +1074,7 @@ pub fn sync_inspector_data(
                                     driver_timing,
                                 );
                                 attach_audio_sends(std::slice::from_mut(&mut surface), &project.audio_setup);
+                                if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
                                 surface
                             });
                             SceneSetupState::Live(Box::new(SceneSetupVm {

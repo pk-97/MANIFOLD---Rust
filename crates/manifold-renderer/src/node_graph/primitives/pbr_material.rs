@@ -878,6 +878,15 @@ crate::primitive! {
             range: None,
             enum_values: &[],
         },
+        // Material inspector feature presence. These are appended so the
+        // original 89 parameter identities retain their slot/order.
+        ParamDef { name: Cow::Borrowed("coat_mode"), label: "Coat Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("iridescence_mode"), label: "Iridescence Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("emission_mode"), label: "Emission Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("glass_mode"), label: "Glass Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("sheen_mode"), label: "Sheen Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_mode"), label: "Anisotropy Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("translucency_mode"), label: "Translucency Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
@@ -896,6 +905,21 @@ impl Primitive for PbrMaterial {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let feature_mode = |name: &str| -> u32 {
+            match ctx.params.get(name) {
+                Some(ParamValue::Enum(value)) => (*value).min(2),
+                Some(ParamValue::Float(value)) => value.round().clamp(0.0, 2.0) as u32,
+                _ => 0,
+            }
+        };
+        let coat_mode = feature_mode("coat_mode");
+        let iridescence_mode = feature_mode("iridescence_mode");
+        let emission_mode = feature_mode("emission_mode");
+        let glass_mode = feature_mode("glass_mode");
+        let sheen_mode = feature_mode("sheen_mode");
+        let anisotropy_mode = feature_mode("anisotropy_mode");
+        let translucency_mode = feature_mode("translucency_mode");
+
         let color_r = ctx.scalar_or_param("color_r", 0.8);
         let color_g = ctx.scalar_or_param("color_g", 0.8);
         let color_b = ctx.scalar_or_param("color_b", 0.82);
@@ -903,9 +927,9 @@ impl Primitive for PbrMaterial {
         let ambient = ctx.scalar_or_param("ambient", 0.05);
         let metallic = ctx.scalar_or_param("metallic", 0.0).clamp(0.0, 1.0);
         let roughness = ctx.scalar_or_param("roughness", 0.5);
-        let emission_r = ctx.scalar_or_param("emission_r", 0.0);
-        let emission_g = ctx.scalar_or_param("emission_g", 0.0);
-        let emission_b = ctx.scalar_or_param("emission_b", 0.0);
+        let mut emission_r = ctx.scalar_or_param("emission_r", 0.0);
+        let mut emission_g = ctx.scalar_or_param("emission_g", 0.0);
+        let mut emission_b = ctx.scalar_or_param("emission_b", 0.0);
         let emission_intensity = ctx.scalar_or_param("emission_intensity", 0.0);
 
         let alpha_mode = match ctx.params.get("alpha_mode") {
@@ -926,24 +950,24 @@ impl Primitive for PbrMaterial {
         // GLB_CONFORMANCE_DESIGN.md G-P5/D5. clearcoat_roughness clamps to
         // the same 0.01 floor as the base `roughness` above — zero is a
         // GGX landmine in the coat lobe's own D/G terms too.
-        let clearcoat = ctx.scalar_or_param("clearcoat", 0.0).clamp(0.0, 1.0);
+        let mut clearcoat = ctx.scalar_or_param("clearcoat", 0.0).clamp(0.0, 1.0);
         let clearcoat_roughness = ctx.scalar_or_param("clearcoat_roughness", 0.0).max(0.01);
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
         // anisotropy, dispersion, transmission+volume — read straight
         // through, no clamping beyond each param's own declared range
         // (no shading math consumes these yet).
-        let sheen_color_r = ctx.scalar_or_param("sheen_color_r", 0.0);
-        let sheen_color_g = ctx.scalar_or_param("sheen_color_g", 0.0);
-        let sheen_color_b = ctx.scalar_or_param("sheen_color_b", 0.0);
+        let mut sheen_color_r = ctx.scalar_or_param("sheen_color_r", 0.0);
+        let mut sheen_color_g = ctx.scalar_or_param("sheen_color_g", 0.0);
+        let mut sheen_color_b = ctx.scalar_or_param("sheen_color_b", 0.0);
         let sheen_roughness = ctx.scalar_or_param("sheen_roughness", 0.0);
-        let iridescence = ctx.scalar_or_param("iridescence", 0.0);
+        let mut iridescence = ctx.scalar_or_param("iridescence", 0.0);
         let iridescence_ior = ctx.scalar_or_param("iridescence_ior", 1.3);
         let iridescence_thickness_min = ctx.scalar_or_param("iridescence_thickness_min", 100.0);
         let iridescence_thickness_max = ctx.scalar_or_param("iridescence_thickness_max", 400.0);
-        let anisotropy_strength = ctx.scalar_or_param("anisotropy_strength", 0.0);
+        let mut anisotropy_strength = ctx.scalar_or_param("anisotropy_strength", 0.0);
         let anisotropy_rotation = ctx.scalar_or_param("anisotropy_rotation", 0.0);
-        let dispersion = ctx.scalar_or_param("dispersion", 0.0);
-        let transmission = ctx.scalar_or_param("transmission", 0.0);
+        let mut dispersion = ctx.scalar_or_param("dispersion", 0.0);
+        let mut transmission = ctx.scalar_or_param("transmission", 0.0);
         let volume_thickness = ctx.scalar_or_param("volume_thickness", 0.0);
         let volume_attenuation_distance = ctx.scalar_or_param(
             "volume_attenuation_distance",
@@ -953,7 +977,36 @@ impl Primitive for PbrMaterial {
         let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);
         let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
         // RAYTRACING_DESIGN.md section 16 TL3.
-        let translucency = ctx.scalar_or_param("translucency", 0.0);
+        let mut translucency = ctx.scalar_or_param("translucency", 0.0);
+
+        // A saved Off mode gates evaluated output only. Authored factors,
+        // maps, and their drivers remain untouched in the graph.
+        if coat_mode == 1 {
+            clearcoat = 0.0;
+        }
+        if iridescence_mode == 1 {
+            iridescence = 0.0;
+        }
+        if emission_mode == 1 {
+            emission_r = 0.0;
+            emission_g = 0.0;
+            emission_b = 0.0;
+        }
+        if glass_mode == 1 {
+            transmission = 0.0;
+            dispersion = 0.0;
+        }
+        if sheen_mode == 1 {
+            sheen_color_r = 0.0;
+            sheen_color_g = 0.0;
+            sheen_color_b = 0.0;
+        }
+        if anisotropy_mode == 1 {
+            anisotropy_strength = 0.0;
+        }
+        if translucency_mode == 1 {
+            translucency = 0.0;
+        }
         // One folded per-map UV affine per family (G-P4); identity defaults
         // are exactly inert. The map families are a fixed set, so the lookup
         // keys are static strs — building them with format! would allocate
@@ -961,19 +1014,35 @@ impl Primitive for PbrMaterial {
         const UV_XF_KEYS: [[&str; 6]; 5] = [
             ["uv_m00", "uv_m01", "uv_m10", "uv_m11", "uv_tx", "uv_ty"],
             [
-                "nrm_uv_m00", "nrm_uv_m01", "nrm_uv_m10", "nrm_uv_m11", "nrm_uv_tx",
+                "nrm_uv_m00",
+                "nrm_uv_m01",
+                "nrm_uv_m10",
+                "nrm_uv_m11",
+                "nrm_uv_tx",
                 "nrm_uv_ty",
             ],
             [
-                "mr_uv_m00", "mr_uv_m01", "mr_uv_m10", "mr_uv_m11", "mr_uv_tx",
+                "mr_uv_m00",
+                "mr_uv_m01",
+                "mr_uv_m10",
+                "mr_uv_m11",
+                "mr_uv_tx",
                 "mr_uv_ty",
             ],
             [
-                "occ_uv_m00", "occ_uv_m01", "occ_uv_m10", "occ_uv_m11", "occ_uv_tx",
+                "occ_uv_m00",
+                "occ_uv_m01",
+                "occ_uv_m10",
+                "occ_uv_m11",
+                "occ_uv_tx",
                 "occ_uv_ty",
             ],
             [
-                "em_uv_m00", "em_uv_m01", "em_uv_m10", "em_uv_m11", "em_uv_tx",
+                "em_uv_m00",
+                "em_uv_m01",
+                "em_uv_m10",
+                "em_uv_m11",
+                "em_uv_tx",
                 "em_uv_ty",
             ],
         ];
@@ -987,8 +1056,13 @@ impl Primitive for PbrMaterial {
                 ctx.scalar_or_param(keys[5], 0.0),
             ]
         };
-        let [base_color_uv_transform, normal_uv_transform, mr_uv_transform, occlusion_uv_transform, emissive_uv_transform] =
-            UV_XF_KEYS.map(uv_xf);
+        let [
+            base_color_uv_transform,
+            normal_uv_transform,
+            mr_uv_transform,
+            occlusion_uv_transform,
+            emissive_uv_transform,
+        ] = UV_XF_KEYS.map(uv_xf);
 
         // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
         // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
@@ -1019,9 +1093,19 @@ impl Primitive for PbrMaterial {
         // allocations per frame otherwise.
         const SAMPLER_KEYS: [[&str; 4]; 5] = [
             ["wrap_u", "wrap_v", "mag_filter", "min_filter"],
-            ["nrm_wrap_u", "nrm_wrap_v", "nrm_mag_filter", "nrm_min_filter"],
+            [
+                "nrm_wrap_u",
+                "nrm_wrap_v",
+                "nrm_mag_filter",
+                "nrm_min_filter",
+            ],
             ["mr_wrap_u", "mr_wrap_v", "mr_mag_filter", "mr_min_filter"],
-            ["occ_wrap_u", "occ_wrap_v", "occ_mag_filter", "occ_min_filter"],
+            [
+                "occ_wrap_u",
+                "occ_wrap_v",
+                "occ_mag_filter",
+                "occ_min_filter",
+            ],
             ["em_wrap_u", "em_wrap_v", "em_mag_filter", "em_min_filter"],
         ];
         let map_sampler = |keys: [&str; 4]| -> MapSamplerDesc {
@@ -1032,8 +1116,13 @@ impl Primitive for PbrMaterial {
                 min_filter: filter_mode(enum_or(keys[3])),
             }
         };
-        let [base_color_sampler, normal_sampler, mr_sampler, occlusion_sampler, emissive_sampler] =
-            SAMPLER_KEYS.map(map_sampler);
+        let [
+            base_color_sampler,
+            normal_sampler,
+            mr_sampler,
+            occlusion_sampler,
+            emissive_sampler,
+        ] = SAMPLER_KEYS.map(map_sampler);
 
         let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],
@@ -1092,8 +1181,128 @@ impl Primitive for PbrMaterial {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::effect_node::ParamValues;
     use crate::node_graph::material::MaterialKind;
     use crate::node_graph::primitive::PrimitiveSpec;
+
+    fn run_material(params: ParamValues, bound_emission_r: Option<f32>) -> Material {
+        use crate::node_graph::MockBackend;
+        use crate::node_graph::execution_plan::ResourceId;
+        use crate::node_graph::ports::PortType;
+        use manifold_core::{Beats, Seconds};
+
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
+        if let Some(value) = bound_emission_r {
+            backend.set_scalar(Slot(1), ParamValue::Float(value));
+        }
+        let inputs_bindings: &[(&'static str, Slot)] = &[("emission_r", Slot(1))];
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
+        let outputs_bindings: &[(&'static str, Slot)] = &[("out", out_slot)];
+        let outputs = NodeOutputs::new(
+            outputs_bindings,
+            &backend,
+            &mut scalar_scratch,
+            &mut camera_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+            &mut render_mode_scratch,
+            &mut object_scratch,
+        );
+        let time = crate::node_graph::effect_node::FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+        let mut primitive = PbrMaterial::new();
+        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+        Primitive::run(&mut primitive, &mut ctx);
+        for (slot, value) in material_scratch.drain(..) {
+            backend.set_material(slot, value);
+        }
+        backend
+            .material(out_slot)
+            .expect("PBR run must emit a material")
+    }
+
+    fn authored_material_params() -> ParamValues {
+        let mut params = ParamValues::default();
+        for (name, value) in [
+            ("emission_intensity", 1.0),
+            ("clearcoat", 0.21),
+            ("iridescence", 0.22),
+            ("emission_r", 0.23),
+            ("sheen_color_r", 0.24),
+            ("anisotropy_strength", 0.25),
+            ("transmission", 0.26),
+            ("translucency", 0.27),
+        ] {
+            params.insert(Cow::Borrowed(name), ParamValue::Float(value));
+        }
+        params
+    }
+
+    #[test]
+    fn material_inspector_feature_modes_gate_evaluated_outputs_only() {
+        type ModeCase = (&'static str, f32, fn(&Material) -> f32);
+        let cases: &[ModeCase] = &[
+            ("coat_mode", 0.21, |m| m.clearcoat),
+            ("iridescence_mode", 0.22, |m| m.iridescence_factor),
+            ("emission_mode", 0.23, |m| m.emission[0]),
+            ("glass_mode", 0.26, |m| m.transmission_factor),
+            ("sheen_mode", 0.24, |m| m.sheen_color_factor[0]),
+            ("anisotropy_mode", 0.25, |m| m.anisotropy_strength),
+            ("translucency_mode", 0.27, |m| m.translucency),
+        ];
+        for &(mode, authored, read) in cases {
+            let params = authored_material_params();
+            assert!(
+                (read(&run_material(params.clone(), None)) - authored).abs() < 1e-6,
+                "missing {mode}"
+            );
+            let mut from_values = params.clone();
+            from_values.insert(Cow::Borrowed(mode), ParamValue::Enum(0));
+            assert!(
+                (read(&run_material(from_values, None)) - authored).abs() < 1e-6,
+                "zero {mode}"
+            );
+            let mut on = params.clone();
+            on.insert(Cow::Borrowed(mode), ParamValue::Enum(2));
+            assert!(
+                (read(&run_material(on, None)) - authored).abs() < 1e-6,
+                "on {mode}"
+            );
+            let mut off = params.clone();
+            off.insert(Cow::Borrowed(mode), ParamValue::Enum(1));
+            let gated = run_material(off, None);
+            assert!(read(&gated).abs() < 1e-6, "off {mode}");
+            assert!(
+                params.get(mode).is_none(),
+                "running a mode must not author it"
+            );
+        }
+
+        let mut bound_off = authored_material_params();
+        bound_off.insert(Cow::Borrowed("emission_mode"), ParamValue::Enum(1));
+        let bound = run_material(bound_off, Some(0.91));
+        assert!(
+            bound.emission[0].abs() < 1e-6,
+            "Off must gate a bound emission input"
+        );
+    }
 
     #[test]
     fn pbr_material_declares_port_shadow_scalars_and_material_output() {
@@ -1133,18 +1342,51 @@ mod tests {
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("color_r"), ParamValue::Float(0.85));
-        params.insert(std::borrow::Cow::Borrowed("color_g"), ParamValue::Float(0.85));
-        params.insert(std::borrow::Cow::Borrowed("color_b"), ParamValue::Float(0.85));
-        params.insert(std::borrow::Cow::Borrowed("color_a"), ParamValue::Float(1.0));
-        params.insert(std::borrow::Cow::Borrowed("ambient"), ParamValue::Float(0.05));
-        params.insert(std::borrow::Cow::Borrowed("metallic"), ParamValue::Float(1.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("color_r"),
+            ParamValue::Float(0.85),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("color_g"),
+            ParamValue::Float(0.85),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("color_b"),
+            ParamValue::Float(0.85),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("color_a"),
+            ParamValue::Float(1.0),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("ambient"),
+            ParamValue::Float(0.05),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("metallic"),
+            ParamValue::Float(1.0),
+        );
         // Roughness zero — the constructor must clamp to >= 0.01.
-        params.insert(std::borrow::Cow::Borrowed("roughness"), ParamValue::Float(0.0));
-        params.insert(std::borrow::Cow::Borrowed("emission_r"), ParamValue::Float(0.0));
-        params.insert(std::borrow::Cow::Borrowed("emission_g"), ParamValue::Float(0.0));
-        params.insert(std::borrow::Cow::Borrowed("emission_b"), ParamValue::Float(0.0));
-        params.insert(std::borrow::Cow::Borrowed("emission_intensity"), ParamValue::Float(0.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("roughness"),
+            ParamValue::Float(0.0),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("emission_r"),
+            ParamValue::Float(0.0),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("emission_g"),
+            ParamValue::Float(0.0),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("emission_b"),
+            ParamValue::Float(0.0),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("emission_intensity"),
+            ParamValue::Float(0.0),
+        );
 
         let mut prim = PbrMaterial::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[];
@@ -1198,7 +1440,7 @@ mod tests {
     /// relies on: no second node type, no live graph rewrite, just a CPU
     /// branch in `run()` (this primitive is CPU-only, no GPU dispatch).
     #[test]
-    fn baked_look_toggle_emits_unlit_material_kind() {
+    fn material_inspector_baked_look_emission_off_stays_gated() {
         use crate::node_graph::MockBackend;
         use crate::node_graph::backend::Backend;
         use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
@@ -1207,11 +1449,16 @@ mod tests {
         use crate::node_graph::ports::PortType;
         use manifold_core::{Beats, Seconds};
 
-        let run_with_baked_look = |baked_look: bool| -> MaterialKind {
+        let run_with_baked_look = |baked_look: bool| -> (MaterialKind, [f32; 4]) {
             let mut backend = MockBackend::new();
             let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
             let mut params = ParamValues::default();
             params.insert(Cow::Borrowed("baked_look"), ParamValue::Bool(baked_look));
+            params.insert(Cow::Borrowed("emission_r"), ParamValue::Float(0.8));
+            params.insert(Cow::Borrowed("emission_g"), ParamValue::Float(0.6));
+            params.insert(Cow::Borrowed("emission_b"), ParamValue::Float(0.4));
+            params.insert(Cow::Borrowed("emission_intensity"), ParamValue::Float(1.0));
+            params.insert(Cow::Borrowed("emission_mode"), ParamValue::Enum(1));
 
             let mut prim = PbrMaterial::new();
             let inputs_bindings: &[(&'static str, Slot)] = &[];
@@ -1249,14 +1496,21 @@ mod tests {
             for (slot, value) in material_scratch.drain(..) {
                 backend.set_material(slot, value);
             }
-            backend.material(out_slot).expect("material should be set").kind
+            let material = backend.material(out_slot).expect("material should be set");
+            (material.kind, material.emission)
         };
 
-        assert_eq!(run_with_baked_look(false), MaterialKind::Pbr, "default (false) stays Pbr");
         assert_eq!(
-            run_with_baked_look(true),
+            run_with_baked_look(false).0,
+            MaterialKind::Pbr,
+            "default (false) stays Pbr"
+        );
+        assert_eq!(run_with_baked_look(false).1[..3], [0.0, 0.0, 0.0]);
+        assert_eq!(
+            run_with_baked_look(true).0,
             MaterialKind::Unlit,
             "baked_look=true must emit Unlit, not Pbr"
         );
+        assert_eq!(run_with_baked_look(true).1[..3], [0.0, 0.0, 0.0]);
     }
 }

@@ -30,7 +30,7 @@
 //! wrong architecture" callout: this module must never grow a persistent
 //! mirror of scene values.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use manifold_core::LayerId;
 use manifold_core::effect_graph_def::{
@@ -281,7 +281,49 @@ pub struct MaterialColorRow {
     /// PBR-only concept, so a phong/unlit/cel material's quick knobs are
     /// base color alone (D4: "the atom's own params otherwise").
     pub is_pbr: bool,
+    /// The fixed map-input vocabulary exposed by the material inspector.
+    pub texture_slots: Vec<MaterialTextureSlot>,
+    /// Number of scene objects sharing this material identity when the whole
+    /// scene is fully classified; `None` means the count is not authoritative.
+    pub shared_object_count: Option<usize>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialTextureSlot {
+    pub port: String,
+    pub source: MaterialTextureSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MaterialTextureSource {
+    Unconnected,
+    Known {
+        scope_path: Vec<u32>,
+        node_doc_id: u32,
+        type_id: String,
+    },
+    GraphSource,
+}
+
+const MATERIAL_TEXTURE_PORTS: &[&str] = &[
+    "base_color_map",
+    "normal_map",
+    "mr_map",
+    "occlusion_map",
+    "emissive_map",
+    "sheen_color_map",
+    "sheen_roughness_map",
+    "iridescence_map",
+    "iridescence_thickness_map",
+    "anisotropy_map",
+    "clearcoat_map",
+    "clearcoat_roughness_map",
+    "clearcoat_normal_map",
+    "specular_map",
+    "specular_color_map",
+    "transmission_map",
+    "volume_thickness_map",
+];
 
 /// The Objects section's material quick-knob row (D3/D4).
 #[derive(Debug, Clone, PartialEq)]
@@ -646,6 +688,71 @@ fn resolve_producer_through_group<'a>(
     Some((inner, Some(producer_id), inner_producer, inner_producer_port))
 }
 
+fn material_texture_slots(
+    level: &Level<'_>,
+    scope_path: &[u32],
+    object_node_id: u32,
+) -> Vec<MaterialTextureSlot> {
+    MATERIAL_TEXTURE_PORTS
+        .iter()
+        .map(|&port| {
+            let source = if level.producer(object_node_id, port).is_none() {
+                MaterialTextureSource::Unconnected
+            } else if let Some((_level, crossed_group, node, _)) =
+                resolve_producer_through_group(level, object_node_id, port)
+            {
+                let mut source_scope = scope_path.to_vec();
+                if let Some(group_id) = crossed_group {
+                    source_scope.push(group_id);
+                }
+                MaterialTextureSource::Known {
+                    scope_path: source_scope,
+                    node_doc_id: node.id,
+                    type_id: node.type_id.clone(),
+                }
+            } else {
+                MaterialTextureSource::GraphSource
+            };
+            MaterialTextureSlot {
+                port: port.to_string(),
+                source,
+            }
+        })
+        .collect()
+}
+
+fn assign_shared_material_counts(objects: &mut [SceneObjectVm]) {
+    let mut counts: HashMap<(Vec<u32>, u32), usize> = HashMap::new();
+    let mut complete = true;
+    for object in objects.iter() {
+        let SceneObjectVm::Known(row) = object else {
+            complete = false;
+            continue;
+        };
+        let MaterialVm::Known(material) = &row.material else {
+            complete = false;
+            continue;
+        };
+        *counts
+            .entry((material.scope_path.clone(), material.node_doc_id))
+            .or_default() += 1;
+    }
+    for object in objects {
+        let SceneObjectVm::Known(row) = object else {
+            continue;
+        };
+        let MaterialVm::Known(material) = &mut row.material else {
+            continue;
+        };
+        material.shared_object_count = complete.then(|| {
+            counts
+                .get(&(material.scope_path.clone(), material.node_doc_id))
+                .copied()
+                .unwrap_or(0)
+        });
+    }
+}
+
 /// BUG-194 (D4) + D12: alongside the objects themselves, returns the summed
 /// vertex count and whether that sum is exact (`true`) or a lower bound
 /// (`false` — at least one object's mesh source didn't resolve to a known
@@ -692,6 +799,7 @@ fn trace_objects(
         }
         out.push(row);
     }
+    assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)
 }
 
@@ -810,6 +918,7 @@ fn trace_scene_object(
     layer_id_set: &HashSet<&str>,
 ) -> (SceneObjectVm, Option<u32>) {
     let object_node_id = node.id;
+    let object_scope_path = scope_path.clone();
     let name = node.handle.clone().unwrap_or_else(|| format!("Object {k}"));
     let visible_addr =
         ParamAddr { scope_path: scope_path.clone(), node_doc_id: object_node_id, param_id: "visible".to_string() };
@@ -826,10 +935,13 @@ fn trace_scene_object(
             if let Some(g) = crossed_group {
                 scope_path.push(g);
             }
+            let texture_slots = material_texture_slots(level, &object_scope_path, object_node_id);
             MaterialVm::Known(Box::new(MaterialColorRow {
                 node_doc_id: n.id,
                 scope_path,
                 is_pbr: n.type_id == "node.pbr_material",
+                texture_slots,
+                shared_object_count: None,
             }))
         })
         .unwrap_or(MaterialVm::None);
@@ -1718,9 +1830,152 @@ mod tests {
             SceneObjectVm::Known(row) if matches!(row.material, MaterialVm::Known(_)) => {
                 let MaterialVm::Known(m) = &row.material else { unreachable!() };
                 assert!(m.is_pbr, "pbr material atom flags is_pbr — metallic/roughness rows follow");
+                assert_eq!(m.texture_slots.len(), 17);
+                assert!(m
+                    .texture_slots
+                    .iter()
+                    .all(|slot| matches!(&slot.source, MaterialTextureSource::Unconnected)));
+                assert_eq!(m.shared_object_count, Some(1));
             }
             other => panic!("expected Known pbr object, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn material_inspector_texture_facts_track_shared_identity_and_graph_sources() {
+        let mesh0 = node(1, "node.cube_mesh", Some("mesh0"));
+        let mesh1 = node(2, "node.cube_mesh", Some("mesh1"));
+        let material = node(3, "node.pbr_material", Some("shared_material"));
+        let object0 = node(4, SCENE_OBJECT_TYPE_ID, Some("Object 0"));
+        let object1 = node(5, SCENE_OBJECT_TYPE_ID, Some("Object 1"));
+        let map0 = node(6, "node.value", Some("map0"));
+        let map1 = node(7, "node.value", Some("map1"));
+        let scene = with_param(
+            node(20, RENDER_SCENE_TYPE_ID, None),
+            "objects",
+            SerializedParamValue::Float { value: 2.0 },
+        );
+        let out = node(30, "system.final_output", None);
+        let root = def(
+            vec![mesh0, mesh1, material, object0, object1, map0, map1, scene, out],
+            vec![
+                wire(1, "vertices", 4, "vertices"),
+                wire(2, "vertices", 5, "vertices"),
+                wire(3, "out", 4, "material"),
+                wire(3, "out", 5, "material"),
+                wire(6, "out", 4, "base_color_map"),
+                wire(7, "out", 5, "base_color_map"),
+                wire(4, "object", 20, "object_0"),
+                wire(5, "object", 20, "object_1"),
+                wire(20, "color", 30, "in"),
+            ],
+        );
+        let vm = SceneVm::from_def(&root).expect("scene must resolve");
+        let material_rows: Vec<_> = vm
+            .objects
+            .iter()
+            .filter_map(|object| match object {
+                SceneObjectVm::Known(row) => match &row.material {
+                    MaterialVm::Known(material) => Some(material),
+                    MaterialVm::None => None,
+                },
+                SceneObjectVm::Custom { .. } => None,
+            })
+            .collect();
+        assert_eq!(material_rows.len(), 2);
+        assert!(material_rows.iter().all(|material| material.node_doc_id == 3));
+        assert!(material_rows.iter().all(|material| material.shared_object_count == Some(2)));
+        assert_eq!(material_rows[0].texture_slots.len(), 17);
+        assert!(matches!(
+            &material_rows[0]
+                .texture_slots
+                .iter()
+                .find(|slot| slot.port == "base_color_map")
+                .expect("base map slot")
+                .source,
+            MaterialTextureSource::Known { node_doc_id: 6, .. }
+        ));
+        assert!(matches!(
+            &material_rows[1]
+                .texture_slots
+                .iter()
+                .find(|slot| slot.port == "base_color_map")
+                .expect("base map slot")
+                .source,
+            MaterialTextureSource::Known { node_doc_id: 7, .. }
+        ));
+
+        let mut unresolved = root.clone();
+        unresolved.nodes.push(EffectGraphNode {
+            group: Some(Box::new(GroupDef {
+                interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+                nodes: vec![],
+                wires: vec![],
+                tint: None,
+            })),
+            ..node(8, GROUP_TYPE_ID, Some("unresolved_map"))
+        });
+        unresolved.wires.retain(|wire| wire.from_node != 6);
+        unresolved.wires.push(wire(8, "out", 4, "base_color_map"));
+        let unresolved_vm = SceneVm::from_def(&unresolved).expect("scene must resolve");
+        let SceneObjectVm::Known(row) = &unresolved_vm.objects[0] else { panic!("expected object") };
+        let MaterialVm::Known(material) = &row.material else { panic!("expected material") };
+        assert!(matches!(
+            &material
+                .texture_slots
+                .iter()
+                .find(|slot| slot.port == "base_color_map")
+                .expect("base map slot")
+                .source,
+            MaterialTextureSource::GraphSource
+        ));
+        assert_eq!(material.shared_object_count, Some(2), "texture provenance does not change material users");
+    }
+
+    #[test]
+    fn material_inspector_nested_sources_keep_object_scope() {
+        let mut group = node(10, GROUP_TYPE_ID, Some("Nested Object"));
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![
+                node(1, "node.cube_mesh", Some("mesh")),
+                node(2, "node.pbr_material", Some("material")),
+                node(3, SCENE_OBJECT_TYPE_ID, Some("Object")),
+                node(4, "node.value", Some("base_map")),
+                node(5, GROUP_OUTPUT_TYPE_ID, Some("output")),
+            ],
+            wires: vec![
+                wire(1, "vertices", 3, "vertices"),
+                wire(2, "out", 3, "material"),
+                wire(4, "out", 3, "base_color_map"),
+                wire(3, "object", 5, "object"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(
+            node(20, RENDER_SCENE_TYPE_ID, None),
+            "objects",
+            SerializedParamValue::Float { value: 1.0 },
+        );
+        let out = node(30, "system.final_output", None);
+        let vm = SceneVm::from_def(&def(
+            vec![group, scene, out],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
+        ))
+        .expect("nested scene must resolve");
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("expected object") };
+        let MaterialVm::Known(material) = &row.material else { panic!("expected material") };
+        assert_eq!(material.scope_path, vec![10]);
+        assert_eq!(material.shared_object_count, Some(1));
+        assert!(matches!(
+            &material
+                .texture_slots
+                .iter()
+                .find(|slot| slot.port == "base_color_map")
+                .expect("base map slot")
+                .source,
+            MaterialTextureSource::Known { scope_path, node_doc_id: 4, .. } if scope_path == &vec![10]
+        ));
     }
 
     /// D12's `visible` port-shadow: a wire into `visible` reads as driven,

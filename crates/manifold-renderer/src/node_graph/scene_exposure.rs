@@ -12,6 +12,7 @@ use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMet
 
 use crate::node_graph::parameters::ParamType;
 use crate::node_graph::persistence::PrimitiveRegistry;
+use crate::node_graph::material_inspector::material_param_role;
 
 static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
@@ -115,6 +116,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 is_trigger,
                 value_labels,
                 convert,
+                material_role: material_param_role(type_id, pd.name.as_ref()),
             }
         })
         .collect()
@@ -347,6 +349,23 @@ mod tests {
     #[test]
     fn metadata_for_unknown_type_is_empty() {
         assert!(metadata_for_node_type("node.definitely_not_real").is_empty());
+    }
+
+    #[test]
+    fn material_inspector_metadata_classifies_every_descriptor() {
+        let metadata = metadata_for_node_type("node.pbr_material");
+        assert_eq!(metadata.len(), 96);
+        assert!(metadata.iter().all(|param| param.material_role.is_some()));
+        assert_eq!(
+            metadata
+                .iter()
+                .filter(|param| matches!(
+                    param.material_role,
+                    Some(manifold_core::material_inspector::MaterialParamRole::FeatureMode(_))
+                ))
+                .count(),
+            7
+        );
     }
 
     /// R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md), manifest level: the

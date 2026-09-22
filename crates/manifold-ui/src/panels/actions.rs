@@ -10,6 +10,7 @@
 use super::PanelAction;
 use super::{DriverConfigAction, GraphParamTarget, InspectorTab, UiRelightHeightFrom};
 use super::{browser_popup, picker_core};
+use crate::param_surface::ModifierObjectRef;
 use crate::input::Modifiers;
 use crate::node::Rect;
 use crate::types::{
@@ -28,6 +29,30 @@ pub enum AutomationShape {
     Square,
     HoldLow,
     HoldHigh,
+}
+
+/// Named starter looks. The app owns their numeric recipe and validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialLook {
+    Matte,
+    Coated,
+    BrushedMetal,
+    Glass,
+}
+
+/// One existing material parameter slot in a compound edit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialParamWrite {
+    pub param_id: ParamId,
+    pub value: f32,
+}
+
+/// Validation/undo policy for a compound material edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialEditKind {
+    Feature,
+    Look,
+    Placement,
 }
 
 #[derive(Debug, Clone)]
@@ -338,6 +363,23 @@ pub enum ProjectAction {
     /// Duplicate the selected scene modifiers, preserving their stable ids in
     /// the command's captured selection.
     SceneModifiersDuplicate(LayerId, Vec<NodeId>),
+    /// Apply one atomic material recipe to the selected material scope.
+    /// Eligibility and numeric writes are owned by the app/editor layer.
+    MaterialLookApply {
+        target: super::GraphParamTarget,
+        object: ModifierObjectRef,
+        material: ModifierObjectRef,
+        look: MaterialLook,
+    },
+    /// Apply one validated batch to existing material parameter slots.
+    MaterialParamsSet {
+        target: super::GraphParamTarget,
+        object: ModifierObjectRef,
+        material: ModifierObjectRef,
+        kind: MaterialEditKind,
+        writes: Vec<MaterialParamWrite>,
+        description: String,
+    },
     /// Capture the selected scene modifiers into the UI-owned clipboard.
     SceneModifiersCopy(LayerId, Vec<NodeId>),
     /// Paste the UI-owned scene modifier snapshot through the content thread.

@@ -1546,6 +1546,8 @@ mod tests {
                 value_labels: None,
                 section: None,
                 disabled: None,
+                material_role: None,
+                inactive_reason: None,
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),
@@ -1557,6 +1559,8 @@ mod tests {
                 mappable: false,
             },
             scene_addr: None,
+            rgb_members: None,
+            material_attached: false,
         }
     }
 

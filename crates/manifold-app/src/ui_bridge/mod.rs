@@ -12,6 +12,8 @@ mod editing;
 mod inspector;
 mod layer;
 mod marker;
+mod material_looks;
+mod material_colour;
 mod project;
 mod projection;
 // `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor

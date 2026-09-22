@@ -564,6 +564,11 @@ pub struct ParamSpecDef {
     /// when `true` so every existing preset/project stays byte-identical.
     #[serde(default = "default_card_visible", skip_serializing_if = "is_true")]
     pub card_visible: bool,
+    /// Optional semantic role used by the material inspector. This is
+    /// additive presentation metadata; ranges, defaults, labels, bindings
+    /// and parameter identity remain authoritative elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_role: Option<crate::material_inspector::MaterialParamRole>,
 }
 
 fn default_card_visible() -> bool {
@@ -599,6 +604,7 @@ impl Default for ParamSpecDef {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         }
     }
 }
@@ -840,6 +846,7 @@ mod tests {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         }
     }
 
@@ -1214,6 +1221,7 @@ mod tests {
                 wraps: false,
                 section: None,
                 card_visible: true,
+                material_role: None,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),

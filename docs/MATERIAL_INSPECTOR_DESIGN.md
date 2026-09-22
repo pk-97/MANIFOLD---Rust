@@ -1,10 +1,11 @@
 # Material inspector — understandable surface authoring
 
-**Status:** PROPOSED · 2026-09-22 · GPT-6 · source audit complete; implementation not started.
-**Prerequisites:** none for metadata and grouping; the Glass affordance and Glass look require BUG-1c9c and BUG-vj1p to be resolved with runtime evidence.
-**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. This proposal needs Peter's approval before app implementation.
+**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, local texture drawers, RGB gestures, atomic looks and affine placement.
+Lifecycle: contract — defines the live material inspector’s feature modes, texture ownership, compound edits and compatibility invariants.
+**Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
+**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
 
-<!-- index: Proposed material inspector: feature state, texture ownership, manifest-backed grouping, compound edits, starter looks, and bounded implementation gates. -->
+<!-- index: Material inspector: feature state, texture ownership, manifest-backed grouping, compound edits, starter looks, and bounded implementation gates. -->
 
 Peter described the problem as “a huge wall of sliders” where users cannot tell “if something is ‘on’ or valid,” including the “GIANT list of UV transforms.” The target is a small surface section, optional material features, and placement controls beside their textures. “Opacity & Cutout” replaces the prototype's “Coverage.” This improves authoring of the existing material model; it does not introduce a shader graph or promise Blender rendering parity.
 
@@ -37,7 +38,7 @@ Paths below are repository-relative. Symbol anchors are intentional: executors m
 
 ### Rendering dependencies found by the audit
 
-These are source-backed findings, not reproduced bugs. Fixes require their own bounded reproduction and verification; this document does not certify shader fidelity.
+These were source-backed audit findings. The implementation preserves MR replacement semantics and explains texture ownership. The native Metal proof `material_inspector_glass_opaque_route_preserves_transmission_lobes` verifies Opaque/Blend transmission equivalence and separately observable sheen and translucency contributions. This is a bounded composition proof, not a general shader-fidelity certification.
 
 | Finding | Source | Contract for this work |
 |---|---|---|
@@ -79,14 +80,14 @@ These are source-backed findings, not reproduced bugs. Fixes require their own b
 | Coat | `clearcoat`, `clearcoat_roughness` plus connected coat maps. |
 | Iridescence | `iridescence`, `iridescence_ior`, `iridescence_thickness_min/max`. Explain thin-film colour; minimum thickness matters only with its thickness map. |
 | Emission | `emission_r/g/b`, `emission_intensity`; separately addressed scene-object `emission_strength` labelled Object gain. |
-| Glass | `transmission`, `volume_thickness`, `volume_attenuation_distance/color_r/g/b`, `dispersion`; show Surface IOR by reference to the same row, never another slot. Explain thickness/IOR dependence without promising visible dispersion at every setting. |
+| Glass | `transmission`, `volume_thickness`, `volume_attenuation_distance/color_r/g/b`, `dispersion`; include the existing IOR row, without creating another slot. Explain thickness/IOR dependence without promising visible dispersion at every setting. |
 | Sheen | `sheen_color_r/g/b`, `sheen_roughness`. |
 | Anisotropy | `anisotropy_strength`, `anisotropy_rotation`. |
 | Translucency | `translucency`; help text: light through thin surfaces, not volumetric subsurface scattering. |
 | Textures | Five independent families: base (`uv_*`, unprefixed samplers), normal (`nrm_*`), metallic/roughness (`mr_*`), occlusion (`occ_*`), emission (`em_*`). Each owns six UV fields and four sampler fields. All other connected texture ports show source and supported/shared sampling facts. |
-| Advanced surface | `ambient`, `specular`, `specular_tint_r/g/b`, `ior`, `baked_look`, plus dormant/raw representations on demand. |
+| Advanced surface | `ambient`, `specular`, `specular_tint_r/g/b`, `baked_look`, plus dormant/raw representations on demand. |
 
-Every original PBR descriptor must be assigned exactly once. References such as Glass → IOR navigate to its canonical control. Unclassified future parameters appear in Advanced and fail the schema coverage test until deliberately classified; they must not disappear.
+Every original PBR descriptor must be assigned exactly once. IOR has one canonical control under Glass. Unclassified future parameters appear in Advanced and fail the schema coverage test until deliberately classified; they must not disappear.
 
 An untouched neutral feature lives in Add Feature. A feature stays visible when its mode is explicitly Off/On, its controlling authored factor is non-neutral, one of its relevant maps is connected, or one of its members has a wire/driver/envelope/audio/mapping/automation attachment. This is a structural/authored predicate, never a test of the current animated sample; LFO zero crossings do not rearrange the panel. Non-neutral secondary settings alone remain accessible through Add Feature and are never reset.
 
@@ -98,7 +99,7 @@ For a shared material with distinct maps, the texture list reflects the selected
 
 ## 4. Data model and seams
 
-All signatures here are proposed additions, not claims that these APIs already exist. No new thread, channel, lock, renderer backend or GPU dispatch is introduced.
+The signatures below describe the implemented seams. No new thread, channel, lock, renderer backend or GPU dispatch is introduced.
 
 ### 4.1 Manifest descriptors
 
@@ -129,7 +130,7 @@ pub fn material_param_role(type_id: &str, param_name: &str)
     -> Option<manifold_core::material_inspector::MaterialParamRole>;
 ```
 
-`ParamSpecDef.material_role` uses `#[serde(default, skip_serializing_if = "Option::is_none")]`; Default initializes None. The registry metadata walk calls this classifier. No `ParamDef` fields or primitive trait signatures change. Scene stamping/migration enriches existing specs in place without rebuilding IDs, labels authored by the user, bindings or param stores. User-authored fan-out specs receive a compound role only when every bound target agrees; otherwise they stay ordinary advanced scalar controls. Metadata must be refreshed on existing bindings, not only inserted for newly exposed parameters.
+`ParamSpecDef.material_role` uses `#[serde(default, skip_serializing_if = "Option::is_none")]`; Default initializes None. The registry metadata walk calls this classifier. No `ParamDef` fields or primitive trait signatures change. Scene stamping/migration enriches existing specs in place without rebuilding IDs, labels authored by the user, bindings or param stores. User-authored fan-out specs stay ordinary scalar controls; compound roles require one unambiguous binding. Metadata must be refreshed on existing bindings, not only inserted for newly exposed parameters.
 
 In `manifold-ui::param_surface`, define UI counterparts of these descriptor enums and add `RowSpec.material_role: Option<MaterialParamRole>` and `RowSpec.inactive_reason: Option<String>`. App projection performs an exhaustive core-to-UI conversion. This mirrors the existing `ParamAddr` → `SceneRowAddr` boundary; do not move domain types into foundation or introduce UI dependencies on core/renderer. Ranges/defaults/labels still come only from `ParamSpecDef`.
 
@@ -164,9 +165,9 @@ pub enum MaterialTextureSource {
 
 Populate all 17 slots on structural scene-VM rebuild using the existing producer resolver. Unresolved wired producers are GraphSource, not Unconnected. Count users by scope-qualified material producer identity across the accessible scene; unresolved outgoing uses make the count None. None means incomplete resolution, never one assumed user. Read source layer/path/index from the resolved graph node at projection time. No disk probes, image decoding, graph walking or source-label allocation on each frame.
 
-Add UI `MaterialTextureInfo { port: String, label: String, source_label: String, connected: bool, graph_source: bool }` and `MaterialInspectorInfo { object: ModifierObjectRef, material: ModifierObjectRef, shared_object_count: Option<usize>, textures: Vec<MaterialTextureInfo> }` in `scene_setup_panel.rs`; carry `Option<MaterialInspectorInfo>` alongside `ObjectMaterialVm`. These are app-adapted facts, not persisted state. Runtime readiness is deliberately absent. Labels use “Connected” and an identifiable producer; missing layer references use the existing Skin missing-state fact. Do not infer “Ready,” “Failed” or “Loading” from a wire, filename, black output or lack of thumbnail.
+Add UI `MaterialTextureInfo { port: String, label: String, source_label: String, connected: bool, graph_source: bool }` and `MaterialInspectorInfo { object: ModifierObjectRef, object_gain: Option<ParamId>, material: ModifierObjectRef, shared_object_count: Option<usize>, textures: Vec<MaterialTextureInfo>, params: Vec<(String, ParamId)> }` in `scene_setup_panel.rs`; carry `Option<MaterialInspectorInfo>` alongside `ObjectMaterialVm`. These are app-adapted facts, not persisted state. `object_gain` retains the selected object's separately bound emission gain under Emission. `params` maps inner descriptor names to the selected material's real exposed IDs; actions never infer an address from a suffix. `ParamRow.material_attached` records stored ownership even when a driver or mapping is currently disabled. Runtime readiness is deliberately absent. Labels use “Connected” and an identifiable producer; missing layer references use the existing Skin missing-state fact. Do not infer “Ready,” “Failed” or “Loading” from a wire, filename, black output or lack of thumbnail.
 
-Structural grouping joins real row IDs to these facts once per relevant metadata/topology/base-state change. Per-frame effective value updates retain `sync_scene_row_values` and its ParamId join. Inactive text based on effective feature modes may update without reconstructing rows. Preserve scroll, focus and drawers by material scope/node/ParamId, not current section position.
+Material presentation helpers live in `panels/scene_setup_panel/material_inspector.rs`; the parent scene panel retains its state and shared row rendering. This extraction keeps the existing 4300-line scene-panel ceiling unchanged. Structural grouping joins real row IDs to these facts once per relevant metadata/topology/base-state change. Per-frame effective value updates retain `sync_scene_row_values` and its ParamId join. Inactive text based on effective feature modes may update without reconstructing rows. Preserve scroll, focus and drawers by material scope/node/ParamId, not current section position.
 
 ### 4.4 Compound edits and command ownership
 
@@ -184,12 +185,13 @@ Add the resolved state in `manifold-app::ui_bridge::scrub`:
 ResolvedScrub::ParamRgb {
     target: GraphTarget,
     param_ids: [ParamId; 3],
+    preset: PresetTypeId,
     baseline: [f32; 3],
     live: [f32; 3],
 },
 ```
 
-Extend `ResolvedScrub::restore` to reapply all three live bases after a content snapshot swap, using the same all-members preflight as Move. It must never overwrite only part of an RGB value. Snapshot restoration keeps the original baseline and does not create commands. App scrub handling captures all three baselines on Begin. Move validates all members before writing any, then applies the three values in one existing `ContentCommand::MutateProjectLive` closure. Commit submits one CompositeCommand containing three `ChangeGraphParamCommand`s with the original baselines. No-op gestures create no undo entry. Selection changes, missing IDs and externally owned members end the gesture without redirecting it to another material; use the existing scrub termination policy. The first picker is an RGB swatch/popover with the three shared scalar controls; a new colour-wheel library is not required. Rendering the swatch does not change linear stored values; any display encoding stays at the UI boundary.
+Extend `ResolvedScrub::restore` to reapply all three live bases after a content snapshot swap, using the same all-members preflight as Move. It must never overwrite only part of an RGB value. Snapshot restoration keeps the original baseline and does not create commands. App scrub handling captures all three baselines on Begin. Move validates all members before writing any, then applies the three values in one existing `ContentCommand::MutateProjectLive` closure. Commit submits one guarded command containing three `ChangeGraphParamCommand`s with the original baselines. Content-thread ownership rejection restores a still-current preview without overwriting newer edits. No-op gestures create no undo entry. Selection changes, missing IDs and externally owned members end the gesture without redirecting it to another material; use the existing scrub termination policy. The first picker is an expandable RGB swatch with the three shared scalar controls; a new colour-wheel library is not required. Rendering the swatch does not change linear stored values; any display encoding stays at the UI boundary.
 
 Discrete Add Feature, toggle and look edits share one app-side batch builder in `ui_bridge/project.rs`:
 
@@ -207,13 +209,14 @@ ProjectAction::MaterialParamsSet {
 },
 ```
 
-The app resolves the target and every manifest slot, verifies locks/ownership and duplicate IDs, then builds one CompositeCommand of bound-slot edits. Submit the unexecuted wrapper via existing `ContentCommand::ExecuteOnContent`; wait for the content snapshot, with no optimistic UI project write. Scope is resolved once to stable NodeId provenance and checked against each binding target. Only successfully stamped and unambiguous manifest rows are eligible for these compound operations. V1 compound eligibility additionally requires identity binding scale/offset, linear uninverted card response, matching declared units, and the native Float/EnumRound conversion. Custom reshaped bindings retain ordinary scalar editing with a “Custom binding” reason; never write a physical recipe value directly into a differently calibrated outer slot. This guard also applies to RGB and friendly placement. Unbound/ambiguous custom graphs retain existing scalar editing and graph navigation; do not route a batch through a guessed `apply_scene_param_write` address. Recheck preconditions on the content thread before applying the batch, using a command wrapper with `rejection_reason`/`was_applied`; a stale rejection applies zero writes.
+The app resolves the target and every manifest slot, verifies locks/ownership and duplicate IDs, then builds one `ChangeMaterialParamsCommand` of bound-slot edits. Submit the unexecuted wrapper via existing `ContentCommand::ExecuteOnContent`; wait for the content snapshot, with no optimistic UI project write. Scope is resolved once to stable NodeId provenance and checked against each binding target. Only successfully stamped and unambiguous manifest rows are eligible for these compound operations. V1 compound eligibility additionally requires identity binding scale/offset, linear uninverted card response, matching declared units, and the native Float/EnumRound conversion. Custom reshaped bindings retain ordinary scalar editing with a “Custom binding” reason; never write a physical recipe value directly into a differently calibrated outer slot. This guard also applies to RGB and friendly placement. Unbound/ambiguous custom graphs retain existing scalar editing and graph navigation; do not route a batch through a guessed `apply_scene_param_write` address. Recheck preconditions on the content thread before applying the batch, using a command wrapper with `rejection_reason`/`was_applied`; a stale rejection applies zero writes.
 
-The wrapper lives in `manifold-editing::commands::material`:
+The discrete wrapper lives in `manifold-editing::commands::material`:
 
 ```rust
 pub enum MaterialEditKind { Feature, Look, Placement }
 pub struct MaterialEditContext {
+    pub expected_preset_id: manifold_core::PresetTypeId,
     pub object: manifold_core::scene_modifier_preset::SceneNodeRef,
     pub material: manifold_core::scene_modifier_preset::SceneNodeRef,
     pub kind: MaterialEditKind,
@@ -226,15 +229,18 @@ pub struct MaterialParamChange {
 pub struct ChangeMaterialParamsCommand { /* private prepared edits and undo state */ }
 impl ChangeMaterialParamsCommand {
     pub fn new(target: manifold_core::GraphTarget, context: MaterialEditContext,
-               changes: Vec<MaterialParamChange>, description: String) -> Self;
+               changes: Vec<MaterialParamChange>, description: String,
+               catalog_default: Option<manifold_core::effect_graph_def::EffectGraphDef>) -> Self;
 }
 ```
+
+Execution amendment: the command carries the prepared catalog default and expected preset ID, like existing graph commands. Core cannot read renderer catalog topology. Missing topology is an explicit rejection, never permission to skip ownership checks; a changed preset ID invalidates the prepared edit. `validate_material_edit(project, target, context, changes, catalog_default: Option<&EffectGraphDef>)` is shared by app preflight and command execution.
 
 The app exhaustively adapts the UI edit-kind enum to the editing enum. The UI reuses `param_surface::ModifierObjectRef` (stable scope plus node ID) for both node references; the app converts to existing core `scene_modifier_preset::SceneNodeRef`. Resolve the complete scope in the target graph; no new identity scheme or bare-ID recursive first-match lookup is introduced. At execute, validate that the object still references that material, all IDs and expected base values match, and every affected binding targets only the expected material. Resolve bindings through `BindingTarget::Node { node_id, param }`, never through document-ID prefixes. The Feature policy permits existing modulation on the mode itself, but rejects wired/fan-out mode ownership; factor seeding rejects externally owned factors. Placement rejects externally owned matrix members. Look enforces D7 against the selected object’s current map wires, all affected attachments and current Skin ownership. Recheck the policy before any child command executes; reject stale state explicitly. Undo restores the captured bases through the same slots. For RGB, final live values require a distinct already-previewed baseline in the existing scrub path; do not run the discrete expected-value precondition against the old baseline after a live move.
 
 ### 4.5 Placement and looks
 
-V1 placement uses the existing six scalar rows inside each texture card's Advanced drawer. Friendly offset/rotation/scale is deferred to a separate phase of this contract: it must batch the same six ParamIds using the command above; no new persisted transform. Decomposition is allowed only if both column lengths exceed `1e-8` and `abs(dot(c0,c1)) <= 1e-6 * length(c0) * length(c1)`. Use signed Y scale to preserve reflection; `theta = atan2(m10,m00)`. Keep original values unless a user commits an edit. Drivers on any matrix member disable the compound editor while leaving individual mapping controls accessible. Round-trip tests include shear, reflection, singular matrices and an imported nonidentity matrix.
+V1 placement offers offset, rotation and scale beside each supported texture family, with the original six scalar rows in its Advanced drawer. Friendly controls keep a local preview and commit the same six ParamIds atomically on release; scene output updates at commit. Raw matrix sliders retain their existing live scalar gestures. There is no new persisted transform. Decomposition is allowed only if both column lengths exceed `1e-8` and `abs(dot(c0,c1)) <= 1e-6 * length(c0) * length(c1)`. Use signed Y scale to preserve reflection; `theta = atan2(m10,m00)`. Keep original values unless a user commits an edit. Drivers on any matrix member disable the compound editor while leaving individual mapping controls accessible. Round-trip tests include shear, reflection, singular matrices and an imported nonidentity matrix.
 
 Implement starter looks as an app-owned static recipe table in `ui_bridge/material_looks.rs`, patterned after the existing `crates/manifold-core/src/scene_modifier_preset.rs` recipe approach. Identify targets through the material node's existing bindings; numeric values below are recipe values, not a second descriptor catalog. Every look sets seven feature modes explicitly (all Off except listed On). Preserve feature subsettings not listed.
 
@@ -249,22 +255,22 @@ A look name is an action label, not a saved authoritative identity. After applic
 
 ## 5. Invariants and enforcement
 
-Tests named here are required new tests, not tests already run. Use the `material_inspector_` prefix so focused commands cannot silently select an unrelated suite; gates must report a nonzero test count.
+The table records the required invariants; concrete regression names below match the implementation. Use the `material_inspector_` prefix so focused commands cannot silently select an unrelated suite; gates must report a nonzero test count.
 
 | Invariant | Machine enforcement |
 |---|---|
-| All descriptors classified exactly once, no duplicate ranges/defaults | `material_inspector_schema_covers_pbr` compares registry parameter names to role catalog (89 before feature phase, 96 afterward); `material_inspector_manifest_preserves_descriptor_values` |
-| Old show loading does not enable/disable features | `material_inspector_legacy_modes_preserve_output`, testing missing fields and serialize/reload; `material_inspector_invalid_mode_rejected` covers saved Enum 3 and dynamic bounds |
-| Off gates after modulation without destroying values | `material_inspector_off_preserves_drivers_and_gates_output`, including reloaded animated input, emission+Baked and texture-multiplied factors |
-| Membership stable through animation | `material_inspector_zero_crossing_keeps_rows` asserts stable row IDs/order and focus across zero/nonzero samples |
-| Scope is not a flat doc ID | `material_inspector_duplicate_doc_ids_do_not_alias` uses two group scopes with reused local IDs and distinct bindings |
-| One undo entry; no partial/stale recipe | `material_inspector_batch_is_atomic`, `material_inspector_stale_batch_rejected`, `material_inspector_rgb_gesture_undo` |
-| Metadata migration retains ownership/modulation | `material_inspector_metadata_upgrade_roundtrip` checks slots, bindings, driver/envelope/audio/mapping/automation, then modulates after reload |
-| No invented readiness or placement capability | `material_inspector_texture_capabilities` asserts connected/graph-source states and only five independent UV families |
-| Shared material scope and map ownership remain visible | `material_inspector_shared_material_distinct_maps` checks two objects, one material, separate maps and shared placement edits |
-| No lossy UV write on view/rebuild | `material_inspector_uv_roundtrip` tests unchanged bytes/values on opening and numeric tolerance `1e-6` after explicit decomposable edits |
-| UI uses shared routing | Extend existing widget-tree coverage/dispatch tests; `material_inspector_grouped_rows_keep_actions` exercises mapping, modulation, type-in and undo |
-| Texture-owned factors and locked recipes are explained | `material_inspector_look_conflicts_reject_all` covers MR map, wires, automation, fan-out and emissive Skin |
+| All descriptors classified exactly once, no duplicate ranges/defaults | `material_inspector_schema_covers_pbr` compares registry parameter names to role catalog (89 before feature phase, 96 afterward); `material_inspector_existing_exposure_gains_role_without_resetting_authored_fields` |
+| Old show loading does not enable/disable features | `material_inspector_feature_modes_gate_evaluated_outputs_only`, testing missing fields; app look/RGB tests cover save/reload; `material_inspector_invalid_mode_rejected` covers saved Enum 3 and dynamic bounds |
+| Off gates after modulation without destroying values | `material_inspector_feature_modes_gate_evaluated_outputs_only` and `material_inspector_baked_look_emission_off_stays_gated`; RGB reload test verifies retained modulation |
+| Membership stable through animation | `material_inspector_authored_feature_survives_effective_zero` and `material_inspector_external_attachment_survives_dormant_flags` |
+| Scope is not a flat doc ID | `material_inspector_rejects_identity_fanout_driven_and_ambiguous_members` and `material_inspector_group_export_resolves_the_actual_material_scope` |
+| One undo entry; no partial/stale recipe | `material_inspector_material_command_applies_two_writes_as_one_undo_unit`, `material_inspector_stale_batch_applies_zero_writes`, `material_inspector_rgb_gesture_undo_and_snapshot_restore` |
+| Metadata migration retains ownership/modulation | Metadata enrichment preserves existing authored fields; `material_inspector_rgb_gesture_undo_and_snapshot_restore` serializes/reloads and then modulates the retained channel |
+| No invented readiness or placement capability | `material_inspector_texture_families_split_connected_and_dormant_drawers` and the descriptor schema test asserts connected/graph-source states and only five independent UV families |
+| Shared material scope and map ownership remain visible | `material_inspector_texture_facts_track_shared_identity_and_graph_sources` checks two objects, one material, separate maps and shared placement edits |
+| No lossy UV write on view/rebuild | Foundation UV decomposition tests and `material_inspector_placement_opening_and_noop_emit_zero_actions` tests unchanged bytes/values on opening and numeric tolerance `1e-6` after explicit decomposable edits |
+| UI uses shared routing | Extend existing widget-tree coverage/dispatch tests; The six `material-inspector-*` UI flows exercises mapping, modulation, type-in and undo |
+| Texture-owned factors and locked recipes are explained | Editing material ownership tests plus app look conflict tests covers MR map, wires, automation, fan-out and emissive Skin |
 
 No per-frame scan/allocation is added for grouping or texture facts. New periodic/content work would require a `MANIFOLD_RENDER_TRACE=1` acceptance run with no >20ms content-frame spike; this design schedules structural work only. No new GPU pipeline is created during authoring.
 
@@ -320,7 +326,7 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Entry/read-back:** P2 batch semantics landed. Read shared row action/builder and scrub handlers; enumerate every ValueRef/ScrubValue match. D6 forbids vector migration and bespoke row routing.
 - **Deliverables:** shared colour row role, three-ID swatch/popover, RGB scrub variant and app adapter; retain advanced channel controls.
 - **Gate:** RGB gesture undo, mid-drag snapshot restoration, no-op/cancel/selection-change/stale ownership tests; reload then modulate one channel independently. Common checks. A wire-driven channel must not be overwritten by the aggregate control.
-- **Demo/gesture:** `material-inspector-colour`: drag a colour channel in the popover, undo once and assert all starting values; map another channel and assert its drawer remains reachable. L3+PNG.
+- **Demo/gesture:** `material-inspector-colour`: drag a colour channel in the expanded swatch, undo once and assert all starting values; map another channel and assert its drawer remains reachable. L3+PNG.
 
 ### P5 — Starter looks
 
@@ -336,7 +342,7 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Gate:** UV round-trip test with identity, rotation, reflection, shear, zero scale and a held-out imported transform; opening causes no writes. One undo restores exact pregesture values. Common checks; focused rendered UV proof where runtime sampling changes are involved.
 - **Demo/gesture:** `material-inspector-placement`: rotate a texture, undo; select sheared imported mapping, verify Advanced reason and unchanged matrix. L3+PNG. Retain P3's fully functional affine editor if this phase is not yet landed; label status accordingly.
 
-The two renderer bug repairs are separate workstreams, not an implicit extra phase. Before briefing them, reproduce the named behaviour, decide the compositing/pass fix from that evidence, and update their existing beads. This inspector contract must not be used as authority for speculative shader changes.
+The two renderer repairs were included in the authorized end-to-end work after their bounded proof was established: transmissive PBR output enters the transparent pass independently of authored alpha mode, and transmission replaces only the diffuse term while preserving additional lobes. The shader ABI is unchanged.
 
 ## 7. Decided — do not reopen
 
