@@ -1118,6 +1118,17 @@ fn scene_lens_params_have_consumers() {
         .find(|n| n.type_id == GROUP_TYPE_ID && n.node_id == NodeId::new("dof"))
         .expect("dof group present in the import graph");
     let inner = dof_group.group.as_ref().expect("dof group has inner nodes");
+    let bokeh = inner.nodes.iter().find(|node| node.type_id == "node.bokeh_gather").unwrap();
+    assert_eq!(bokeh.params["enabled"], bool_val(true));
+    for node in [bokeh, def.nodes.iter().find(|node| node.type_id == "node.motion_blur").unwrap()] {
+        let binding = meta.bindings.iter().find(|binding| matches!(
+            &binding.target,
+            BindingTarget::Node { node_id, param } if *node_id == node.node_id && param == "enabled"
+        )).expect("cinematic enabled control is exposed");
+        let spec = meta.params.iter().find(|spec| spec.id == binding.id).unwrap();
+        assert!(spec.is_toggle);
+        assert_eq!(spec.default_value, 1.0);
+    }
     let inner_types: Vec<&str> = inner.nodes.iter().map(|n| n.type_id.as_str()).collect();
     for want in ["node.coc_from_depth", "node.coc_dilate", "node.bokeh_gather"] {
         assert!(

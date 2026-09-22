@@ -208,6 +208,9 @@ fn validate_graph_ownership(
             )?;
             if context.kind == MaterialEditKind::Look
                 && matches!(param.as_str(), "metallic" | "roughness")
+                // Restoring authored factors preserves the mapped material's
+                // original response; stylized look overrides remain blocked.
+                && change.value != slot.spec.default_value
             {
                 look_writes_metallic_roughness = true;
             }
