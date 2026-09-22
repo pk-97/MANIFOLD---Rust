@@ -1,0 +1,1189 @@
+{
+  "version": 2,
+  "name": "Physics Solids",
+  "presetMetadata": {
+    "id": "PhysicsSolids",
+    "displayName": "Physics Solids",
+    "category": "Geometry",
+    "oscPrefix": "physicssolids",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": []
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 40,
+      "nodeId": "physics_demo_40",
+      "typeId": "node.physics_world",
+      "handle": "Physics",
+      "params": {}
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": {
+          "type": "Float",
+          "value": 12.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.3
+        }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "fog",
+      "typeId": "node.atmosphere",
+      "handle": "fog",
+      "params": {
+        "fog_density": {
+          "type": "Float",
+          "value": 0.008
+        },
+        "height_falloff": {
+          "type": "Float",
+          "value": 0.3
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 7.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "fill_light",
+      "typeId": "node.light",
+      "handle": "fill_light",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.82
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": -4.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": -3.0
+        }
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "lights": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "objects": {
+          "type": "Float",
+          "value": 6.0
+        }
+      }
+    },
+    {
+      "id": 31,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 101,
+      "nodeId": "physics_demo_101",
+      "typeId": "node.rigid_body",
+      "handle": "Ground Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 0
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 100,
+      "nodeId": "physics_demo_100",
+      "typeId": "node.transform_3d",
+      "handle": "Ground Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": -0.14433756729740646
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 12.0
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 8.0
+        }
+      }
+    },
+    {
+      "id": 102,
+      "nodeId": "physics_demo_102",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Ground Mesh",
+      "params": {}
+    },
+    {
+      "id": 103,
+      "nodeId": "physics_demo_103",
+      "typeId": "node.pbr_material",
+      "handle": "Ground Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.17
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.22
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.05
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 104,
+      "nodeId": "physics_demo_104",
+      "typeId": "node.scene_object",
+      "handle": "Ground",
+      "params": {}
+    },
+    {
+      "id": 111,
+      "nodeId": "physics_demo_111",
+      "typeId": "node.rigid_body",
+      "handle": "Tetrahedron Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 0
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 110,
+      "nodeId": "physics_demo_110",
+      "typeId": "node.transform_3d",
+      "handle": "Tetrahedron Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": -3.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3.8
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 112,
+      "nodeId": "physics_demo_112",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Tetrahedron Mesh",
+      "params": {}
+    },
+    {
+      "id": 113,
+      "nodeId": "physics_demo_113",
+      "typeId": "node.pbr_material",
+      "handle": "Tetrahedron Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.95
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.22
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.13
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.32
+        }
+      }
+    },
+    {
+      "id": 114,
+      "nodeId": "physics_demo_114",
+      "typeId": "node.scene_object",
+      "handle": "Tetrahedron",
+      "params": {}
+    },
+    {
+      "id": 121,
+      "nodeId": "physics_demo_121",
+      "typeId": "node.rigid_body",
+      "handle": "Cube Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 120,
+      "nodeId": "physics_demo_120",
+      "typeId": "node.transform_3d",
+      "handle": "Cube Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": -1.5
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 4.6
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.4
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 122,
+      "nodeId": "physics_demo_122",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Cube Mesh",
+      "params": {}
+    },
+    {
+      "id": 123,
+      "nodeId": "physics_demo_123",
+      "typeId": "node.pbr_material",
+      "handle": "Cube Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.13
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.48
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.95
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.32
+        }
+      }
+    },
+    {
+      "id": 124,
+      "nodeId": "physics_demo_124",
+      "typeId": "node.scene_object",
+      "handle": "Cube",
+      "params": {}
+    },
+    {
+      "id": 131,
+      "nodeId": "physics_demo_131",
+      "typeId": "node.rigid_body",
+      "handle": "Octahedron Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 2
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 130,
+      "nodeId": "physics_demo_130",
+      "typeId": "node.transform_3d",
+      "handle": "Octahedron Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.6000000000000001
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.44999999999999996
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.8999999999999999
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 132,
+      "nodeId": "physics_demo_132",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Octahedron Mesh",
+      "params": {}
+    },
+    {
+      "id": 133,
+      "nodeId": "physics_demo_133",
+      "typeId": "node.pbr_material",
+      "handle": "Octahedron Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.98
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.68
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.32
+        }
+      }
+    },
+    {
+      "id": 134,
+      "nodeId": "physics_demo_134",
+      "typeId": "node.scene_object",
+      "handle": "Octahedron",
+      "params": {}
+    },
+    {
+      "id": 141,
+      "nodeId": "physics_demo_141",
+      "typeId": "node.rigid_body",
+      "handle": "Icosahedron Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 140,
+      "nodeId": "physics_demo_140",
+      "typeId": "node.transform_3d",
+      "handle": "Icosahedron Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3.8
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 1.2
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 142,
+      "nodeId": "physics_demo_142",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Icosahedron Mesh",
+      "params": {}
+    },
+    {
+      "id": 143,
+      "nodeId": "physics_demo_143",
+      "typeId": "node.pbr_material",
+      "handle": "Icosahedron Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.22
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.85
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.32
+        }
+      }
+    },
+    {
+      "id": 144,
+      "nodeId": "physics_demo_144",
+      "typeId": "node.scene_object",
+      "handle": "Icosahedron",
+      "params": {}
+    },
+    {
+      "id": 151,
+      "nodeId": "physics_demo_151",
+      "typeId": "node.rigid_body",
+      "handle": "Dodecahedron Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 4
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.2
+        }
+      }
+    },
+    {
+      "id": 150,
+      "nodeId": "physics_demo_150",
+      "typeId": "node.transform_3d",
+      "handle": "Dodecahedron Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 4.6
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.65
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 152,
+      "nodeId": "physics_demo_152",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Dodecahedron Mesh",
+      "params": {}
+    },
+    {
+      "id": 153,
+      "nodeId": "physics_demo_153",
+      "typeId": "node.pbr_material",
+      "handle": "Dodecahedron Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.62
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.32
+        }
+      }
+    },
+    {
+      "id": 154,
+      "nodeId": "physics_demo_154",
+      "typeId": "node.scene_object",
+      "handle": "Dodecahedron",
+      "params": {}
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "atmosphere",
+      "toNode": 30,
+      "toPort": "atmosphere"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "envmap",
+      "toNode": 30,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "light_1"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "color",
+      "toNode": 31,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "transform",
+      "toNode": 101,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_0"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "shape",
+      "toNode": 102,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 102,
+      "fromPort": "vertices",
+      "toNode": 104,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 103,
+      "fromPort": "out",
+      "toNode": 104,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_0",
+      "toNode": 104,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 104,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 110,
+      "fromPort": "transform",
+      "toNode": 111,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 111,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_1"
+    },
+    {
+      "fromNode": 111,
+      "fromPort": "shape",
+      "toNode": 112,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 112,
+      "fromPort": "vertices",
+      "toNode": 114,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 113,
+      "fromPort": "out",
+      "toNode": 114,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_1",
+      "toNode": 114,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 114,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_1"
+    },
+    {
+      "fromNode": 120,
+      "fromPort": "transform",
+      "toNode": 121,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 121,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_2"
+    },
+    {
+      "fromNode": 121,
+      "fromPort": "shape",
+      "toNode": 122,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 122,
+      "fromPort": "vertices",
+      "toNode": 124,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 123,
+      "fromPort": "out",
+      "toNode": 124,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_2",
+      "toNode": 124,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 124,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_2"
+    },
+    {
+      "fromNode": 130,
+      "fromPort": "transform",
+      "toNode": 131,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 131,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_3"
+    },
+    {
+      "fromNode": 131,
+      "fromPort": "shape",
+      "toNode": 132,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 132,
+      "fromPort": "vertices",
+      "toNode": 134,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 133,
+      "fromPort": "out",
+      "toNode": 134,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_3",
+      "toNode": 134,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 134,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_3"
+    },
+    {
+      "fromNode": 140,
+      "fromPort": "transform",
+      "toNode": 141,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 141,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_4"
+    },
+    {
+      "fromNode": 141,
+      "fromPort": "shape",
+      "toNode": 142,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 142,
+      "fromPort": "vertices",
+      "toNode": 144,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 143,
+      "fromPort": "out",
+      "toNode": 144,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_4",
+      "toNode": 144,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 144,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_4"
+    },
+    {
+      "fromNode": 150,
+      "fromPort": "transform",
+      "toNode": 151,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 151,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_5"
+    },
+    {
+      "fromNode": 151,
+      "fromPort": "shape",
+      "toNode": 152,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 152,
+      "fromPort": "vertices",
+      "toNode": 154,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 153,
+      "fromPort": "out",
+      "toNode": 154,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_5",
+      "toNode": 154,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 154,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_5"
+    }
+  ]
+}

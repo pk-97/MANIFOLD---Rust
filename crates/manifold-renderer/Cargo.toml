@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+manifold-physics = { path = "../manifold-physics" }
 arrayvec = "0.7"
 manifold-core = { path = "../manifold-core" }
 manifold-foundation = { path = "../manifold-foundation" }

@@ -75,6 +75,8 @@ pub enum PortType {
     /// `Transform` / `Atmosphere`; unwired = Rendered = byte-identical to
     /// no render_mode.
     RenderMode,
+    /// CPU-only rigid-body description; native world state never travels on wires.
+    RigidBody,
     /// CPU-only struct wire carrying a
     /// [`SceneObject`](crate::node_graph::scene_object::SceneObject) — the
     /// bundle of transform + material + mesh/map/instance [`Slot`](crate::node_graph::bindings::Slot)s

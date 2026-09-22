@@ -1,0 +1,186 @@
+//! Focused structural coverage for the bundled Box3D Physics Solids scene.
+//!
+//! The runtime and renderer proofs cover simulation and drawing. These tests
+//! keep the authored graph's scene-panel discovery contract explicit: every
+//! visible object has an editable starting transform/material, every body is
+//! paired with the shared world, and the load-time exposure migration remains
+//! complete and idempotent.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use manifold_core::effect_graph_def::{
+    BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
+};
+use manifold_core::effects::ParamConvert;
+use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures;
+use manifold_renderer::node_graph::scene_vm::{
+    MaterialVm, SceneObjectVm, SceneVm, physics_body_doc_id, physics_world_doc_ids,
+};
+use manifold_renderer::preset_runtime::PresetRuntime;
+
+const PHYSICS_SOLIDS_JSON: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
+
+fn parse_preset() -> EffectGraphDef {
+    serde_json::from_str(PHYSICS_SOLIDS_JSON).expect("PhysicsSolids preset must parse")
+}
+
+fn nodes_by_id(def: &EffectGraphDef) -> BTreeMap<u32, &EffectGraphNode> {
+    def.nodes.iter().map(|node| (node.id, node)).collect()
+}
+
+fn binding_targets(def: &EffectGraphDef) -> BTreeSet<(u32, String)> {
+    def.preset_metadata
+        .as_ref()
+        .expect("scene exposure migration creates preset metadata")
+        .bindings
+        .iter()
+        .filter_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, param } => Some((
+                def.nodes
+                    .iter()
+                    .find(|node| node.node_id.as_str() == node_id.as_str())
+                    .map(|node| node.id)
+                    .unwrap_or_else(|| {
+                        panic!("binding {} targets missing node {node_id}", binding.id)
+                    }),
+                param.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn physics_solids_compiles_and_scene_objects_resolve_editable_sources() {
+    let registry = PrimitiveRegistry::with_builtin();
+    PresetRuntime::from_json_str(PHYSICS_SOLIDS_JSON, &registry)
+        .expect("PhysicsSolids must compile through the persistence loader");
+
+    let def = parse_preset();
+    let vm = SceneVm::from_def(&def).expect("PhysicsSolids must resolve as a scene");
+    assert_eq!(vm.objects.len(), 6, "six solids are authored in the scene");
+
+    let expected_objects = [
+        (104, 100, 103),
+        (114, 110, 113),
+        (124, 120, 123),
+        (134, 130, 133),
+        (144, 140, 143),
+        (154, 150, 153),
+    ];
+    for (object, (object_id, transform_id, material_id)) in vm.objects.iter().zip(expected_objects)
+    {
+        let SceneObjectVm::Known(row) = object else {
+            panic!("PhysicsSolids object must resolve to a known scene object");
+        };
+        assert_eq!(row.object_node_id, object_id);
+        assert_eq!(
+            row.transform
+                .as_ref()
+                .map(|transform| transform.node_doc_id),
+            Some(transform_id),
+            "starting transform must be discoverable for object {object_id}"
+        );
+        match &row.material {
+            MaterialVm::Known(material) => assert_eq!(material.node_doc_id, material_id),
+            MaterialVm::None => panic!("object {object_id} must resolve its PBR material"),
+        }
+        assert!(
+            !row.transform_chain_parseable,
+            "modifiers must not splice across the solver"
+        );
+        assert!(row.modifier_chain_parseable);
+    }
+
+    assert_eq!(
+        physics_world_doc_ids(&def).collect::<Vec<_>>(),
+        vec![40],
+        "all six bodies share world node 40"
+    );
+    for (object_id, body_id) in [
+        (104, 101),
+        (114, 111),
+        (124, 121),
+        (134, 131),
+        (144, 141),
+        (154, 151),
+    ] {
+        assert_eq!(
+            physics_body_doc_id(&def, object_id),
+            Some(body_id),
+            "object {object_id} must resolve its authored rigid body"
+        );
+    }
+}
+
+#[test]
+fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
+    let mut migrated = parse_preset();
+    assert!(migrate_scene_exposures(&mut migrated));
+
+    let targets = binding_targets(&migrated);
+    for body_id in [101, 111, 121, 131, 141, 151] {
+        for param in ["mass", "friction", "bounce", "motion", "shape"] {
+            assert!(
+                targets.contains(&(body_id, param.to_string())),
+                "body {body_id}.{param} must be exposed"
+            );
+        }
+    }
+    for param in ["gravity_x", "gravity_y", "gravity_z", "speed", "reset"] {
+        assert!(
+            targets.contains(&(40, param.to_string())),
+            "world 40.{param} must be exposed"
+        );
+    }
+
+    let metadata = migrated.preset_metadata.as_ref().expect("metadata");
+    let reset_specs: Vec<_> = metadata
+        .params
+        .iter()
+        .filter(|spec| spec.name == "Reset")
+        .collect();
+    assert_eq!(reset_specs.len(), 1, "world reset has one scene exposure");
+    assert!(reset_specs[0].is_trigger, "reset retains trigger metadata");
+    let reset_binding = metadata
+        .bindings
+        .iter()
+        .find(|binding| {
+            matches!(
+                &binding.target,
+                BindingTarget::Node { node_id, param }
+                    if node_id.as_str() == "physics_demo_40" && param == "reset"
+            )
+        })
+        .expect("world reset binding");
+    assert_eq!(reset_binding.convert, ParamConvert::Trigger);
+
+    let once = migrated.clone();
+    assert!(
+        !migrate_scene_exposures(&mut migrated),
+        "migration must be idempotent"
+    );
+    assert_eq!(migrated, once);
+
+    let serialized = serde_json::to_string(&migrated).expect("migrated preset serializes");
+    let roundtrip: EffectGraphDef =
+        serde_json::from_str(&serialized).expect("serialized PhysicsSolids reloads");
+    assert_eq!(
+        roundtrip, migrated,
+        "exposure metadata must round-trip exactly"
+    );
+
+    // Keep this helper exercised against the actual node params as well as
+    // the binding surface: all six body descriptions and the world are
+    // ordinary nodes in the persisted graph.
+    let nodes = nodes_by_id(&roundtrip);
+    for id in [101, 111, 121, 131, 141, 151] {
+        assert_eq!(nodes[&id].type_id, "node.rigid_body");
+        assert!(matches!(
+            nodes[&id].params.get("mass"),
+            Some(SerializedParamValue::Float { .. })
+        ));
+    }
+    assert_eq!(nodes[&40].type_id, "node.physics_world");
+}

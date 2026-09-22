@@ -169,3 +169,5 @@ pub use validation::{
     TextureChannelMismatchReason, channels_compatible, texture_channels_compatible,
     topological_sort, validate,
 };
+
+pub mod physics;

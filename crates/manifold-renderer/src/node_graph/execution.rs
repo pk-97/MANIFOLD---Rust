@@ -91,6 +91,7 @@ pub struct Executor {
     transform_write_scratch: Vec<(Slot, crate::node_graph::transform::Transform)>,
     /// Sibling scratch for [`PortType::Atmosphere`] writes — same drain pattern.
     /// Sibling scratch for [`PortType::RenderMode`] writes — same drain pattern.
+    rigid_body_write_scratch: Vec<(Slot, crate::node_graph::physics::RigidBody)>,
     render_mode_write_scratch: Vec<(Slot, crate::node_graph::render_mode::RenderMode)>,
     atmosphere_write_scratch: Vec<(Slot, crate::node_graph::atmosphere::Atmosphere)>,
     /// Sibling scratch for [`PortType::Object`] writes — same drain pattern.
@@ -458,6 +459,7 @@ impl Executor {
             transform_write_scratch: Vec::new(),
             atmosphere_write_scratch: Vec::new(),
             render_mode_write_scratch: Vec::new(),
+            rigid_body_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
@@ -1783,6 +1785,7 @@ impl Executor {
                     self.transform_write_scratch.clear();
                     self.atmosphere_write_scratch.clear();
                     self.render_mode_write_scratch.clear();
+                    self.rigid_body_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
                     {
@@ -1802,7 +1805,7 @@ impl Executor {
                             &mut self.atmosphere_write_scratch,
                             &mut self.render_mode_write_scratch,
                             &mut self.object_write_scratch,
-                        );
+                        ).with_rigid_body_writes(&mut self.rigid_body_write_scratch);
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
                         // need them (`scatter_particles` and friends)
@@ -1930,6 +1933,9 @@ impl Executor {
                     // RenderMode writes use the same drain shape.
                     for (slot, value) in self.render_mode_write_scratch.drain(..) {
                         self.backend.set_render_mode(slot, value);
+                    }
+                    for (slot, value) in self.rigid_body_write_scratch.drain(..) {
+                        self.backend.set_rigid_body(slot, value);
                     }
                     // Object writes use the same drain shape.
                     for (slot, value) in self.object_write_scratch.drain(..) {

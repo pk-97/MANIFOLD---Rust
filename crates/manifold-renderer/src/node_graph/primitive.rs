@@ -1306,6 +1306,9 @@ macro_rules! __primitive_port_type {
     (Atmosphere) => {
         $crate::node_graph::ports::PortType::Atmosphere
     };
+    (RigidBody) => {
+        $crate::node_graph::ports::PortType::RigidBody
+    };
     (RenderMode) => {
         $crate::node_graph::ports::PortType::RenderMode
     };

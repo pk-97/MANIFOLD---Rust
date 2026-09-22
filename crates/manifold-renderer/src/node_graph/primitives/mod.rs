@@ -954,3 +954,8 @@ mod tests {
         assert!(g.set_param(id, "missing", ParamValue::Float(0.0)).is_err());
     }
 }
+
+mod rigid_body;
+mod physics_world;
+pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
+mod platonic_mesh;
