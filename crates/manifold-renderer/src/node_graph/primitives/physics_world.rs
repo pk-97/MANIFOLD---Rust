@@ -27,6 +27,22 @@ const ZERO_INSTANCE: InstanceTransform = InstanceTransform {
     rot_pad: [0.0; 4],
 };
 
+fn read_copy_layout(ctx: &EffectNodeContext<'_, '_>) -> f32 {
+    let wired = ctx
+        .inputs
+        .scalar("copy_layout")
+        .and_then(|value| match value {
+            ParamValue::Float(value) => Some(value),
+            ParamValue::Enum(value) => Some(value as f32),
+            _ => None,
+        });
+    wired.unwrap_or_else(|| match ctx.params.get("copy_layout") {
+        Some(ParamValue::Enum(value)) => *value as f32,
+        Some(ParamValue::Float(value)) => *value,
+        _ => 0.0,
+    })
+}
+
 pub struct InstanceUploadState {
     pipeline: Option<manifold_gpu::GpuComputePipeline>,
     data: Vec<InstanceTransform>,
@@ -115,7 +131,7 @@ impl InstanceUploadState {
 crate::primitive! {
  name: PhysicsWorldNode,
  type_id: "node.physics_world",
- purpose: "Advance one shared Box3D rigid-body world at fixed 120 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy grid.",
+ purpose: "Advance one shared Box3D rigid-body world at fixed 120 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
  inputs: {
 body_0: RigidBody optional,
 body_1: RigidBody optional,
@@ -135,7 +151,7 @@ body_14: RigidBody optional,
  body_15: RigidBody optional,
 copies: RigidBody optional,
 gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional,
-copy_count: ScalarF32 optional, copy_spacing: ScalarF32 optional, copy_columns: ScalarF32 optional,
+copy_count: ScalarF32 optional, copy_spacing: ScalarF32 optional, copy_columns: ScalarF32 optional, copy_layout: ScalarF32 optional,
  },
  outputs: {
 pose_0: Transform,
@@ -167,9 +183,10 @@ ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger,
 ParamDef { name: Cow::Borrowed("copy_count"), label: "Copy Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_spacing"), label: "Copy Spacing", ty: ParamType::Float, default: ParamValue::Float(1.25), range: Some((0.01, 100.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_columns"), label: "Copy Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Grid", "Pile"] },
  ],
  depth_rule: Terminal,
- composition_notes: "Connect body_N to its matching pose_N consumer. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, and copy_columns are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Copies use a centered x/z grid, preserve the copies rotation, and require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. More than 128 pending ticks reports an error instead of silently dropping time. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
+ composition_notes: "Connect body_N to its matching pose_N consumer. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. More than 128 pending ticks reports an error instead of silently dropping time. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Physics World", category: Atom },
  summary: "Simulate colliding objects together under gravity, with speed and reset controls.",
@@ -218,12 +235,14 @@ impl Primitive for PhysicsWorldNode {
         let copy_count = ctx.scalar_or_param("copy_count", 100.0);
         let copy_spacing = ctx.scalar_or_param("copy_spacing", 1.25);
         let copy_columns = ctx.scalar_or_param("copy_columns", 16.0);
-        let result = self.simulation.advance_with_copies(
+        let copy_layout = read_copy_layout(ctx);
+        let result = self.simulation.advance_with_copy_layout(
             bodies,
             prototype,
             copy_count,
             copy_spacing,
             copy_columns,
+            copy_layout,
             gravity,
             ctx.time.seconds,
             speed,
@@ -304,7 +323,10 @@ mod gpu_tests {
         assert_eq!(first[126].pos_scale[0], 126.0);
         assert_eq!(first[127].pos_scale[0], 127.0);
         assert_eq!(first[129].rot_pad[3], 129.0);
-        assert_eq!(bytemuck::bytes_of(&first[130]), bytemuck::bytes_of(&ZERO_INSTANCE));
+        assert_eq!(
+            bytemuck::bytes_of(&first[130]),
+            bytemuck::bytes_of(&ZERO_INSTANCE)
+        );
 
         state.data.fill(ZERO_INSTANCE);
         for (index, value) in state.data.iter_mut().take(3).enumerate() {
@@ -323,7 +345,13 @@ mod gpu_tests {
         let shrunk = read_instances(&output);
         assert_eq!(shrunk[0].pos_scale[0], 100.0);
         assert_eq!(shrunk[2].pos_scale[0], 102.0);
-        assert_eq!(bytemuck::bytes_of(&shrunk[3]), bytemuck::bytes_of(&ZERO_INSTANCE));
-        assert_eq!(bytemuck::bytes_of(&shrunk[MAX_COPIES - 1]), bytemuck::bytes_of(&ZERO_INSTANCE));
+        assert_eq!(
+            bytemuck::bytes_of(&shrunk[3]),
+            bytemuck::bytes_of(&ZERO_INSTANCE)
+        );
+        assert_eq!(
+            bytemuck::bytes_of(&shrunk[MAX_COPIES - 1]),
+            bytemuck::bytes_of(&ZERO_INSTANCE)
+        );
     }
 }

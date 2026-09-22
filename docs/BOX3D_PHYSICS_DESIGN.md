@@ -71,19 +71,24 @@ Physics Solids demo. The original larger design remains a roadmap.
 
 ### Physics Boxes demo
 
-Load **Physics Boxes** from the generator picker. **Box Count**
-selects 0–4,096 boxes; **Reset** rebuilds the starting grid at that count. The
-initial count is 256. The floor, box geometry/contact properties, camera and
-lighting are fixed in the preset. Play advances the drop; pause holds it. The
-Performance HUD shows render frame interval, Physics CPU time and Bodies (including
-the fixed floor). The 4,096 ceiling is a bounded demo capacity, not a measured
+Load **Physics Boxes** from the generator picker. **Copy Count**
+selects 0–4,096 boxes; **Reset** rebuilds the starting pile at that count. The
+initial count is 256. Boxes start in a compact, deterministically jittered pile
+with varied rotations,
+then tumble onto two opposing ramps that funnel them into each other. The floor,
+ramps, box geometry/contact properties, camera and lighting are authored in the preset.
+Play advances the drop; pause holds it. The Performance HUD shows render frame interval, Physics CPU time and Bodies (including
+the fixed floor and two ramps). The 4,096 ceiling is a bounded demo capacity, not a measured
 real-time limit or a Box3D engine limit.
 
 The existing `node.physics_world` accepts an optional `copies` rigid-body
 prototype alongside its sixteen individual bodies. Copies share their native
-world and contacts, and start in a centered layered grid. `copy_count`,
-`copy_columns` and `copy_spacing` are sampled on initialization/Reset, not on
-slider motion. Copies require uniform scale because the existing
+world and contacts. `copy_layout` selects the original centered Grid or a compact
+Pile: Pile caps its cube-root-derived row width at `copy_columns`, adds bounded
+position jitter, and varies each copy’s rotation with an index-seeded hash. Reset
+repeats the same initial arrangement; it does not introduce a new random seed.
+`copy_count`, `copy_columns`, `copy_spacing` and `copy_layout` are sampled on
+initialization/Reset, not on slider motion. Copies require uniform scale because the existing
 `InstanceTransform` wire has one scale component. The `instances` output feeds
 `node.scene_object.instances`; `active_count` feeds its optional `instance_count`
 input, so drawing, shadows and RT use only active copies rather than the 4,096

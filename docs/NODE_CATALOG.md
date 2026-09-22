@@ -493,8 +493,8 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 287 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 775 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 518 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 776 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `SceneStarter` | Scene Starter | generator | Geometry | 135 |

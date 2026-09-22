@@ -78,7 +78,7 @@
       "id": 40,
       "nodeId": "physics_demo_40",
       "typeId": "node.physics_world",
-      "handle": "Boxes \u2014 Apply Count with Reset",
+      "handle": "Boxes — Apply Count with Reset",
       "params": {
         "copy_count": {
           "type": "Float",
@@ -90,7 +90,11 @@
         },
         "copy_spacing": {
           "type": "Float",
-          "value": 1.5
+          "value": 1.85
+        },
+        "copy_layout": {
+          "type": "Enum",
+          "value": 1
         }
       },
       "exposedParams": [
@@ -106,7 +110,7 @@
       "params": {
         "distance": {
           "type": "Float",
-          "value": 58
+          "value": 62
         },
         "fov_y": {
           "type": "Float",
@@ -114,7 +118,7 @@
         },
         "look_y": {
           "type": "Float",
-          "value": 8
+          "value": 10
         },
         "orbit": {
           "type": "Float",
@@ -214,7 +218,7 @@
         },
         "objects": {
           "type": "Float",
-          "value": 2
+          "value": 4
         },
         "rt_enabled": {
           "type": "Bool",
@@ -366,11 +370,11 @@
         },
         "friction": {
           "type": "Float",
-          "value": 0.6
+          "value": 0.25
         },
         "bounce": {
           "type": "Float",
-          "value": 0.1
+          "value": 0.38
         }
       }
     },
@@ -386,7 +390,7 @@
         },
         "pos_y": {
           "type": "Float",
-          "value": 4
+          "value": 9
         },
         "pos_z": {
           "type": "Float",
@@ -458,6 +462,234 @@
       "nodeId": "physics_demo_124",
       "typeId": "node.scene_object",
       "handle": "Boxes",
+      "params": {}
+    },
+    {
+      "id": 140,
+      "nodeId": "physics_demo_140",
+      "typeId": "node.transform_3d",
+      "handle": "Left Ramp Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": -4
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": -0.12
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": -0.45
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 6
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 10
+        }
+      }
+    },
+    {
+      "id": 141,
+      "nodeId": "physics_demo_141",
+      "typeId": "node.rigid_body",
+      "handle": "Left Ramp Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 0
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.28
+        }
+      }
+    },
+    {
+      "id": 142,
+      "nodeId": "physics_demo_142",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Left Ramp Mesh",
+      "params": {}
+    },
+    {
+      "id": 143,
+      "nodeId": "physics_demo_143",
+      "typeId": "node.pbr_material",
+      "handle": "Left Ramp Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.08
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.45
+        }
+      }
+    },
+    {
+      "id": 144,
+      "nodeId": "physics_demo_144",
+      "typeId": "node.scene_object",
+      "handle": "Left Ramp",
+      "params": {}
+    },
+    {
+      "id": 160,
+      "nodeId": "physics_demo_160",
+      "typeId": "node.transform_3d",
+      "handle": "Right Ramp Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 4
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.45
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 6
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 10
+        }
+      }
+    },
+    {
+      "id": 161,
+      "nodeId": "physics_demo_161",
+      "typeId": "node.rigid_body",
+      "handle": "Right Ramp Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 0
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.28
+        }
+      }
+    },
+    {
+      "id": 162,
+      "nodeId": "physics_demo_162",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Right Ramp Mesh",
+      "params": {}
+    },
+    {
+      "id": 163,
+      "nodeId": "physics_demo_163",
+      "typeId": "node.pbr_material",
+      "handle": "Right Ramp Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.08
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.45
+        }
+      }
+    },
+    {
+      "id": 164,
+      "nodeId": "physics_demo_164",
+      "typeId": "node.scene_object",
+      "handle": "Right Ramp",
       "params": {}
     }
   ],
@@ -575,6 +807,90 @@
       "fromPort": "active_count",
       "toNode": 124,
       "toPort": "instance_count"
+    },
+    {
+      "fromNode": 140,
+      "fromPort": "transform",
+      "toNode": 141,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 141,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_1"
+    },
+    {
+      "fromNode": 141,
+      "fromPort": "shape",
+      "toNode": 142,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 142,
+      "fromPort": "vertices",
+      "toNode": 144,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 143,
+      "fromPort": "out",
+      "toNode": 144,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_1",
+      "toNode": 144,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 144,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_2"
+    },
+    {
+      "fromNode": 160,
+      "fromPort": "transform",
+      "toNode": 161,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 161,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_2"
+    },
+    {
+      "fromNode": 161,
+      "fromPort": "shape",
+      "toNode": 162,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 162,
+      "fromPort": "vertices",
+      "toNode": 164,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 163,
+      "fromPort": "out",
+      "toNode": 164,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_2",
+      "toNode": 164,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 164,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_3"
     }
   ]
 }
