@@ -254,6 +254,8 @@ pub enum LoadError {
         expected: &'static str,
         got: &'static str,
     },
+    /// A material feature mode enum is outside the persisted From/Off/On range.
+    InvalidMaterialFeatureMode { node_id: u32, param: String, value: u32 },
     /// Wire targets a port that doesn't exist or has the wrong kind /
     /// type on the receiving node.
     InvalidWire { wire_index: usize, reason: String },
@@ -346,6 +348,14 @@ impl std::fmt::Display for LoadError {
             } => write!(
                 f,
                 "node {node_id} ({type_id}): parameter '{param}' expected {expected}, got {got}"
+            ),
+            Self::InvalidMaterialFeatureMode {
+                node_id,
+                param,
+                value,
+            } => write!(
+                f,
+                "node {node_id}: material feature mode '{param}' has invalid value {value}"
             ),
             Self::InvalidWire { wire_index, reason } => {
                 write!(f, "wire #{wire_index}: {reason}")
@@ -739,6 +749,15 @@ fn load_error_from_build(e: crate::node_graph::graph_loader::GraphBuildError) ->
             param,
             expected,
             got,
+        },
+        G::InvalidMaterialFeatureMode {
+            node_id,
+            param,
+            value,
+        } => LoadError::InvalidMaterialFeatureMode {
+            node_id,
+            param,
+            value,
         },
         G::InvalidWire { wire_index, reason } => LoadError::InvalidWire { wire_index, reason },
         G::UnknownOutputFormat {

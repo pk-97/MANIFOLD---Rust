@@ -25,6 +25,96 @@ use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, A
 use crate::panels::GraphParamTarget;
 use manifold_foundation::{EffectId, LayerId, ParamId};
 
+/// UI-side copy of the persisted material descriptor vocabulary. The UI crate
+/// deliberately does not depend on core; the app projection performs the
+/// exhaustive conversion at the boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialFeature {
+    Coat,
+    Iridescence,
+    Emission,
+    Glass,
+    Sheen,
+    Anisotropy,
+    Translucency,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialGroup {
+    Surface,
+    Opacity,
+    Feature(MaterialFeature),
+    Advanced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialColour {
+    Base,
+    Specular,
+    Emission,
+    Sheen,
+    Attenuation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RgbChannel {
+    R,
+    G,
+    B,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialMapFamily {
+    Base,
+    Normal,
+    MetallicRoughness,
+    Occlusion,
+    Emission,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UvComponent {
+    M00,
+    M01,
+    M10,
+    M11,
+    Tx,
+    Ty,
+}
+
+/// Friendly controls projected from the six authoritative UV matrix rows.
+/// The raw matrix remains available under Advanced for shear and other
+/// placements that cannot be represented by these five controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UvControl {
+    OffsetU,
+    OffsetV,
+    Rotation,
+    ScaleU,
+    ScaleV,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SamplerComponent {
+    WrapU,
+    WrapV,
+    MagFilter,
+    MinFilter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialParamRole {
+    Scalar(MaterialGroup),
+    Colour(MaterialGroup, MaterialColour, RgbChannel),
+    FeatureMode(MaterialFeature),
+    Placement(MaterialMapFamily, UvComponent),
+    Sampler(MaterialMapFamily, SamplerComponent),
+}
+
+/// Re-export the action vocabulary beside the surface descriptors for callers
+/// that consume the UI projection as one material-inspector API.
+pub use crate::panels::actions::MaterialLook;
+
 /// Descriptor half of a row — sourced verbatim from the manifest's
 /// `ParamSpecDef` fields by the projection. Never from registry re-reads,
 /// never from hand tables (INV-1).
@@ -55,6 +145,14 @@ pub struct RowSpec {
     /// (e.g. Math View's Connect to Mesh on an unsupported chain); the row
     /// builders + dispatch honour it, never the renderer.
     pub disabled: Option<String>,
+    /// Semantic material descriptor, when this row belongs to a PBR material.
+    /// The app projection is the only authority that fills this field.
+    pub material_role: Option<MaterialParamRole>,
+    /// Explanation for a material control that is authored but currently has
+    /// no contribution (for example, an optional feature set to Off).
+    /// This is presentation state; `disabled` remains reserved for controls
+    /// that cannot be edited at all.
+    pub inactive_reason: Option<String>,
 }
 
 /// Value state at projection time. Per-frame effective values keep riding
@@ -167,6 +265,13 @@ pub struct ParamRow {
     /// gestures turn it into `SceneSetupParamChanged` instead of a plain
     /// manifest-param toggle.
     pub scene_addr: Option<SceneRowAddr>,
+    /// The canonical RGB row keeps the three existing scalar identities so a
+    /// swatch can make one gesture while advanced rows retain their bindings.
+    pub rgb_members: Option<[ParamId; 3]>,
+    /// An authored external attachment (wire, automation, or host mapping)
+    /// that remains meaningful even when the current frame flags are dormant.
+    /// Material feature visibility and seed writes use this projection fact.
+    pub material_attached: bool,
 }
 
 /// The complete queryable description of one manifest-backed param surface.
@@ -255,6 +360,12 @@ pub enum RowRole {
     RelightHeightBtn,
     /// Relight: one of the six knob slider bundles.
     RelightSlider,
+    /// Shared RGB swatch over the three existing scalar parameter slots.
+    ColourSwatch(MaterialColour),
+    /// Optional material feature header/toggle.
+    MaterialFeatureToggle(MaterialFeature),
+    /// Friendly material placement control backed by the six matrix rows.
+    MaterialPlacement(UvControl),
 }
 
 /// Reverse map from durable widget identity to `(row index, role)` —

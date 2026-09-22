@@ -102,6 +102,7 @@ pub(super) fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         });
     p.value = value;
     p.base = value;
@@ -301,5 +302,6 @@ pub(super) fn scene_param_meta(
         is_trigger: false,
         value_labels: Vec::new(),
         convert: manifold_core::effects::ParamConvert::Float,
+        material_role: None,
     }
 }

@@ -124,6 +124,11 @@ pub enum GraphBuildError {
         expected: &'static str,
         got: &'static str,
     },
+    InvalidMaterialFeatureMode {
+        node_id: u32,
+        param: String,
+        value: u32,
+    },
     InvalidWire {
         wire_index: usize,
         reason: String,
@@ -974,6 +979,17 @@ pub fn instantiate_def(
                     got: param_type_label(&pv),
                 });
             }
+            if node_doc.type_id == "node.pbr_material"
+                && is_material_feature_mode(key)
+                && matches!(&pv, ParamValue::Enum(value) if *value > 2)
+            {
+                let ParamValue::Enum(value) = pv else { unreachable!() };
+                return Err(GraphBuildError::InvalidMaterialFeatureMode {
+                    node_id: node_doc.id,
+                    param: key.clone(),
+                    value,
+                });
+            }
             // set_param can only fail with NodeNotFound (just added) or
             // ParamNotFound (just validated). Both impossible here.
             graph
@@ -1302,6 +1318,19 @@ pub(crate) fn param_value_matches_type(v: &ParamValue, ty: ParamType) -> bool {
     )
 }
 
+fn is_material_feature_mode(param: &str) -> bool {
+    matches!(
+        param,
+        "coat_mode"
+            | "iridescence_mode"
+            | "emission_mode"
+            | "glass_mode"
+            | "sheen_mode"
+            | "anisotropy_mode"
+            | "translucency_mode"
+    )
+}
+
 /// Tag for the declared `ParamType` side of a mismatch error.
 pub(crate) fn param_type_name(ty: ParamType) -> &'static str {
     match ty {
@@ -1381,6 +1410,16 @@ pub fn log_build_error(context: &str, err: &GraphBuildError) {
             let _ = write!(
                 buf,
                 "node {node_id} ({type_id}): param '{param}' expected {expected}, got {got}"
+            );
+        }
+        GraphBuildError::InvalidMaterialFeatureMode {
+            node_id,
+            param,
+            value,
+        } => {
+            let _ = write!(
+                buf,
+                "node {node_id}: material feature mode '{param}' has invalid value {value}"
             );
         }
         GraphBuildError::InvalidWire { wire_index, reason } => {
@@ -1896,6 +1935,41 @@ mod tests {
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.wires().len(), 1);
         assert!(graph.node_id_by_handle("uv").is_some());
+    }
+
+    #[test]
+    fn material_inspector_invalid_mode_rejected() {
+        let json = r#"{
+            "version": 1,
+            "name": "test",
+            "nodes": [
+                {
+                    "id": 0,
+                    "typeId": "node.pbr_material",
+                    "params": { "coat_mode": { "type": "Enum", "value": 3 } }
+                }
+            ],
+            "wires": []
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).expect("parse");
+        let mut graph = Graph::new();
+        let err = instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect_err("invalid material mode must be rejected at load time");
+        assert_eq!(
+            err,
+            GraphBuildError::InvalidMaterialFeatureMode {
+                node_id: 0,
+                param: "coat_mode".to_string(),
+                value: 3,
+            }
+        );
     }
 
     /// Splice instantiation: system.source + system.final_output are

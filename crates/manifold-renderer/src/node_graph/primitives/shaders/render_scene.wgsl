@@ -1993,7 +1993,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
             N, V, in.world_pos, roughness, ior, albedo.rgb, F0, env_brdf, volume_thickness, dispersion
         );
         let final_diffuse = mix(diffuse_component, transmitted_diffuse, transmission_factor);
-        base_rgb = (direct - direct_diffuse) + specular_ibl + final_diffuse + ambient + emissive;
+        base_rgb = base_rgb + final_diffuse - diffuse_component;
     }
     let coat_rgb = direct_coat + coat_ibl;
     let lit = base_rgb * (1.0 - fc) + coat_rgb * fc;

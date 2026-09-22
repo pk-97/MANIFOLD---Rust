@@ -509,6 +509,7 @@ mod tests {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         });
         p.value = value;
         p.base = value;
@@ -551,6 +552,7 @@ mod tests {
                     wraps: false,
                     section: None,
                     card_visible: true,
+                    material_role: None,
                 }],
                 bindings: Vec::new(),
                 param_aliases: Vec::new(),

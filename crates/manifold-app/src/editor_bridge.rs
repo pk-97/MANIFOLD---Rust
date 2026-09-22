@@ -2291,6 +2291,7 @@ mod binding_reroute_tests {
                     wraps: false,
                     section: None,
                     card_visible: true,
+            material_role: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".into(),

@@ -1827,6 +1827,7 @@ fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
         wraps: false,
         section: Some("MergedGlass".to_string()),
         card_visible: true,
+        material_role: None,
     };
     let new_binding = BindingDef {
         id: "opacity_1".to_string(),

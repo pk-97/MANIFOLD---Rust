@@ -1358,6 +1358,9 @@ impl RowHost {
                 // match exhaustiveness.
                 Vec::new()
             }
+            RowRole::ColourSwatch(_)
+            | RowRole::MaterialFeatureToggle(_)
+            | RowRole::MaterialPlacement(_) => Vec::new(),
         }
     }
 }

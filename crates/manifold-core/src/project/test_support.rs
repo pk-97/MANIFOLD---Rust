@@ -25,6 +25,7 @@ use super::*;
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;

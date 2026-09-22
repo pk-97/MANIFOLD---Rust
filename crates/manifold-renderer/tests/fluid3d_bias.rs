@@ -52,6 +52,7 @@ fn slot(id: &str, value: f32) -> Param {
         is_trigger_gate: false,
         wraps: false,
         section: None,
+        material_role: None,
     });
     p.value = value;
     p.base = value;

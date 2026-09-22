@@ -476,7 +476,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 158 |
+| `Lantern` | Lantern | generator | Geometry | 165 |
 | `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
@@ -485,7 +485,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 150 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
@@ -493,7 +493,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 730 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 772 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `SceneStarter` | Scene Starter | generator | Geometry | 135 |

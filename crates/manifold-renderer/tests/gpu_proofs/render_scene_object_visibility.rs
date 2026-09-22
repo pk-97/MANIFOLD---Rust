@@ -102,6 +102,44 @@ fn scene_json(occluder_visible: f32) -> String {
     )
 }
 
+fn glass_scene_json(alpha_mode: u32, sheen: f32, translucency: f32) -> String {
+    use serde_json::json;
+    let mut scene: serde_json::Value = serde_json::from_str(&scene_json(1.0)).unwrap();
+    let nodes = scene["nodes"].as_array_mut().unwrap();
+    let material = nodes.iter_mut().find(|n| n["id"] == 8).unwrap();
+    material["typeId"] = json!("node.pbr_material");
+    let params = material["params"].as_object_mut().unwrap();
+    params.insert(
+        "alpha_mode".into(),
+        json!({"type":"Enum","value":alpha_mode}),
+    );
+    for (name, value) in [
+        ("transmission", 1.0),
+        ("color_a", 1.0),
+        ("roughness", 0.3),
+        ("sheen_color_r", sheen),
+        ("sheen_color_g", 0.0),
+        ("sheen_color_b", 0.0),
+        ("sheen_roughness", 0.4),
+        ("translucency", translucency),
+    ] {
+        params.insert(name.into(), json!({"type":"Float","value":value}));
+    }
+    let sun = nodes.iter_mut().find(|n| n["id"] == 30).unwrap();
+    sun["params"]["cast_shadows"]["value"] = json!(0.0);
+    let mut backlight = sun.clone();
+    backlight["id"] = json!(31);
+    backlight["nodeId"] = json!("backlight");
+    backlight["params"]["pos_y"]["value"] = json!(-20.0);
+    nodes.push(backlight);
+    nodes.push(json!({"id":9,"nodeId":"environment","typeId":"node.bake_environment"}));
+    nodes.iter_mut().find(|n| n["id"] == 20).unwrap()["params"]["lights"]["value"] = json!(2);
+    let wires = scene["wires"].as_array_mut().unwrap();
+    wires.push(json!({"fromNode":9,"fromPort":"envmap","toNode":20,"toPort":"envmap"}));
+    wires.push(json!({"fromNode":31,"fromPort":"out","toNode":20,"toPort":"light_1"}));
+    scene.to_string()
+}
+
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -133,7 +171,9 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        let mut enc = h.device.create_encoder("render-scene-object-visibility-enc");
+        let mut enc = h
+            .device
+            .create_encoder("render-scene-object-visibility-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(
@@ -155,7 +195,10 @@ fn luma(bytes: &[u8]) -> (f64, f32) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
         peak = peak.max(r.max(g).max(b));
     }
@@ -199,12 +242,23 @@ fn invisible_object_casts_no_shadow_and_does_not_draw() {
     let (invisible_bytes, _, _) = render_readback(&scene_json(0.0));
 
     write_png(&visible_bytes, w, h, "/tmp/render_scene_object_visible.png");
-    write_png(&invisible_bytes, w, h, "/tmp/render_scene_object_invisible.png");
+    write_png(
+        &invisible_bytes,
+        w,
+        h,
+        "/tmp/render_scene_object_invisible.png",
+    );
 
     let (sum_visible, peak_visible) = luma(&visible_bytes);
     let (sum_invisible, peak_invisible) = luma(&invisible_bytes);
-    assert!(peak_visible > 0.2, "visible-occluder frame is unlit (peak {peak_visible})");
-    assert!(peak_invisible > 0.2, "invisible-occluder frame is unlit (peak {peak_invisible})");
+    assert!(
+        peak_visible > 0.2,
+        "visible-occluder frame is unlit (peak {peak_visible})"
+    );
+    assert!(
+        peak_invisible > 0.2,
+        "invisible-occluder frame is unlit (peak {peak_invisible})"
+    );
 
     // No shadow: total luma rises when the occluder (and its shadow) is
     // gone — same direction/magnitude test as render_scene_shadows.rs's
@@ -234,4 +288,61 @@ fn invisible_object_casts_no_shadow_and_does_not_draw() {
         "invisible occluder's own red draw must not appear: \
          visible={red_visible:.1} invisible={red_invisible:.1}"
     );
+}
+
+#[test]
+fn material_inspector_glass_opaque_route_preserves_transmission_lobes() {
+    let (opaque, w, h) = render_readback(&glass_scene_json(0, 0.35, 0.45));
+    let (blend, _, _) = render_readback(&glass_scene_json(2, 0.35, 0.45));
+    let (baseline, _, _) = render_readback(&glass_scene_json(2, 0.0, 0.0));
+    let (sheen_only, _, _) = render_readback(&glass_scene_json(2, 0.35, 0.0));
+    let (translucency_only, _, _) = render_readback(&glass_scene_json(2, 0.0, 0.45));
+    assert_eq!(opaque.len(), (w * h * 8) as usize);
+    assert!(
+        luma(&opaque).1 > 0.2,
+        "glass scene must contain rendered geometry"
+    );
+    let opaque_blend_delta = opaque
+        .chunks_exact(2)
+        .zip(blend.chunks_exact(2))
+        .map(|(a, b)| {
+            (f16::from_le_bytes([a[0], a[1]]).to_f32() - f16::from_le_bytes([b[0], b[1]]).to_f32())
+                .abs() as f64
+        })
+        .sum::<f64>();
+    let lobe_delta = blend
+        .chunks_exact(2)
+        .zip(baseline.chunks_exact(2))
+        .map(|(a, b)| {
+            (f16::from_le_bytes([a[0], a[1]]).to_f32() - f16::from_le_bytes([b[0], b[1]]).to_f32())
+                .abs() as f64
+        })
+        .sum::<f64>();
+    eprintln!(
+        "glass proof: opaque/blend delta={opaque_blend_delta:.4} sheen+translucency delta={lobe_delta:.4}"
+    );
+    assert!(
+        opaque_blend_delta < 0.05,
+        "opaque transmission diverges from Blend route"
+    );
+    assert!(
+        lobe_delta > 0.05,
+        "sheen/translucency contributions disappeared"
+    );
+    for (name, pixels) in [("sheen", sheen_only), ("translucency", translucency_only)] {
+        let delta = pixels
+            .chunks_exact(2)
+            .zip(baseline.chunks_exact(2))
+            .map(|(a, b)| {
+                (f16::from_le_bytes([a[0], a[1]]).to_f32()
+                    - f16::from_le_bytes([b[0], b[1]]).to_f32())
+                .abs() as f64
+            })
+            .sum::<f64>();
+        eprintln!("glass {name} isolated contribution: {delta:.4}");
+        assert!(
+            delta > 0.05,
+            "{name} contribution disappeared during transmission"
+        );
+    }
 }
