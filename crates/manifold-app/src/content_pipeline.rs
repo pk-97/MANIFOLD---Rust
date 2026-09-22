@@ -1990,6 +1990,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         data_version: u64,
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
+        let _physics_scope =
+            manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(export_mode);
         let _t_frame = std::time::Instant::now();
 
         // §5.4: one reset per frame; the generator and compositor wrappers

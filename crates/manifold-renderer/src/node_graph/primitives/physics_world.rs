@@ -131,7 +131,7 @@ impl InstanceUploadState {
 crate::primitive! {
  name: PhysicsWorldNode,
  type_id: "node.physics_world",
- purpose: "Advance one shared Box3D rigid-body world at fixed 120 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
+ purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
  inputs: {
 body_0: RigidBody optional,
 body_1: RigidBody optional,
@@ -186,7 +186,7 @@ ParamDef { name: Cow::Borrowed("copy_columns"), label: "Copy Columns", ty: Param
 ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Grid", "Pile"] },
  ],
  depth_rule: Terminal,
- composition_notes: "Connect body_N to its matching pose_N consumer. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. More than 128 pending ticks reports an error instead of silently dropping time. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
+ composition_notes: "Connect body_N to its matching pose_N consumer. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Live renders limit catch-up to four ticks and a 4 ms budget checked between ticks, discard excess whole ticks and recover automatically; export/offline renders retain exact elapsed time. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Physics World", category: Atom },
  summary: "Simulate colliding objects together under gravity, with speed and reset controls.",

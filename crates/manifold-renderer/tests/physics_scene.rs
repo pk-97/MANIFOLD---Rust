@@ -39,7 +39,7 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
         .unwrap();
     assert_eq!(
         (count.min, count.max, count.default_value),
-        (0.0, 4096.0, 256.0)
+        (0.0, 4000.0, 256.0)
     );
     assert!(count.whole_numbers && count.card_visible);
     assert!(

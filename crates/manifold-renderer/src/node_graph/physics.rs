@@ -5,8 +5,44 @@ use manifold_physics::{BodyConfig, BodyHandle, BodyKind, PhysicsWorld};
 use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
 
+const LIVE_MAX_TICKS: usize = 4;
+const LIVE_STEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
+
+thread_local! {
+    // Offline callers remain exact unless a live render explicitly scopes them.
+    static LIVE_STEPPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Select live catch-up or exact export stepping for this thread's render.
+/// Restores the outer policy even on early return; must stay on this thread.
+#[must_use]
+pub struct PhysicsStepScope {
+    previous: bool,
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl PhysicsStepScope {
+    pub fn for_render(export_mode: bool) -> Self {
+        let previous = LIVE_STEPPING.with(|live| live.replace(!export_mode));
+        Self {
+            previous,
+            _thread_bound: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for PhysicsStepScope {
+    fn drop(&mut self) {
+        LIVE_STEPPING.with(|live| live.set(self.previous));
+    }
+}
+
+fn live_budget_exhausted(completed: usize, elapsed: std::time::Duration) -> bool {
+    completed >= LIVE_MAX_TICKS || elapsed >= LIVE_STEP_BUDGET
+}
+
 pub const MAX_BODIES: usize = 16;
-pub const MAX_COPIES: usize = 4096;
+pub const MAX_COPIES: usize = 4_000;
 pub const BODY_PORTS: [&str; MAX_BODIES] = [
     "body_0", "body_1", "body_2", "body_3", "body_4", "body_5", "body_6", "body_7", "body_8",
     "body_9", "body_10", "body_11", "body_12", "body_13", "body_14", "body_15",
@@ -100,6 +136,9 @@ pub struct RigidSimulation {
     pub copy_poses: Vec<Transform>,
     pub active_copy_count: usize,
     pub physics_ms: f32,
+    /// Simulation time omitted by live catch-up limiting in the last evaluation.
+    pub dropped_time: Seconds,
+    last_overload_warning: Option<std::time::Instant>,
 }
 
 impl Default for RigidSimulation {
@@ -121,12 +160,14 @@ impl Default for RigidSimulation {
             copy_poses: vec![Transform::default(); MAX_COPIES],
             active_copy_count: 0,
             physics_ms: 0.0,
+            dropped_time: Seconds::ZERO,
+            last_overload_warning: None,
         }
     }
 }
 
 impl RigidSimulation {
-    /// 120 Hz outer ticks, four Box3D substeps each. A paused transport contributes no time.
+    /// 60 Hz outer ticks, four Box3D substeps each. A paused transport contributes no time.
     pub fn advance(
         &mut self,
         bodies: [Option<RigidBody>; MAX_BODIES],
@@ -343,13 +384,10 @@ impl RigidSimulation {
             self.accumulator = 0.0;
         }
         let elapsed = now.0 - self.last_time.unwrap_or(now).0;
-        // Never silently drop simulation time when the live/export caller overruns the bounded step budget.
+        // Live frames discard excess catch-up; offline/export evaluates every tick.
         let accumulated = self.accumulator + elapsed * f64::from(speed);
-        const TICK: f64 = 1.0 / 120.0;
+        const TICK: f64 = 1.0 / 60.0;
         let steps = ((accumulated + 1e-9) / TICK).floor() as usize;
-        if steps > 128 {
-            return Err("Physics step budget exceeded; reset the simulation to resume".into());
-        }
         let world = self.world.as_mut().expect("world constructed above");
         world.set_gravity(gravity).map_err(|e| e.to_string())?;
         for (i, body) in bodies.iter().enumerate() {
@@ -389,9 +427,29 @@ impl RigidSimulation {
             }
         }
         let physics_start = std::time::Instant::now();
+        let live = LIVE_STEPPING.with(std::cell::Cell::get);
+        let mut completed = 0;
         for _ in 0..steps {
             world.step(Seconds(TICK), 4).map_err(|e| e.to_string())?;
+            completed += 1;
+            // A native tick cannot be preempted. Yield before starting another.
+            if live && live_budget_exhausted(completed, physics_start.elapsed()) {
+                break;
+            }
         }
+        self.dropped_time = Seconds((steps - completed) as f64 * TICK);
+        if self.dropped_time.0 > 0.0
+            && self
+                .last_overload_warning
+                .is_none_or(|last| last.elapsed().as_secs() >= 2)
+        {
+            log::warn!(
+                "Physics overload: dropped {:.1} ms of live catch-up after {completed} ticks; continuing automatically",
+                self.dropped_time.0 * 1000.0
+            );
+            self.last_overload_warning = Some(std::time::Instant::now());
+        }
+        // Remove ALL due ticks from the backlog, retaining only fractional time.
         self.accumulator = (accumulated - steps as f64 * TICK).max(0.0);
         self.last_time = Some(now);
         self.reset_count = Some(reset_count);
@@ -737,21 +795,72 @@ mod tests {
     }
 
     #[test]
-    fn overrun_errors_and_a_reset_recovers() {
+    fn long_catch_up_matches_regular_ticks_and_keeps_running() {
         let bodies = one_body([0.0, 4.0, 0.0]);
-        let mut simulation = RigidSimulation::default();
-        simulation
+        let mut caught_up = RigidSimulation::default();
+        let mut regular = RigidSimulation::default();
+        caught_up
             .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
-        let error = simulation
-            .advance(bodies, GRAVITY, Seconds(2.0), 1.0, 0.0)
-            .unwrap_err();
-        assert!(error.contains("step budget"));
-
-        simulation
-            .advance(bodies, GRAVITY, Seconds(2.0), 1.0, 1.0)
+        for frame in 0..=181 {
+            regular
+                .advance(bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .unwrap();
+        }
+        caught_up
+            .advance(bodies, GRAVITY, Seconds(180.0 * FRAME), 1.0, 0.0)
             .unwrap();
-        assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
+        caught_up
+            .advance(bodies, GRAVITY, Seconds(181.0 * FRAME), 1.0, 0.0)
+            .unwrap();
+        assert_eq!(caught_up.poses, regular.poses);
+        caught_up
+            .advance(bodies, GRAVITY, Seconds(181.0 * FRAME), 1.0, 1.0)
+            .unwrap();
+        assert_eq!(caught_up.poses[0].pos, [0.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn live_catch_up_discards_backlog_and_next_frame_advances() {
+        let _scope = PhysicsStepScope::for_render(false);
+        let bodies = one_body([0.0, 4.0, 0.0]);
+        let mut sim = RigidSimulation::default();
+        sim.advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        sim.advance(bodies, GRAVITY, Seconds(3.0 + FRAME / 2.0), 1.0, 0.0)
+            .unwrap();
+        assert!(sim.dropped_time.0 >= 3.0 - LIVE_MAX_TICKS as f64 * FRAME - 1e-9);
+        assert!((sim.accumulator - FRAME / 2.0).abs() < 1e-9);
+        let previous_y = sim.poses[0].pos[1];
+        sim.advance(bodies, GRAVITY, Seconds(3.0 + FRAME), 1.0, 0.0)
+            .unwrap();
+        assert_eq!(sim.dropped_time, Seconds::ZERO);
+        assert!(sim.poses[0].pos[1] < previous_y);
+        assert!(sim.accumulator < 1e-9);
+    }
+
+    #[test]
+    fn render_scope_restores_live_and_export_policy() {
+        assert!(!LIVE_STEPPING.with(std::cell::Cell::get));
+        {
+            let _live = PhysicsStepScope::for_render(false);
+            assert!(LIVE_STEPPING.with(std::cell::Cell::get));
+            {
+                let _export = PhysicsStepScope::for_render(true);
+                long_catch_up_matches_regular_ticks_and_keeps_running();
+                assert!(!LIVE_STEPPING.with(std::cell::Cell::get));
+            }
+            assert!(LIVE_STEPPING.with(std::cell::Cell::get));
+        }
+        assert!(!LIVE_STEPPING.with(std::cell::Cell::get));
+    }
+
+    #[test]
+    fn live_budget_stops_at_either_time_or_tick_limit() {
+        use std::time::Duration;
+        assert!(!live_budget_exhausted(1, Duration::from_millis(1)));
+        assert!(live_budget_exhausted(1, LIVE_STEP_BUDGET));
+        assert!(live_budget_exhausted(LIVE_MAX_TICKS, Duration::ZERO));
     }
 
     #[test]
@@ -950,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_boxes_share_floor_contacts_and_reset_recovers_overrun() {
+    fn bulk_boxes_share_floor_contacts_and_reset_after_catch_up() {
         let mut bodies = [None; MAX_BODIES];
         let mut ground = body([0.0, -0.28867513, 0.0]);
         ground.kind = 0;
@@ -997,20 +1106,6 @@ mod tests {
             sim.copy_poses, held,
             "zero speed holds and count edit stays pending"
         );
-        assert!(
-            sim.advance_with_copies(
-                bodies,
-                Some(prototype),
-                64.0,
-                1.25,
-                4.0,
-                GRAVITY,
-                Seconds(7.0),
-                1.0,
-                0.0
-            )
-            .is_err()
-        );
         sim.advance_with_copies(
             bodies,
             Some(prototype),
@@ -1018,7 +1113,19 @@ mod tests {
             1.25,
             4.0,
             GRAVITY,
-            Seconds(7.0),
+            Seconds(8.0),
+            1.0,
+            0.0,
+        )
+        .unwrap();
+        sim.advance_with_copies(
+            bodies,
+            Some(prototype),
+            64.0,
+            1.25,
+            4.0,
+            GRAVITY,
+            Seconds(8.0),
             1.0,
             1.0,
         )
