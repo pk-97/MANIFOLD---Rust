@@ -73,16 +73,19 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
         physics_metrics::take_frame()
     };
     let first = render(0, &params);
-    assert_eq!(first.body_count, 257, "256 boxes plus shared fixed floor");
+    assert_eq!(
+        first.body_count, 259,
+        "256 boxes plus floor and two shared ramps"
+    );
     let initial = readback_raw_halves(device, &target.texture, width, height);
     std::fs::write(
         "/tmp/physics_boxes_initial.png",
         readback_to_srgb_png(device, &target.texture, width, height),
     )
     .unwrap();
-    for frame in 1..=90 {
+    for frame in 1..=180 {
         let metrics = render(frame, &params);
-        assert_eq!(metrics.body_count, 257);
+        assert_eq!(metrics.body_count, 259);
         assert!(metrics.physics_cpu_ms.is_finite() && metrics.physics_cpu_ms >= 0.0);
     }
     let dropped = readback_raw_halves(device, &target.texture, width, height);
@@ -97,23 +100,23 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     );
     params.get_mut("40_copy_count").unwrap().value = 32.0;
     assert_eq!(
-        render(91, &params).body_count,
-        257,
+        render(181, &params).body_count,
+        259,
         "slider edit does not rebuild"
     );
     params.get_mut("40_reset").unwrap().value = 1.0;
     assert_eq!(
-        render(92, &params).body_count,
-        33,
+        render(182, &params).body_count,
+        35,
         "Reset applies requested count"
     );
     let sparse = readback_raw_halves(device, &target.texture, width, height);
     params.get_mut("40_copy_count").unwrap().value = 0.0;
     params.get_mut("40_reset").unwrap().value = 2.0;
     assert_eq!(
-        render(93, &params).body_count,
-        1,
-        "zero leaves the floor only"
+        render(183, &params).body_count,
+        3,
+        "zero leaves the floor and ramps only"
     );
     let floor = readback_raw_halves(device, &target.texture, width, height);
     assert!(

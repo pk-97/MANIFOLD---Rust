@@ -16,6 +16,23 @@ pub const POSE_PORTS: [&str; MAX_BODIES] = [
     "pose_9", "pose_10", "pose_11", "pose_12", "pose_13", "pose_14", "pose_15",
 ];
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CopyLayout {
+    #[default]
+    Grid,
+    Pile,
+}
+
+impl CopyLayout {
+    fn from_scalar(value: f32) -> Self {
+        if value.round().clamp(0.0, 1.0) >= 1.0 {
+            Self::Pile
+        } else {
+            Self::Grid
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RigidBody {
     pub transform: Transform,
@@ -75,6 +92,7 @@ pub struct RigidSimulation {
     latched_copy_count: usize,
     latched_copy_spacing: f32,
     latched_copy_columns: usize,
+    latched_copy_layout: CopyLayout,
     last_time: Option<Seconds>,
     accumulator: f64,
     reset_count: Option<f32>,
@@ -95,6 +113,7 @@ impl Default for RigidSimulation {
             latched_copy_count: 0,
             latched_copy_spacing: 1.25,
             latched_copy_columns: 16,
+            latched_copy_layout: CopyLayout::Grid,
             last_time: None,
             accumulator: 0.0,
             reset_count: None,
@@ -147,6 +166,36 @@ impl RigidSimulation {
         speed: f32,
         reset_count: f32,
     ) -> Result<(), String> {
+        self.advance_with_copy_layout(
+            bodies,
+            prototype,
+            copy_count,
+            copy_spacing,
+            copy_columns,
+            0.0,
+            gravity,
+            now,
+            speed,
+            reset_count,
+        )
+    }
+
+    /// Advance the shared world with a reset-latched copy layout. `layout` is
+    /// zero for the legacy centered grid and one for the compact pile.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_with_copy_layout(
+        &mut self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        copy_count: f32,
+        copy_spacing: f32,
+        copy_columns: f32,
+        layout: f32,
+        gravity: [f32; 3],
+        now: Seconds,
+        speed: f32,
+        reset_count: f32,
+    ) -> Result<(), String> {
         if !now.0.is_finite()
             || !speed.is_finite()
             || !(0.0..=4.0).contains(&speed)
@@ -159,8 +208,9 @@ impl RigidSimulation {
             || !copy_spacing.is_finite()
             || copy_spacing <= 0.0
             || !copy_columns.is_finite()
+            || !layout.is_finite()
         {
-            return Err("Physics: copy count, spacing, and columns must be finite; spacing must be positive".into());
+            return Err("Physics: copy count, spacing, columns, and layout must be finite; spacing must be positive".into());
         }
         let requested_copy_count = if prototype.is_some() {
             copy_count.round().clamp(0.0, MAX_COPIES as f32) as usize
@@ -168,6 +218,7 @@ impl RigidSimulation {
             0
         };
         let requested_copy_columns = copy_columns.round().clamp(1.0, 64.0) as usize;
+        let requested_copy_layout = CopyLayout::from_scalar(layout);
         if let Some(prototype) = prototype {
             validate_copy_prototype(prototype)?;
         }
@@ -225,6 +276,11 @@ impl RigidSimulation {
             } else {
                 self.latched_copy_columns
             };
+            let active_copy_layout = if self.world.is_none() || reset || prototype_added {
+                requested_copy_layout
+            } else {
+                self.latched_copy_layout
+            };
             if let Some(prototype) = prototype {
                 validate_copy_prototype(prototype)?;
             }
@@ -256,12 +312,14 @@ impl RigidSimulation {
                 }
                 for (index, handle) in copy_handles.iter_mut().enumerate() {
                     let mut copy = prototype;
-                    copy.transform.pos = copy_position(
+                    copy = copy_transform_for_layout(
+                        copy,
                         prototype.transform.pos,
                         index,
                         active_copy_count,
                         active_copy_columns,
                         active_copy_spacing,
+                        active_copy_layout,
                     );
                     *handle = Some(
                         world
@@ -280,6 +338,7 @@ impl RigidSimulation {
             self.latched_copy_count = active_copy_count;
             self.latched_copy_spacing = active_copy_spacing;
             self.latched_copy_columns = active_copy_columns;
+            self.latched_copy_layout = active_copy_layout;
             self.last_time = Some(now);
             self.accumulator = 0.0;
         }
@@ -314,12 +373,14 @@ impl RigidSimulation {
                         continue;
                     };
                     let mut copy = prototype;
-                    copy.transform.pos = copy_position(
+                    copy = copy_transform_for_layout(
+                        copy,
                         prototype.transform.pos,
                         index,
                         self.active_copy_count,
                         self.latched_copy_columns,
                         self.latched_copy_spacing,
+                        self.latched_copy_layout,
                     );
                     world
                         .update_body(handle, copy.config(), move_pose)
@@ -391,6 +452,81 @@ fn validate_copy_prototype(prototype: RigidBody) -> Result<(), String> {
         return Err("Physics: copy prototype scale must be uniform".into());
     }
     Ok(())
+}
+
+fn copy_transform_for_layout(
+    mut copy: RigidBody,
+    origin: [f32; 3],
+    index: usize,
+    count: usize,
+    columns: usize,
+    spacing: f32,
+    layout: CopyLayout,
+) -> RigidBody {
+    copy.transform.pos = match layout {
+        CopyLayout::Grid => copy_position(origin, index, count, columns, spacing),
+        CopyLayout::Pile => pile_position(origin, index, count, columns, spacing),
+    };
+    if layout == CopyLayout::Pile {
+        let offsets = pile_rotation(index);
+        for (axis, offset) in offsets.into_iter().enumerate() {
+            copy.transform.rot_euler[axis] += offset;
+        }
+    }
+    copy
+}
+
+fn pile_position(
+    origin: [f32; 3],
+    index: usize,
+    count: usize,
+    copy_columns: usize,
+    spacing: f32,
+) -> [f32; 3] {
+    let columns = ceil_cuberoot(count).min(copy_columns.max(1));
+    let column = index % columns;
+    let row = (index / columns) % columns;
+    let layer = index / (columns * columns);
+    let center = (columns as f32 - 1.0) * 0.5;
+    [
+        origin[0] + (column as f32 - center) * spacing + bounded_jitter(index, 0, spacing),
+        origin[1] + layer as f32 * spacing + bounded_jitter(index, 1, spacing),
+        origin[2] + (row as f32 - center) * spacing + bounded_jitter(index, 2, spacing),
+    ]
+}
+
+fn ceil_cuberoot(count: usize) -> usize {
+    let mut columns: usize = 1;
+    while columns.saturating_mul(columns).saturating_mul(columns) < count {
+        columns += 1;
+    }
+    columns
+}
+
+fn pile_rotation(index: usize) -> [f32; 3] {
+    [
+        full_turn_hash(index, 3),
+        full_turn_hash(index, 4),
+        full_turn_hash(index, 5),
+    ]
+}
+
+fn bounded_jitter(index: usize, axis: u32, spacing: f32) -> f32 {
+    (index_hash_unit(index, axis) * 2.0 - 1.0) * 0.04 * spacing
+}
+
+fn full_turn_hash(index: usize, salt: u32) -> f32 {
+    index_hash_unit(index, salt) * std::f32::consts::TAU
+}
+
+fn index_hash_unit(index: usize, salt: u32) -> f32 {
+    let mut value = (index as u32).wrapping_add(salt.wrapping_mul(0x9e37_79b9));
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x85eb_ca6b);
+    value ^= value >> 13;
+    value = value.wrapping_mul(0xc2b2_ae35);
+    value ^= value >> 16;
+    value as f32 / u32::MAX as f32
 }
 
 fn copy_position(
@@ -669,6 +805,148 @@ mod tests {
             .unwrap();
         assert_eq!(simulation.active_copy_count, 3);
         assert_eq!(simulation.copy_poses[3], Transform::default());
+    }
+
+    #[test]
+    fn pile_layout_is_reset_deterministic_and_property_latched() {
+        let prototype = body([0.0, 9.0, 0.0]);
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance_with_copy_layout(
+                [None; MAX_BODIES],
+                Some(prototype),
+                32.0,
+                1.85,
+                16.0,
+                1.0,
+                GRAVITY,
+                Seconds::ZERO,
+                0.0,
+                0.0,
+            )
+            .unwrap();
+        let initial = simulation.copy_poses[..32].to_vec();
+
+        simulation
+            .advance_with_copy_layout(
+                [None; MAX_BODIES],
+                Some(prototype),
+                3.0,
+                0.5,
+                1.0,
+                0.0,
+                GRAVITY,
+                Seconds(FRAME),
+                0.0,
+                0.0,
+            )
+            .unwrap();
+        assert_eq!(simulation.active_copy_count, 32);
+        assert_eq!(&simulation.copy_poses[..32], initial.as_slice());
+
+        simulation
+            .advance_with_copy_layout(
+                [None; MAX_BODIES],
+                Some(prototype),
+                3.0,
+                0.5,
+                1.0,
+                0.0,
+                GRAVITY,
+                Seconds(FRAME),
+                0.0,
+                1.0,
+            )
+            .unwrap();
+        assert_eq!(simulation.active_copy_count, 3);
+
+        simulation
+            .advance_with_copy_layout(
+                [None; MAX_BODIES],
+                Some(prototype),
+                32.0,
+                1.85,
+                16.0,
+                1.0,
+                GRAVITY,
+                Seconds(FRAME),
+                0.0,
+                2.0,
+            )
+            .unwrap();
+        assert_eq!(&simulation.copy_poses[..32], initial.as_slice());
+    }
+
+    #[test]
+    fn pile_layout_has_bounded_jitter_distinct_rotations_and_clearance() {
+        let prototype = body([0.0, 9.0, 0.0]);
+        let first = copy_transform_for_layout(
+            prototype,
+            prototype.transform.pos,
+            0,
+            256,
+            16,
+            1.85,
+            CopyLayout::Pile,
+        );
+        let second = copy_transform_for_layout(
+            prototype,
+            prototype.transform.pos,
+            1,
+            256,
+            16,
+            1.85,
+            CopyLayout::Pile,
+        );
+        assert_ne!(first.transform.rot_euler, second.transform.rot_euler);
+        assert_eq!(
+            first.transform,
+            copy_transform_for_layout(
+                prototype,
+                prototype.transform.pos,
+                0,
+                256,
+                16,
+                1.85,
+                CopyLayout::Pile,
+            )
+            .transform
+        );
+
+        for count in [256, MAX_COPIES] {
+            let columns = ceil_cuberoot(count).min(16);
+            let mut positions = vec![[0.0; 3]; count];
+            for (index, position) in positions.iter_mut().enumerate() {
+                *position = pile_position(prototype.transform.pos, index, count, 16, 1.85);
+                let column = index % columns;
+                let row = (index / columns) % columns;
+                let layer = index / (columns * columns);
+                let center = (columns as f32 - 1.0) * 0.5;
+                let lattice = [
+                    prototype.transform.pos[0] + (column as f32 - center) * 1.85,
+                    prototype.transform.pos[1] + layer as f32 * 1.85,
+                    prototype.transform.pos[2] + (row as f32 - center) * 1.85,
+                ];
+                for axis in 0..3 {
+                    assert!((position[axis] - lattice[axis]).abs() <= 0.04 * 1.85 + 1.0e-6);
+                }
+            }
+
+            let mut closest_squared = f32::MAX;
+            for (index, left) in positions.iter().enumerate() {
+                for right in positions.iter().skip(index + 1) {
+                    let distance_squared = (0..3)
+                        .map(|axis| (left[axis] - right[axis]).powi(2))
+                        .sum::<f32>();
+                    closest_squared = closest_squared.min(distance_squared);
+                }
+            }
+            let sphere_diameter: f32 = 1.6;
+            assert!(
+                closest_squared > sphere_diameter * sphere_diameter,
+                "count={count} closest_squared={closest_squared}"
+            );
+        }
     }
 
     #[test]

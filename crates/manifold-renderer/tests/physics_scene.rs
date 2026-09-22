@@ -30,7 +30,7 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
     let mut def: EffectGraphDef = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
     migrate_scene_exposures(&mut def);
     let vm = SceneVm::from_def(&def).expect("box demo is a scene");
-    assert_eq!(vm.objects.len(), 2);
+    assert_eq!(vm.objects.len(), 4);
     let metadata = def.preset_metadata.as_ref().unwrap();
     let count = metadata
         .params
@@ -52,6 +52,8 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
     );
     for (from, port, to, input) in [
         (101, "body", 40, "body_0"),
+        (141, "body", 40, "body_1"),
+        (161, "body", 40, "body_2"),
         (121, "body", 40, "copies"),
         (40, "instances", 124, "instances"),
         (40, "active_count", 124, "instance_count"),
@@ -64,6 +66,78 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
     let roundtrip: EffectGraphDef =
         serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
     assert_eq!(def, roundtrip);
+}
+
+#[test]
+fn physics_boxes_contacts_deflect_the_pile_sideways() {
+    use manifold_core::Seconds;
+    use manifold_renderer::node_graph::physics::{MAX_BODIES, RigidBody, RigidSimulation};
+    use manifold_renderer::node_graph::transform::Transform;
+
+    let def: EffectGraphDef = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
+    let nodes = nodes_by_id(&def);
+    let scalar = |id: u32, name: &str| match nodes[&id].params.get(name).unwrap() {
+        SerializedParamValue::Float { value } => *value,
+        SerializedParamValue::Enum { value } => *value as f32,
+        other => panic!("unexpected {name} value: {other:?}"),
+    };
+    let body = |id: u32| RigidBody {
+        transform: Transform {
+            pos: ["pos_x", "pos_y", "pos_z"].map(|p| scalar(id - 1, p)),
+            rot_euler: ["rot_x", "rot_y", "rot_z"].map(|p| scalar(id - 1, p)),
+            scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(id - 1, p)),
+            billboard: false,
+        },
+        shape: scalar(id, "shape") as u32,
+        kind: scalar(id, "motion") as u32,
+        mass: scalar(id, "mass"),
+        friction: scalar(id, "friction"),
+        bounce: scalar(id, "bounce"),
+    };
+    let mut bodies = [None; MAX_BODIES];
+    for (slot, id) in [101, 141, 161].into_iter().enumerate() {
+        bodies[slot] = Some(body(id));
+    }
+    let prototype = Some(body(121));
+    let mut sim = RigidSimulation::default();
+    let advance = |sim: &mut RigidSimulation, frame| {
+        sim.advance_with_copy_layout(
+            bodies,
+            prototype,
+            scalar(40, "copy_count"),
+            scalar(40, "copy_spacing"),
+            scalar(40, "copy_columns"),
+            scalar(40, "copy_layout"),
+            [0.0, -9.81, 0.0],
+            Seconds(f64::from(frame) / 60.0),
+            1.0,
+            0.0,
+        )
+        .unwrap();
+    };
+    advance(&mut sim, 0);
+    let initial = sim.copy_poses[..sim.active_copy_count].to_vec();
+    for frame in 1..=240 {
+        advance(&mut sim, frame);
+    }
+    let deflected = initial
+        .iter()
+        .zip(&sim.copy_poses)
+        .filter(|(a, b)| {
+            let dx = b.pos[0] - a.pos[0];
+            let dz = b.pos[2] - a.pos[2];
+            dx * dx + dz * dz > 0.25
+        })
+        .count();
+    assert!(
+        deflected > initial.len() / 4,
+        "contacts must scatter boxes, not just drop an unchanged grid: {deflected}"
+    );
+    assert!(
+        sim.copy_poses[..sim.active_copy_count]
+            .iter()
+            .all(|pose| pose.pos.iter().all(|v| v.is_finite()) && pose.pos[1] > -1.0)
+    );
 }
 
 fn parse_preset() -> EffectGraphDef {
