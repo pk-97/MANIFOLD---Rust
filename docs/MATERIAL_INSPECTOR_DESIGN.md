@@ -1,6 +1,7 @@
 # Material inspector — understandable surface authoring
 
 **Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, local texture drawers, RGB gestures, atomic looks and affine placement.
+Lifecycle: contract — defines the live material inspector’s feature modes, texture ownership, compound edits and compatibility invariants.
 **Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
 
