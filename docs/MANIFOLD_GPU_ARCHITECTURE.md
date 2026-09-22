@@ -99,6 +99,13 @@ scratch writes follow it in the same queue. Native hazard tracking also covers
 existing command-buffer checkpoints. Resize refreshes both aliases with their
 backing. This removes two allocations without adding waits or changing history.
 
+**RT scalar history:** Each shadow-visibility group keeps its own ping-pong
+snap-hold countdown in `R16Float`. Accumulation reads and writes only the red
+channel, retaining the previous half-float precision. Both histories remain
+persistent and separate; reprojection prevents sharing their backing. The scalar
+textures permit render-target clears for diagnostic sentinel injection. Capture
+decoders return zero for the absent channels.
+
 **Immutable imported images:** glTF source uploads may share an immutable
 RGBA8 texture within one execution thread and device resource scope. The key
 includes the decoded pixel SHA256, source dimensions and colour format. Hashing

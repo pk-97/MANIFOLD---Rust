@@ -97,9 +97,15 @@ fn make_history(device: &GpuDevice, label: &str) -> GpuTexture {
 }
 
 fn make_history_side_channel(device: &GpuDevice, format: GpuTextureFormat, label: &str) -> GpuTexture {
+    let mut usage = GpuTextureUsage::SHADER_WRITE
+        | GpuTextureUsage::SHADER_READ
+        | GpuTextureUsage::COPY_SRC;
+    if format == GpuTextureFormat::R16Float {
+        usage = usage | GpuTextureUsage::RENDER_TARGET;
+    }
     device.create_texture(&GpuTextureDesc {
         width: W, height: H, depth: 1, format, dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+        usage,
         label, mip_levels: 1,
     })
 }
@@ -153,6 +159,10 @@ struct FullHistorySet {
 
 impl FullHistorySet {
     fn new(device: &GpuDevice) -> Self {
+        Self::with_hold_format(device, GpuTextureFormat::R16Float)
+    }
+
+    fn with_hold_format(device: &GpuDevice, hold_format: GpuTextureFormat) -> Self {
         Self {
             irr: [make_history(device, "gr-irr-a"), make_history(device, "gr-irr-b")],
             depth: [
@@ -178,8 +188,8 @@ impl FullHistorySet {
                 make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svm2-b"),
             ],
             sv_hold: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svh-a"),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svh-b"),
+                make_history_side_channel(device, hold_format, "gr-svh-a"),
+                make_history_side_channel(device, hold_format, "gr-svh-b"),
             ],
             sv2: [make_history(device, "gr-sv2-a"), make_history(device, "gr-sv2-b")],
             sv2_m1: [
@@ -191,8 +201,8 @@ impl FullHistorySet {
                 make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2m2-b"),
             ],
             sv2_hold: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2h-a"),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2h-b"),
+                make_history_side_channel(device, hold_format, "gr-sv2h-a"),
+                make_history_side_channel(device, hold_format, "gr-sv2h-b"),
             ],
             svt: [make_history(device, "gr-svt-a"), make_history(device, "gr-svt-b")],
             ping: 0,
@@ -318,6 +328,21 @@ fn read_r_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     f16s[0].to_f32()
 }
 
+fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
+    assert_eq!(texture.format, GpuTextureFormat::Rgba16Float);
+    let bytes_per_row = W * 8;
+    let total_bytes = u64::from(H * bytes_per_row);
+    let buf = device.create_buffer_shared(total_bytes);
+    let mut enc = device.create_encoder("gr-readback-rgba");
+    enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("shared readback buffer");
+    let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
+    f16s.chunks_exact(4)
+        .map(|p| [p[0].to_f32(), p[1].to_f32(), p[2].to_f32(), p[3].to_f32()])
+        .collect()
+}
+
 fn read_rgb_center(device: &GpuDevice, texture: &GpuTexture) -> [f32; 3] {
     let bytes_per_row = W * 8;
     let total_bytes = u64::from(H * bytes_per_row);
@@ -328,6 +353,70 @@ fn read_rgb_center(device: &GpuDevice, texture: &GpuTexture) -> [f32; 3] {
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
     [f16s[0].to_f32(), f16s[1].to_f32(), f16s[2].to_f32()]
+}
+
+fn read_scalar_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<f32> {
+    assert_eq!(texture.format, GpuTextureFormat::R16Float);
+    let bytes_per_row = W * 2;
+    let total_bytes = u64::from(H * bytes_per_row);
+    let buf = device.create_buffer_shared(total_bytes);
+    let mut enc = device.create_encoder("gr-readback-r16-all");
+    enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("shared readback buffer");
+    let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H) as usize) };
+    f16s.iter().map(|v| v.to_f32()).collect()
+}
+
+fn assert_history_parity(
+    device: &GpuDevice,
+    compact: &FullHistorySet,
+    reference: &FullHistorySet,
+    label: &str,
+) -> [f32; 2] {
+    let rgba_pairs = [
+        ("irr", compact.read_irr(), reference.read_irr()),
+        ("refl", compact.read_refl(), reference.read_refl()),
+        ("sv", compact.read_sv(), reference.read_sv()),
+        ("sv2", compact.read_sv2(), reference.read_sv2()),
+        ("svt", compact.read_svt(), reference.read_svt()),
+    ];
+    for (name, scalar, rgba) in rgba_pairs {
+        let scalar_pixels = read_rgba_pixels(device, scalar);
+        let rgba_pixels = read_rgba_pixels(device, rgba);
+        assert_eq!(scalar_pixels.len(), rgba_pixels.len(), "{label}/{name}: pixel count");
+        for (pixel, (a, b)) in scalar_pixels.iter().zip(rgba_pixels.iter()).enumerate() {
+            for channel in 0..4 {
+                assert!(
+                    a[channel].is_finite() && b[channel].is_finite(),
+                    "{label}/{name}: pixel {pixel} channel {channel} is non-finite"
+                );
+                assert_eq!(
+                    a[channel].to_bits(),
+                    b[channel].to_bits(),
+                    "{label}/{name}: pixel {pixel} channel {channel} diverged"
+                );
+            }
+        }
+    }
+    let hold_pairs = [
+        ("sv_hold", compact.read_sv_hold(), reference.read_sv_hold()),
+        ("sv2_hold", compact.read_sv2_hold(), reference.read_sv2_hold()),
+    ];
+    let mut holds = [0.0; 2];
+    for (group, (name, scalar, rgba)) in hold_pairs.into_iter().enumerate() {
+        let scalar_pixels = read_scalar_pixels(device, scalar);
+        let rgba_pixels = read_rgba_pixels(device, rgba);
+        holds[group] = scalar_pixels[0];
+        for (pixel, (a, b)) in scalar_pixels.iter().zip(rgba_pixels.iter()).enumerate() {
+            assert!(
+                a.is_finite() && b[0].is_finite(),
+                "{label}/{name}: pixel {pixel} is non-finite"
+            );
+            assert_eq!(a.to_bits(), b[0].to_bits(), "{label}/{name}: pixel {pixel} diverged");
+        }
+    }
+    holds
 }
 
 /// Make a shared buffer with identity obj_motion content.
@@ -646,6 +735,87 @@ fn svt_tint_holds_through_strobe() {
             svt_before[ch], svt_after[ch]
         );
     }
+}
+
+/// The scalar snap-hold histories must preserve the native Metal values of the
+/// previous RGBA16 representation. Exercise reset, an independent crossing in
+/// each visibility quad, nonzero hold countdown and decay, and a final reset.
+#[test]
+fn scalar_hold_r16_matches_rgba16_history() {
+    let h = shared();
+    let device = &h.device;
+    let tracer = MetalShadowRayTracer::new(device);
+    let depth = make_depth_at(device, 0.5);
+    let normal = make_pass_through(device, 0.0, 1.0, 0.0, "scalar-hold-normal");
+    let irr = upload_irr(device, 0.3, 0.3, 0.3);
+    let sv_one = make_pass_through(device, 1.0, 1.0, 1.0, "scalar-hold-sv-one");
+    let sv_zero = make_pass_through(device, 0.0, 0.0, 0.0, "scalar-hold-sv-zero");
+    let sv2_one = make_pass_through(device, 1.0, 1.0, 1.0, "scalar-hold-sv2-one");
+    let sv2_zero = make_pass_through(device, 0.0, 0.0, 0.0, "scalar-hold-sv2-zero");
+    let svt = make_pass_through(device, 0.7, 0.4, 0.2, "scalar-hold-svt");
+    let refl = make_pass_through(device, 0.2, 0.1, 0.05, "scalar-hold-refl");
+    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    gi_materials_buf.zero_fill();
+    let obj_motion_buf = make_identity_obj_motion(device);
+    let mut compact = FullHistorySet::new(device);
+    let mut reference = FullHistorySet::with_hold_format(device, GpuTextureFormat::Rgba16Float);
+
+    let mut run_pair = |hi_sv: &GpuTexture,
+                        hi_sv2: &GpuTexture,
+                        reset: bool,
+                        flags: u32,
+                        label: &str|
+     -> [f32; 2] {
+        run_accumulate_frame(
+            device, &tracer, &irr, &depth, &normal, hi_sv, hi_sv2, &svt, &refl,
+            &mut compact, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, reset, flags,
+            &format!("{label}-r16"),
+        );
+        run_accumulate_frame(
+            device, &tracer, &irr, &depth, &normal, hi_sv, hi_sv2, &svt, &refl,
+            &mut reference, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, reset, flags,
+            &format!("{label}-rgba16"),
+        );
+        assert_history_parity(device, &compact, &reference, label)
+    };
+
+    // Reset and converge both independent visibility groups to 1.
+    let initial = run_pair(&sv_one, &sv2_one, true, 0, "scalar-hold-reset");
+    assert!(initial[0].abs() < 0.01 && initial[1].abs() < 0.01, "reset hold was not cleared: {initial:?}");
+    for frame in 0..12 {
+        run_pair(&sv_one, &sv2_one, false, 0, &format!("scalar-hold-warm-{frame}"));
+    }
+
+    // First quad crosses independently; its hold must arm while quad two stays
+    // at zero. The following frames prove the countdown is actually decaying.
+    let first_cross = run_pair(&sv_zero, &sv2_one, false, 0, "scalar-hold-sv-cross");
+    assert!(first_cross[0] > 3.5, "sv hold did not arm: {first_cross:?}");
+    assert!(first_cross[1].abs() < 0.01, "sv2 hold armed during sv-only crossing: {first_cross:?}");
+    let first_decay = run_pair(&sv_zero, &sv2_one, false, 0, "scalar-hold-sv-decay-1");
+    assert!(first_decay[0] > 0.0 && first_decay[0] < first_cross[0], "sv hold did not decay: {first_cross:?} -> {first_decay:?}");
+    for frame in 2..=4 {
+        let sample = run_pair(&sv_zero, &sv2_one, false, 0, &format!("scalar-hold-sv-decay-{frame}"));
+        assert!(sample[0].is_finite(), "sv hold became non-finite during decay");
+    }
+
+    // Re-reset before the second independent crossing so the two group proofs
+    // each start from a converged, nonzero visibility history.
+    run_pair(&sv_one, &sv2_one, true, 0, "scalar-hold-mid-reset");
+    for frame in 0..12 {
+        run_pair(&sv_one, &sv2_one, false, 0, &format!("scalar-hold-rewarm-{frame}"));
+    }
+    let second_cross = run_pair(&sv_one, &sv2_zero, false, 0, "scalar-hold-sv2-cross");
+    assert!(second_cross[1] > 3.5, "sv2 hold did not arm: {second_cross:?}");
+    assert!(second_cross[0].abs() < 0.01, "sv hold armed during sv2-only crossing: {second_cross:?}");
+    let second_decay = run_pair(&sv_one, &sv2_zero, false, 0, "scalar-hold-sv2-decay-1");
+    assert!(second_decay[1] > 0.0 && second_decay[1] < second_cross[1], "sv2 hold did not decay: {second_cross:?} -> {second_decay:?}");
+    for frame in 2..=4 {
+        let sample = run_pair(&sv_one, &sv2_zero, false, 0, &format!("scalar-hold-sv2-decay-{frame}"));
+        assert!(sample[1].is_finite(), "sv2 hold became non-finite during decay");
+    }
+
+    let final_reset = run_pair(&sv_one, &sv2_one, true, 0, "scalar-hold-final-reset");
+    assert!(final_reset[0].abs() < 0.01 && final_reset[1].abs() < 0.01, "final reset hold was not cleared: {final_reset:?}");
 }
 
 /// Read the moments texture's `.w` (accumulated history length) at the
