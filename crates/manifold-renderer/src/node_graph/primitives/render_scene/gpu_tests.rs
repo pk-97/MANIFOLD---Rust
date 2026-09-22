@@ -1063,9 +1063,49 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // First allocation resets.
         assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        let assert_history_pair = |pair: &[Option<manifold_gpu::GpuTexture>; 2], format| {
+            let textures: Vec<_> = pair.iter().flatten().collect();
+            assert_eq!(textures.len(), 2);
+            assert!(textures.iter().all(|texture| texture.format == format));
+            assert_ne!(textures[0].identity_key(), textures[1].identity_key());
+        };
+        use GpuTextureFormat::*;
+        assert_history_pair(&s.rt_irr_history, Rgba16Float);
+        assert_history_pair(&s.rt_refl_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_m1_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_m2_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_hold_history, R16Float);
+        assert_history_pair(&s.rt_sv2_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv2_m1_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv2_m2_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv2_hold_history, R16Float);
+        assert_history_pair(&s.rt_svt_history, Rgba16Float);
+        assert_history_pair(&s.rt_depth_history, R32Float);
+        assert_history_pair(&s.rt_normal_history, Rgba16Float);
+        assert_history_pair(&s.rt_moments_history, Rgba32Float);
+        let original_hold_textures: Vec<_> = s
+            .rt_sv_hold_history
+            .iter()
+            .chain(s.rt_sv2_hold_history.iter())
+            .filter_map(Option::as_ref)
+            .cloned()
+            .collect();
+        let original_hold_ids: Vec<_> = original_hold_textures
+            .iter()
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
         s.ensure_rt_masks(&device, 128, 128, 256, 256);
         // Same dims: no realloc, no reset.
         assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        let same_size_hold_ids: Vec<_> = s
+            .rt_sv_hold_history
+            .iter()
+            .chain(s.rt_sv2_hold_history.iter())
+            .filter_map(Option::as_ref)
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
+        assert_eq!(same_size_hold_ids, original_hold_ids, "same-size ensure must preserve R16 histories");
         // Tier flip (Half → Native at fixed canvas): trace dims change.
         assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
         assert_eq!(s.rt_irr_trace_w, 256);
@@ -1074,6 +1114,31 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
         assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
         assert_eq!(s.rt_irr_width, 257);
+        assert_history_pair(&s.rt_sv_hold_history, R16Float);
+        assert_history_pair(&s.rt_sv2_hold_history, R16Float);
+        for texture in s.rt_sv_hold_history.iter().flatten().chain(s.rt_sv2_hold_history.iter().flatten()) {
+            assert_eq!((texture.width, texture.height), (257, 257));
+        }
+        let resized_hold_ids: Vec<_> = s
+            .rt_sv_hold_history
+            .iter()
+            .chain(s.rt_sv2_hold_history.iter())
+            .filter_map(Option::as_ref)
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
+        assert!(resized_hold_ids.iter().all(|id| !original_hold_ids.contains(id)), "resize must replace R16 histories");
+        // R16Float has no compute clear pipeline; its render-target usage must
+        // keep the render-pass clear fallback usable for the reset sentinel.
+        let hold = s.rt_sv_hold_history[0].as_ref().expect("R16 hold history");
+        let bytes_per_row = 257 * 2;
+        let readback = device.create_buffer_shared(u64::from(257 * bytes_per_row));
+        let mut enc = device.create_encoder("rt-r16-history-clear-read");
+        enc.clear_texture(hold, 0.25, 0.0, 0.0, 0.0);
+        enc.copy_texture_to_buffer(hold, &readback, 257, 257, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("R16 history readback");
+        let values: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast(), (257 * 257) as usize) };
+        assert!((f16::from_bits(values[0]).to_f32() - 0.25).abs() < 0.01);
         // Masks guard follows the same dual-pair discipline.
         s.ensure_rt_masks(&device, 64, 64, 256, 256);
         assert_eq!(s.rt_mask_trace_w, 64);

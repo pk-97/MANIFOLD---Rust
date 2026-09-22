@@ -7035,6 +7035,25 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
+        // R16Float has no storage-texture clear pipeline. Keep the hold
+        // histories renderable so `clear_texture` can use its render-pass
+        // fallback for the reset sentinel while the accumulate kernel still
+        // writes them through the normal shader-write path.
+        let make_scalar_history = |w: u32, h: u32, label: &'static str| {
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::R16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::COPY_SRC,
+                label,
+                mip_levels: 1,
+            })
+        };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         // Lighting textures (irradiance, reflection, normal) at trace resolution.
         self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
@@ -7089,8 +7108,8 @@ impl RenderScene {
         ]
         .map(Some);
         self.rt_sv_hold_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
         ]
         .map(Some);
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
@@ -7111,13 +7130,13 @@ impl RenderScene {
         ]
         .map(Some);
         self.rt_sv2_hold_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
         // same lifecycle, reset rule, and ping clock as rt_irr_history.
-        // Full res, Rgba16Float (same as every other history pair).
+        // Full res, Rgba16Float (the scalar hold pairs are R16Float).
         self.rt_svt_history = [
             make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
             make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
