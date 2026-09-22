@@ -1315,6 +1315,33 @@ temporal state.
 
 ### 15.2 Decisions
 
+**2026-09-22 contract correction (BUG-dl16):** `RenderScene::frame_preliminaries`
+must collect the first eight shadow-enabled lights in wired order, using
+`MAX_RT_CASTERS`, and preserve those compacted IDs for RT masks and surface
+shading. Raster map allocation, drawing and the caster matrix table use only
+the first `MAX_RASTER_SHADOW_CASTERS` (four). Raster surface and shaft consumers
+return unshadowed visibility for slots beyond that table before indexing it,
+including when RT is disabled, not ready, or its shadow term is off. All wired
+lights still illuminate beyond either shadow budget. This repairs RS2's
+incomplete integration; it does not raise either budget. Tests must retain the
+preceding shadow-enabled lights when asserting a particular compacted slot:
+enabling shadows only on light index 5 exercises slot 0, not slot 5.
+
+Both modes share the surface light interpretation: Sun direction is constant;
+Point direction points from the surface toward the light position, with
+`1 / (1 + distance_squared / range_squared)` attenuation, as defined by
+`Light::light_dir_at` and `Light::attenuation_at`. RT supplies visibility to
+that surface calculation. The existing sun-only secondary-bounce lighting in
+`sun_bounce_at_hit` is unchanged; adding point-light bounce sampling is separate
+work, not a consequence of fixing direct light interpretation.
+
+Enforcement: `rt_6caster_shadow::caster_contract_*` covers actual slots 0, 3,
+4–7, sparse light indices, overflow and live RT/shadow toggles. Dark preceding
+casters have a different visibility result, so reading the wrong channel cannot
+pass. `render_scene_lights::light_contract_point_position_aim_range_and_sun_controls`
+checks the shared surface-light meaning across material paths, with a live RT
+dispatch check. No whole-project performance or displayed-image result is implied.
+
 - **RS1 — two mechanisms for two different gaps, not one ReSTIR.**
   Analytic lights and emissive geometry are different problems at
   MANIFOLD's scales and get different answers (RS2, RS3). Rejected: one
@@ -1327,7 +1354,7 @@ temporal state.
   deterministic per-caster rays are strictly better than sampling at these
   counts — zero variance, zero MIS, zero clamp machinery. Cost: 0–4 extra
   shadow rays per trace texel, only on scenes that actually wire >4
-  casters. `MAX_SHADOW_CASTING_LIGHTS` (the raster shadow-map path) stays
+  casters. `MAX_RASTER_SHADOW_CASTERS` (the raster shadow-map path) stays
   4 — non-RT scenes are untouched; the raster/RT coverage divergence
   widens from "RT shadows better" to "RT shadows more", same direction as
   every RT term so far. Un-suppression trigger for >8: a real show project

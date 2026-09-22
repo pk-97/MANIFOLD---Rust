@@ -486,7 +486,7 @@
         shadow_enc.commit_and_wait_completed();
 
         let bias = light.shadow_bias;
-        let mut caster_table: Vec<[f32; 4]> = vec![[0.0f32; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
+        let mut caster_table: Vec<[f32; 4]> = vec![[0.0f32; 4]; MAX_RASTER_SHADOW_CASTERS * CASTER_VEC4_STRIDE];
         caster_table[0] = vp[0];
         caster_table[1] = vp[1];
         caster_table[2] = vp[2];
