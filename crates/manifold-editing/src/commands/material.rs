@@ -208,6 +208,9 @@ fn validate_graph_ownership(
             )?;
             if context.kind == MaterialEditKind::Look
                 && matches!(param.as_str(), "metallic" | "roughness")
+                // Restoring authored factors preserves the mapped material's
+                // original response; stylized look overrides remain blocked.
+                && change.value != slot.spec.default_value
             {
                 look_writes_metallic_roughness = true;
             }
@@ -370,7 +373,9 @@ fn validate_descriptor_identity(
     if (binding.scale - 1.0).abs() > EPSILON || binding.offset.abs() > EPSILON {
         return Err(format!("parameter {id} uses a custom binding calibration"));
     }
-    let expected = if matches!(role, MaterialParamRole::FeatureMode(_)) {
+    let expected = if spec.is_toggle {
+        ParamConvert::BoolThreshold
+    } else if matches!(role, MaterialParamRole::FeatureMode(_)) || !spec.value_labels.is_empty() {
         ParamConvert::EnumRound
     } else {
         ParamConvert::Float

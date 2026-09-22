@@ -1,11 +1,23 @@
 //! Starter looks change existing factors through the material batch command.
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::effects::PresetInstance;
+use manifold_core::material_inspector::MaterialParamRole;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_ui::panels::actions::{MaterialLook, MaterialParamWrite};
 
+const FEATURE_MODE_PARAMS: &[&str] = &[
+    "coat_mode",
+    "iridescence_mode",
+    "emission_mode",
+    "glass_mode",
+    "sheen_mode",
+    "anisotropy_mode",
+    "translucency_mode",
+];
+
 pub(super) fn recipe(look: MaterialLook) -> &'static [(&'static str, f32)] {
     match look {
+        MaterialLook::Default => &[],
         MaterialLook::Matte => &[("metallic", 0.0), ("roughness", 0.8)],
         MaterialLook::Coated => &[
             ("metallic", 0.0),
@@ -30,6 +42,47 @@ pub(super) fn recipe(look: MaterialLook) -> &'static [(&'static str, f32)] {
     }
 }
 
+fn is_material_factor(role: Option<MaterialParamRole>) -> bool {
+    matches!(
+        role,
+        Some(
+            MaterialParamRole::Scalar(_)
+                | MaterialParamRole::Colour(..)
+                | MaterialParamRole::FeatureMode(_)
+        )
+    )
+}
+
+fn default_factor_params(
+    meta: &manifold_core::effect_graph_def::PresetMetadata,
+    material: &SceneNodeRef,
+) -> Result<Vec<String>, String> {
+    let material_roles =
+        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material");
+    let mut params = Vec::new();
+    for binding in meta.bindings.iter().filter(|binding| {
+        matches!(
+            &binding.target,
+            BindingTarget::Node { node_id, .. } if node_id == &material.node
+        )
+    }) {
+        let BindingTarget::Node { param, .. } = &binding.target else {
+            unreachable!()
+        };
+        let role = material_roles
+            .iter()
+            .find(|entry| entry.name.as_str() == param.as_str())
+            .and_then(|entry| entry.material_role);
+        if is_material_factor(role) && !params.iter().any(|name| name == param) {
+            params.push(param.clone());
+        }
+    }
+    if params.is_empty() {
+        return Err("Material has no exposed factor parameters".to_owned());
+    }
+    Ok(params)
+}
+
 pub(super) fn writes(
     inst: &PresetInstance,
     def: &EffectGraphDef,
@@ -40,28 +93,47 @@ pub(super) fn writes(
         .preset_metadata
         .as_ref()
         .ok_or("Material has no parameter bindings")?;
-    let mut factors = vec![
-        ("coat_mode", 1.0),
-        ("iridescence_mode", 1.0),
-        ("emission_mode", 1.0),
-        ("glass_mode", 1.0),
-        ("sheen_mode", 1.0),
-        ("anisotropy_mode", 1.0),
-        ("translucency_mode", 1.0),
-    ];
-    for &(name, value) in recipe(look) {
-        if let Some(pair) = factors.iter_mut().find(|(n, _)| *n == name) {
+    let mut factors: Vec<(String, f32)> = if matches!(look, MaterialLook::Default) {
+        default_factor_params(meta, material)?
+            .into_iter()
+            .map(|name| (name, 0.0))
+            .collect()
+    } else {
+        FEATURE_MODE_PARAMS
+            .iter()
+            .map(|&name| (name.to_owned(), 1.0))
+            .collect()
+    };
+    let recipe = recipe(look);
+    for &(name, value) in recipe {
+        if let Some(pair) = factors.iter_mut().find(|(n, _)| n.as_str() == name) {
             pair.1 = value;
         } else {
-            factors.push((name, value));
+            factors.push((name.to_owned(), value));
         }
     }
     factors.into_iter().map(|(param,value)| {
+        // Imports also expose shared scene controls (such as Ambient) to
+        // the same node input. Default restores the material's own stamp.
+        let prefer_authored = matches!(look, MaterialLook::Default)
+            && meta.bindings.iter().any(|binding| binding.default_mirrors_node_param
+                && matches!(&binding.target, BindingTarget::Node { node_id, param: p }
+                    if *node_id == material.node && p == &param));
         let mut found = meta.bindings.iter().filter(|binding|
-            matches!(&binding.target,BindingTarget::Node {node_id,param:p} if *node_id == material.node && p == param));
+            (!prefer_authored || binding.default_mirrors_node_param)
+                && matches!(&binding.target,BindingTarget::Node {node_id,param:p} if *node_id == material.node && p == &param));
         let binding = found.next().ok_or_else(|| format!("Material parameter {param} is not exposed"))?;
         if found.next().is_some() { return Err(format!("Material parameter {param} has ambiguous bindings")); }
         if !inst.params.contains(&binding.id) { return Err(format!("Material parameter {param} is unavailable")); }
+        let value = if matches!(look, MaterialLook::Default) {
+            meta.params
+                .iter()
+                .find(|spec| spec.id == binding.id)
+                .map(|spec| spec.default_value)
+                .ok_or_else(|| format!("Material parameter {param} has no parameter spec"))?
+        } else {
+            value
+        };
         Ok(MaterialParamWrite { param_id: binding.id.clone().into(), value })
     }).collect()
 }
@@ -69,7 +141,9 @@ pub(super) fn writes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
+    use manifold_core::effect_graph_def::{
+        EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+    };
     use manifold_core::effects::ParameterDriver;
     use manifold_core::id::NodeId;
     use manifold_core::project::Project;
@@ -264,6 +338,48 @@ mod tests {
         )
     }
 
+    fn set_authored_default(fixture: &mut MaterialFixture, name: &str, value: f32) {
+        let material = fixture.material.clone();
+        fixture
+            .project
+            .with_preset_graph_mut(&fixture.target, |instance| {
+                let graph = instance.graph.as_mut().unwrap();
+                graph
+                    .nodes
+                    .iter_mut()
+                    .find(|node| node.node_id == material.node)
+                    .unwrap()
+                    .params
+                    .insert(name.to_owned(), SerializedParamValue::Float { value });
+                let metadata = graph.preset_metadata.as_mut().unwrap();
+                let binding = metadata
+                    .bindings
+                    .iter_mut()
+                    .find(|binding| {
+                        matches!(
+                            &binding.target,
+                            BindingTarget::Node { node_id, param }
+                                if node_id == &material.node && param == name
+                        )
+                    })
+                    .unwrap();
+                binding.default_value = value;
+                let binding_id = binding.id.clone();
+                metadata
+                    .params
+                    .iter_mut()
+                    .find(|spec| spec.id == binding_id)
+                    .unwrap()
+                    .default_value = value;
+                instance
+                    .params
+                    .get_mut(&binding_id)
+                    .unwrap()
+                    .spec
+                    .default_value = value;
+            });
+    }
+
     fn assert_look_result(look: MaterialLook) {
         let mut fixture = physics_solids_fixture();
         let before_graph = serde_json::to_string(
@@ -294,7 +410,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut service = EditingService::new();
         service.execute(Box::new(command), &mut fixture.project);
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         let after = fixture.project.preset_instance(&fixture.target).unwrap();
         for change in &changes {
             assert_eq!(after.get_base_param(&change.param_id), change.value);
@@ -369,7 +485,7 @@ mod tests {
             )),
             &mut fixture.project,
         );
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         assert!(changes.iter().all(|change| {
             fixture
                 .project
@@ -404,6 +520,164 @@ mod tests {
         ] {
             assert_look_result(look);
         }
+    }
+
+    #[test]
+    fn material_inspector_default_restores_authored_material_baseline() {
+        let mut fixture = physics_solids_fixture();
+        let authored_defaults = [
+            ("metallic", 0.23),
+            ("roughness", 0.67),
+            ("color_r", 0.19),
+            ("color_g", 0.37),
+            ("color_b", 0.83),
+            ("color_a", 0.71),
+            ("alpha_cutoff", 0.42),
+            ("clearcoat", 0.41),
+            ("clearcoat_roughness", 0.17),
+            ("anisotropy_strength", 0.29),
+            ("transmission", 0.38),
+            ("ior", 1.33),
+        ];
+        let material = fixture.material.clone();
+        for &(name, default_value) in &authored_defaults {
+            set_authored_default(&mut fixture, name, default_value);
+        }
+        let saved = serde_json::to_string(&fixture.project).unwrap();
+        fixture.project = serde_json::from_str(&saved).unwrap();
+        fixture
+            .project
+            .with_preset_graph_mut(&fixture.target, |instance| {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(
+                    instance.graph.as_mut().unwrap(),
+                );
+            });
+        fixture.project.reconcile_param_manifests();
+
+        let (coated_command, _) = build_command(&fixture, MaterialLook::Coated);
+        let mut service = EditingService::new();
+        service.execute(Box::new(coated_command), &mut fixture.project);
+        assert_eq!(service.take_rejection(), None);
+
+        let (default_command, default_changes) = build_command(&fixture, MaterialLook::Default);
+        service.execute(Box::new(default_command), &mut fixture.project);
+        assert_eq!(service.take_rejection(), None);
+        let restored = fixture.project.preset_instance(&fixture.target).unwrap();
+        let metadata = restored
+            .graph
+            .as_ref()
+            .unwrap()
+            .preset_metadata
+            .as_ref()
+            .unwrap();
+        for &(name, expected) in &authored_defaults {
+            let binding = metadata
+                .bindings
+                .iter()
+                .find(|binding| {
+                    matches!(
+                        &binding.target,
+                        BindingTarget::Node { node_id, param }
+                            if node_id == &material.node && param == name
+                    )
+                })
+                .unwrap();
+            assert_eq!(
+                restored.get_base_param(&binding.id),
+                expected
+            );
+        }
+        for change in &default_changes {
+            let expected = metadata
+                .params
+                .iter()
+                .find(|spec| spec.id == change.param_id.as_ref())
+                .unwrap()
+                .default_value;
+            assert_eq!(restored.get_base_param(&change.param_id), expected);
+        }
+
+        assert!(service.undo(&mut fixture.project));
+        let coated = fixture.project.preset_instance(&fixture.target).unwrap();
+        for &(name, value) in recipe(MaterialLook::Coated) {
+            let id = coated
+                .graph
+                .as_ref()
+                .unwrap()
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings
+                .iter()
+                .find(|binding| {
+                    matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &material.node && param == name)
+                })
+                .unwrap()
+                .id
+                .clone();
+            assert_eq!(coated.get_base_param(&id), value);
+        }
+        assert!(service.redo(&mut fixture.project));
+        let redone = fixture.project.preset_instance(&fixture.target).unwrap();
+        for change in &default_changes {
+            let expected = redone
+                .graph
+                .as_ref()
+                .unwrap()
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .params
+                .iter()
+                .find(|spec| spec.id == change.param_id.as_ref())
+                .unwrap()
+                .default_value;
+            assert_eq!(redone.get_base_param(&change.param_id), expected);
+        }
+    }
+
+    #[test]
+    fn material_inspector_default_restores_authored_baseline_with_mr_map() {
+        let mut fixture = physics_solids_fixture();
+        add_selected_map_source(&mut fixture, "node.gltf_texture_source", "mr_map");
+        let authored_defaults = [("metallic", 0.23), ("roughness", 0.67)];
+        for &(name, default_value) in &authored_defaults {
+            set_authored_default(&mut fixture, name, default_value);
+        }
+        let before_graph = serde_json::to_string(
+            &fixture
+                .project
+                .preset_instance(&fixture.target)
+                .unwrap()
+                .graph,
+        )
+        .unwrap();
+
+        let (command, changes) = build_command(&fixture, MaterialLook::Default);
+        let mut service = EditingService::new();
+        service.execute(Box::new(command), &mut fixture.project);
+        assert_eq!(service.take_rejection(), None);
+        let after = fixture.project.preset_instance(&fixture.target).unwrap();
+        for change in changes {
+            let expected = after
+                .graph
+                .as_ref()
+                .unwrap()
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .params
+                .iter()
+                .find(|spec| spec.id == change.param_id.as_ref())
+                .unwrap()
+                .default_value;
+            assert_eq!(after.get_base_param(&change.param_id), expected);
+        }
+        assert_eq!(
+            serde_json::to_string(&after.graph).unwrap(),
+            before_graph,
+            "Default only changes bound-slot bases"
+        );
     }
 
     #[test]

@@ -636,9 +636,11 @@ impl ScenePanel {
             );
         }
 
-        // Trigger parameters use the same momentary button and ParamFire
-        // dispatch as generator cards; a numeric slider cannot fire Reset.
-        if info.spec.is_trigger {
+        // Boolean and trigger parameters use the shared button/dispatch path.
+        if info.spec.is_toggle || info.spec.is_trigger {
+            info.spec.default = self.properties_card.last_pushed_values.get(slot)
+                .copied().filter(|value| !value.is_nan())
+                .unwrap_or(self.properties_card.current_values[slot]);
             let row = build_toggle_trigger_row(
                 tree,
                 Some(self.content_parent),
@@ -1080,18 +1082,23 @@ impl ScenePanel {
         }
         if info.shared_object_count.is_some() {
             let looks = [
+                (MaterialLook::Default, "Default", 4_u64),
                 (MaterialLook::Matte, "Matte", 0_u64),
                 (MaterialLook::Coated, "Coated", 1_u64),
                 (MaterialLook::BrushedMetal, "Brushed Metal", 2_u64),
                 (MaterialLook::Glass, "Glass", 3_u64),
             ];
             let gap = ROW_GAP;
-            let button_w = ((inner_w - gap * 3.0) / 4.0).max(0.0);
-            for (look, label, offset) in looks {
+            let min_button_w = looks.iter().map(|(_, label, _)| {
+                tree.text_width(label, btn_style().font_size, crate::node::FontWeight::Regular) + 2.0 * GAP
+            }).fold(0.0_f32, f32::max);
+            let columns = (((inner_w + gap) / (min_button_w + gap)).floor() as usize).clamp(1, looks.len());
+            let button_w = ((inner_w - gap * (columns - 1) as f32) / columns as f32).max(0.0);
+            for (position, (look, label, offset)) in looks.into_iter().enumerate() {
                 let id = tree.add_button_keyed(
                     Some(self.content_parent),
-                    inner_x + offset as f32 * (button_w + gap),
-                    cy,
+                    inner_x + (position % columns) as f32 * (button_w + gap),
+                    cy + (position / columns) as f32 * (ROW_H + gap),
                     button_w,
                     ROW_H,
                     btn_style(),
@@ -1101,6 +1108,7 @@ impl ScenePanel {
                 self.material_look_ids
                     .push((id, look, info.object.clone(), info.material.clone()));
             }
+            cy += (looks.len().div_ceil(columns) - 1) as f32 * (ROW_H + gap);
         } else {
             tree.add_label(
                 Some(self.content_parent),

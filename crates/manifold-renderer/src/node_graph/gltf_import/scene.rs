@@ -255,7 +255,7 @@ pub(super) fn build_import_graph(
     // arbitrary imported model). f_stop stays at its neutral 32 (top of the
     // slider band — the old 1000 seed sat outside it and the stamper's
     // range-widen stretched every f-stop slider to 0.5–1000; "DoF off" is
-    // bokeh's enabled toggle, seeded off in the tail, not an f-stop value);
+    // bokeh's enabled toggle, not an f-stop value);
     // shutter_angle defaults to 180 per Peter's P4 amendment of D1 — fresh
     // imports smear motion by default (shutter 0 is the exact pass-through).
     let lens_id = fresh_id();

@@ -36,12 +36,8 @@ pub(super) struct CinematicTail {
 
 /// Build the DoF group + motion_blur node with neutral lens-era params
 /// (CoC/bokeh `max_radius` = 24, `max_blur_px` = 32 — the CinematicScene
-/// values), bokeh `enabled = false` (2026-08-27: "DoF off" is the labeled
-/// toggle, OFF by default — no magic big f-stop. The old f/1000-then-f/32
-/// neutral seeds failed two ways: 1000 sat outside the slider band and the
-/// stamper's widen stretched every f-stop slider to fit; 32 blurs visibly
-/// on close-up scenes. Off-by-default also preserves every pre-tail
-/// project's look). The caller wires the shared lens in, so depth-of-field
+/// values), with bokeh enabled by default. Existing projects retain their
+/// saved enabled value. The caller wires the shared lens in, so depth-of-field
 /// and shutter read the SAME lens the exposure and FOV card knob surface.
 ///
 /// `scene_radius` is the imported bbox bounding-sphere radius (BUG-bdwd):
@@ -77,7 +73,7 @@ pub(super) fn build_cinematic_tail(
     let bokeh_id = fresh_id();
     let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
     bokeh_node.params.insert("max_radius".to_string(), float(24.0));
-    bokeh_node.params.insert("enabled".to_string(), super::assembly::bool_val(false));
+    bokeh_node.params.insert("enabled".to_string(), super::assembly::bool_val(true));
     let bokeh_params = bokeh_node.params.clone();
     dof_nodes.push(bokeh_node);
     let dof_out_id = fresh_id();

@@ -34,6 +34,7 @@ pub enum AutomationShape {
 /// Named starter looks. The app owns their numeric recipe and validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialLook {
+    Default,
     Matte,
     Coated,
     BrushedMetal,

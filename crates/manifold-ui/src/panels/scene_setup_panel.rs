@@ -47,7 +47,7 @@ use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
     ROW_ROLE_SECTION_HEADER, ROW_ROLE_TOGGLE, param_row_key_base,
-    build_toggle_trigger_row, ToggleParamIds,
+    build_toggle_trigger_row, toggle_btn_style, ToggleParamIds,
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ModifierObjectRef,
@@ -1201,8 +1201,16 @@ impl ScenePanel {
             card.current_values[i] = value;
             if value != prev || prev.is_nan() {
                 card.last_pushed_values[i] = value;
-                card.row_host
-                    .push_slider_value(tree, i, value, &card.rows[i].spec, None);
+                if card.rows[i].spec.is_toggle {
+                    if let Some(ids) = &card.row_host.toggle_ids[i] {
+                        let on = value > 0.5;
+                        tree.set_style(ids.button_id, toggle_btn_style(on));
+                        tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
+                    }
+                } else {
+                    card.row_host
+                        .push_slider_value(tree, i, value, &card.rows[i].spec, None);
+                }
             }
             if let Some(c) = card.row_value_synced.get_mut(i) {
                 *c = true;

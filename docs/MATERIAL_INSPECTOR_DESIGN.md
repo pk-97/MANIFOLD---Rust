@@ -1,6 +1,6 @@
 # Material inspector — understandable surface authoring
 
-**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, RGB gestures and atomic looks. Scene-panel UX revision: graph-only UV/sampling, always-visible RGB channels, inline hex editing, stable feature presence, continuous sliders and enable controls first in each feature section.
+**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, RGB gestures and atomic looks. Scene-panel UX revision: graph-only UV/sampling, always-visible RGB channels, inline hex editing, stable feature presence, continuous sliders and enable controls first in each feature section, shared boolean buttons and a Default look restoring the original model material.
 Lifecycle: contract — defines the live material inspector’s feature modes, texture ownership, compound edits and compatibility invariants.
 **Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
@@ -63,7 +63,7 @@ These were source-backed audit findings. The implementation preserves MR replace
 
 **D6 — Always-visible RGB and editable hex.** Colour groups show the hex value and all three scalar sliders whenever their containing section is expanded. The hex field opens inline text entry on a single click; it is not a disclosure control. Hex commits and RGB drags reuse the three existing ParamIds and atomic RGB scrub/undo path. Every slider previews continuously; release completes one undo step. Feature modes use explicit buttons at the top of their sections, before all parameter sliders, and cannot be dragged as numeric sliders.
 
-**D7 — Looks are small, atomic factor recipes.** Ship Matte, Coated and Brushed Metal first; Glass waits for its prerequisites. They preserve base colour, opacity mode, maps, UVs, samplers, Baked Look and object gain. No preset instance, material-library file format or procedural graph is introduced. A recipe is blocked if a changed target is wire-driven, modulated/automated/mapped, fan-out-bound beyond this material, texture-owned, or temporarily owned by emissive Skin. Reject the whole change with named conflicts; never partially apply a named look.
+**D7 — Looks are small, atomic factor recipes.** Ship Matte, Coated and Brushed Metal first; Glass waits for its prerequisites. These styled recipes preserve base colour, opacity mode, maps, UVs, samplers, Baked Look and object gain. Default restores the original model’s exposed material factors (including colour, opacity and feature modes) from authored defaults while retaining maps, UVs, samplers and object gain. Restoring original metallic/roughness factors remains available when an MR map is attached. Default prefers bindings that mirror the material node defaults over shared scene aliases such as Ambient, preserving those scene controls. No preset instance, material-library file format or procedural graph is introduced. A recipe is blocked if a changed target is wire-driven, modulated/automated/mapped, fan-out-bound beyond this material, texture-owned, or temporarily owned by emissive Skin. Reject the whole change with named conflicts; never partially apply a named look.
 
 **D8 — Preserve arbitrary UV matrices.** The six existing affine values remain authoritative on graph nodes. Removing the Scene dock placement widget does not decompose, rewrite, reset or migrate those values.
 
@@ -242,10 +242,11 @@ The app exhaustively adapts the UI edit-kind enum to the editing enum. The UI re
 
 The Scene dock does not build placement or sampling controls. The former local-preview/release-only affine widget is removed. The graph retains all original scalar parameters and values.
 
-Implement starter looks as an app-owned static recipe table in `ui_bridge/material_looks.rs`, patterned after the existing `crates/manifold-core/src/scene_modifier_preset.rs` recipe approach. Identify targets through the material node's existing bindings; numeric values below are recipe values, not a second descriptor catalog. Looks set only their listed feature modes. Preserve feature subsettings not listed.
+Implement starter looks as an app-owned static recipe table in `ui_bridge/material_looks.rs`, patterned after the existing `crates/manifold-core/src/scene_modifier_preset.rs` recipe approach. Identify targets through the material node's existing bindings; numeric values below are recipe values, not a second descriptor catalog. Styled looks turn unlisted features Off and set their listed factors; feature subsettings not listed remain intact. Default restores all exposed material factor defaults from the model.
 
 | Look | Writes in addition to modes |
 |---|---|
+| Default | Restore the original model's exposed material factor defaults, including colours and opacity; preserve texture connections, UVs and samplers. |
 | Matte | metallic 0; roughness 0.8 |
 | Coated | metallic 0; roughness 0.35; Coat On; clearcoat 1; clearcoat_roughness 0.1 |
 | Brushed Metal | metallic 1; roughness 0.3; Anisotropy On; anisotropy_strength 0.6 |
