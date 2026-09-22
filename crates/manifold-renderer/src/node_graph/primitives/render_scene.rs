@@ -25,7 +25,7 @@
 //! antialiasing the cutout edges.
 //!
 //! Per docs/REALTIME_3D_DESIGN.md section 5 P2 (shipped): shadow maps for the
-//! first `MAX_SHADOW_CASTING_LIGHTS` lights whose `cast_shadows` is set (in
+//! first `MAX_RASTER_SHADOW_CASTERS` lights whose `cast_shadows` is set (in
 //! slot order) — one depth-only pre-pass per caster into a private
 //! `Depth32Float` map, consumed by PCF (`textureSampleCompareLevel`) in the
 //! lit fragment shaders; lights past the caster cap still illuminate. No
@@ -149,19 +149,15 @@ const MSAA_SAMPLES: u32 = 4;
 pub(crate) const OBJECT_SAFETY_MAX: u32 = 1024;
 /// Soft upper bound for the `lights` slider — NOT a structural cap. Lights
 /// ride a runtime-sized `array<vec4<f32>>` storage buffer at `@binding(8)`
-/// (two vec4s per light), so nothing in the shader or the ABI limits the
-/// count; each light gets its own dynamic `light_N` port. 64 lights ×
-/// 32 B = 2 KB, half the Metal `setBytes` ceiling of 4 KB. HARD CEILING:
-/// `setBytes` caps at 4 KB = 127 lights — do NOT raise this past 127
-/// without first switching the `@binding(8)` arm from `GpuBinding::Bytes`
-/// to a pooled `GpuBuffer` (docs/RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md
-/// section 6).
+/// (three vec4s per light, shared with the shaft light layout). The existing
+/// storage-buffer ring grows with the actual light count; this is only an
+/// editor range, not a buffer or shadow-caster limit.
 const LIGHT_SLIDER_MAX: u32 = 64;
 
 const DEFAULT_OBJECTS: u32 = 2;
 const DEFAULT_LIGHTS: u32 = 1;
 
-/// Shadow-caster cap (REALTIME_3D_DESIGN D4, F2 amendment). Shadow maps are
+/// Raster shadow-map cap (REALTIME_3D_DESIGN D4, F2 amendment). Maps are
 /// honoured for the first `K` lights *in slot order* whose
 /// `cast_shadows == true`; lights beyond the first `K` casters still
 /// illuminate the scene, they just cast no shadow. This is a SEPARATE,
@@ -169,7 +165,9 @@ const DEFAULT_LIGHTS: u32 = 1;
 /// worst case at `objects × K` shadow-depth draws (64 × 4 = 256), not
 /// `objects × lights`. Bumpable like any cap — the shader's caster table
 /// (`@binding(9)`) and shadow-map bindings (`@binding(10..)`) size to it.
-pub(crate) const MAX_SHADOW_CASTING_LIGHTS: usize = 4;
+pub(crate) const MAX_RASTER_SHADOW_CASTERS: usize = 4;
+const LIGHT_VEC4_STRIDE: usize = 3;
+const _: () = assert!(MAX_RASTER_SHADOW_CASTERS <= manifold_gpu::raytrace::MAX_RT_CASTERS);
 
 /// Ring depth for the per-frame light storage buffer. The content thread is
 /// triple-buffered and its tick loop waits on the surface from ~2 frames ago
@@ -182,7 +180,7 @@ pub(crate) const MAX_SHADOW_CASTING_LIGHTS: usize = 4;
 const FRAMES_IN_FLIGHT: usize = 3;
 
 /// Per-caster shadow metadata, packed as 5 `vec4<f32>` into the
-/// `@binding(9)` caster table (`MAX_SHADOW_CASTING_LIGHTS` slots, always
+/// `@binding(9)` caster table (`MAX_RASTER_SHADOW_CASTERS` slots, always
 /// bound). Columns 0–3 are the light's `shadow_view_proj`; the 5th vec4 is
 /// `(bias, kernel_half_width, texel_size, light_size)` — `light_size` is
 /// the D12/PCSS spare `.w` (REALTIME_3D_DESIGN section 11): zero for the fixed
@@ -330,7 +328,7 @@ const FIREFLY_ABS_FLOOR_MIN: f32 = 4.0;
 /// roughness 0 (mip 0, base resolution) to roughness 1 (the last mip,
 /// 16×8) — a fixed, compile-time-shared constant with
 /// `render_scene.wgsl`'s `PREFILTER_MAX_MIP` (same discipline as
-/// `MAX_SHADOW_CASTING_LIGHTS`/`CASTER_STRIDE` staying in sync across the
+/// `MAX_RASTER_SHADOW_CASTERS`/`CASTER_STRIDE` staying in sync across the
 /// Rust/WGSL boundary).
 const PREFILTER_BASE_WIDTH: u32 = 512;
 const PREFILTER_BASE_HEIGHT: u32 = 256;
@@ -937,7 +935,7 @@ pub struct RenderScene {
     /// Per-caster private shadow maps, cached `(resolution, texture)`;
     /// recreated when a caster's `shadow_resolution` changes. Created
     /// `RENDER_TARGET | SHADER_READ` (AGX 0x78 guard).
-    shadow_maps: [Option<(u32, manifold_gpu::GpuTexture)>; MAX_SHADOW_CASTING_LIGHTS],
+    shadow_maps: [Option<(u32, manifold_gpu::GpuTexture)>; MAX_RASTER_SHADOW_CASTERS],
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — per-caster shadow
     /// dirty-check key (a 64-bit hash of everything the shadow pass reads
     /// for that caster this frame — see the shadow loop below for the exact
@@ -947,7 +945,7 @@ pub struct RenderScene {
     /// mismatch — including a `None` on the first frame — falls through to
     /// a real render and stores the new key; never served on a partial
     /// match).
-    shadow_cache_keys: [Option<u64>; MAX_SHADOW_CASTING_LIGHTS],
+    shadow_cache_keys: [Option<u64>; MAX_RASTER_SHADOW_CASTERS],
     /// PCF comparison sampler (`compare = Less`).
     shadow_sampler: Option<manifold_gpu::GpuSampler>,
     /// 1×1 `Depth32Float` (`SHADER_READ`) bound to unused/non-caster
@@ -2383,7 +2381,7 @@ impl RenderScene {
             self.ensure_shadow_binding_stubs(gpu.device);
             if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
                 self.ensure_shadow_pass(gpu.device);
-                for (slot, l) in casters.iter().enumerate() {
+                for (slot, l) in casters.iter().take(MAX_RASTER_SHADOW_CASTERS).enumerate() {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
                 }
             } else if has_transmission || rt_enabled {
@@ -2556,7 +2554,7 @@ impl RenderScene {
                 opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
-            for (slot, l) in casters.iter().enumerate() {
+            for (slot, l) in casters.iter().take(MAX_RASTER_SHADOW_CASTERS).enumerate() {
                 let Some((_, shadow_map)) = self.shadow_maps[slot].as_ref() else {
                     continue;
                 };
@@ -3772,7 +3770,7 @@ impl RenderScene {
                 // with no full bounding-box tracked); slot -1 (unshadowed
                 // glow — this pseudo-light has no shadow-map caster, the
                 // same honest-cost fallback every Point light beyond
-                // `MAX_SHADOW_CASTING_LIGHTS` already uses). Gated on
+                // `MAX_RASTER_SHADOW_CASTERS` already uses). Gated on
                 // `rt_ready` (this `if` block) rather than `rt_enabled`
                 // alone: an RT-enabled scene whose accel isn't ready yet
                 // has no GI-gathered emissive term either, so gating the
@@ -3970,7 +3968,7 @@ impl RenderScene {
         // texture. Hand-unrolled for K=4 (WGSL has no dynamic texture-binding
         // indexing); the assert trips if K changes and this list doesn't.
         const _: () = assert!(
-            MAX_SHADOW_CASTING_LIGHTS == 4,
+            MAX_RASTER_SHADOW_CASTERS == 4,
             "shadow-map bindings @10..13 + shader switch are hand-unrolled for K=4"
         );
         let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
@@ -4612,7 +4610,7 @@ impl RenderScene {
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
         let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         const _: () = assert!(
-            MAX_SHADOW_CASTING_LIGHTS == 4,
+            MAX_RASTER_SHADOW_CASTERS == 4,
             "shadow-map bindings + shader switch are hand-unrolled for K=4"
         );
         let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
@@ -5369,20 +5367,15 @@ impl RenderScene {
         // exactly as today, byte-identical to no render_mode input.
         let render_mode = ctx.inputs.render_mode("render_mode").unwrap_or_default();
 
-        // Build the shared lights buffer from whichever light_N ports are
-        // actually wired (unwired slots simply don't contribute — 0 lights
-        // is a valid scene state, matched by ambient + emission only). Two
-        // vec4s per light. As lights are collected, the first
-        // `MAX_SHADOW_CASTING_LIGHTS` of them whose `cast_shadows` is set
-        // (in slot order — D4/F2) are recorded as shadow casters; each
-        // caster's light-space matrix + PCF params go into the caster table
-        // below, and its slot index rides the previously-unused `.w` of the
-        // light's colour vec4 (−1.0 = not a caster). Lights beyond the cap
-        // still illuminate; they simply carry slot −1 and cast no shadow.
-        let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * 2);
+        // One light interpretation for surfaces and shafts: position/direction
+        // plus mode, premultiplied colour plus caster slot, and range. Keep
+        // stable compacted caster IDs through the RT budget; raster consumers
+        // use only its first MAX_RASTER_SHADOW_CASTERS entries. Lights beyond
+        // either shadow budget still contribute direct illumination.
+        let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * LIGHT_VEC4_STRIDE);
         let mut light_count: u32 = 0;
         let mut casters: Vec<crate::node_graph::light::Light> =
-            Vec::with_capacity(MAX_SHADOW_CASTING_LIGHTS);
+            Vec::with_capacity(manifold_gpu::raytrace::MAX_RT_CASTERS);
         // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
         // Point) contributes to the march — 3-vec4-per-light packing,
         // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
@@ -5400,15 +5393,13 @@ impl RenderScene {
         for i in 0..lights_n {
             let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
             if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
-                let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
+                let slot: f32 = if l.cast_shadows && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
                     let s = casters.len() as f32;
                     casters.push(l);
                     s
                 } else {
                     -1.0
                 };
-                light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
-                light_data.push([l.color[0], l.color[1], l.color[2], slot]);
                 light_count += 1;
                 let pos_or_dir = match l.mode {
                     crate::node_graph::light::LightMode::Sun => {
@@ -5418,9 +5409,13 @@ impl RenderScene {
                         [l.pos[0], l.pos[1], l.pos[2], 1.0]
                     }
                 };
-                shaft_light_data.push(pos_or_dir);
-                shaft_light_data.push([l.color[0], l.color[1], l.color[2], slot]);
-                shaft_light_data.push([l.range, 0.0, 0.0, 0.0]);
+                let packed = [
+                    pos_or_dir,
+                    [l.color[0], l.color[1], l.color[2], slot],
+                    [l.range, 0.0, 0.0, 0.0],
+                ];
+                light_data.extend_from_slice(&packed);
+                shaft_light_data.extend_from_slice(&packed);
                 shaft_light_count += 1;
             }
         }
@@ -5429,7 +5424,7 @@ impl RenderScene {
         // zeroed entry the shader never reads (`light_count == 0`). Skipping
         // the binding on empty is the forbidden silent-fallback shape.
         if light_data.is_empty() {
-            light_data.extend([[0.0f32; 4]; 2]);
+            light_data.extend([[0.0f32; 4]; LIGHT_VEC4_STRIDE]);
         }
         // Same D4 always-bind discipline for `shaft_lights` — the
         // "still-empty, pad to one zeroed stub" pass moved to just before
@@ -5441,15 +5436,15 @@ impl RenderScene {
         // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
         // real appended entries).
 
-        // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
+        // Caster table (`@binding(9)`): `MAX_RASTER_SHADOW_CASTERS` slots ×
         // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
         // Columns 0–3 = shadow_view_proj; vec4 4 = (bias, kernel_half_width,
         // texel_size, light_size). Always fully sized so `@binding(9)` is a
         // fixed bind regardless of caster count (Bytes, copy-at-encode,
         // hazard-free).
         let mut caster_table: Vec<[f32; 4]> =
-            vec![[0.0; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
-        for (slot, l) in casters.iter().enumerate() {
+            vec![[0.0; 4]; MAX_RASTER_SHADOW_CASTERS * CASTER_VEC4_STRIDE];
+        for (slot, l) in casters.iter().take(MAX_RASTER_SHADOW_CASTERS).enumerate() {
             let vp = l.shadow_view_proj();
             let base = slot * CASTER_VEC4_STRIDE;
             caster_table[base] = vp[0];

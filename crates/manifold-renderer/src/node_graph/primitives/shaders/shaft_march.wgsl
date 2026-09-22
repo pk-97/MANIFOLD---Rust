@@ -96,7 +96,10 @@ fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
 // (1.0); outside the caster's frustum -> also 1.0 (no shadow data there);
 // otherwise ONE comparison tap, biased the same as the main pass.
 fn shadow_vis(slot_f: f32, world_pos: vec3<f32>) -> f32 {
-    if slot_f < 0.0 {
+    // The shared light list can contain eight RT slots; this lookup has
+    // only four raster shadow maps. Guard before reading the caster table,
+    // including when WGSL select evaluates this alongside RT visibility.
+    if slot_f < 0.0 || slot_f >= 4.0 {
         return 1.0;
     }
     let slot = i32(slot_f + 0.5);

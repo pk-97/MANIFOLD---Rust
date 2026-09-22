@@ -15,6 +15,19 @@ is a performance decision, not an engine constant.
 Scope is deliberately one primitive + its shader. Everything else (Light port type,
 sun/point derivation, material response) is untouched.
 
+**Current ABI correction (2026-09-22, BUG-dl16):** the original two-vec4 layout
+below is historical. Surface lights now reuse the shaft light layout: three
+vec4s containing position/direction plus mode, premultiplied colour plus caster
+slot, and range. Phong, PBR and Cel resolve Point direction and attenuation at
+the surface using the existing `Light` contract; Sun remains directional with
+unit attenuation. This applies with raster or RT shadows. Zero lights bind a
+three-vec4 stub. The upload already uses `RenderScene::light_buffers`, a ring
+of storage buffers, so the old `setBytes` ceiling below no longer applies.
+Light ports and serialized fields are unchanged. Point-lit scenes can change
+appearance because position and range were previously discarded by the surface
+upload. The deferred falloff item below is resolved for Point; Spot remains
+outside the existing light model.
+
 ## 1. Audit — what exists (verified 2026-07-06)
 
 | Piece | Where | State |
