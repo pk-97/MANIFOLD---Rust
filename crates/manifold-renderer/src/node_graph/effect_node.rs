@@ -1043,6 +1043,18 @@ pub trait EffectNode: Send {
     /// whose shader is fixed at compile time.
     fn set_wgsl_source(&mut self, _source: &str) {}
 
+    /// Opt into immutable, node-owned textures. Their dedicated slots are held
+    /// across frames. Feedback back-edges and host-prebound outputs keep the
+    /// ordinary writable contract; the node must support both paths.
+    fn provides_texture_output(&self, _port: &str) -> bool { false }
+
+    /// Texture published after evaluate, before downstream consumers. Never
+    /// mutate a published texture. Cross-encoder sharing must establish GPU
+    /// readiness separately; this hook does not submit or wait for work.
+    fn provided_texture_output(&self, _port: &str) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
     /// Output texture format for the named port. Returns `None` to use
     /// the backend's default format (typically `Rgba16Float`). Only
     /// meaningful for `Texture2D` outputs — other port types ignore

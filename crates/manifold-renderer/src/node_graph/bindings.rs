@@ -429,7 +429,15 @@ impl<'a> NodeOutputs<'a> {
     /// and output texture refs in locals across the encoder's mutable
     /// borrow.
     pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
-        self.backend.texture_2d(self.slot(port)?)
+        let slot = self.slot(port)?;
+        if self.backend.provided_texture_descriptor(slot).is_some() { return None; }
+        self.backend.texture_2d(slot)
+    }
+
+    /// Descriptor for an immutable texture supplied by the node. None means
+    /// the caller must use the ordinary writable/prebound output path.
+    pub fn provided_texture_descriptor(&self, port: &str) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+        self.backend.provided_texture_descriptor(self.slot(port)?)
     }
 
     /// 3D `&GpuTexture` an EffectNode should *write to* for the named

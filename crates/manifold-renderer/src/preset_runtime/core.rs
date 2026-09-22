@@ -4,6 +4,7 @@
 
 use super::*;
 use super::groups::splice_card_with_canonical_fallback;
+use crate::node_graph::{Backend, PortType};
 
 pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
@@ -1187,7 +1188,18 @@ impl PresetRuntime {
         // input can read it).
         let assignment = assign_texture2d_slots(&plan, source_resource, (width, height));
 
-        // Allocate exactly one RenderTarget per physical slot. Pool
+        // Provided images have dedicated logical slots, but the producer owns
+        // their storage. Keep the host's source/final target writable because
+        // those slots are replaced/read as RenderTargets by the chain caller.
+        let provided_slots: AHashMap<Slot, ResourceId> = assignment.resource_to_slot.iter()
+            .filter(|(resource, _)| {
+                **resource != source_resource && **resource != final_output_resource
+                    && plan.is_provided_texture(**resource)
+            })
+            .map(|(&resource, &slot)| (slot, resource))
+            .collect();
+
+        // Allocate one RenderTarget per writable physical slot. Pool
         // the allocation when a pool is available — `MTLHeap`
         // sub-allocation recycles textures across topology rebuilds
         // (scene switches, effect adds/removes), avoiding fresh
@@ -1196,8 +1208,16 @@ impl PresetRuntime {
         if let Some(p) = pool {
             backend.set_texture_pool(p);
         }
+        backend.declare_mipmapped(plan.mipmapped_resources());
         let mut slot_handles: Vec<Slot> = Vec::with_capacity(assignment.slot_count as usize);
         for slot_idx in 0..assignment.slot_count {
+            if let Some(&resource) = provided_slots.get(&Slot(slot_idx)) {
+                slot_handles.push(backend.acquire_provided_texture(
+                    resource, PortType::Texture2D, plan.resource_format(resource),
+                    assignment.slot_dims[slot_idx as usize],
+                ));
+                continue;
+            }
             let label = if slot_idx == assignment.source_slot.0 {
                 "chain-graph-source"
             } else {
@@ -1211,11 +1231,13 @@ impl PresetRuntime {
             };
             slot_handles.push(backend.allocate_slot(rt));
         }
-        // The simulator returned sim-slot indices in 0..K. allocate_slot
-        // is called in order, so backend slot ids match sim ids 1:1.
+        // The simulator returned sim-slot indices in 0..K. Both allocation
+        // paths reserve in order, so backend slot ids match sim ids 1:1.
         let resolve = |s: Slot| slot_handles[s.0 as usize];
         for (res_id, sim_slot) in &assignment.resource_to_slot {
-            backend.bind_resource_to_slot(*res_id, resolve(*sim_slot));
+            if !provided_slots.contains_key(sim_slot) {
+                backend.bind_resource_to_slot(*res_id, resolve(*sim_slot));
+            }
         }
         let source_slot = resolve(assignment.source_slot);
         let output_slot = resolve(

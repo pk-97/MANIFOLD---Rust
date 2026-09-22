@@ -2,14 +2,14 @@
 
 <!-- index: Bounded Azalea/Vortex Fragments/Ordered Recon/Math View memory audit; measured allocation classes, source-derived costs and unverified recovery candidates. -->
 
-**Status:** Cut-remap reuse, CPU source-copy release, conservative temporary-array reuse, immutable source-image sharing and pool telemetry implemented and measured, 2026-09-21. Broader memory investigation remains open: BUG-dl16.
+**Status:** Cut-remap reuse, CPU source-copy release, conservative temporary-array reuse, immutable source/converted-image sharing, loading retirement checkpoints and pool telemetry implemented and measured, 2026-09-22. Broader memory investigation remains open: BUG-dl16.
 
-The latest combined build measures **17,888,559,104 bytes** of peak Metal
-allocations, **2,608,545,792 bytes (12.73%) below the original clean capture**.
-Peak process footprint measures **22,747,876,784 bytes**, compared with
+The latest combined build measures **15,736,799,232 bytes** of peak Metal
+allocations, **4,760,305,664 bytes (23.22%) below the original clean capture**.
+Peak process footprint measures **21,841,956,296 bytes**, compared with
 23,905,440,064 bytes at the start of the overnight follow-up. These are separate,
 overlapping measures from bounded headless captures, not additive memory savings.
-Loading remains about 20 seconds; duration-independent RAM and arbitrary modifier
+Loading measured 22.14 seconds; duration-independent RAM and arbitrary modifier
 complexity are not established.
 
 Reusing identical cut remaps before fusion reduced Corrosion's measured peak
@@ -311,11 +311,10 @@ The full saved project also contains unused preset graphs; counting those as
 live allocations would overstate memory use. Census artifacts are under
 `/tmp/manifold-memory-overnight-20260921/texture-census*`.
 
-Repeated source uploads are now shared as described above. The converted output
-textures still have independent path, conversion and parameter bindings and
-remain separately owned. Sharing those writable outputs, or replacing them with
-an immutable-output contract, remains a separate unimplemented change. The disk
-decode cache alone does not establish GPU sharing or ownership.
+Repeated source uploads are shared as described above. The follow-up below adds
+an immutable-output contract for identical converted images. Each node retains
+independent path, conversion and parameter bindings; the disk decode cache alone
+does not establish GPU sharing or ownership.
 
 Static review also found existing duration-related protections:
 `unique_clip_chain_topologies` deduplicates clip preparation; additional
@@ -325,6 +324,86 @@ lookahead already uses bounded prewarm candidates. Evicting inactive generator
 runtimes would require preserving feedback/simulation state and preparing GPU
 resources without delaying playback. Those changes are not implied by the
 array planner's ordinary within-frame lifetimes.
+
+## Converted-image sharing follow-up (2026-09-22)
+
+The bounded follow-up extends the existing glTF image cache and graph resource
+planner. A producer can supply an immutable converted texture instead of writing
+into a separate backend-owned target. The plan holds that output in a dedicated
+slot. Its descriptor preserves the original dimensions, format and full mip chain;
+the conversion shader is unchanged. Feedback back-edges and host-prebound targets
+continue to use the existing writable path.
+
+The weak cache key includes decoded source identity, output dimensions, format,
+mip count, repack mode and device resource scope. A GPU event is signaled after
+conversion and mip generation. Cache consumers adopt only a ready image, never
+wait for an unsubmitted encoder, and never write into an already published image.
+If simultaneous first conversions create duplicates, warmup gives them another
+pass to adopt a completed canonical image. A completed local image can replace
+an unfinished canonical entry, so abandoned encoders do not hold up warmup.
+
+Changes to one node select or create a different image. Logical content versions
+stay separate from physical storage identity. The backend cannot pool or swap
+immutable outputs into writable storage; staged resize retains compatible images
+and prepares incompatible bindings without modifying the live renderer. Existing
+GPU retirement and residency ownership remain in force.
+
+The first project capture exposed a loading integration gap: recorded peak Metal
+allocations increased from 17,888,559,104 to 18,794,561,536 bytes, and warmup
+residency increased by the same 906,002,432 bytes (six allocations). No late
+intervals were measured. Static tracing found synchronous warmup commits did not
+advance the content frame retirement event: replaced black/duplicate images could
+remain retained until playback. A load-only checkpoint now signals that same
+event after each layer and at final warmup, waits for completion, then drains the
+existing retirement/residency owners. It requires no outstanding unsubmitted
+encoder. Playback retains its ordinary nonblocking fence path. The six-allocation
+delta matches five 4096² and one 1024² converted mip image at observed Metal sizes;
+this agreement is supporting evidence, not a complete live-allocation census.
+
+The effect-chain allocator also reserves provided intermediate slots without a
+writable RenderTarget or host pin, preserving ordinary writable source/final
+endpoints. This closes the second build path's ownership integration.
+
+One verification of that concrete correction used the same project, retained disk
+caches, beat 56 start and eight-second 24 fps headless window:
+
+| Measure | Previous landed build | Converted sharing + loading checkpoint |
+|---|---:|---:|
+| Load | 19.905 s | 22.141 s |
+| Recorded peak Metal allocations | 17,888,559,104 B | 15,736,799,232 B |
+| Warmup residency accounting | 17,222,828,632 B / 1,240 allocations | 15,054,357,080 B / 1,207 allocations |
+| Intervals late by more than 1 ms | 0 / 191 | 0 / 191 |
+| Maximum interval | 41.672083 ms | 41.671875 ms |
+| Cold preparations | 0 | 0 |
+| Maximum process RSS | 2,980,888,576 B | 3,163,275,264 B |
+| OS peak process footprint | 22,747,876,784 B | 21,841,956,296 B |
+| End-of-capture free texture pool | 0 textures / 0 bytes | 0 textures / 0 bytes |
+
+This batch reduces recorded peak Metal allocations by **2,151,759,872 bytes**.
+The footprint decreases by 905,920,488 bytes while RSS increases by 182,386,688
+bytes; these distinct process/GPU metrics overlap and must not be added. Loading
+is 2.24 seconds slower in this pair. The single-run evidence establishes neither
+a repeatable loading improvement nor isolated savings for each component of the
+batch. Display presentation, audio hardware and long-show seek/loop/edit behavior
+remain unmeasured. The failed capture is retained as `after/`; the corrected
+verification is `after-completion/`, with `comparison-completion.json` alongside.
+
+Four focused planner/backend proofs pass: dedicated storage without a duplicate
+writable allocation, exclusion from pool reuse and feedback swaps, host-prebound
+compatibility, fixed-image retention through staged resize, and feedback back-edge
+exclusion. The 12-test glTF GPU group passes, including four new proofs for:
+
+- byte equality with the existing writable conversion at every mip of a 4×4
+  nonuniform image, before and after a repack-mode edit;
+- no sharing of unsubmitted work, reversed submission order, and convergence
+  after the original canonical encoder was delayed;
+- distinct mode/dimension keys and actual opaque-black output pixels;
+- two real executors sharing one image, repeated-frame retention, changing one
+  layer without changing its peer's pixels, and weak-entry expiry.
+
+Validation and measurement artifacts are kept in
+`/tmp/manifold-memory-converted-20260922/`. This change does not implement inactive
+scene eviction, simulation checkpoints or a project-wide memory budget.
 
 ## Source anchors
 

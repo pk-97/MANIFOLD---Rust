@@ -4,6 +4,51 @@ use crate::node_graph::primitives::{AudioSpectrum, Gain, Mix};
 use crate::node_graph::{FinalOutput, Graph, Source, compile};
 
 #[test]
+fn chain_reserves_provided_image_without_a_writable_backing() {
+    let device = crate::test_device();
+    let primitives = PrimitiveRegistry::with_builtin();
+    let mut fx = manifold_core::preset_definition_registry::create_default(&PresetTypeId::INVERT_COLORS);
+    fx.graph = Some(serde_json::from_str(r#"{
+        "version": 1, "name": "shared image chain",
+        "nodes": [
+            {"id": 0, "typeId": "system.source"},
+            {"id": 1, "typeId": "node.gltf_texture_source", "handle": "image",
+             "params": {"width": {"type": "Float", "value": 4.0},
+                        "height": {"type": "Float", "value": 4.0}}},
+            {"id": 2, "typeId": "node.mix"},
+            {"id": 3, "typeId": "system.final_output"}
+        ],
+        "wires": [
+            {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a"},
+            {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b"},
+            {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"}
+        ]
+    }"#).unwrap());
+    fx.graph_version += 1;
+    fx.graph_structure_version += 1;
+    let runtime = PresetRuntime::try_build(ChainBuildInputs {
+        effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives,
+        device: &device, pool: None, width: 8, height: 8, preview_effect: Some(&fx.id),
+    }, None).expect("image chain builds");
+    let image = runtime.effect_nodes[0].handles.iter()
+        .find(|(handle, _)| handle.as_ref() == "image").unwrap().1;
+    let resource = runtime.plan.steps().iter().find(|step| step.node == image)
+        .unwrap().outputs[0].1;
+    let backend = runtime.executor.backend();
+    let slot = backend.slot_for(resource).unwrap();
+    let descriptor = backend.provided_texture_descriptor(slot).expect("producer owns storage");
+    assert_eq!((descriptor.width, descriptor.height, descriptor.mip_levels), (4, 4, 3));
+    assert!(backend.texture_2d(slot).is_none(), "build must not allocate a duplicate image");
+    let metal = backend.as_any().unwrap().downcast_ref::<MetalBackend>().unwrap();
+    assert!(metal.render_target_2d(slot).is_none());
+    let super::core::PresetIo::Transform { source_slot, output_slot } = runtime.io else {
+        panic!("chain must keep host-owned endpoints");
+    };
+    assert!(metal.render_target_2d(source_slot).is_some());
+    assert!(metal.render_target_2d(output_slot).is_some());
+}
+
+#[test]
 fn transient_slots_reuse_only_matching_resolved_dimensions() {
     let mut graph = Graph::new();
     let src = graph.add_node(Box::new(Source::new()));

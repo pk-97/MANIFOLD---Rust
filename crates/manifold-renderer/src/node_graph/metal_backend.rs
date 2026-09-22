@@ -46,6 +46,16 @@ use crate::node_graph::ports::PortType;
 use crate::render_target::RenderTarget;
 use crate::render_target_pool::RenderTargetPool;
 
+/// A dedicated slot whose storage is supplied by its producer. The descriptor
+/// exists before the image does; no duplicate writable render target is needed.
+#[derive(Clone)]
+struct ProvidedTexture {
+    dims: (u32, u32),
+    format: GpuTextureFormat,
+    mip_levels: u32,
+    texture: Option<GpuTexture>,
+}
+
 /// `Backend` impl that allocates real `GpuTexture`s via
 /// `RenderTargetPool`. Used by production code paths.
 ///
@@ -100,6 +110,7 @@ pub struct MetalBackend {
 
     // ---- Real backing storage ----
     textures_2d: AHashMap<Slot, RenderTarget>,
+    provided_2d: AHashMap<Slot, ProvidedTexture>,
     /// "Borrowed" textures installed via [`Self::replace_texture_2d`].
     /// These are clones (one `Retained` bump on the underlying
     /// `MTLTexture`) of textures the *upstream* caller still owns and
@@ -221,6 +232,7 @@ impl MetalBackend {
             mipmapped_ids: AHashSet::default(),
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
+            provided_2d: AHashMap::default(),
             borrowed_2d: AHashMap::default(),
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
@@ -255,6 +267,7 @@ impl MetalBackend {
             mipmapped_ids: AHashSet::default(),
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
+            provided_2d: AHashMap::default(),
             borrowed_2d: AHashMap::default(),
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
@@ -497,6 +510,7 @@ impl MetalBackend {
             self.pool.release(rt);
         }
         self.borrowed_2d.clear();
+        self.provided_2d.clear();
         self.skip_aliased_slots.clear();
         self.scalars.clear();
         self.buffers_array.clear();
@@ -550,6 +564,7 @@ impl MetalBackend {
             mipmapped_ids: self.mipmapped_ids.clone(),
             pinned: self.pinned.clone(),
             textures_2d: AHashMap::default(),
+            provided_2d: self.provided_2d.clone(),
             borrowed_2d: AHashMap::default(),
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
@@ -563,6 +578,21 @@ impl MetalBackend {
             render_modes: AHashMap::default(),
             objects: AHashMap::default(),
         };
+        // Immutable slots are dedicated. Preserve compatible images; a changed
+        // descriptor asks the producer to publish a replacement next frame.
+        for (&resource, &slot) in &candidate.bound {
+            if let Some(provided) = candidate.provided_2d.get_mut(&slot) {
+                let dims = crate::node_graph::execution::resolve_dims(plan, resource, (width, height));
+                let mip_levels = if self.mipmapped_ids.contains(&resource) {
+                    manifold_gpu::GpuTextureDesc::max_mip_levels(dims.0, dims.1)
+                } else { 1 };
+                if provided.dims != dims || provided.mip_levels != mip_levels {
+                    provided.dims = dims;
+                    provided.mip_levels = mip_levels;
+                    provided.texture = None;
+                }
+            }
+        }
         // An old slot can have served both a fixed-size and a canvas-sized
         // resource when their dimensions happened to match. Split that sharing
         // when their new dimensions differ; preserve each logical binding.
@@ -645,6 +675,52 @@ impl Backend for MetalBackend {
         Some(self)
     }
 
+    fn acquire_provided_texture(
+        &mut self, id: ResourceId, ty: PortType,
+        format: Option<GpuTextureFormat>, dims: (u32, u32),
+    ) -> Slot {
+        if self.pinned.contains(&id) { return self.acquire(id, ty, format, dims); }
+        assert!(ty.is_texture_2d());
+        if let Some(&slot) = self.bound.get(&id) {
+            assert!(self.provided_2d.contains_key(&slot), "provided output changed ownership without a rebuild");
+            return slot;
+        }
+        let slot = Slot(self.next_slot);
+        self.next_slot += 1;
+        self.bound.insert(id, slot);
+        self.provided_2d.insert(slot, ProvidedTexture {
+            dims,
+            format: format.unwrap_or(self.format),
+            mip_levels: if self.mipmapped_ids.contains(&id) {
+                manifold_gpu::GpuTextureDesc::max_mip_levels(dims.0, dims.1)
+            } else { 1 },
+            texture: None,
+        });
+        slot
+    }
+
+    fn provided_texture_descriptor(&self, slot: Slot) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+        let provided = self.provided_2d.get(&slot)?;
+        Some(manifold_gpu::GpuTextureDesc {
+            width: provided.dims.0, height: provided.dims.1, depth: 1,
+            format: provided.format,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "node-owned immutable output",
+            mip_levels: provided.mip_levels,
+        })
+    }
+
+    fn install_provided_texture(&mut self, slot: Slot, texture: &GpuTexture) {
+        let provided = self.provided_2d.get_mut(&slot).expect("reserved output slot");
+        assert_eq!((texture.width, texture.height), provided.dims);
+        assert_eq!(texture.format, provided.format);
+        assert_eq!(texture.mip_level_count(), provided.mip_levels);
+        if provided.texture.as_ref().is_none_or(|old| !old.ptr_eq(texture)) {
+            provided.texture = Some(texture.clone());
+        }
+    }
+
     fn acquire(
         &mut self,
         id: ResourceId,
@@ -712,6 +788,9 @@ impl Backend for MetalBackend {
         if self.pinned.contains(&id) {
             return;
         }
+        if self.bound.get(&id).is_some_and(|slot| self.provided_2d.contains_key(slot)) {
+            return;
+        }
         if let Some(slot) = self.bound.remove(&id) {
             let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
             let key = crate::node_graph::backend::pool_key(ty, format, dims, mipmapped);
@@ -746,9 +825,13 @@ impl Backend for MetalBackend {
         self.bound.clear();
         self.free_by_type.clear();
         self.pinned.clear();
+        self.provided_2d.clear();
     }
 
     fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture> {
+        if let Some(provided) = self.provided_2d.get(&slot) {
+            return provided.texture.as_ref();
+        }
         // Borrowed textures (installed via `replace_texture_2d`)
         // shadow the slot's owned RT for the current frame. The owned
         // RT still exists in `textures_2d` so it can be released back
@@ -855,6 +938,7 @@ impl Backend for MetalBackend {
     }
 
     fn alias_2d(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
+        if self.provided_2d.contains_key(&dst_slot) { return false; }
         // Refuse to touch a slot that has a host-installed borrow we
         // don't own (e.g. StylizedFeedback's inner output slot points
         // at the outer chain's target via `replace_texture_2d`). The
@@ -869,11 +953,7 @@ impl Backend for MetalBackend {
         // Look up the current texture at src_slot. Borrow shadow takes
         // priority over owned; this matches `texture_2d`'s lookup order
         // so the alias points at whatever a reader would see.
-        let tex = self
-            .borrowed_2d
-            .get(&src_slot)
-            .cloned()
-            .or_else(|| self.textures_2d.get(&src_slot).map(|rt| rt.texture.clone()));
+        let tex = self.texture_2d(src_slot).cloned();
         let Some(t) = tex else {
             return false;
         };
@@ -953,6 +1033,72 @@ mod array_buffer_tests {
         // ArrayTypes with the same byte layout but different
         // Channels signatures get separate buffers.
         ArrayType::of_known::<crate::generators::compute_common::Particle>()
+    }
+
+    #[test]
+    fn provided_texture_has_no_owned_backing_and_cannot_enter_writable_pool() {
+        let (device, mut backend) = make_backend();
+        let id = ResourceId(0);
+        backend.declare_mipmapped(&[id]);
+        let slot = backend.acquire_provided_texture(id, PortType::Texture2D, None, (8, 8));
+        assert!(backend.textures_2d.is_empty());
+        assert!(backend.texture_2d(slot).is_none());
+        let desc = backend.provided_texture_descriptor(slot).unwrap();
+        assert_eq!(desc.mip_levels, 4);
+        let texture = device.create_texture(&desc);
+        backend.install_provided_texture(slot, &texture);
+        backend.release(id, PortType::Texture2D, None, (8, 8));
+        assert_eq!(backend.slot_for(id), Some(slot));
+        let writable = backend.acquire(ResourceId(1), PortType::Texture2D, None, (8, 8));
+        assert_ne!(writable, slot);
+        assert!(!backend.texture_2d(writable).unwrap().ptr_eq(&texture));
+        assert!(!Backend::swap_texture_2d(&mut backend, slot, writable));
+        assert!(!backend.alias_2d(writable, slot));
+        assert!(backend.alias_2d(slot, writable));
+        assert!(backend.texture_2d(writable).unwrap().ptr_eq(&texture));
+        backend.clear_skip_aliases();
+        assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
+        assert!(!backend.texture_2d(writable).unwrap().ptr_eq(&texture));
+        backend.clear();
+        assert!(backend.provided_2d.is_empty());
+        assert!(backend.texture_2d(slot).is_none());
+    }
+
+    #[test]
+    fn provided_texture_respects_host_prebound_output() {
+        let (device, mut backend) = make_backend();
+        let target = RenderTarget::new(&device, 8, 8, GpuTextureFormat::Rgba16Float, "host");
+        let texture = target.texture.clone();
+        let id = ResourceId(0);
+        let slot = backend.pre_bind_texture_2d(id, target);
+        assert_eq!(backend.acquire_provided_texture(id, PortType::Texture2D, None, (8, 8)), slot);
+        assert!(backend.provided_texture_descriptor(slot).is_none());
+        assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
+    }
+
+    #[test]
+    fn provided_texture_resize_preserves_fixed_images_without_writable_allocations() {
+        use crate::node_graph::{Graph, compile};
+        use crate::node_graph::boundary_nodes::FinalOutput;
+        use crate::node_graph::primitives::GltfTextureSource;
+        let (device, mut backend) = make_backend();
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(GltfTextureSource::new()));
+        let output = graph.add_node(Box::new(FinalOutput::new()));
+        graph.connect((source, "out"), (output, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+        backend.declare_mipmapped(plan.mipmapped_resources());
+        let dims = crate::node_graph::execution::resolve_dims(&plan, resource, (16, 16));
+        let slot = backend.acquire_provided_texture(resource, PortType::Texture2D, None, dims);
+        let texture = device.create_texture(&backend.provided_texture_descriptor(slot).unwrap());
+        backend.install_provided_texture(slot, &texture);
+        let prepared = backend.prepare_resize(&plan, &device, 32, 64).unwrap();
+        assert!(prepared.candidate.textures_2d.is_empty());
+        assert!(prepared.candidate.texture_2d(slot).unwrap().ptr_eq(&texture));
+        assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
+        backend.commit_resize(prepared);
+        assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
     }
 
     /// IMPORT_FIDELITY F-P6: a resource declared mip-chained allocates its
