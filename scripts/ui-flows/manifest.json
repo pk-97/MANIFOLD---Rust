@@ -118,9 +118,6 @@
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
       "material-inspector"
-    ],
-    "crates/manifold-ui/src/panels/param_slider_shared/material_placement.rs": [
-      "material-inspector"
     ]
   },
   "flows": {
@@ -190,7 +187,6 @@
     "material-inspector-colour": "gltfscene",
     "material-inspector-features": "gltfscene",
     "material-inspector-looks": "gltfscene",
-    "material-inspector-placement": "gltfscene",
     "material-inspector-textures": "gltfscene"
   },
   "expected_fail": {

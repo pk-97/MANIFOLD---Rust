@@ -27,20 +27,6 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.11_emission_strength.slider"
-        }
-      },
-      "check": {
-        "Above": {
-          "name": "material.section.10_uv_m00"
-        }
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
           "text": "Surface"
         }
       },

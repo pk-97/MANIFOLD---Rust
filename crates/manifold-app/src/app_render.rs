@@ -1431,6 +1431,31 @@ impl Application {
                     });
                     continue;
                 }
+                PanelAction::Root(RootAction::BeginMaterialColourTextInput {
+                    target,
+                    param_ids,
+                    anchor,
+                    value,
+                }) => {
+                    let initial = crate::text_input::format_material_colour_hex(*value);
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::MaterialColour,
+                        &initial,
+                        crate::text_input::AnchorRect::new(
+                            anchor.x,
+                            anchor.y,
+                            anchor.width,
+                            anchor.height,
+                        ),
+                        11.0,
+                    );
+                    self.text_input.material_colour =
+                        Some(crate::text_input::MaterialColourCtx {
+                            target: target.clone(),
+                            param_ids: param_ids.clone(),
+                        });
+                    continue;
+                }
                 PanelAction::Root(RootAction::SceneSetupBeginNumericTextInput {
                     layer_id,
                     scope_path,

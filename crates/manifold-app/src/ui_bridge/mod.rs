@@ -238,6 +238,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             // dispatch; these arms only keep the match exhaustive and no-op if
             // reached (e.g. via the headless script harness).
             RootAction::BeginParamTextInput { .. }
+            | RootAction::BeginMaterialColourTextInput { .. }
             | RootAction::BeginDriverPeriodTextInput { .. }
             | RootAction::SceneSetupBeginNumericTextInput { .. }
             | RootAction::SceneSetupEnumClicked { .. }

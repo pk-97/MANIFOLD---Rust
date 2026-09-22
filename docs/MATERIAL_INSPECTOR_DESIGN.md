@@ -1,13 +1,13 @@
 # Material inspector — understandable surface authoring
 
-**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, local texture drawers, RGB gestures, atomic looks and affine placement.
+**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, RGB gestures and atomic looks. Scene-panel UX revision: graph-only UV/sampling, always-visible RGB channels, inline hex editing, stable feature presence and continuous sliders.
 Lifecycle: contract — defines the live material inspector’s feature modes, texture ownership, compound edits and compatibility invariants.
 **Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
 
 <!-- index: Material inspector: feature state, texture ownership, manifest-backed grouping, compound edits, starter looks, and bounded implementation gates. -->
 
-Peter described the problem as “a huge wall of sliders” where users cannot tell “if something is ‘on’ or valid,” including the “GIANT list of UV transforms.” The target is a small surface section, optional material features, and placement controls beside their textures. “Opacity & Cutout” replaces the prototype's “Coverage.” This improves authoring of the existing material model; it does not introduce a shader graph or promise Blender rendering parity.
+Peter described the problem as “a huge wall of sliders” where users cannot tell “if something is ‘on’ or valid,” including the “GIANT list of UV transforms.” The scene panel provides surface controls and optional material features. UV transforms and sampling are edited on graph nodes. Slider gestures never change feature modes or reveal controls. “Opacity & Cutout” replaces the prototype's “Coverage.” This improves authoring of the existing material model; it does not introduce a shader graph or promise Blender rendering parity.
 
 Companions: [MATERIAL_SYSTEM_DESIGN.md](MATERIAL_SYSTEM_DESIGN.md) owns material wires and runtime kinds; [GLTF_MATERIAL_EXTENSIONS_DESIGN.md](GLTF_MATERIAL_EXTENSIONS_DESIGN.md) records the extension implementation; [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) owns parameter projection, shared widgets and routing. Source code takes precedence over historical shader claims in those records.
 
@@ -57,15 +57,15 @@ These were source-backed audit findings. The implementation preserves MR replace
 
 **D3 — One descriptor authority.** Add semantic roles to the existing manifest path. A single renderer-side role catalog assigns roles to registered material parameters; it contains no duplicate ranges/defaults. Stamping copies roles into `ParamSpecDef`; the existing app projection translates them to UI descriptors. Rejected: suffix-driven UI tables, because graph cards, scene rows and imports would disagree. Consequence: additive serialized presentation metadata and an exhaustive coverage test are required.
 
-**D4 — Explain ineffective controls without deleting authoring access.** “Off”, “From texture”, “Driven”, “Bypassed” and “Connected” mean different things. Use a nonblocking explanatory field for inactive contribution; reserve `disabled` for edits that genuinely cannot be made. An advanced scalar row remains available for preparing dormant values and editing mappings. Never claim pixels contribute merely because a mode is On.
+**D4 — Keep layout stable and concise.** Feature presence is captured when selecting a material. Add Feature and explicit mode edits may expose a feature; factor drags never add or remove sections. Expanded sections stay expanded until explicitly folded. Opacity fields stay in their section across mode changes. Do not add instructional paragraphs beneath controls; preserve editability and ownership checks.
 
-**D5 — Texture-local UI respects split ownership.** Show each connected texture's source and supported placement beside it. Placement still changes the material and therefore every object using that material; assignment still belongs to the object. Display a shared-material notice when reuse is detected. Existing Skin commands remain the only inspector source-assignment mechanism in v1. Arbitrary texture graph rewiring and a new asset browser are deferred.
+**D5 — Graph-only UV and sampling.** The Scene dock omits every Placement and Sampler descriptor, including dormant maps. Existing graph-node parameters, bindings, imported values and serialization remain unchanged. Skin source assignment retains the existing commands. No graph shortcut or replacement placement editor is added.
 
-**D6 — Preserve scalar identities through compound controls.** RGB swatches edit the existing three ParamIds through one gesture/undo transaction. Advanced channels keep their individual modulation controls. No new vector storage or merged automation track. Rejected: replacing RGB scalars with Color params, because that breaks existing bindings and shows.
+**D6 — Always-visible RGB and editable hex.** Colour groups show the hex value and all three scalar sliders whenever their containing section is expanded. The hex field opens inline text entry on a single click; it is not a disclosure control. Hex commits and RGB drags reuse the three existing ParamIds and atomic RGB scrub/undo path. Every slider previews continuously; release completes one undo step. Feature modes use explicit buttons and cannot be dragged as numeric sliders.
 
 **D7 — Looks are small, atomic factor recipes.** Ship Matte, Coated and Brushed Metal first; Glass waits for its prerequisites. They preserve base colour, opacity mode, maps, UVs, samplers, Baked Look and object gain. No preset instance, material-library file format or procedural graph is introduced. A recipe is blocked if a changed target is wire-driven, modulated/automated/mapped, fan-out-bound beyond this material, texture-owned, or temporarily owned by emissive Skin. Reject the whole change with named conflicts; never partially apply a named look.
 
-**D8 — Preserve arbitrary UV matrices.** The six existing affine values remain authoritative. Offer offset/rotation/scale only when the matrix is representable as `R(theta) * diag(sx, sy)` with translation. Shear, singular transforms and driven matrix members get the existing six-value Advanced editor with a reason. Merely opening the inspector never decomposes/recomposes stored values. Rejected: forcing every imported matrix into scale/rotation, because it changes valid authored mappings.
+**D8 — Preserve arbitrary UV matrices.** The six existing affine values remain authoritative on graph nodes. Removing the Scene dock placement widget does not decompose, rewrite, reset or migrate those values.
 
 **D9 — Scope is explicit.** Edits to a shared material edit that shared material. Both the header and look action say “applies to N objects”; where users cannot be fully resolved, say “shared scope unknown” and disable looks. No silent material cloning. Arbitrary nested graph producers remain inspectable as “Graph source” with existing graph navigation, without a guessed editable address.
 
@@ -75,21 +75,21 @@ These were source-backed audit findings. The implementation preserves MR replace
 
 | Section | Existing parameters and behaviour |
 |---|---|
-| Surface | `color_r/g/b` as a swatch, `metallic`, `roughness`. MR ownership badge sits beside both factors. |
-| Opacity & Cutout | `alpha_mode`, `color_a`, `alpha_cutoff`. Label modes Solid, Cutout, Fade while keeping existing stored enum values. Cutoff appears for Cutout; opacity relevance follows actual shader behaviour. Dormant values remain in Advanced. |
+| Surface | `color_r/g/b` as always-visible sliders beneath an editable hex field, `metallic`, `roughness`. |
+| Opacity & Cutout | `alpha_mode`, `color_a`, `alpha_cutoff` remain in a stable section. Mode labels are Solid, Cutout, Fade. |
 | Coat | `clearcoat`, `clearcoat_roughness` plus connected coat maps. |
 | Iridescence | `iridescence`, `iridescence_ior`, `iridescence_thickness_min/max`. Explain thin-film colour; minimum thickness matters only with its thickness map. |
 | Emission | `emission_r/g/b`, `emission_intensity`; separately addressed scene-object `emission_strength` labelled Object gain. |
 | Glass | `transmission`, `volume_thickness`, `volume_attenuation_distance/color_r/g/b`, `dispersion`; include the existing IOR row, without creating another slot. Explain thickness/IOR dependence without promising visible dispersion at every setting. |
 | Sheen | `sheen_color_r/g/b`, `sheen_roughness`. |
 | Anisotropy | `anisotropy_strength`, `anisotropy_rotation`. |
-| Translucency | `translucency`; help text: light through thin surfaces, not volumetric subsurface scattering. |
-| Textures | Five independent families: base (`uv_*`, unprefixed samplers), normal (`nrm_*`), metallic/roughness (`mr_*`), occlusion (`occ_*`), emission (`em_*`). Each owns six UV fields and four sampler fields. All other connected texture ports show source and supported/shared sampling facts. |
+| Translucency | `translucency`. |
+| Textures | Existing Skin assignment and connected source labels. All five families’ affine UV and sampler parameters remain graph-only. |
 | Advanced surface | `ambient`, `specular`, `specular_tint_r/g/b`, `baked_look`, plus dormant/raw representations on demand. |
 
-Every original PBR descriptor must be assigned exactly once. IOR has one canonical control under Glass. Unclassified future parameters appear in Advanced and fail the schema coverage test until deliberately classified; they must not disappear.
+Every original PBR descriptor keeps its semantic role. Placement and Sampler roles are intentionally excluded from the Scene dock. IOR has one canonical control under Glass. Unclassified future parameters appear in Advanced and fail the schema coverage test until deliberately classified; they must not disappear.
 
-An untouched neutral feature lives in Add Feature. A feature stays visible when its mode is explicitly Off/On, its controlling authored factor is non-neutral, one of its relevant maps is connected, or one of its members has a wire/driver/envelope/audio/mapping/automation attachment. This is a structural/authored predicate, never a test of the current animated sample; LFO zero crossings do not rearrange the panel. Non-neutral secondary settings alone remain accessible through Add Feature and are never reset.
+An untouched neutral feature initially lives in Add Feature. On selection, existing authored factors, modes, maps and attachments determine initial presence. Presence then remains stable throughout scalar edits; explicit Add Feature or mode changes can expose a section. Disabling or zeroing a visible feature does not hide it. Collapse is always UI-local and explicit.
 
 For FollowValues, the header says “From values,” not “On.” Turning it off writes Off. Turning Off on writes On without seeding. Adding a neutral unused feature writes On and seeds only its neutral controlling values: Coat 1, Iridescence 1, Emission white with intensity 1, Transmission 1, Sheen RGB 0.5, Anisotropy 0.5, Translucency 0.5. Preserve non-neutral settings, all attachments and all maps. If any controlling value is externally owned, Add records On without seeding and explains the owner. A separate Reset values action is out of scope.
 
@@ -240,9 +240,9 @@ The app exhaustively adapts the UI edit-kind enum to the editing enum. The UI re
 
 ### 4.5 Placement and looks
 
-V1 placement offers offset, rotation and scale beside each supported texture family, with the original six scalar rows in its Advanced drawer. Friendly controls keep a local preview and commit the same six ParamIds atomically on release; scene output updates at commit. Raw matrix sliders retain their existing live scalar gestures. There is no new persisted transform. Decomposition is allowed only if both column lengths exceed `1e-8` and `abs(dot(c0,c1)) <= 1e-6 * length(c0) * length(c1)`. Use signed Y scale to preserve reflection; `theta = atan2(m10,m00)`. Keep original values unless a user commits an edit. Drivers on any matrix member disable the compound editor while leaving individual mapping controls accessible. Round-trip tests include shear, reflection, singular matrices and an imported nonidentity matrix.
+The Scene dock does not build placement or sampling controls. The former local-preview/release-only affine widget is removed. The graph retains all original scalar parameters and values.
 
-Implement starter looks as an app-owned static recipe table in `ui_bridge/material_looks.rs`, patterned after the existing `crates/manifold-core/src/scene_modifier_preset.rs` recipe approach. Identify targets through the material node's existing bindings; numeric values below are recipe values, not a second descriptor catalog. Every look sets seven feature modes explicitly (all Off except listed On). Preserve feature subsettings not listed.
+Implement starter looks as an app-owned static recipe table in `ui_bridge/material_looks.rs`, patterned after the existing `crates/manifold-core/src/scene_modifier_preset.rs` recipe approach. Identify targets through the material node's existing bindings; numeric values below are recipe values, not a second descriptor catalog. Looks set only their listed feature modes. Preserve feature subsettings not listed.
 
 | Look | Writes in addition to modes |
 |---|---|
@@ -314,19 +314,19 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Gate:** atomic/stale/scope/legacy/Off round-trip tests; renderer output-value tests and focused GPU proof comparing old-default material vs FollowValues at zero pixel difference on the same backend. Common checks. No per-frame project mutations from output gating.
 - **Demo/gesture:** `material-inspector-features`: add Coat, modulate its amount, turn Off, turn On, undo, save/reload, modulate again. Assert retained factor/attachment and gated runtime factor; L3+PNG. One reproduction/one verification for any observed failure, not an open-ended render sweep.
 
-### P3 — Texture facts and local advanced placement
+### P3 — Texture facts (Scene placement removed by UX revision)
 
 - **Entry/read-back:** P1 landed; P2 needed for feature map grouping. Re-find scene-object ports, producer resolver, Skin commands and five shader UV families. Read D4/D5/D9. Hold arbitrary nested source resolution to current capabilities.
-- **Deliverables:** VM texture/source/shared-user facts, texture cards, five local affine/sampler drawers, MR ownership explanation, same existing Skin picker under Textures, object emission gain under Emission. Remove superseded Skin/emission layout only now. No new asset picker or runtime readiness projection.
+- **Deliverables:** VM texture/source/shared-user facts and existing Skin assignment. UX revision removes local UV/sampling drawers; graph parameters remain unchanged.
 - **Gate:** texture capabilities/shared material/scope tests; bound editing and Skin undo/save/reload tests. Held-out fixture has shared material, distinct object maps and nonidentity UVs. Common checks; structural projection must not enter the per-frame value path.
-- **Demo/gesture:** `material-inspector-textures`: open MR texture placement, change U offset, undo; switch between two shared-material objects and assert map identity/ownership notice. Verify unrelated map transforms remain unchanged. L3+PNG.
+- **Demo/gesture:** `material-inspector-textures`: assert no affine, matrix or sampler controls exist in the Scene dock. Existing graph/import round-trip coverage retains data compatibility.
 
 ### P4 — RGB swatches
 
 - **Entry/read-back:** P2 batch semantics landed. Read shared row action/builder and scrub handlers; enumerate every ValueRef/ScrubValue match. D6 forbids vector migration and bespoke row routing.
-- **Deliverables:** shared colour row role, three-ID swatch/popover, RGB scrub variant and app adapter; retain advanced channel controls.
+- **Deliverables:** shared colour row role, always-visible RGB sliders, inline hex entry, RGB scrub variant and app adapter; retain channel modulation controls.
 - **Gate:** RGB gesture undo, mid-drag snapshot restoration, no-op/cancel/selection-change/stale ownership tests; reload then modulate one channel independently. Common checks. A wire-driven channel must not be overwritten by the aggregate control.
-- **Demo/gesture:** `material-inspector-colour`: drag a colour channel in the expanded swatch, undo once and assert all starting values; map another channel and assert its drawer remains reachable. L3+PNG.
+- **Demo/gesture:** `material-inspector-colour`: drag a visible channel directly, undo once and assert all starting values; open another channel’s modulation drawer. Hex text input uses the live Application path (headless text injection is unsupported).
 
 ### P5 — Starter looks
 
@@ -335,12 +335,9 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Gate:** look conflict/atomic/round-trip tests; serialized before/after comparison proves maps/UVs/samplers/colour/alpha/object gain/attachments unchanged except specified writes. Common checks.
 - **Demo/gesture:** `material-inspector-looks`: apply Coated, undo once, redo, reload; attempt Brushed Metal with MR texture and assert zero writes plus ownership explanation. L3+PNG.
 
-### P6 — Friendly placement over preserved affine values
+### P6 — Friendly placement (retired by Scene-panel UX revision)
 
-- **Entry/read-back:** P3 and batch command landed. Read matrix construction/sampling and D8's numerical contract. No transform storage redesign or automatic slot linking.
-- **Deliverables:** compound offset/rotation/scale controls for decomposable, undriven transforms; explicit Advanced fallback for shear/singular/driven cases; batch update of six original slots.
-- **Gate:** UV round-trip test with identity, rotation, reflection, shear, zero scale and a held-out imported transform; opening causes no writes. One undo restores exact pregesture values. Common checks; focused rendered UV proof where runtime sampling changes are involved.
-- **Demo/gesture:** `material-inspector-placement`: rotate a texture, undo; select sheared imported mapping, verify Advanced reason and unchanged matrix. L3+PNG. Retain P3's fully functional affine editor if this phase is not yet landed; label status accordingly.
+The Scene dock widget and its release-only gesture path were removed at Peter’s request. Original affine values, node parameters and graph editing remain unchanged. `material-inspector-textures` now verifies their absence from the panel. No renderer or serialization change accompanies removal.
 
 The two renderer repairs were included in the authorized end-to-end work after their bounded proof was established: transmissive PBR output enters the transparent pass independently of authored alpha mode, and transmission replaces only the diffuse term while preserving additional lobes. The shader ABI is unchanged.
 

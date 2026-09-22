@@ -55,13 +55,6 @@ impl ScenePanel {
                 }
             }
         };
-        // Keep the stored cutoff reachable without presenting it as active
-        // opacity authoring in Solid/Fade. Its value remains intact in the
-        // Advanced drawer until Cutout is selected.
-        if self.material_param_named(row, "alpha_cutoff") && self.material_opacity_mode() != Some(1)
-        {
-            return Some("Advanced · Opacity".to_string());
-        }
         Some(name)
     }
 
@@ -89,34 +82,6 @@ impl ScenePanel {
             .eq(name.chars().filter(|character| *character != '_'))
     }
 
-    fn material_value(&self, id: &manifold_foundation::ParamId) -> Option<f32> {
-        self.properties_card
-            .row_id_index
-            .get(id.as_ref())
-            .and_then(|&slot| self.properties_card.current_values.get(slot).copied())
-            .or_else(|| {
-                self.full_params.as_ref().and_then(|surface| {
-                    surface
-                        .rows
-                        .iter()
-                        .find(|row| row.id == *id)
-                        .map(|row| row.value.effective)
-                })
-            })
-    }
-
-    fn material_opacity_mode(&self) -> Option<i32> {
-        self.full_params.as_ref()?.rows.iter().find_map(|row| {
-            (row.spec.material_role == Some(MaterialParamRole::Scalar(MaterialGroup::Opacity))
-                && self.material_param_named(row, "alpha_mode"))
-            .then(|| {
-                self.material_value(&row.id)
-                    .unwrap_or(row.value.effective)
-                    .round() as i32
-            })
-        })
-    }
-
     pub(super) fn material_section_folded(&self, name: &str) -> bool {
         self.section_folded.get(name).copied().unwrap_or_else(|| {
             name == "Advanced"
@@ -124,16 +89,6 @@ impl ScenePanel {
                 || name == "Advanced · Dormant Textures"
                 || name.starts_with("Textures · ")
         })
-    }
-
-    pub(super) fn material_section_display_name(&self, name: &str) -> String {
-        if let Some(family) = Self::material_family_from_section(name) {
-            return format!(
-                "Advanced · {} UV & sampling",
-                Self::material_family_label(family)
-            );
-        }
-        name.to_string()
     }
 
     pub(super) fn build_material_section_sources(
@@ -175,7 +130,7 @@ impl ScenePanel {
                     cy,
                     width,
                     ROW_H,
-                    &format!("{} · {} · mesh UV", texture.label, texture.source_label),
+                    &format!("{} · {}", texture.label, texture.source_label),
                     label_style(),
                 );
                 cy += ROW_H;
@@ -211,177 +166,6 @@ impl ScenePanel {
                 texture.connected && Self::material_family_for_port(&texture.port) == Some(family)
             })
         })
-    }
-
-    fn material_family_index(family: MaterialMapFamily) -> usize {
-        match family {
-            MaterialMapFamily::Base => 0,
-            MaterialMapFamily::Normal => 1,
-            MaterialMapFamily::MetallicRoughness => 2,
-            MaterialMapFamily::Occlusion => 3,
-            MaterialMapFamily::Emission => 4,
-        }
-    }
-
-    fn material_placement_rows(&self, family: MaterialMapFamily) -> Option<[ParamRow; 6]> {
-        let surface = self.full_params.as_ref()?;
-        let components = [
-            UvComponent::M00,
-            UvComponent::M01,
-            UvComponent::M10,
-            UvComponent::M11,
-            UvComponent::Tx,
-            UvComponent::Ty,
-        ];
-        let mut found: [Option<ParamRow>; 6] = std::array::from_fn(|_| None);
-        for row in surface
-            .rows
-            .iter()
-            .filter(|row| self.material_param_selected(row))
-        {
-            let Some(MaterialParamRole::Placement(row_family, component)) = row.spec.material_role
-            else {
-                continue;
-            };
-            if row_family != family {
-                continue;
-            }
-            let Some(index) = components
-                .iter()
-                .position(|candidate| *candidate == component)
-            else {
-                continue;
-            };
-            if found[index].is_none() {
-                found[index] = Some(row.clone());
-            }
-        }
-        let [
-            Some(m00),
-            Some(m01),
-            Some(m10),
-            Some(m11),
-            Some(tx),
-            Some(ty),
-        ] = found
-        else {
-            return None;
-        };
-        Some([m00, m01, m10, m11, tx, ty])
-    }
-
-    fn configure_material_placements(&mut self, info: &MaterialInspectorInfo) {
-        let Some(target) = self
-            .live_layer_id()
-            .cloned()
-            .map(GraphParamTarget::GeneratorOf)
-        else {
-            return;
-        };
-        for family in [
-            MaterialMapFamily::Base,
-            MaterialMapFamily::Normal,
-            MaterialMapFamily::MetallicRoughness,
-            MaterialMapFamily::Occlusion,
-            MaterialMapFamily::Emission,
-        ] {
-            let index = Self::material_family_index(family);
-            if !self.material_family_connected(family) {
-                continue;
-            }
-            let Some(rows) = self.material_placement_rows(family) else {
-                continue;
-            };
-            let refs = [&rows[0], &rows[1], &rows[2], &rows[3], &rows[4], &rows[5]];
-            self.material_placement_widgets[index].configure(
-                target.clone(),
-                info.object.clone(),
-                info.material.clone(),
-                refs,
-            );
-            self.material_placement_active[index] = true;
-        }
-    }
-
-    pub(super) fn material_family_from_section(name: &str) -> Option<MaterialMapFamily> {
-        match name {
-            "Textures · Base Color" => Some(MaterialMapFamily::Base),
-            "Textures · Normal" => Some(MaterialMapFamily::Normal),
-            "Textures · Metallic / Roughness" => Some(MaterialMapFamily::MetallicRoughness),
-            "Textures · Occlusion" => Some(MaterialMapFamily::Occlusion),
-            "Textures · Emission" => Some(MaterialMapFamily::Emission),
-            _ => None,
-        }
-    }
-
-    pub(super) fn build_material_placement(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        family: MaterialMapFamily,
-    ) -> f32 {
-        let index = Self::material_family_index(family);
-        if !self.material_placement_active[index] || self.material_placement_built[index] {
-            return cy;
-        }
-        self.material_placement_built[index] = true;
-        let mut cy = cy;
-        let source = self.active_material_info.as_ref().and_then(|info| {
-            info.textures.iter().find(|texture| {
-                texture.connected && Self::material_family_for_port(&texture.port) == Some(family)
-            })
-        });
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            &format!("{} texture", Self::material_family_label(family)),
-            section_label_style(),
-        );
-        cy += ROW_H;
-        if let Some(texture) = source {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                &texture.source_label,
-                label_style(),
-            );
-            cy += ROW_H;
-        }
-        if let Some(reason) = self.material_placement_widgets[index].reason() {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                &format!("Placement — {reason}"),
-                label_style(),
-            );
-            return cy + ROW_H + ROW_GAP;
-        }
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Placement",
-            section_label_style(),
-        );
-        self.material_placement_widgets[index].build(
-            tree,
-            Some(self.content_parent),
-            Rect::new(inner_x, cy + ROW_H, inner_w, inner_w),
-            98_000 + index as u64 * 128,
-        ) + ROW_H
     }
 
     fn material_feature_map_for_port(
@@ -436,16 +220,11 @@ impl ScenePanel {
             .unwrap_or_default()
     }
 
-    pub(super) fn material_rgb_row_visible(&self, rows: &[ParamRow], row: &ParamRow) -> bool {
-        let Some(anchor) = rows.iter().find_map(|candidate| {
-            candidate
-                .rgb_members
-                .as_ref()
-                .and_then(|members| members.contains(&row.id).then(|| candidate.id.clone()))
-        }) else {
-            return true;
-        };
-        row.id == anchor || self.material_rgb_expanded.contains(&anchor)
+    pub(super) fn material_panel_row_visible(row: &ParamRow) -> bool {
+        !matches!(
+            row.spec.material_role,
+            Some(MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..))
+        )
     }
 
     fn material_rgb_colour(row: &ParamRow) -> Option<crate::param_surface::MaterialColour> {
@@ -572,6 +351,14 @@ impl ScenePanel {
         rows: &[ParamRow],
         feature: crate::param_surface::MaterialFeature,
     ) -> bool {
+        if self.material_feature_context.is_some() {
+            return self.material_visible_features.contains(&feature)
+                || rows.iter().any(|row| {
+                    self.material_param_selected(row)
+                        && row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
+                        && row.value.base != row.spec.default
+                });
+        }
         let authored = rows
             .iter()
             .filter(|row| self.material_param_selected(row))
@@ -793,55 +580,49 @@ impl ScenePanel {
             }
         }
         let mut info = self.properties_card.rows[slot].clone();
-        if (self.material_param_named(&info, "metallic")
-            || self.material_param_named(&info, "roughness"))
-            && self.material_family_connected(MaterialMapFamily::MetallicRoughness)
-        {
-            info.spec.inactive_reason =
-                Some("From texture — scalar applies without this map".into());
+        if info.spec.material_role.is_some() {
+            info.spec.inactive_reason = None;
         }
         if self.material_object_gain(&info) {
             info.spec.name = "Object gain".into();
         }
-        match info.spec.material_role {
-            Some(MaterialParamRole::Placement(_, component)) => {
-                info.spec.name = match component {
-                    UvComponent::M00 => "M00",
-                    UvComponent::M01 => "M01",
-                    UvComponent::M10 => "M10",
-                    UvComponent::M11 => "M11",
-                    UvComponent::Tx => "Offset U",
-                    UvComponent::Ty => "Offset V",
-                }
-                .into()
-            }
-            Some(MaterialParamRole::Sampler(_, component)) => {
-                info.spec.name = match component {
-                    crate::param_surface::SamplerComponent::WrapU => "Wrap U",
-                    crate::param_surface::SamplerComponent::WrapV => "Wrap V",
-                    crate::param_surface::SamplerComponent::MagFilter => "Magnification",
-                    crate::param_surface::SamplerComponent::MinFilter => "Minification",
-                }
-                .into()
-            }
-            _ => {}
-        }
         if self.material_param_named(&info, "alpha_mode") {
-            info.spec.value_labels = Some(vec![
-                "Solid".to_string(),
-                "Cutout".to_string(),
-                "Fade".to_string(),
-            ]);
-        } else if self.material_param_named(&info, "alpha_cutoff") {
-            if self.material_opacity_mode() != Some(1) {
-                info.spec.inactive_reason = Some("Only used in Cutout".to_string());
-            }
-        } else if self.material_param_named(&info, "color_a")
-            && self.material_opacity_mode() == Some(0)
-        {
-            info.spec.inactive_reason = Some("Ignored in Solid".to_string());
+            info.spec.value_labels = Some(vec!["Solid".into(), "Cutout".into(), "Fade".into()]);
         }
-
+        if let Some(MaterialParamRole::FeatureMode(feature)) = info.spec.material_role {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                label_width,
+                ROW_H,
+                "Enabled",
+                label_style(),
+            );
+            let label = match info.value.base.round() as i32 {
+                1 => "Off",
+                2 => "On",
+                _ => "Auto",
+            };
+            let id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x + label_width,
+                cy,
+                (slider_w - label_width).max(0.0),
+                ROW_H,
+                btn_style(),
+                label,
+                param_row_key_base(info.id.as_ref()) | ROW_ROLE_TOGGLE,
+            );
+            tree.set_name(id, format!("param_row.{}.value", info.id));
+            self.properties_card.row_host.row_index.insert(
+                tree.widget_of(id),
+                slot,
+                RowRole::MaterialFeatureToggle(feature),
+            );
+            self.material_mode_ids.push((id, slot));
+            return cy + ROW_H + ROW_GAP;
+        }
         let mut row_cy = cy;
         if info.rgb_members.is_some() && Self::material_rgb_colour(&info).is_some() {
             row_cy = self.build_material_swatch_header(
@@ -853,9 +634,6 @@ impl ScenePanel {
                 slider_w,
                 &info,
             );
-            if !self.material_rgb_expanded.contains(&info.id) {
-                return row_cy;
-            }
         }
 
         // Trigger parameters use the same momentary button and ParamFire
@@ -936,33 +714,11 @@ impl ScenePanel {
         );
         let new_cy = built.new_cy;
         self.properties_card.row_host.install_row(tree, slot, built);
-        if let Some(MaterialParamRole::FeatureMode(feature)) = info.spec.material_role
-            && let Some(slider) = &self.properties_card.row_host.slider_ids[slot]
-        {
-            let widget = |node: NodeId| tree.widget_of(node);
-            self.properties_card.row_host.row_index.insert(
-                widget(slider.track),
-                slot,
-                RowRole::MaterialFeatureToggle(feature),
-            );
-            self.properties_card.row_host.row_index.insert(
-                widget(slider.value_text),
-                slot,
-                RowRole::MaterialFeatureToggle(feature),
-            );
-            if let Some(label) = slider.label {
-                self.properties_card.row_host.row_index.insert(
-                    widget(label),
-                    slot,
-                    RowRole::MaterialFeatureToggle(feature),
-                );
-            }
-        }
 
         new_cy
     }
 
-    fn material_full_value(&self, id: &manifold_foundation::ParamId) -> f32 {
+    pub(super) fn material_full_value(&self, id: &manifold_foundation::ParamId) -> f32 {
         self.properties_card
             .row_id_index
             .get(id.as_ref())
@@ -978,6 +734,33 @@ impl ScenePanel {
             })
             .unwrap_or(0.0)
             .clamp(0.0, 1.0)
+    }
+
+    pub(super) fn sync_material_swatches(&self, tree: &mut UITree) {
+        for (node, _, ids, _) in &self.material_swatch_ids {
+            let rgb: [u8; 3] = std::array::from_fn(|index| {
+                (self.material_full_value(&ids[index]) * 255.0).round() as u8
+            });
+            let colour = Color32::new(rgb[0], rgb[1], rgb[2], 255);
+            let Some(current) = tree.get_node(*node) else {
+                continue;
+            };
+            if current.style.bg_color == colour {
+                continue;
+            }
+            let mut style = current.style;
+            style.bg_color = colour;
+            style.text_color = if rgb.iter().map(|v| *v as u32).sum::<u32>() > 421 {
+                Color32::BLACK
+            } else {
+                Color32::WHITE
+            };
+            tree.set_style(*node, style);
+            tree.set_text(
+                *node,
+                &format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]),
+            );
+        }
     }
 
     fn build_material_swatch_header(
@@ -1027,8 +810,6 @@ impl ScenePanel {
             ROW_H,
             UIStyle {
                 bg_color: Color32::new(to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), 255), // design-token-exempt: displays authored material RGB, not a UI theme colour
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
                 text_color: if rgb.iter().copied().sum::<f32>() > 1.65 {
                     Color32::BLACK
                 } else {
@@ -1036,10 +817,10 @@ impl ScenePanel {
                 },
                 font_size: color::FONT_LABEL,
                 corner_radius: color::SMALL_RADIUS,
-                ..btn_style()
+                ..drag_value_style()
             },
             &label,
-            MATERIAL_SWATCH_KEY_BASE + slot as u64,
+            param_row_key_base(info.id.as_ref()) | MATERIAL_SWATCH_KEY_BASE,
         );
         tree.set_name(swatch_id, format!("material.swatch.{}", info.id));
         self.material_swatch_ids
@@ -1191,7 +972,20 @@ impl ScenePanel {
     ) -> f32 {
         self.active_material_info = row.material_inspector.clone();
         if let Some(material) = row.material_inspector.clone() {
-            self.configure_material_placements(&material);
+            let context = self
+                .live_layer_id()
+                .cloned()
+                .map(|layer| (layer, material.object.clone(), material.material.clone()));
+            if self.material_feature_context != context {
+                self.material_feature_context = None;
+                let rows = self.selected_material_rows();
+                self.material_visible_features = rows
+                    .iter()
+                    .filter_map(Self::row_feature)
+                    .filter(|feature| self.material_feature_visible(&rows, *feature))
+                    .collect();
+                self.material_feature_context = context;
+            }
             cy = self.build_material_header(tree, inner_x, inner_w, cy, &material);
             cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &material);
             cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
@@ -1272,31 +1066,18 @@ impl ScenePanel {
             section_label_style(),
         );
         cy += ROW_H;
-        let scope = match info.shared_object_count {
-            Some(1) => "Applies to 1 object".to_string(),
-            Some(n) => format!("Applies to {n} objects"),
-            None => "Shared scope unknown".to_string(),
-        };
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            &scope,
-            label_style(),
-        );
-        cy += ROW_H;
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Custom material",
-            section_label_style(),
-        );
-        cy += ROW_H;
+        if let Some(count) = info.shared_object_count.filter(|count| *count > 1) {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                &format!("Shared · {count} objects"),
+                label_style(),
+            );
+            cy += ROW_H;
+        }
         if info.shared_object_count.is_some() {
             let looks = [
                 (MaterialLook::Matte, "Matte", 0_u64),
@@ -1327,7 +1108,7 @@ impl ScenePanel {
                 cy,
                 inner_w,
                 ROW_H,
-                "Looks unavailable — shared scope unknown",
+                "Shared scope unknown",
                 label_style(),
             );
         }
@@ -1512,34 +1293,6 @@ impl ScenePanel {
         cy + ROW_H + ROW_GAP
     }
 
-    pub(super) fn handle_material_placement_event(
-        &mut self,
-        event: &UIEvent,
-        tree: &mut UITree,
-    ) -> Option<Vec<PanelAction>> {
-        if let Some(index) = self
-            .material_placement_active
-            .iter()
-            .copied()
-            .enumerate()
-            .find_map(|(index, active)| {
-                (active && self.material_placement_widgets[index].is_dragging()).then_some(index)
-            })
-            && let Some(actions) = self.material_placement_widgets[index].handle_event(event, tree)
-        {
-            return Some(actions);
-        }
-        for (index, active) in self.material_placement_active.iter().copied().enumerate() {
-            if active
-                && let Some(actions) =
-                    self.material_placement_widgets[index].handle_event(event, tree)
-            {
-                return Some(actions);
-            }
-        }
-        None
-    }
-
     pub(super) fn properties_row_action(
         &mut self,
         row: usize,
@@ -1557,7 +1310,13 @@ impl ScenePanel {
             let Some(param) = self.properties_card.rows.get(row) else {
                 return Vec::new();
             };
-            let current = param.value.base.round() as i32;
+            let current = self
+                .properties_card
+                .current_values
+                .get(row)
+                .copied()
+                .unwrap_or(param.value.base)
+                .round() as i32;
             let next = match current {
                 0 => 1, // FollowValues → explicit Off
                 1 => 2, // Off → explicit On
@@ -1719,6 +1478,164 @@ mod tests {
         assert!(
             !panel.material_feature_visible(&[mode, secondary], feature),
             "secondary authored values must remain reachable through Add Feature"
+        );
+    }
+
+    #[test]
+    fn material_inspector_factor_drag_cannot_change_feature_presence() {
+        let feature = crate::param_surface::MaterialFeature::Coat;
+        let mut panel = ScenePanel::new();
+        panel.material_feature_context = Some((
+            LayerId::new("layer"),
+            ModifierObjectRef {
+                scope: Vec::new(),
+                node: manifold_foundation::NodeId::new("object"),
+            },
+            ModifierObjectRef {
+                scope: Vec::new(),
+                node: manifold_foundation::NodeId::new("material"),
+            },
+        ));
+        let mut row = material_test_row(
+            "51_clearcoat",
+            MaterialParamRole::Scalar(MaterialGroup::Feature(feature)),
+            0.0,
+            0.0,
+        );
+        assert!(!panel.material_feature_visible(&[row.clone()], feature));
+        row.value.base = 1.0;
+        row.value.effective = 1.0;
+        assert!(!panel.material_feature_visible(&[row.clone()], feature));
+        panel.material_visible_features.insert(feature);
+        row.value.base = 0.0;
+        row.value.effective = 0.0;
+        assert!(panel.material_feature_visible(&[row], feature));
+    }
+
+    #[test]
+    fn material_inspector_rgb_sliders_preview_before_release_and_sync_hex() {
+        let mut panel = ScenePanel::new();
+        panel.properties_card.resize(3);
+        let ids =
+            ["51_color_r", "51_color_g", "51_color_b"].map(manifold_foundation::ParamId::from);
+        for (index, channel) in [RgbChannel::R, RgbChannel::G, RgbChannel::B]
+            .into_iter()
+            .enumerate()
+        {
+            let mut row = material_test_row(
+                ids[index].as_ref(),
+                MaterialParamRole::Colour(
+                    MaterialGroup::Surface,
+                    crate::param_surface::MaterialColour::Base,
+                    channel,
+                ),
+                1.0,
+                1.0,
+            );
+            row.spec.min = 0.0;
+            row.spec.max = 1.0;
+            if index == 0 {
+                row.rgb_members = Some(ids.clone());
+            }
+            panel
+                .properties_card
+                .row_id_index
+                .insert(row.id.to_string(), index);
+            panel.properties_card.rows[index] = row;
+            panel.properties_card.current_values[index] = 1.0;
+        }
+        let target = GraphParamTarget::GeneratorOf(LayerId::new("layer"));
+        let mut tree = UITree::new();
+        panel.content_parent = tree.add_panel(None, 0.0, 0.0, 400.0, 800.0, UIStyle::default());
+        let mut y = 0.0;
+        for slot in 0..3 {
+            y = panel.build_properties_row(&mut tree, 0.0, y, slot, 100.0, 380.0, target.clone());
+        }
+        assert!(
+            panel
+                .properties_card
+                .row_host
+                .slider_ids
+                .iter()
+                .all(Option::is_some)
+        );
+        assert_eq!(panel.material_swatch_ids.len(), 1);
+        let track = panel.properties_card.row_host.slider_ids[0]
+            .as_ref()
+            .unwrap()
+            .track;
+        let rect = tree.get_bounds(track);
+        let down = panel.properties_card.handle_pointer_down(
+            track,
+            Vec2::new(rect.x + rect.width, rect.y),
+            &mut tree,
+            &target,
+        );
+        let down = panel.rewrite_material_rgb_actions(down);
+        assert!(matches!(
+            down.first(),
+            Some(PanelAction::Scrub(
+                ValueRef::ParamRgb(..),
+                ScrubPhase::Begin
+            ))
+        ));
+        let moved =
+            panel
+                .properties_card
+                .handle_drag(Vec2::new(rect.x, rect.y), &mut tree, false, &target);
+        let moved = panel.rewrite_material_rgb_actions(moved);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::ParamRgb(_, members), ScrubPhase::Move(ScrubValue::Rgb(rgb)))] if members == &ids && rgb[0] < 1.0 && rgb[1..] == [1.0, 1.0])
+        );
+        panel.sync_material_swatches(&mut tree);
+        let hex = tree
+            .get_node(panel.material_swatch_ids[0].0)
+            .unwrap()
+            .text
+            .as_deref()
+            .unwrap();
+        assert_ne!(hex, "#FFFFFF");
+        assert!(hex.ends_with("FFFF"));
+        let release = panel.properties_card.row_host.handle_drag_end();
+        assert!(matches!(
+            panel.rewrite_material_rgb_actions(release).as_slice(),
+            [PanelAction::Scrub(
+                ValueRef::ParamRgb(..),
+                ScrubPhase::Commit
+            )]
+        ));
+    }
+
+    #[test]
+    fn material_inspector_mode_is_an_explicit_control_without_a_slider() {
+        let feature = crate::param_surface::MaterialFeature::Coat;
+        let mut panel = ScenePanel::new();
+        panel.properties_card.resize(1);
+        panel.properties_card.rows[0] = material_test_row(
+            "51_coat_mode",
+            MaterialParamRole::FeatureMode(feature),
+            0.0,
+            0.0,
+        );
+        let mut tree = UITree::new();
+        panel.content_parent = tree.add_panel(None, 0.0, 0.0, 400.0, 800.0, UIStyle::default());
+        panel.build_properties_row(
+            &mut tree,
+            0.0,
+            0.0,
+            0,
+            100.0,
+            380.0,
+            GraphParamTarget::GeneratorOf(LayerId::new("layer")),
+        );
+        assert!(panel.properties_card.row_host.slider_ids[0].is_none());
+        assert_eq!(panel.material_mode_ids.len(), 1);
+        assert_eq!(
+            tree.get_node(panel.material_mode_ids[0].0)
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("Auto")
         );
     }
 
@@ -1918,52 +1835,31 @@ mod tests {
     }
 
     #[test]
-    fn material_inspector_texture_families_split_connected_and_dormant_drawers() {
-        let placement = material_test_row(
-            "51_base_uv_m00",
+    fn material_inspector_uv_and_sampling_stay_out_of_panel() {
+        for role in [
             MaterialParamRole::Placement(
                 MaterialMapFamily::Base,
                 crate::param_surface::UvComponent::M00,
             ),
-            1.0,
-            1.0,
-        );
-        let mut panel = ScenePanel::new();
-        panel.active_material_info = Some(MaterialInspectorInfo {
-            object_gain: None,
-            object: ModifierObjectRef {
-                scope: Vec::new(),
-                node: manifold_foundation::NodeId::new("object"),
-            },
-            material: ModifierObjectRef {
-                scope: Vec::new(),
-                node: manifold_foundation::NodeId::new("material"),
-            },
-            shared_object_count: Some(1),
-            textures: vec![MaterialTextureInfo {
-                port: "base_color_map".into(),
-                label: "base color".into(),
-                source_label: "Connected · albedo.png".into(),
-                connected: true,
-                graph_source: false,
-            }],
-            params: Vec::new(),
-        });
-        assert_eq!(
-            panel.material_section_name(&placement).as_deref(),
-            Some("Textures · Base Color")
-        );
-        assert!(panel.material_section_folded("Textures · Base Color"));
-        panel.active_material_info.as_mut().unwrap().textures[0].connected = false;
-        assert_eq!(
-            panel.material_section_name(&placement).as_deref(),
-            Some("Advanced · Dormant Textures")
-        );
-        assert!(panel.material_section_folded("Advanced · Dormant Textures"));
-        assert_eq!(
-            ScenePanel::material_family_for_port("clearcoat_normal_map"),
-            None
-        );
+            MaterialParamRole::Sampler(
+                MaterialMapFamily::Normal,
+                crate::param_surface::SamplerComponent::WrapU,
+            ),
+        ] {
+            assert!(!ScenePanel::material_panel_row_visible(&material_test_row(
+                "uv", role, 0.0, 0.0
+            )));
+        }
+        assert!(ScenePanel::material_panel_row_visible(&material_test_row(
+            "r",
+            MaterialParamRole::Colour(
+                MaterialGroup::Surface,
+                crate::param_surface::MaterialColour::Base,
+                RgbChannel::R
+            ),
+            0.0,
+            0.0
+        )));
     }
 
     #[test]
@@ -2085,7 +1981,7 @@ mod tests {
     }
 
     #[test]
-    fn material_inspector_expanded_rgb_keeps_primary_channel_reachable() {
+    fn material_inspector_rgb_channels_are_always_reachable() {
         let r = manifold_foundation::ParamId::from("51_base_color_r".to_string());
         let g = manifold_foundation::ParamId::from("51_base_color_g".to_string());
         let b = manifold_foundation::ParamId::from("51_base_color_b".to_string());
@@ -2120,11 +2016,9 @@ mod tests {
             0.6,
             0.0,
         );
-        let mut panel = ScenePanel::new();
-        panel.material_rgb_expanded.insert(r.clone());
         let rows = vec![primary.clone(), green, blue];
-        assert!(panel.material_rgb_row_visible(&rows, &primary));
-        assert!(panel.material_rgb_row_visible(&rows, &rows[1]));
-        assert!(panel.material_rgb_row_visible(&rows, &rows[2]));
+        assert!(ScenePanel::material_panel_row_visible(&primary));
+        assert!(ScenePanel::material_panel_row_visible(&rows[1]));
+        assert!(ScenePanel::material_panel_row_visible(&rows[2]));
     }
 }

@@ -979,6 +979,15 @@ pub enum RootAction {
         whole_numbers: bool,
         degrees: bool,
     },
+    /// Click on a material colour swatch opens the shared inline hex editor.
+    /// The three channel ids remain the authoritative scalar storage and are
+    /// committed through the existing atomic `ParamRgb` scrub path.
+    BeginMaterialColourTextInput {
+        target: GraphParamTarget,
+        param_ids: [ParamId; 3],
+        anchor: Rect,
+        value: [f32; 3],
+    },
     /// Click on the driver drawer's Free field → open a beats type-in for the
     /// LFO's free-running period (free mode). Carries the target + id, the field
     /// anchor rect, and the current period to prefill (the division's beats when

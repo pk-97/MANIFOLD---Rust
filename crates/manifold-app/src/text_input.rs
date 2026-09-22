@@ -48,6 +48,10 @@ pub enum TextInputField {
     /// [`TextInputState::inspector_param`] (carries a non-`Copy` `ParamId`).
     /// Commit parses the f32, clamps, and dispatches `ParamChanged` + `ParamCommit`.
     InspectorParam,
+    /// Material RGB swatch hex type-in. The target + channel ids ride on
+    /// [`TextInputState::material_colour`]. Commit routes through the atomic
+    /// `ParamRgb` scrub path so the edit has one undo entry.
+    MaterialColour,
     /// Driver (LFO) free-period type-in, opened by a click on the drawer's Free
     /// field. The target + id ride on [`TextInputState::driver_free_period`].
     /// Commit parses the beats f32 and dispatches `DriverConfig(SetFreePeriod)`.
@@ -181,6 +185,15 @@ pub struct InspectorParamCtx {
     /// commit converts back — same boundary contract as `SceneNumericParamCtx`'s
     /// `degrees` flag.
     pub degrees: bool,
+}
+
+/// Context for an in-flight material RGB hex type-in. The channel ids remain
+/// stable across selection changes and are consumed by the shared `ParamRgb`
+/// scrub path on commit.
+#[derive(Debug, Clone)]
+pub struct MaterialColourCtx {
+    pub target: manifold_ui::panels::GraphParamTarget,
+    pub param_ids: [manifold_core::effects::ParamId; 3],
 }
 
 /// Context for an in-flight driver Free-period type-in — set when the box opens
@@ -367,6 +380,8 @@ pub struct TextInputState {
     /// Context for `InspectorParam` (target + id + clamp range; `ParamId` is
     /// not `Copy`). Set right after `begin()` by the app, read on commit.
     pub inspector_param: Option<InspectorParamCtx>,
+    /// Context for `MaterialColour` (target + three channel ids).
+    pub material_colour: Option<MaterialColourCtx>,
     /// Context for `DriverFreePeriod` (target + id). Set right after `begin()`,
     /// read on commit.
     pub driver_free_period: Option<DriverFreePeriodCtx>,
@@ -419,6 +434,7 @@ impl TextInputState {
             graph_param_name: None,
             graph_table_edit: None,
             inspector_param: None,
+            material_colour: None,
             driver_free_period: None,
             graph_numeric_param: None,
             scene_numeric_param: None,
@@ -482,6 +498,7 @@ impl TextInputState {
         // it again immediately for an `InspectorParam` / `DriverFreePeriod` /
         // `GraphNumericParam` / `SavePresetName` / `RenamePreset` field.
         self.inspector_param = None;
+        self.material_colour = None;
         self.driver_free_period = None;
         self.graph_numeric_param = None;
         self.scene_numeric_param = None;
@@ -543,6 +560,7 @@ impl TextInputState {
         self.graph_param_name = None;
         self.graph_table_edit = None;
         self.inspector_param = None;
+        self.material_colour = None;
         self.driver_free_period = None;
         self.graph_numeric_param = None;
         self.scene_numeric_param = None;
@@ -719,6 +737,60 @@ pub fn degrees_commit_value(parsed: f32, degrees: bool) -> f32 {
     if degrees { parsed.to_radians() } else { parsed }
 }
 
+/// Parse a CSS-style RGB hex colour into normalized channel values.
+/// Six-digit input may have an optional `#`; three-digit input expands each
+/// nibble. The parser is deliberately strict so malformed text cannot write a
+/// partial colour through the live scrub path.
+pub fn parse_material_colour_hex(text: &str) -> Option<[f32; 3]> {
+    let text = text.trim().strip_prefix('#').unwrap_or(text.trim());
+    let digits: Vec<u8> = text
+        .as_bytes()
+        .iter()
+        .map(|byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let channels = match digits.as_slice() {
+        [r, g, b] => [r * 17, g * 17, b * 17],
+        [r0, r1, g0, g1, b0, b1] => [r0 * 16 + r1, g0 * 16 + g1, b0 * 16 + b1],
+        _ => return None,
+    };
+    Some(channels.map(|channel| f32::from(channel) / 255.0))
+}
+
+/// Format normalized RGB values for the swatch's initial text.
+pub fn format_material_colour_hex(value: [f32; 3]) -> String {
+    let channels = value.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+    format!("#{:02X}{:02X}{:02X}", channels[0], channels[1], channels[2])
+}
+
+/// Build the existing atomic RGB scrub transaction for a committed hex value.
+/// Keeping this shape shared with the app commit arm makes it impossible for
+/// text entry to accidentally create three independent scalar undo entries.
+pub fn material_colour_scrub_actions(
+    ctx: MaterialColourCtx,
+    values: [f32; 3],
+) -> [manifold_ui::panels::PanelAction; 3] {
+    use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
+    [
+        PanelAction::Scrub(
+            ValueRef::ParamRgb(ctx.target.clone(), ctx.param_ids.clone()),
+            ScrubPhase::Begin,
+        ),
+        PanelAction::Scrub(
+            ValueRef::ParamRgb(ctx.target.clone(), ctx.param_ids.clone()),
+            ScrubPhase::Move(ScrubValue::Rgb(values)),
+        ),
+        PanelAction::Scrub(
+            ValueRef::ParamRgb(ctx.target, ctx.param_ids),
+            ScrubPhase::Commit,
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod parse_tests {
     use super::*;
@@ -749,5 +821,71 @@ mod parse_tests {
     fn non_degrees_row_commit_passes_through() {
         let parsed = parse_lenient_numeric("0.42").expect("\"0.42\" parses");
         assert_eq!(degrees_commit_value(parsed, false), 0.42);
+    }
+
+    #[test]
+    fn material_colour_hex_parser_accepts_full_and_shorthand_case_insensitively() {
+        assert_eq!(
+            parse_material_colour_hex("#aBc012"),
+            Some([171.0 / 255.0, 192.0 / 255.0, 18.0 / 255.0])
+        );
+        assert_eq!(parse_material_colour_hex(" f0A "), Some([1.0, 0.0, 170.0 / 255.0]));
+        assert_eq!(format_material_colour_hex([1.0, 0.0, 170.0 / 255.0]), "#FF00AA");
+    }
+
+    #[test]
+    fn material_colour_hex_parser_rejects_invalid_input() {
+        for input in ["", "#", "#12", "#1234", "#12345", "#1234567", "#gggggg"] {
+            assert_eq!(parse_material_colour_hex(input), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn material_colour_context_is_cleared_when_a_session_begins_or_cancels() {
+        let mut state = TextInputState::new();
+        state.material_colour = Some(MaterialColourCtx {
+            target: manifold_ui::panels::GraphParamTarget::Generator,
+            param_ids: ["r".into(), "g".into(), "b".into()],
+        });
+        state.begin(TextInputField::Bpm, "120", AnchorRect::zero(), 11.0);
+        assert!(state.material_colour.is_none());
+        state.material_colour = Some(MaterialColourCtx {
+            target: manifold_ui::panels::GraphParamTarget::Generator,
+            param_ids: ["r".into(), "g".into(), "b".into()],
+        });
+        state.cancel();
+        assert!(state.material_colour.is_none());
+    }
+
+    #[test]
+    fn material_colour_hex_builds_one_atomic_param_rgb_transaction() {
+        use manifold_ui::panels::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
+
+        let values = parse_material_colour_hex("#12aBc0").expect("valid colour");
+        let ids = ["r".into(), "g".into(), "b".into()];
+        let actions = material_colour_scrub_actions(
+            MaterialColourCtx {
+                target: GraphParamTarget::Generator,
+                param_ids: ids.clone(),
+            },
+            values,
+        );
+        assert!(matches!(
+            &actions[0],
+            PanelAction::Scrub(ValueRef::ParamRgb(GraphParamTarget::Generator, got), ScrubPhase::Begin)
+                if got == &ids
+        ));
+        assert!(matches!(
+            &actions[1],
+            PanelAction::Scrub(
+                ValueRef::ParamRgb(GraphParamTarget::Generator, got),
+                ScrubPhase::Move(ScrubValue::Rgb(got_values))
+            ) if got == &ids && got_values == &values
+        ));
+        assert!(matches!(
+            &actions[2],
+            PanelAction::Scrub(ValueRef::ParamRgb(GraphParamTarget::Generator, got), ScrubPhase::Commit)
+                if got == &ids
+        ));
     }
 }
