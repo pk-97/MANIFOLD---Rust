@@ -23,6 +23,7 @@ use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::render_mode::RenderMode;
+use crate::node_graph::physics::RigidBody;
 use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::transform::Transform;
 
@@ -253,6 +254,10 @@ impl<'a> NodeInputs<'a> {
         self.backend.render_mode(self.slot(port)?)
     }
 
+    pub fn rigid_body(&self, port: &str) -> Option<RigidBody> {
+        self.backend.rigid_body(self.slot(port)?)
+    }
+
     /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
     /// `None` if unwired. Same CPU-struct drain shape as `Atmosphere` —
     /// produced by `node.scene_object`, consumed by `render_scene`'s
@@ -380,6 +385,7 @@ pub struct NodeOutputs<'a> {
     /// Sibling scratch for `Atmosphere` writes — same shape as transforms.
     pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
     /// Sibling scratch for `RenderMode` writes — same shape as atmospheres.
+    pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
     pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
     pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
@@ -409,7 +415,20 @@ impl<'a> NodeOutputs<'a> {
             pending_transform_writes,
             pending_atmosphere_writes,
             pending_render_mode_writes,
+            pending_rigid_body_writes: None,
             pending_object_writes,
+        }
+    }
+
+    pub(crate) fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
+        self.pending_rigid_body_writes = Some(writes);
+        self
+    }
+
+    pub fn set_rigid_body(&mut self, port: &str, value: RigidBody) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_rigid_body_writes.as_mut()
+                .expect("executor must provide rigid-body output scratch").push((slot, value));
         }
     }
 

@@ -99,6 +99,7 @@
     ]
   },
   "flows": {
+    "scene-physics-controls": "physicsscene",
     "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",
     "automation-show-parameter": "inspector",

@@ -44,6 +44,7 @@ use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
     ROW_ROLE_SECTION_HEADER, param_row_key_base,
+    build_toggle_trigger_row, ToggleParamIds,
 };
 use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
 use crate::slider::GAP;
@@ -1934,6 +1935,26 @@ impl ScenePanel {
         }
         let info = self.properties_card.rows[slot].clone();
 
+        // Trigger parameters use the same momentary button and ParamFire
+        // dispatch as generator cards; a numeric slider cannot fire Reset.
+        if info.spec.is_trigger {
+            let row = build_toggle_trigger_row(
+                tree, Some(self.content_parent), inner_x, cy, slider_w,
+                &info, &self.properties_card.mod_state, slot, target,
+                color::FONT_LABEL, true, false,
+                Some(param_row_key_base(info.id.as_ref())), None,
+            );
+            let host = &mut self.properties_card.row_host;
+            host.toggle_ids[slot] = Some(ToggleParamIds {
+                label_id: row.label_id, button_id: row.button_id,
+            });
+            host.audio_btn_ids[slot] = row.audio_btn;
+            host.audio_configs[slot] = row.audio_config;
+            host.audio_trigger_mode_badge_ids[slot] = row.mode_badge_id;
+            host.reindex_row(tree, slot);
+            return row.new_cy;
+        }
+
         // The value this row must SHOW: the sync's last-pushed value (the tree
         // is minted fresh every frame — a row the dirty-check skipped must
         // redraw that value here or it snaps back to the default). Never-
@@ -3783,6 +3804,33 @@ mod tests {
             relight: crate::panels::param_card::RelightCardConfig::default(),
         };
         (vm, surface)
+    }
+
+    #[test]
+    fn physics_reset_button_dispatches_to_the_bound_scene_layer() {
+        let (vm, mut surface) = world_transform_vm();
+        surface.rows[0].id = manifold_foundation::ParamId::from("40_reset");
+        surface.rows[0].spec.name = "Reset".into();
+        surface.rows[0].spec.is_trigger = true;
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure_params(Some(surface));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::World);
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let button = panel.properties_card.row_host.toggle_ids[0]
+            .as_ref().expect("Reset must have a trigger button").button_id;
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: button,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(actions.as_slice(),
+            [PanelAction::Params(ParamsAction::ParamFire(GraphParamTarget::GeneratorOf(layer), id))]
+                if layer.as_str() == "layer-1" && id.as_ref() == "40_reset"
+        ));
     }
 
     /// Build the world-transform fixture and select World, so the unified

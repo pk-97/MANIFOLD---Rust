@@ -12,6 +12,13 @@ pub const CUT_MAP_TYPE_IDS: &[&str] = &["node.cut_mesh_bands", "node.cut_mesh_ce
 
 pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
+        source: "platonic_mesh.rs",
+        rust_struct: "UploadUniforms",
+        shader: "shaders/platonic_mesh_upload.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "mesh_cut_map.rs",
         rust_struct: "CutMapUniforms",
         shader: "shaders/mesh_cut_map.wgsl",

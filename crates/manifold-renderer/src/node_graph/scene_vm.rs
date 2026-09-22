@@ -747,6 +747,19 @@ fn walk_transform_chain(
             transform_vm = Some(trace_transform(&current_level, sp, n.id));
             break;
         }
+        if n.type_id == "node.physics_world" {
+            // A pose is paired with one description input. Follow that body's
+            // authored transform for editing; the live simulated pose is not a
+            // project value and must never be written back by the scene panel.
+            cursor = port.strip_prefix("pose_")
+                .and_then(|index| current_level.producer(n.id, &format!("body_{index}")));
+            parseable = false; // transform modifiers must not splice across the solver.
+            continue;
+        }
+        if n.type_id == "node.rigid_body" {
+            cursor = current_level.producer(n.id, "transform");
+            continue;
+        }
         if TRANSFORM_MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
             chain.push(ModifierVm { node_doc_id: n.id, type_id: n.type_id.clone() });
             cursor = current_level.producer(n.id, "transform");
@@ -761,6 +774,26 @@ fn walk_transform_chain(
     // source is not a complete, splicable stack.
     let parseable = parseable && transform.is_some();
     (transform, chain, parseable)
+}
+
+/// Physics exposure owner associated with a root-scope scene object.
+/// Discovery only: no panel-owned values or duplicate mutation path.
+pub fn physics_body_doc_id(def: &EffectGraphDef, object_id: u32) -> Option<u32> {
+    let level = Level { nodes: &def.nodes, wires: &def.wires };
+    physics_body_in_level(&level, object_id)
+}
+
+fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
+    let (world_id, port) = level.producer(object_id, "transform")?;
+    let world = level.node(world_id)?;
+    if world.type_id != "node.physics_world" { return None; }
+    let input = format!("body_{}", port.strip_prefix("pose_")?);
+    let (body_id, _) = level.producer(world_id, &input)?;
+    (level.node(body_id)?.type_id == "node.rigid_body").then_some(body_id)
+}
+
+pub fn physics_world_doc_ids(def: &EffectGraphDef) -> impl Iterator<Item=u32> + '_ {
+    def.nodes.iter().filter(|n| n.type_id == "node.physics_world").map(|n| n.id)
 }
 
 /// Traces one `node.scene_object`'s full editable surface (D12): name,

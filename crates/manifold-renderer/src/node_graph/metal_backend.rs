@@ -182,6 +182,7 @@ pub struct MetalBackend {
     /// Same shape as `atmospheres` — drained after `node.render_mode`'s
     /// `evaluate`.
     render_modes: AHashMap<Slot, crate::node_graph::render_mode::RenderMode>,
+    rigid_bodies: AHashMap<Slot, crate::node_graph::physics::RigidBody>,
     /// CPU-only [`SceneObject`] values written via [`Backend::set_object`].
     /// Same shape as `atmospheres` — drained after `node.scene_object`'s
     /// `evaluate`.
@@ -244,6 +245,7 @@ impl MetalBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
+            rigid_bodies: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -279,6 +281,7 @@ impl MetalBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
+            rigid_bodies: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -576,6 +579,7 @@ impl MetalBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
+            rigid_bodies: AHashMap::default(),
             objects: AHashMap::default(),
         };
         // Immutable slots are dedicated. Preserve compatible images; a changed
@@ -913,8 +917,16 @@ impl Backend for MetalBackend {
         self.render_modes.get(&slot).copied()
     }
 
+    fn rigid_body(&self, slot: Slot) -> Option<crate::node_graph::physics::RigidBody> {
+        self.rigid_bodies.get(&slot).copied()
+    }
+
     fn set_render_mode(&mut self, slot: Slot, value: crate::node_graph::render_mode::RenderMode) {
         self.render_modes.insert(slot, value);
+    }
+
+    fn set_rigid_body(&mut self, slot: Slot, value: crate::node_graph::physics::RigidBody) {
+        self.rigid_bodies.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<crate::node_graph::scene_object::SceneObject> {

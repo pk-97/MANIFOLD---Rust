@@ -584,6 +584,10 @@ pub fn sync_inspector_data(
                                         // different strings for the same
                                         // node kind).
                                         let mut object_doc_ids = vec![*object_node_id];
+                                        if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
+                                            manifold_renderer::node_graph::scene_vm::physics_body_doc_id(def, *object_node_id)) {
+                                            object_doc_ids.push(body);
+                                        }
                                         if let Some(t) = transform {
                                             object_doc_ids.push(t.node_doc_id);
                                         }
@@ -925,6 +929,9 @@ pub fn sync_inspector_data(
                                 // World — scene-global toggles, and World is
                                 // the panel's scene-global item.
                                 ids.push(vm.scene_root_node_id);
+                                if let Some(def) = def.as_ref() {
+                                    ids.extend(manifold_renderer::node_graph::scene_vm::physics_world_doc_ids(def));
+                                }
                                 match &vm.environment {
                                     EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
                                     EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),

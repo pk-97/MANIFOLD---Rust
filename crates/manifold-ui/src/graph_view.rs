@@ -224,6 +224,7 @@ pub enum PortKindSnapshot {
     Atmosphere,
     RenderMode,
     Object,
+    RigidBody,
 }
 
 /// One wire. Mirror of `manifold_renderer::node_graph::WireSnapshot`.
