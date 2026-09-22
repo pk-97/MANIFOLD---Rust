@@ -403,7 +403,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut service = EditingService::new();
         service.execute(Box::new(command), &mut fixture.project);
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         let after = fixture.project.preset_instance(&fixture.target).unwrap();
         for change in &changes {
             assert_eq!(after.get_base_param(&change.param_id), change.value);
@@ -478,7 +478,7 @@ mod tests {
             )),
             &mut fixture.project,
         );
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         assert!(changes.iter().all(|change| {
             fixture
                 .project
@@ -532,6 +532,7 @@ mod tests {
             ("transmission", 0.38),
             ("ior", 1.33),
         ];
+        let material = fixture.material.clone();
         for &(name, default_value) in &authored_defaults {
             set_authored_default(&mut fixture, name, default_value);
         }
@@ -549,11 +550,11 @@ mod tests {
         let (coated_command, _) = build_command(&fixture, MaterialLook::Coated);
         let mut service = EditingService::new();
         service.execute(Box::new(coated_command), &mut fixture.project);
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
 
         let (default_command, default_changes) = build_command(&fixture, MaterialLook::Default);
         service.execute(Box::new(default_command), &mut fixture.project);
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         let restored = fixture.project.preset_instance(&fixture.target).unwrap();
         let metadata = restored
             .graph
@@ -575,7 +576,7 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(
-                restored.get_base_param(&binding.id.clone().into()),
+                restored.get_base_param(&binding.id),
                 expected
             );
         }
@@ -607,7 +608,7 @@ mod tests {
                 .unwrap()
                 .id
                 .clone();
-            assert_eq!(coated.get_base_param(&id.into()), value);
+            assert_eq!(coated.get_base_param(&id), value);
         }
         assert!(service.redo(&mut fixture.project));
         let redone = fixture.project.preset_instance(&fixture.target).unwrap();
@@ -648,7 +649,7 @@ mod tests {
         let (command, changes) = build_command(&fixture, MaterialLook::Default);
         let mut service = EditingService::new();
         service.execute(Box::new(command), &mut fixture.project);
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         let after = fixture.project.preset_instance(&fixture.target).unwrap();
         for change in changes {
             let expected = after

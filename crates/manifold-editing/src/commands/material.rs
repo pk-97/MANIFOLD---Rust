@@ -373,7 +373,9 @@ fn validate_descriptor_identity(
     if (binding.scale - 1.0).abs() > EPSILON || binding.offset.abs() > EPSILON {
         return Err(format!("parameter {id} uses a custom binding calibration"));
     }
-    let expected = if matches!(role, MaterialParamRole::FeatureMode(_)) {
+    let expected = if spec.is_toggle {
+        ParamConvert::BoolThreshold
+    } else if matches!(role, MaterialParamRole::FeatureMode(_)) || !spec.value_labels.is_empty() {
         ParamConvert::EnumRound
     } else {
         ParamConvert::Float
