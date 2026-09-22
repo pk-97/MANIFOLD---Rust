@@ -80,7 +80,11 @@ tracked bytes and budget rather than claiming hitch-free playback.
 **Temporary arrays:** `plan_array_allocations` shares an existing physical slot
 only between arrays with identical channel layout and byte capacity whose
 execution-plan lifetimes do not overlap. Outputs acquire storage before the
-current step releases inputs. Held, persistent, prebound, atomic, explicit
+current step releases inputs. Each exact layout/capacity bucket retains all distinct
+free roots; an explicit alias removes its root from reuse. Array inputs and outputs
+of `NonGpu` and `IoBridge` nodes remain dedicated: CPU evaluation can finish before
+queued GPU reads/writes execute, and GPU hazard tracking does not order mapped
+CPU access. Held, persistent, prebound, atomic, explicit
 in-place, canvas-dependent and carried/exported resources remain dedicated. Buffers stay allocated
 for the runtime; ordered encoding and native hazard tracking govern GPU access.
 Executor storage revisions detect overwritten cached outputs. This changes
@@ -118,6 +122,18 @@ output; adopting identical pixels in different physical storage changes the
 storage identity without inventing a content change. Weak caches retain no image
 after their last producer releases it; GPU handles still use normal retirement
 and residency leases. This does not add inactive-scene eviction or reduce quality.
+
+**Parked thumbnails:** A cold thumbnail runtime is retained only while its clip
+is visible and has no captured atlas cell. Runtime preparation and frame validity
+must be complete before exposing its texture. Atlas copy encoding occurs before
+runtime eviction; the normal content-frame retirement fence protects in-flight
+resources. This does not evict live layer generator state. An atlas cache entry
+means capture was encoded, not that the GPU fence has already completed.
+
+**Deleted effects:** Empty authored effect lists release their cached layer,
+group, LED-group and master runtimes before the compositor's empty-frame return.
+Disabled or zero-amount effects are not deletion. Pool entries and last-use
+stamps retain the existing layer-deletion and grace-period pruning policy.
 
 **Resolution changes:** The content thread prepares compositor, upscaler, generator,
 effect-chain and Math View replacements before publishing new dimensions. GPU

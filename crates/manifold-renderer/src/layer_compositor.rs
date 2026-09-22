@@ -1631,6 +1631,46 @@ impl LayerCompositor {
         }
     }
 
+    /// Release cached runtimes whose authored effect owner has been removed.
+    ///
+    /// A layer can remain in the project, and therefore inside the grace pool,
+    /// after its effects are edited away. The layer entry is still useful for
+    /// future effects, but the cached runtime is no longer compatible with the
+    /// authored graph. Keep the map slot so the LayerId pool invariant stays
+    /// intact; only drop the runtime. The liveness stamps remain paired with
+    /// the map slots so the existing project-deletion and grace pruner can
+    /// still retire those slots. Disabled and amount-zero effects intentionally
+    /// do not enter this path.
+    fn clear_obsolete_effect_chains(
+        &mut self,
+        layers: &[CompositeLayerDescriptor],
+        master_effects: &[PresetInstance],
+    ) {
+        for layer in layers {
+            if !layer.effects.is_empty() {
+                continue;
+            }
+
+            // A layer can change between leaf/group ownership. Clear every
+            // same-id pool slot so an old owner cannot retain an obsolete
+            // runtime after the authored effect slice is removed.
+            if let Some(chain) = self.effect_chains.get_mut(layer.layer_id) {
+                *chain = None;
+            }
+            if let Some(chain) = self.group_effect_chains.get_mut(layer.layer_id) {
+                *chain = None;
+            }
+            if let Some(chain) = self.led_group_effect_chains.get_mut(layer.layer_id) {
+                *chain = None;
+            }
+        }
+
+        if master_effects.is_empty() {
+            self.master_effect_chain = None;
+            self.led_master_ec = None;
+        }
+    }
+
     /// For every effect chain whose layer / group did NOT dispatch this
     /// frame (no active clips, layer muted, or layer outside the solo
     /// set), wipe persistent primitive state — Watercolor feedback,
@@ -2949,6 +2989,9 @@ impl Compositor for LayerCompositor {
     }
 
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
+        // Drop runtimes whose authored effect owner was edited away before
+        // either render path, including the empty-playback early return.
+        self.clear_obsolete_effect_chains(frame.layers, frame.master_effects);
         // Aim the authoring-time output preview at the watched node (or clear)
         // before any chain runs, so a freshly rebuilt chain re-acquires it.
         self.apply_preview_targets();
@@ -3408,6 +3451,173 @@ mod chain_pool_tests {
             is_group: false,
             trigger_count: 0,
         }
+    }
+
+    fn make_effect_layer(name: &str, enabled: bool, amount: f32) -> manifold_core::layer::Layer {
+        let mut layer = manifold_core::layer::Layer::new(
+            name.to_string(),
+            manifold_core::LayerType::Video,
+            0,
+        );
+        let mut fx = manifold_core::preset_definition_registry::create_default(
+            &PresetTypeId::MIRROR,
+        );
+        fx.enabled = enabled;
+        if let Some(param) = fx.params.iter_mut().next() {
+            param.value = amount;
+            param.base = amount;
+        }
+        layer.effects_mut().push(fx);
+        layer
+    }
+
+    fn authored_layer_desc<'a>(
+        layer: &'a manifold_core::layer::Layer,
+    ) -> CompositeLayerDescriptor<'a> {
+        CompositeLayerDescriptor {
+            layer_index: 0,
+            layer_id: &layer.layer_id,
+            blend_mode: layer.default_blend_mode,
+            opacity: layer.opacity,
+            hidden: false,
+            blit_to_led: layer.blit_to_led,
+            layer_type: layer.layer_type,
+            effects: layer.effects(),
+            effect_groups: layer.effect_groups(),
+            parent_layer_id: layer.parent_layer_id.as_ref(),
+            is_group: layer.is_group(),
+            trigger_count: 0,
+        }
+    }
+
+    fn warm_effect_layer(
+        comp: &mut LayerCompositor,
+        device: &crate::TestDevice,
+        layer: &manifold_core::layer::Layer,
+    ) {
+        assert_eq!(
+            comp.prewarm_layer_chains(
+                layer,
+                manifold_core::WarmupBudget::default(),
+                device,
+            ),
+            manifold_core::WarmupOutcome::Quiescent,
+            "minimal effect chain must quiesce during warmup",
+        );
+        assert!(comp
+            .effect_chains
+            .get(&layer.layer_id)
+            .and_then(Option::as_ref)
+            .is_some());
+    }
+
+    #[test]
+    fn empty_authored_effects_drop_only_their_layer_chain() {
+        let (device, mut comp) = make_compositor();
+        let removed = make_effect_layer("removed", true, 1.0);
+        let retained = make_effect_layer("retained", true, 1.0);
+        warm_effect_layer(&mut comp, &device, &removed);
+        warm_effect_layer(&mut comp, &device, &retained);
+
+        let empty_effects = Vec::new();
+        let removed_desc = CompositeLayerDescriptor {
+            effects: &empty_effects,
+            effect_groups: &[],
+            ..authored_layer_desc(&removed)
+        };
+        let retained_desc = authored_layer_desc(&retained);
+        comp.clear_obsolete_effect_chains(&[removed_desc, retained_desc], &[]);
+
+        assert!(comp
+            .effect_chains
+            .get(&removed.layer_id)
+            .is_some_and(Option::is_none));
+        assert!(comp.chain_last_used_frame.contains_key(&removed.layer_id));
+        assert!(comp
+            .effect_chains
+            .get(&retained.layer_id)
+            .and_then(Option::as_ref)
+            .is_some());
+        assert!(comp.chain_last_used_frame.contains_key(&retained.layer_id));
+    }
+
+    #[test]
+    fn disabled_and_zero_amount_effects_retain_their_chain() {
+        let (device, mut comp) = make_compositor();
+        let mut layer = make_effect_layer("retained", true, 1.0);
+        warm_effect_layer(&mut comp, &device, &layer);
+
+        layer.effects_mut()[0].enabled = false;
+        let disabled_desc = authored_layer_desc(&layer);
+        comp.clear_obsolete_effect_chains(&[disabled_desc], &[]);
+        assert!(comp
+            .effect_chains
+            .get(&layer.layer_id)
+            .and_then(Option::as_ref)
+            .is_some());
+
+        layer.effects_mut()[0].enabled = true;
+        layer.effects_mut()[0]
+            .params
+            .iter_mut()
+            .next()
+            .expect("minimal effect has an amount parameter")
+            .value = 0.0;
+        let zero_amount_desc = authored_layer_desc(&layer);
+        comp.clear_obsolete_effect_chains(&[zero_amount_desc], &[]);
+        assert!(comp
+            .effect_chains
+            .get(&layer.layer_id)
+            .and_then(Option::as_ref)
+            .is_some());
+    }
+
+    #[test]
+    fn empty_frame_master_effects_drop_master_chain_before_early_return() {
+        let (device, mut comp) = make_compositor();
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(
+            manifold_core::preset_definition_registry::create_default(&PresetTypeId::MIRROR),
+        );
+        assert_eq!(
+            comp.prewarm_master_chain(
+                &project,
+                manifold_core::WarmupBudget::default(),
+                &device,
+                None,
+                (1, 1),
+            ),
+            manifold_core::WarmupOutcome::Quiescent,
+            "minimal master chain must quiesce during warmup",
+        );
+        assert!(comp.master_effect_chain.is_some());
+
+        let frame = CompositorFrame {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            frame_count: 0,
+            compositor_dirty: true,
+            clips: &[],
+            layers: &[],
+            master_effects: &[],
+            master_effect_groups: &[],
+            master_trigger_count: 0,
+            tonemap: crate::tonemap::TonemapSettings::default(),
+            led_exit_index: -1,
+            led_composite_size: (1, 1),
+            output_width: 64,
+            output_height: 64,
+            occluded_layers: &[],
+            render_skip: &[],
+        };
+        let mut enc = device.create_encoder("empty-frame-obsolete-chain");
+        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+        let _ = comp.render(&mut gpu, &frame);
+        enc.commit_and_wait_completed();
+
+        assert!(comp.master_effect_chain.is_none());
+        assert!(comp.led_master_ec.is_none());
     }
 
     #[test]
