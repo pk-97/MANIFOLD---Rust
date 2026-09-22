@@ -341,10 +341,9 @@ pub(super) fn enrich_surface(
                     | Role::Colour(ui::MaterialGroup::Feature(feature), ..),
                 ) = row.spec.material_role
                 {
-                    if feature_modes
-                        .iter()
-                        .any(|(owner, f, mode)| owner == id && *f == feature && *mode == 1.0)
-                    {
+                    if feature_modes.iter().any(|(owner, f, mode)| {
+                        owner == id && *f == feature && (*mode == 1.0 || *mode == 3.0)
+                    }) {
                         row.spec.inactive_reason = Some("Off — settings are retained".into());
                     } else if feature != ui::MaterialFeature::Emission && baked.contains(id) {
                         row.spec.inactive_reason = Some("Bypassed by Baked Look".into());
