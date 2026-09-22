@@ -1026,7 +1026,7 @@ impl ScenePanel {
             (slider_w - label_width).max(0.0),
             ROW_H,
             UIStyle {
-                bg_color: Color32::new(to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), 255),
+                bg_color: Color32::new(to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), 255), // design-token-exempt: displays authored material RGB, not a UI theme colour
                 hover_bg_color: color::HOVER_OVERLAY,
                 pressed_bg_color: color::PRESS_OVERLAY,
                 text_color: if rgb.iter().copied().sum::<f32>() > 1.65 {

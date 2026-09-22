@@ -7,6 +7,29 @@ use crate::panels::{AudioDrawerClick, ClipTriggerDrawerClick};
 use manifold_foundation::ParamId;
 
 
+/// Native slider construction shared by scalar rows and compound row controls.
+/// Hosts retain their RowIndex roles and actions; geometry and styling stay here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_row_slider(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    rect: Rect,
+    label: &str,
+    normalized_value: f32,
+    value_text: &str,
+    colors: &SliderColors,
+    label_width: f32,
+    default_normalized: f32,
+    reset: PanelAction,
+    key: Option<u64>,
+) -> crate::slider::Slider {
+    BitmapSlider::build(
+        tree, parent, rect, Some(label), normalized_value, value_text, colors,
+        FONT_SIZE, label_width, default_normalized, reset, key,
+    )
+}
+
+
 /// Per-row modulation config tabs. The T/∿/A arm buttons stay on the row (one-
 /// click arm); when two or more configs are active they share ONE drawer with a
 /// tab strip rather than stacking three deep (section 6.2). A single active config
@@ -1953,15 +1976,14 @@ pub(crate) fn build_param_row(
         ),
     };
 
-    let slider = BitmapSlider::build(
+    let slider = build_row_slider(
         tree,
         parent,
         slider_rect,
-        Some(&info.spec.name),
+        &info.spec.name,
         shown_norm,
         &val_text,
         slider_colors,
-        FONT_SIZE,
         label_width,
         // Reset marker at the DEFAULT position — the reset target, not the
         // displayed value.

@@ -241,15 +241,14 @@ impl MaterialPlacementWidget {
             let (min, max) = ranges[index];
             self.controls[index].set_range(min, max, false);
             let reset = self.reset_action(control);
-            let slider = BitmapSlider::build(
+            let slider = super::build_row_slider(
                 tree,
                 parent,
                 row_rect,
-                Some(control.label()),
+                control.label(),
                 BitmapSlider::value_to_normalized(value, min, max),
                 format_control_value(control, value).as_str(),
                 &colors,
-                super::FONT_SIZE,
                 label_width,
                 BitmapSlider::value_to_normalized(default_control_value(control), min, max),
                 reset,
