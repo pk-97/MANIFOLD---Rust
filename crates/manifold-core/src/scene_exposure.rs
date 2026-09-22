@@ -622,6 +622,18 @@ where
                 spec.name = meta_entry.label.clone();
                 changed = true;
             }
+            // Material feature modes are persisted card metadata. Refresh
+            // their labels as part of the stamp repair so old manifests gain
+            // newly appended compatibility values without touching authored
+            // defaults or custom bindings.
+            if matches!(
+                meta_entry.material_role,
+                Some(crate::material_inspector::MaterialParamRole::FeatureMode(_))
+            ) && spec.value_labels != meta_entry.value_labels
+            {
+                spec.value_labels = meta_entry.value_labels.clone();
+                changed = true;
+            }
             let widen = !spec.whole_numbers && !spec.is_toggle && !spec.is_trigger;
             // When scene_bounds are present, use the scene-scaled range as
             // the base band (import-time bands preserved across load) instead
@@ -1681,6 +1693,125 @@ mod tests {
             !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
             "second migration run is a no-op once repaired"
         );
+        assert_eq!(def, after_repair);
+    }
+
+    #[test]
+    fn migrate_refreshes_material_feature_mode_labels_and_keeps_custom_binding() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.pbr_material" {
+                    vec![SceneParamMetadata {
+                        min: 0.0,
+                        max: 3.0,
+                        default_value: SerializedParamValue::Enum { value: 0 },
+                        whole_numbers: true,
+                        value_labels: vec![
+                            "From values".into(),
+                            "Off".into(),
+                            "On".into(),
+                            "Removed".into(),
+                        ],
+                        material_role: Some(
+                            crate::material_inspector::MaterialParamRole::FeatureMode(
+                                crate::material_inspector::MaterialFeature::Coat,
+                            ),
+                        ),
+                        convert: ParamConvert::EnumRound,
+                        ..float_meta("coat_mode", "Coat Mode")
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(7, "node.pbr_material");
+        let node_id = node.node_id.clone();
+        let mut stale_spec = float_spec_default("7_coat_mode", "Coat Mode", "Material");
+        stale_spec.min = 0.0;
+        stale_spec.max = 2.0;
+        stale_spec.default_value = 2.0;
+        stale_spec.whole_numbers = true;
+        stale_spec.value_labels = vec!["From values".into(), "Off".into(), "On".into()];
+        stale_spec.material_role = Some(crate::material_inspector::MaterialParamRole::FeatureMode(
+            crate::material_inspector::MaterialFeature::Coat,
+        ));
+        let stale_binding = BindingDef {
+            id: "7_coat_mode".into(),
+            label: "Coat Mode".into(),
+            default_value: 2.0,
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "coat_mode".into(),
+            },
+            convert: ParamConvert::EnumRound,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+        let user_binding = BindingDef {
+            id: "custom_coat_mode".into(),
+            label: "Custom coat control".into(),
+            default_value: 1.25,
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "coat_mode".into(),
+            },
+            convert: ParamConvert::Float,
+            user_added: true,
+            scale: 0.5,
+            offset: 0.25,
+            default_mirrors_node_param: false,
+        };
+        let expected_user = user_binding.clone();
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec],
+                bindings: vec![stale_binding, user_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            scene_modifiers: Vec::new(),
+            nodes: vec![node],
+            wires: Vec::new(),
+        };
+
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &["node.pbr_material"],
+            |_n| "Material".into(),
+            &TestProvider
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "7_coat_mode").unwrap();
+        assert_eq!((spec.min, spec.max), (0.0, 3.0));
+        assert_eq!(
+            spec.value_labels,
+            vec!["From values", "Off", "On", "Removed"]
+        );
+        assert_eq!(spec.default_value, 2.0, "authored mode survives repair");
+        assert_eq!(
+            meta.bindings
+                .iter()
+                .find(|b| b.id == "custom_coat_mode")
+                .unwrap(),
+            &expected_user,
+            "custom user binding is outside the stamp repair"
+        );
+
+        let after_repair = def.clone();
+        assert!(!migrate_scene_exposures(
+            &mut def,
+            &["node.pbr_material"],
+            |_n| "Material".into(),
+            &TestProvider
+        ));
         assert_eq!(def, after_repair);
     }
 

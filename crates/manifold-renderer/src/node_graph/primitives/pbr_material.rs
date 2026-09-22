@@ -880,13 +880,13 @@ crate::primitive! {
         },
         // Material inspector feature presence. These are appended so the
         // original 89 parameter identities retain their slot/order.
-        ParamDef { name: Cow::Borrowed("coat_mode"), label: "Coat Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
-        ParamDef { name: Cow::Borrowed("iridescence_mode"), label: "Iridescence Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
-        ParamDef { name: Cow::Borrowed("emission_mode"), label: "Emission Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
-        ParamDef { name: Cow::Borrowed("glass_mode"), label: "Glass Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
-        ParamDef { name: Cow::Borrowed("sheen_mode"), label: "Sheen Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
-        ParamDef { name: Cow::Borrowed("anisotropy_mode"), label: "Anisotropy Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
-        ParamDef { name: Cow::Borrowed("translucency_mode"), label: "Translucency Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["From values", "Off", "On"] },
+        ParamDef { name: Cow::Borrowed("coat_mode"), label: "Coat Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+        ParamDef { name: Cow::Borrowed("iridescence_mode"), label: "Iridescence Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+        ParamDef { name: Cow::Borrowed("emission_mode"), label: "Emission Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+        ParamDef { name: Cow::Borrowed("glass_mode"), label: "Glass Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+        ParamDef { name: Cow::Borrowed("sheen_mode"), label: "Sheen Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_mode"), label: "Anisotropy Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+        ParamDef { name: Cow::Borrowed("translucency_mode"), label: "Translucency Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
@@ -907,8 +907,19 @@ impl Primitive for PbrMaterial {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let feature_mode = |name: &str| -> u32 {
             match ctx.params.get(name) {
+                // `Removed` is a persisted compatibility value. The feature
+                // has no active shading path, so evaluate it exactly like
+                // `Off` while keeping the authored mode in the graph.
+                Some(ParamValue::Enum(3)) => 1,
                 Some(ParamValue::Enum(value)) => (*value).min(2),
-                Some(ParamValue::Float(value)) => value.round().clamp(0.0, 2.0) as u32,
+                Some(ParamValue::Float(value)) => {
+                    let value = value.round();
+                    if value == 3.0 {
+                        1
+                    } else {
+                        value.clamp(0.0, 2.0) as u32
+                    }
+                }
                 _ => 0,
             }
         };
@@ -1289,6 +1300,10 @@ mod tests {
             off.insert(Cow::Borrowed(mode), ParamValue::Enum(1));
             let gated = run_material(off, None);
             assert!(read(&gated).abs() < 1e-6, "off {mode}");
+            let mut removed = params.clone();
+            removed.insert(Cow::Borrowed(mode), ParamValue::Enum(3));
+            let gated = run_material(removed, None);
+            assert!(read(&gated).abs() < 1e-6, "removed {mode}");
             assert!(
                 params.get(mode).is_none(),
                 "running a mode must not author it"
@@ -1301,6 +1316,13 @@ mod tests {
         assert!(
             bound.emission[0].abs() < 1e-6,
             "Off must gate a bound emission input"
+        );
+        let mut bound_removed = authored_material_params();
+        bound_removed.insert(Cow::Borrowed("emission_mode"), ParamValue::Enum(3));
+        let bound_removed = run_material(bound_removed, Some(0.91));
+        assert!(
+            bound_removed.emission[0].abs() < 1e-6,
+            "Removed must gate a bound emission input"
         );
     }
 
