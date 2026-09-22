@@ -981,7 +981,7 @@ pub fn instantiate_def(
             }
             if node_doc.type_id == "node.pbr_material"
                 && is_material_feature_mode(key)
-                && matches!(&pv, ParamValue::Enum(value) if *value > 2)
+                && matches!(&pv, ParamValue::Enum(value) if *value > 3)
             {
                 let ParamValue::Enum(value) = pv else { unreachable!() };
                 return Err(GraphBuildError::InvalidMaterialFeatureMode {
@@ -1938,7 +1938,7 @@ mod tests {
     }
 
     #[test]
-    fn material_inspector_invalid_mode_rejected() {
+    fn material_inspector_removed_mode_loads_and_invalid_mode_is_rejected() {
         let json = r#"{
             "version": 1,
             "name": "test",
@@ -1952,6 +1952,18 @@ mod tests {
             "wires": []
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).expect("parse");
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("removed material mode survives save/load");
+        let invalid_json = json.replace("\"value\": 3", "\"value\": 4");
+        let def: EffectGraphDef = serde_json::from_str(&invalid_json).expect("parse");
         let mut graph = Graph::new();
         let err = instantiate_def(
             &mut graph,
@@ -1967,7 +1979,7 @@ mod tests {
             GraphBuildError::InvalidMaterialFeatureMode {
                 node_id: 0,
                 param: "coat_mode".to_string(),
-                value: 3,
+                value: 4,
             }
         );
     }

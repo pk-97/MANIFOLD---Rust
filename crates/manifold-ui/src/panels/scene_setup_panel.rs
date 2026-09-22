@@ -1012,6 +1012,8 @@ pub struct ScenePanel {
     material_mode_ids: Vec<(NodeId, usize)>,
     material_feature_context: Option<(LayerId, ModifierObjectRef, ModifierObjectRef)>,
     material_visible_features: ahash::AHashSet<crate::param_surface::MaterialFeature>,
+    material_feature_order: Vec<crate::param_surface::MaterialFeature>,
+    material_remove_ids: Vec<(NodeId, crate::param_surface::MaterialFeature, manifold_foundation::ParamId)>,
     /// Named material recipe buttons for the selected object's material.
     material_look_ids: Vec<(NodeId, MaterialLook, ModifierObjectRef, ModifierObjectRef)>,
     /// Add Feature controls and explicit feature mode headers for the selected
@@ -1069,6 +1071,8 @@ impl Default for ScenePanel {
             material_mode_ids: Vec::new(),
             material_feature_context: None,
             material_visible_features: ahash::AHashSet::new(),
+            material_feature_order: Vec::new(),
+            material_remove_ids: Vec::new(),
             material_look_ids: Vec::new(),
             material_feature_ids: Vec::new(),
             active_material_info: None,
@@ -1312,6 +1316,7 @@ impl ScenePanel {
         self.material_mode_ids.clear();
         self.material_look_ids.clear();
         self.material_feature_ids.clear();
+        self.material_remove_ids.clear();
         self.active_material_info = None;
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -1903,7 +1908,7 @@ impl ScenePanel {
                     && owned
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
-                    && Self::row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
+                    && self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
                     && Self::material_panel_row_visible(p)
                 {
                     retained.push(i);
@@ -1933,6 +1938,8 @@ impl ScenePanel {
         for (position, index) in material_positions.into_iter().zip(material_rows) {
             retained[position] = index;
         }
+        // Keep optional features directly above their Add controls.
+        retained.sort_by_key(|&index| self.material_row_feature(&config.rows[index]).is_some());
         self.properties_card.configure_from_filtered(&config, &retained);
         self.properties_card.restore_live(&target);
 
@@ -1949,6 +1956,12 @@ impl ScenePanel {
         while i < retained.len() {
             let cur_section = self.material_section_name(&config.rows[retained[i]]);
             if let Some(name) = &cur_section {
+                let feature = self.material_row_feature(&config.rows[retained[i]]);
+                let remove_mode = feature.and_then(|feature| config.rows.iter().find(|row|
+                    self.material_param_selected(row)
+                        && row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
+                ).map(|row| (feature, row.id.clone())));
+                let header_w = if remove_mode.is_some() { inner_w - ROW_H - ROW_GAP } else { inner_w };
                 let folded = self.material_section_folded(name);
                 self.section_folded.entry(name.clone()).or_insert(folded);
                 // Build interactive section header row
@@ -1956,7 +1969,7 @@ impl ScenePanel {
                     Some(self.content_parent),
                     inner_x,
                     cy,
-                    inner_w,
+                    header_w,
                     ROW_H,
                     UIStyle {
                         bg_color: color::INSPECTOR_BG,
@@ -1994,7 +2007,7 @@ impl ScenePanel {
                     Some(header_id),
                     inner_x + GAP + triangle_w,
                     cy,
-                    (inner_w - 2.0 * GAP - triangle_w).max(0.0),
+                    (header_w - 2.0 * GAP - triangle_w).max(0.0),
                     ROW_H,
                     name,
                     label_style(),
@@ -2006,6 +2019,15 @@ impl ScenePanel {
                     i,
                     RowRole::SectionHeader,
                 );
+                if let Some((feature, mode_id)) = remove_mode {
+                    let remove = tree.add_button_keyed(
+                        Some(self.content_parent), inner_x + inner_w - ROW_H, cy,
+                        ROW_H, ROW_H, btn_style(), "×",
+                        MATERIAL_LOOK_KEY_BASE + 64 + feature as u64,
+                    );
+                    tree.set_name(remove, format!("material.feature.remove.{mode_id}"));
+                    self.material_remove_ids.push((remove, feature, mode_id));
+                }
                 cy += ROW_H;
                 // Skip folded section's rows
                 if folded {
@@ -2322,7 +2344,13 @@ impl ScenePanel {
                 }
                 let mut actions = Vec::new();
                 if let SceneSetupState::Live(vm) = &self.state {
-                    if let Some((_, feature, writes, object, material)) = self
+                    if let Some((_, feature, mode_id)) = self.material_remove_ids.iter()
+                        .find(|(id, _, _)| *id == *node_id)
+                    {
+                        return (true, self.material_remove_action(
+                            *feature, mode_id, GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
+                        ));
+                    } else if let Some((_, feature, writes, object, material)) = self
                         .material_feature_ids
                         .iter()
                         .find(|(id, _, _, _, _)| *id == *node_id)
@@ -2330,7 +2358,9 @@ impl ScenePanel {
                         if !self.material_action_context(object, material, false) {
                             return (true, Vec::new());
                         }
-                        self.material_visible_features.insert(*feature);
+                        self.material_feature_order.retain(|existing| existing != feature);
+                        self.material_feature_order.push(*feature);
+                        self.section_folded.insert(Self::material_feature_label(*feature).into(), false);
                         actions.push(PanelAction::Project(ProjectAction::MaterialParamsSet {
                             target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
                             object: object.clone(),

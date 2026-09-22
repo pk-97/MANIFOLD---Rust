@@ -20,7 +20,9 @@
           "text": "Object gain"
         }
       },
-      "check": "Exists"
+      "check": {
+        "Count": 0
+      }
     }
   },
   {
