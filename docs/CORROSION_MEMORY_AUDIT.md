@@ -496,6 +496,64 @@ topology, resolution and content changes need explicit invalidation; preparation
 must never activate clips or advance triggers. This remains unfinished work under
 BUG-dl16, not a claim that project duration is now independent of memory.
 
+## RT filter scratch: bounded follow-up (2026-09-22)
+
+Static review at `15256c420` follows the same Azalea → Vortex Fragments →
+Math View → Ordered Recon stack through its shared `node.render_scene` backend.
+The currently saved project has SHA256
+`87f1e89a4baeef5cb66da345423ae2d46c9882cb29dcc5a2a7c69dc10ee1f405`,
+different from the earlier capture. Its representative layer enables RT, disables
+temporal upscale and MetalFX denoise feed, and selects spatial denoise Off for
+realtime / High for export.
+`ensure_rt_irradiance` nevertheless allocated two full-render-resolution RGBA16
+post-filter textures even when the post-filter did not run. Ray resolution is
+quarter for realtime; it changes trace targets, not these full-resolution targets.
+These are source/project findings, not a new live allocation capture.
+
+The relevant lifetimes are:
+
+| Storage | Required lifetime and coexistence |
+|---|---|
+| Imported geometry, cut maps/remaps and exported Math View inputs | Retain their existing cached/exported ownership; not reclaimed here |
+| RT irradiance, reflection, visibility, depth, normal and moments histories | Independent read/write history pairs; survive frames and remain separate from scratch |
+| Pre-accumulation full targets plus their `_b` scratch | Both sets coexist during two spatial passes; the last pass writes back to the full targets |
+| Full normal, depth and newly written moments/history | Remain readable as post-filter guides/input; cannot be reused for its outputs |
+| `rt_irr_full_b` and `rt_normal_full_b` | Last reads finish in GPU command order before accumulation/post-filter; no CPU mapped access or raw capture export |
+| Post-filter `rt_irr_filtered` and `_b` | Derived current-frame output/intermediate, not history; final output survives through the composite |
+
+The bounded change reuses the two pre-filter scratch handles for the post-filter
+pair. Both have identical full-render dimensions, RGBA16 format and usage. It
+keeps all histories, guides and diagnostic raw full targets separate. The next
+frame overwrites scratch in the same GPU queue order, after the previous
+composite. Existing command-buffer checkpoints preserve queue order and native
+hazard tracking; no CPU completion assumption, mapped writes, cross-runtime
+sharing, new pool, wait or scene-readiness policy is introduced. Resize recreates
+the backing and aliases together. Disabled post-filtering requires no extra
+backing, and enabling it uses already-prepared storage.
+
+The smallest saving is **two physical textures**, with payload
+`2 × render_width × render_height × 8` bytes: **33,177,600 bytes (31.64 MiB)**
+for one 1080×1920 renderer. Three matching Azalea renderers give a source-derived
+estimate of **99,532,800 bytes (94.92 MiB)**. This is neither a measured project
+Metal peak nor a process RAM reduction; alignment, other owners, resize overlap
+and actual render dimensions affect live accounting. No new project capture,
+loading-speed, display/audio or performance result is claimed.
+
+The focused native Metal proof passes: actual pre- and post-filter kernels
+produce bit-identical finite pixels with reused and dedicated storage across
+queued Off/odd/even frames. Raw irradiance and normal guides remain identical,
+history/moments identities stay separate, and resize refreshes both aliases.
+This is a synthetic lifetime/value proof, not displayed project verification.
+Focused output, source diff and required landing logs are retained outside the
+slot in `/tmp/manifold-memory-rt-scratch-20260922/`. The first sandboxed test
+compiled but could not find a Metal device; the corrected proof passed with
+native device access. The larger question remains which RT output/history families can
+be absent for a given actual consumer set: current trace, upsample and accumulation
+kernels bind those families together. Disabling a feature alone does not establish
+that its textures can be removed. Resolve producer writes, consumer bindings and
+history reset requirements before changing that contract. Predictive loading and
+scene suspension are outside this follow-up's scope. BUG-dl16 remains open.
+
 ## Source anchors
 
 Paths below are under `crates/manifold-renderer/src/` unless prefixed with `crates/`:

@@ -832,10 +832,14 @@ pub struct RenderScene {
     rt_firefly_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
     /// ping-pong pair — `atrous_post` writes into one, the composite binds
-    /// whichever was last written. Same rgba16 + full-res lifecycle as
-    /// `rt_irr_history` (ensured in `ensure_rt_irradiance`). When the
-    /// filter is off this frame, the composite falls back to the raw
-    /// history slot (existing behaviour).
+    /// whichever was last written. These handles intentionally alias the
+    /// completed pre-accumulation scratch pair (`rt_irr_full_b` and
+    /// `rt_normal_full_b`): the pre-filter passes are encoded before the
+    /// post-accumulation block writes them, and the queue orders those uses,
+    /// so the aliases remove two full-resolution allocations without sharing
+    /// temporal history.
+    /// When the filter is off this frame, the composite falls back to the
+    /// raw history slot (existing behaviour).
     rt_irr_filtered: Option<manifold_gpu::GpuTexture>,
     rt_irr_filtered_b: Option<manifold_gpu::GpuTexture>,
     /// RT-Stage-3 P4: CPU-mapped `AtrousPostParams` upload buffer —
@@ -7141,11 +7145,16 @@ impl RenderScene {
             make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
         ]
         .map(Some);
-        // RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
-        // pair — same full-res rgba16 + usage lifecycle as `rt_irr_history`.
-        // The composite binds whichever was last written by `atrous_post`.
-        self.rt_irr_filtered = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered (RT-Stage-3 P4)"));
-        self.rt_irr_filtered_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered_b (RT-Stage-3 P4)"));
+        // RT-Stage-3 P4 (BUG-eytk): the pre-accumulation à-trous passes
+        // above are encoded before post-accumulation filtering writes these
+        // handles; the GPU queue orders those reads before the later writes.
+        // Reuse their full-resolution RGBA16 scratch handles: cloning a
+        // GpuTexture retains the same Metal object and does not allocate.
+        // Keep the temporal history pair and raw `rt_irr_full` capture
+        // textures separately; only these two frame-local scratch lifetimes
+        // overlap at the allocator level.
+        self.rt_irr_filtered = self.rt_irr_full_b.clone();
+        self.rt_irr_filtered_b = self.rt_normal_full_b.clone();
         self.rt_moments_valid = false;
         self.rt_history_ping = 0;
         self.rt_irr_width = full_w;
