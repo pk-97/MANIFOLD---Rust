@@ -255,8 +255,11 @@ pub enum ContentCommand {
     StopProfiling,
 
     // ── Display ───────────────────────────────────────────────────
-    /// Update EDR headroom when window moves to a different display.
-    UpdateEdrHeadroom(f64),
+    /// Update one destination after a screen or available-brightness change.
+    UpdateDisplayCapabilities {
+        destination: manifold_renderer::presentation::DisplayDestination,
+        capabilities: manifold_renderer::presentation::DisplayCapabilities,
+    },
 
     // ── Output surface (direct present from content thread) ─────
     /// Attach an output surface for direct-to-drawable presentation.

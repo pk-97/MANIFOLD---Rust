@@ -164,10 +164,9 @@ impl Color32 {
     /// Convert sRGB byte values to linear float RGBA for GPU rendering.
     ///
     /// The UI colors are specified in sRGB space (matching Unity's UGUI).
-    /// Since the surface uses an sRGB format (Bgra8UnormSrgb), the GPU
-    /// automatically applies gamma encoding when writing. We must convert
-    /// to linear space here so the final displayed color matches the
-    /// original sRGB byte values.
+    /// UI targets store linear floating-point values. macOS interprets the
+    /// window as ExtendedLinearSRGB; PNG capture explicitly encodes sRGB.
+    /// Both boundaries therefore recover the original palette values.
     ///
     /// Without this conversion, colors appear ~3x brighter because the
     /// sRGB values get gamma-encoded a second time.

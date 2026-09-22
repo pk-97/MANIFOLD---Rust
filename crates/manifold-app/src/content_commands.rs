@@ -1644,18 +1644,11 @@ impl ContentThread {
             }
 
             // ── Display ───────────────────────────────────────────
-            ContentCommand::UpdateEdrHeadroom(headroom) => {
-                log::info!(
-                    "[EDR] Content thread: headroom updated to {:.2}x (mode={})",
-                    headroom,
-                    if headroom > 1.0 {
-                        "passthrough"
-                    } else {
-                        "ACES tonemap"
-                    },
-                );
-                self.content_pipeline.edr_headroom = headroom;
-                self.engine.mark_compositor_dirty_now();
+            ContentCommand::UpdateDisplayCapabilities { destination, capabilities } => {
+                if self.content_pipeline.presentation.update(destination, capabilities) {
+                    log::info!("[Display] {destination:?}: current headroom {:.2}x", capabilities.current().value());
+                    self.engine.mark_compositor_dirty_now();
+                }
             }
 
             // ── Output surface (direct present) ────────────────────

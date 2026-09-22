@@ -140,16 +140,19 @@ touching disk; the old texture stays up until the new one lands (no black flash)
 
 ## 7. Color & precision contract
 
-The compositor works in **linear** Rgba16Float; the display surface is
-ExtendedLinearSRGB (the display applies the transfer function at scanout). Every path in
+The compositor and master effects work in **linear HDR** Rgba16Float, independent
+of connected displays. Each display maps that image using its current headroom
+and presents through a float ExtendedLinearSRGB surface. SDR video and recording
+apply the selected SDR curve after master effects, before transfer encoding. See
+[Colour presentation](COLOUR_PRESENTATION_DESIGN.md). Every path in
 and out applies its own transfer function — and they do not all agree:
 
 | Path | Transfer function | EDR (>1.0) handling |
 |---|---|---|
-| Display (live show) | true sRGB, at scanout | EDR passthrough (tonemap soft-clip per display peak) |
+| Display (live show) | macOS colour management from ExtendedLinearSRGB | Selected SDR curve or soft shoulder at the destination’s current EDR headroom |
 | Still export, faithful | true piecewise sRGB (`linear_f16_rgba_to_srgb8`) | hard clip at white |
 | Still export, rolloff | true sRGB after tanh shoulder above 0.8 | compressed into SDR white |
-| SDR video export | true piecewise sRGB (`manifold_srgb_encode`, `ColorTransferFunctions.h`, matches `linear_f16_rgba_to_srgb8`) | hard clip (BGRA8 write) |
+| SDR video export / live recording | true piecewise sRGB | Selected SDR curve before 8-bit encoding; independent of monitors |
 | HDR video export | PQ (applied by `pq_encode_for_export`, 200/10000 nits), BT.2020 metadata | carried in PQ |
 | Video decode (playback) | `manifold_srgb_decode` (matching EOTF) for luma/chroma linearization; YCbCr matrix selected per-frame from `CVImageBuffer` colorimetry attachments (601/709/2020) | n/a (SDR sources) |
 

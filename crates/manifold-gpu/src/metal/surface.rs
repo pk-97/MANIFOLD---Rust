@@ -232,8 +232,11 @@ impl GpuSurface {
 
     /// Configure the surface for Extended Dynamic Range (EDR) output.
     pub fn configure_edr(&self) {
+        assert_eq!(self.format, GpuTextureFormat::Rgba16Float,
+            "linear EDR presentation requires a floating-point surface; a colour-space tag cannot extend UNORM storage");
         unsafe {
             let cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+            assert!(!cs.is_null(), "extended linear sRGB colour space is required for EDR presentation");
             if !cs.is_null() {
                 let layer = self.layer_ptr as *mut AnyObject;
                 let cs_ptr: *mut CGColorSpaceOpaque = cs.cast();
@@ -307,6 +310,8 @@ impl GpuDrawable {
     /// Create a GpuTexture referencing this drawable's backing texture.
     pub fn gpu_texture(&self, format: GpuTextureFormat) -> GpuTexture {
         let tex = self.texture();
+        assert_eq!(unsafe { tex.pixelFormat() }, to_mtl_pixel_format(format),
+            "drawable texture format must match its actual Metal storage");
         let w = unsafe { tex.width() } as u32;
         let h = unsafe { tex.height() } as u32;
         GpuTexture::from_raw(tex, w, h, 1, format)

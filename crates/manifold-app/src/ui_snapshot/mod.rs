@@ -1269,7 +1269,7 @@ mod cache_path_full_render {
     use std::time::Duration;
 
     use manifold_core::LayerId;
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuDevice;
     use manifold_renderer::ui_cache_manager::UICacheManager;
     use manifold_renderer::ui_renderer::UIRenderer;
     use manifold_ui::automation::{self, AutomationTarget, SelectorQuery};
@@ -1323,20 +1323,21 @@ mod cache_path_full_render {
         super::render::readback(device, &res.offscreen, w, h)
     }
 
-    // `save_bgra_png`/`save_filmstrip_png` now live in `render.rs` (P2,
+    // `save_ui_png`/`save_filmstrip_png` now live in `render.rs` (P2,
     // `UI_HARNESS_UNIFICATION_DESIGN.md` D3) — shared with `script.rs`'s
     // `Runner`, which needed the identical helpers for its own filmstrip/
     // snapshot artifacts. Were private copies duplicated in this test
     // module; see `render.rs`'s doc comments on both.
-    use super::render::{save_bgra_png, save_filmstrip_png};
+    use super::render::{save_filmstrip_png, save_ui_png};
 
     /// The only automated assertion in this module (per the Reframe): the
     /// render drew *something* — not empty, not a single flat colour
     /// end-to-end.
-    fn assert_not_blank(bgra: &[u8], label: &str) {
-        assert!(!bgra.is_empty(), "{label}: readback is empty");
-        let first = &bgra[0..4];
-        let all_same = bgra.chunks_exact(4).all(|px| px == first);
+    fn assert_not_blank(linear: &[u8], label: &str) {
+        assert!(!linear.is_empty(), "{label}: readback is empty");
+        let bpp = manifold_renderer::presentation::UI_FORMAT.bytes_per_pixel() as usize;
+        let first = &linear[0..bpp];
+        let all_same = linear.chunks_exact(bpp).all(|px| px == first);
         assert!(!all_same, "{label}: readback is a uniform single colour — drew nothing");
     }
 
@@ -1405,10 +1406,10 @@ mod cache_path_full_render {
         sync_build(&mut ui, &data, 24.0);
 
         let device = GpuDevice::new();
-        let mut ui_renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
+        let mut ui_renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
         // D8: scale factor 1.0 always, at the fixture's logical size — layout
         // is a function of logical size, never shrink the window for speed.
-        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
         let atlas_w = LOGICAL_W as u32;
         let atlas_h = LOGICAL_H as u32;
@@ -1538,7 +1539,7 @@ mod cache_path_full_render {
         let final_bytes = full_frame_bytes(&device, &res, atlas_w, atlas_h);
         assert_not_blank(&final_bytes, "full-app render");
         let frame_png = out_dir.join("frame.png");
-        save_bgra_png(&final_bytes, atlas_w, atlas_h, &frame_png);
+        save_ui_png(&final_bytes, atlas_w, atlas_h, &frame_png);
 
         // ── assemble the drawer-tween filmstrip into one contact sheet ──
         let filmstrip_png = out_dir.join("drawer_filmstrip.png");
@@ -1593,7 +1594,7 @@ mod editor_window_harness {
         build_editor_preview_column, composite_editor_frame, EditorMiniTimelineInputs,
     };
 
-    const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
+    const FORMAT: GpuTextureFormat = manifold_renderer::presentation::UI_FORMAT;
 
     #[test]
     fn node_the_fixture_places_renders_at_its_declared_screen_rect() {
@@ -1768,11 +1769,11 @@ mod editor_window_harness {
             "node '{}' declared rect ({ex},{ey},{ew}x{eh}) is off the {tex_w}x{tex_h} canvas",
             node_entry.label,
         );
-        let mut distinct: std::collections::HashSet<[u8; 3]> = std::collections::HashSet::new();
+        let mut distinct: std::collections::HashSet<[u8; 8]> = std::collections::HashSet::new();
         for y in y0..y1 {
             for x in x0..x1 {
-                let idx = ((y * tex_w + x) * 4) as usize;
-                distinct.insert([bytes[idx], bytes[idx + 1], bytes[idx + 2]]);
+                let idx = ((y * tex_w + x) * manifold_renderer::presentation::UI_FORMAT.bytes_per_pixel()) as usize;
+                distinct.insert(bytes[idx..idx + 8].try_into().expect("RGBA16Float pixel"));
             }
         }
         assert!(
@@ -1815,7 +1816,7 @@ mod overlay_fidelity_proof {
     //! fresh composite carries). Keep the GREEN assertion: reverting the seam
     //! to `render_tree_range` makes `sub_region_drew` false and this fails.
 
-    use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};
+    use manifold_gpu::{GpuDevice, GpuLoadAction};
     use manifold_renderer::ui_cache_manager::UICacheManager;
     use manifold_renderer::ui_renderer::UIRenderer;
 
@@ -1885,8 +1886,8 @@ mod overlay_fidelity_proof {
         assert!(start >= 1, "overlay range must exclude its region root at start-1");
 
         let device = GpuDevice::new();
-        let mut renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
-        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        let mut renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
+        let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
         cache.ensure_atlas(&device, w, h);
         let res = CompositeResources::new(&device, w, h);

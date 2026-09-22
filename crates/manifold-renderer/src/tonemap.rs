@@ -1,8 +1,8 @@
 //! ACES tonemapping pipeline — mechanical translation of Unity's
 //! CompositorStack.ApplyTonemap() + ACESTonemap.shader.
 //!
-//! Owned by the compositor. Applied as the final step after master effects,
-//! before the blit to the display surface.
+//! Owned by the compositor. SceneLinear output feeds master effects; SDR/EDR
+//! destination mapping is applied later by the presentation pipeline.
 //!
 //! Uses a native Metal compute dispatch via manifold-gpu. This eliminates
 //! Metal TBDR tile alloc/load/store overhead (~290us at 4K per pass).
@@ -12,16 +12,26 @@ use crate::render_target::RenderTarget;
 use manifold_core::TonemapCurve;
 use manifold_gpu::{GpuDevice, GpuTexture};
 
-/// Per-frame tonemap settings. Matches Unity CompositorStack properties:
-/// TonemapExposure, HDROutputEnabled, PaperWhiteNits, MaxDisplayNits.
+/// Output stage for the compositor tonemapping pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TonemapMode {
+    /// Apply the selected display tonemap curve into the SDR range.
+    Sdr = 0,
+    /// Preserve the existing display-linear EDR path.
+    Edr = 3,
+    /// Preserve linear scene values for later per-display presentation.
+    SceneLinear = 4,
+}
+
+/// Per-frame tonemap settings. Exposure is applied before the selected output
+/// mode. SceneLinear is the stable master-FX interchange mode.
 #[derive(Debug, Clone, Copy)]
 pub struct TonemapSettings {
     /// Exposure multiplier for ACES tonemapping. 1.0 = neutral.
     /// Matches Unity CompositorStack.TonemapExposure.
     pub exposure: f32,
-    /// HDR output mode. false = SDR (sRGB tonemap), true = HDR display-linear (EDR).
-    /// Matches Unity CompositorStack.HDROutputEnabled.
-    pub hdr_output_enabled: bool,
+    /// Output mode for the tonemap stage.
+    pub mode: TonemapMode,
     /// Paper white in nits (scene 1.0 maps to this). Typical: 200 nits.
     /// Matches Unity CompositorStack.PaperWhiteNits.
     pub paper_white_nits: f32,
@@ -36,7 +46,7 @@ impl Default for TonemapSettings {
     fn default() -> Self {
         Self {
             exposure: 1.0,
-            hdr_output_enabled: false,
+            mode: TonemapMode::Sdr,
             paper_white_nits: 200.0,
             max_display_nits: 1000.0,
             curve: TonemapCurve::AcesNarkowicz,
@@ -45,7 +55,8 @@ impl Default for TonemapSettings {
 }
 
 /// Uniform buffer layout for the tonemap shader.
-/// Two u32 fields: mode (SDR/PQ/EDR) and curve (Narkowicz/Hill/AgX/Khronos PBR Neutral).
+/// Two u32 fields: mode (SDR/PQ/EDR/scene-linear) and curve
+/// (Narkowicz/Hill/AgX/Khronos PBR Neutral).
 /// 24 bytes total — padded to 32 bytes for 16-byte alignment.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -53,7 +64,7 @@ struct TonemapUniforms {
     exposure: f32,
     paper_white: f32,
     max_nits: f32,
-    mode: u32,  // 0 = SDR, 1 = PQ, 2 = EDR, 3 = EDR passthrough
+    mode: u32,  // 0 = SDR, 1 = PQ, 2 = EDR curve, 3 = EDR shoulder, 4 = scene-linear
     curve: u32, // 0 = Narkowicz, 1 = Hill, 2 = AgX
     _pad0: f32,
     _pad1: f32,
@@ -74,7 +85,10 @@ impl TonemapPipeline {
         let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
         let pipeline = device.create_compute_pipeline(
-            include_str!("effects/shaders/aces_tonemap_compute.wgsl"),
+            concat!(
+                include_str!("effects/shaders/tonemap_common.wgsl"),
+                include_str!("effects/shaders/aces_tonemap_compute.wgsl")
+            ),
             "cs_main",
             "Tonemap Native",
         );
@@ -93,16 +107,10 @@ impl TonemapPipeline {
     /// Apply ACES tonemapping to the HDR source buffer.
     /// Matches Unity CompositorStack.ApplyTonemap().
     ///
-    /// Realtime display uses SDR (mode 0) or EDR (mode 2) depending on
-    /// hdr_output_enabled. PQ (mode 1) is reserved for export pipeline.
+    /// PQ (mode 1) remains reserved for export callers. SceneLinear leaves
+    /// linear scene values available for the presentation mapper.
     pub fn apply(&self, gpu: &mut GpuEncoder, hdr_source: &GpuTexture, settings: &TonemapSettings) {
-        // Realtime HDR preview uses EDR passthrough (3) — no ACES compression,
-        // linear values passed directly to macOS EDR with soft-clip at display peak.
-        let mode = if settings.hdr_output_enabled {
-            3u32
-        } else {
-            0u32
-        };
+        let mode = settings.mode as u32;
 
         let uniforms = TonemapUniforms {
             exposure: settings.exposure,
