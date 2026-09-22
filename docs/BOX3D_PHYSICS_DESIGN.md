@@ -59,11 +59,15 @@ Physics Solids demo. The original larger design remains a roadmap.
   existing runtime state-clear path restore authored starting poses. Shape, scale
   or body membership changes rebuild the world. Mass/contact-property edits preserve
   current motion; editing a starting position/rotation repositions that body.
-  Each live physics world catches up at most four whole ticks, with a four-millisecond
-  stepping budget checked between native steps. If more whole ticks are pending, excess whole ticks are discarded;
-  the fractional tick is retained and the transport clock is updated to the
-  current time. A native tick cannot be preempted once started. Exact export
-  renders do not discard elapsed ticks. Arbitrary-time seek replay is not provided.
+  Preview processes fixed ticks for up to one project-frame CPU interval per world,
+  checked between native steps, then yields to rendering and command processing.
+  Only completed ticks leave the accumulator: all unfinished ticks and fractional
+  time remain queued. Physics gets priority over preview frame rate; if it cannot
+  keep up, preview can lag transport and the Physics Lag HUD reports that debt.
+  Zero simulation speed holds the backlog; a stationary transport can finish work
+  already owed to its paused position. Reset/backward time clears the old backlog.
+  Export drains all owed ticks with the same timestep and solver settings. A native
+  tick cannot be preempted. Arbitrary-time seek replay is not provided.
 - The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.
@@ -82,7 +86,9 @@ then tumble onto two opposing ramps that funnel them into each other. The floor,
 ramps, box geometry/contact properties, camera and lighting are authored in the preset.
 The stress-test floor uses X/Z scale 100, with a wider camera view and up to 24
 columns per pile row.
-Play advances the drop; pause holds it. The Performance HUD shows render frame interval, Physics CPU time and Bodies (including
+Play advances the drop; pause holds it once queued work reaches the paused position.
+The Performance HUD shows render frame interval, Physics CPU time, Physics Lag
+(maximum queued simulation seconds across worlds), and Bodies (including
 the fixed floor and two ramps). The 4,000 ceiling is a bounded demo capacity, not a measured
 real-time limit or a Box3D engine limit.
 
@@ -327,10 +333,13 @@ Step cost is CPU, on the content thread, inline (D2). The current stress-test
 capacity is 4,000 copies, with 60 Hz outer ticks, four substeps and one worker.
 Capacity is not a measured real-time guarantee; use the HUD to measure the scene.
 Pose upload at 4,000 copies is 128 KB/frame through the existing compute-upload
-path. Each live world has a four-tick catch-up cap and a four-millisecond total
-stepping budget checked between native steps; excess whole ticks are discarded while the fractional tick is retained and
-the clock is updated. Exact export renders simulate every elapsed tick. A native
-tick cannot be preempted once started.
+path. Preview gives physics one project-frame CPU interval per work batch, with
+no fixed catch-up tick cap and no discarded simulation time. Rendering follows
+that batch, so heavy physics can lower preview frame rate. Unfinished ticks are
+retained and reported as Physics Lag. If the solver cannot process 60 ticks per
+wall-clock second, preview falls behind; this policy preserves the trajectory,
+not a guarantee of real-time playback. Export drains the backlog. A native tick
+cannot be preempted once started.
 
 ## 7. Decided — do not reopen
 

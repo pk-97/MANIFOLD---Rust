@@ -1990,8 +1990,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         data_version: u64,
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
-        let _physics_scope =
-            manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(export_mode);
+        // Prioritize accurate physics work before drawing, retaining any debt.
+        let preview_fps = engine
+            .project()
+            .map_or(60.0, |p| f64::from(p.settings.frame_rate))
+            .max(1.0);
+        let _physics_scope = manifold_renderer::node_graph::physics::PhysicsStepScope::with_preview_budget(
+            export_mode,
+            std::time::Duration::from_secs_f64(1.0 / preview_fps),
+        );
         let _t_frame = std::time::Instant::now();
 
         // §5.4: one reset per frame; the generator and compositor wrappers

@@ -5,25 +5,28 @@ use manifold_physics::{BodyConfig, BodyHandle, BodyKind, PhysicsWorld};
 use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
 
-const LIVE_MAX_TICKS: usize = 4;
-const LIVE_STEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
-
 thread_local! {
-    // Offline callers remain exact unless a live render explicitly scopes them.
-    static LIVE_STEPPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // A preview budget only yields work; it never discards simulation time.
+    static PREVIEW_STEP_BUDGET: std::cell::Cell<Option<std::time::Duration>> = const { std::cell::Cell::new(None) };
 }
 
-/// Select live catch-up or exact export stepping for this thread's render.
-/// Restores the outer policy even on early return; must stay on this thread.
+/// Bound preview work batches so commands remain serviceable between frames.
+/// Export drains all due ticks; both paths use the same fixed timestep.
 #[must_use]
 pub struct PhysicsStepScope {
-    previous: bool,
+    previous: Option<std::time::Duration>,
     _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl PhysicsStepScope {
     pub fn for_render(export_mode: bool) -> Self {
-        let previous = LIVE_STEPPING.with(|live| live.replace(!export_mode));
+        Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(1.0 / 60.0))
+    }
+
+    /// A running native tick cannot be interrupted, even with a zero budget.
+    pub fn with_preview_budget(export_mode: bool, budget: std::time::Duration) -> Self {
+        let previous =
+            PREVIEW_STEP_BUDGET.with(|current| current.replace((!export_mode).then_some(budget)));
         Self {
             previous,
             _thread_bound: std::marker::PhantomData,
@@ -33,12 +36,8 @@ impl PhysicsStepScope {
 
 impl Drop for PhysicsStepScope {
     fn drop(&mut self) {
-        LIVE_STEPPING.with(|live| live.set(self.previous));
+        PREVIEW_STEP_BUDGET.with(|budget| budget.set(self.previous));
     }
-}
-
-fn live_budget_exhausted(completed: usize, elapsed: std::time::Duration) -> bool {
-    completed >= LIVE_MAX_TICKS || elapsed >= LIVE_STEP_BUDGET
 }
 
 pub const MAX_BODIES: usize = 16;
@@ -136,8 +135,8 @@ pub struct RigidSimulation {
     pub copy_poses: Vec<Transform>,
     pub active_copy_count: usize,
     pub physics_ms: f32,
-    /// Simulation time omitted by live catch-up limiting in the last evaluation.
-    pub dropped_time: Seconds,
+    /// Whole fixed ticks still owed after the last preview work batch.
+    pub pending_time: Seconds,
     last_overload_warning: Option<std::time::Instant>,
 }
 
@@ -160,7 +159,7 @@ impl Default for RigidSimulation {
             copy_poses: vec![Transform::default(); MAX_COPIES],
             active_copy_count: 0,
             physics_ms: 0.0,
-            dropped_time: Seconds::ZERO,
+            pending_time: Seconds::ZERO,
             last_overload_warning: None,
         }
     }
@@ -384,10 +383,16 @@ impl RigidSimulation {
             self.accumulator = 0.0;
         }
         let elapsed = now.0 - self.last_time.unwrap_or(now).0;
-        // Live frames discard excess catch-up; offline/export evaluates every tick.
+        // Preserve all elapsed time. Preview can yield with ticks still queued.
         let accumulated = self.accumulator + elapsed * f64::from(speed);
         const TICK: f64 = 1.0 / 60.0;
-        let steps = ((accumulated + 1e-9) / TICK).floor() as usize;
+        let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
+        let preview_budget = PREVIEW_STEP_BUDGET.with(std::cell::Cell::get);
+        let steps = if speed == 0.0 && preview_budget.is_some() {
+            0
+        } else {
+            due_steps
+        };
         let world = self.world.as_mut().expect("world constructed above");
         world.set_gravity(gravity).map_err(|e| e.to_string())?;
         for (i, body) in bodies.iter().enumerate() {
@@ -427,30 +432,30 @@ impl RigidSimulation {
             }
         }
         let physics_start = std::time::Instant::now();
-        let live = LIVE_STEPPING.with(std::cell::Cell::get);
         let mut completed = 0;
         for _ in 0..steps {
             world.step(Seconds(TICK), 4).map_err(|e| e.to_string())?;
             completed += 1;
             // A native tick cannot be preempted. Yield before starting another.
-            if live && live_budget_exhausted(completed, physics_start.elapsed()) {
+            if preview_budget.is_some_and(|budget| physics_start.elapsed() >= budget) {
                 break;
             }
         }
-        self.dropped_time = Seconds((steps - completed) as f64 * TICK);
-        if self.dropped_time.0 > 0.0
+        self.pending_time = Seconds((due_steps - completed) as f64 * TICK);
+        if self.pending_time.0 > 0.0
+            && speed > 0.0
             && self
                 .last_overload_warning
                 .is_none_or(|last| last.elapsed().as_secs() >= 2)
         {
             log::warn!(
-                "Physics overload: dropped {:.1} ms of live catch-up after {completed} ticks; continuing automatically",
-                self.dropped_time.0 * 1000.0
+                "Physics preview: {:.1} ms still queued after {completed} ticks; preserving every physics step",
+                self.pending_time.0 * 1000.0
             );
             self.last_overload_warning = Some(std::time::Instant::now());
         }
-        // Remove ALL due ticks from the backlog, retaining only fractional time.
-        self.accumulator = (accumulated - steps as f64 * TICK).max(0.0);
+        // Remove only completed ticks. Later preview batches or export drain the rest.
+        self.accumulator = (accumulated - completed as f64 * TICK).max(0.0);
         self.last_time = Some(now);
         self.reset_count = Some(reset_count);
         self.descriptions = bodies;
@@ -821,46 +826,85 @@ mod tests {
     }
 
     #[test]
-    fn live_catch_up_discards_backlog_and_next_frame_advances() {
-        let _scope = PhysicsStepScope::for_render(false);
+    fn preview_backlog_is_retained_and_eventually_matches_export() {
+        // Force one tick per call without relying on machine speed.
+        let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+        let mut bodies = one_body([0.0, 4.0, 0.0]);
+        let mut floor = body([0.0, -1.0, 0.0]);
+        floor.kind = 0;
+        floor.transform.scale = [20.0, 1.0, 20.0];
+        bodies[1] = Some(floor);
+        let mut preview = RigidSimulation::default();
+        let mut export = RigidSimulation::default();
+        for sim in [&mut preview, &mut export] {
+            sim.advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+                .unwrap();
+        }
+        let now = Seconds(3.0 + FRAME / 2.0);
+        preview.advance(bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+        assert!((preview.pending_time.0 - 179.0 * FRAME).abs() < 1e-9);
+        let held = preview.poses;
+        preview.advance(bodies, GRAVITY, now, 0.0, 0.0).unwrap();
+        assert_eq!(preview.poses, held);
+        for _ in 1..180 {
+            preview.advance(bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+        }
+        assert_eq!(preview.pending_time, Seconds::ZERO);
+        assert!((preview.accumulator - FRAME / 2.0).abs() < 1e-9);
+        {
+            let _export = PhysicsStepScope::for_render(true);
+            export.advance(bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+        }
+        assert_eq!(
+            preview.poses, export.poses,
+            "chunking must not change collision results"
+        );
+        let next = Seconds(3.0 + FRAME);
+        preview.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
+        export.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
+        assert_eq!(preview.poses, export.poses);
+    }
+
+    #[test]
+    fn preview_backlog_can_be_completed_by_export_or_cleared_by_reset() {
+        let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut sim = RigidSimulation::default();
         sim.advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
-        sim.advance(bodies, GRAVITY, Seconds(3.0 + FRAME / 2.0), 1.0, 0.0)
+        sim.advance(bodies, GRAVITY, Seconds(3.0), 1.0, 0.0)
             .unwrap();
-        assert!(sim.dropped_time.0 >= 3.0 - LIVE_MAX_TICKS as f64 * FRAME - 1e-9);
-        assert!((sim.accumulator - FRAME / 2.0).abs() < 1e-9);
-        let previous_y = sim.poses[0].pos[1];
-        sim.advance(bodies, GRAVITY, Seconds(3.0 + FRAME), 1.0, 0.0)
+        assert!(sim.pending_time.0 > 2.9);
+        {
+            let _export = PhysicsStepScope::for_render(true);
+            sim.advance(bodies, GRAVITY, Seconds(3.0), 0.0, 0.0)
+                .unwrap();
+        }
+        assert_eq!(sim.pending_time, Seconds::ZERO);
+        sim.advance(bodies, GRAVITY, Seconds(6.0), 1.0, 0.0)
             .unwrap();
-        assert_eq!(sim.dropped_time, Seconds::ZERO);
-        assert!(sim.poses[0].pos[1] < previous_y);
-        assert!(sim.accumulator < 1e-9);
+        assert!(sim.pending_time.0 > 2.9);
+        sim.advance(bodies, GRAVITY, Seconds(6.0), 1.0, 1.0)
+            .unwrap();
+        assert_eq!(sim.pending_time, Seconds::ZERO);
+        assert_eq!(sim.poses[0].pos, [0.0, 4.0, 0.0]);
     }
 
     #[test]
     fn render_scope_restores_live_and_export_policy() {
-        assert!(!LIVE_STEPPING.with(std::cell::Cell::get));
+        assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
         {
-            let _live = PhysicsStepScope::for_render(false);
-            assert!(LIVE_STEPPING.with(std::cell::Cell::get));
+            let budget = std::time::Duration::from_millis(33);
+            let _live = PhysicsStepScope::with_preview_budget(false, budget);
+            assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), Some(budget));
             {
                 let _export = PhysicsStepScope::for_render(true);
                 long_catch_up_matches_regular_ticks_and_keeps_running();
-                assert!(!LIVE_STEPPING.with(std::cell::Cell::get));
+                assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
             }
-            assert!(LIVE_STEPPING.with(std::cell::Cell::get));
+            assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), Some(budget));
         }
-        assert!(!LIVE_STEPPING.with(std::cell::Cell::get));
-    }
-
-    #[test]
-    fn live_budget_stops_at_either_time_or_tick_limit() {
-        use std::time::Duration;
-        assert!(!live_budget_exhausted(1, Duration::from_millis(1)));
-        assert!(live_budget_exhausted(1, LIVE_STEP_BUDGET));
-        assert!(live_budget_exhausted(LIVE_MAX_TICKS, Duration::ZERO));
+        assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
     }
 
     #[test]

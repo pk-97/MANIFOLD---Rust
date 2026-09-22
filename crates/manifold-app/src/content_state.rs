@@ -112,6 +112,8 @@ pub struct ContentState {
     pub physics_cpu_ms: f32,
     /// Bodies evaluated by physics worlds during the live content frame.
     pub physics_body_count: u32,
+    /// Maximum unprocessed physics time across worlds, in seconds.
+    pub physics_backlog_seconds: f32,
     pub active_clips: usize,
 
     // ── Editing ────────────────────────────────────────────────────
@@ -499,6 +501,7 @@ impl Default for ContentState {
             gpu_fence_wait_ms: 0.0,
             physics_cpu_ms: 0.0,
             physics_body_count: 0,
+            physics_backlog_seconds: 0.0,
             active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,
