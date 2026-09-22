@@ -1,6 +1,6 @@
 # Material inspector — understandable surface authoring
 
-**Status:** COMPLETE · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, local texture drawers, RGB gestures, atomic looks and affine placement.
+**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, local texture drawers, RGB gestures, atomic looks and affine placement.
 **Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
 
@@ -79,14 +79,14 @@ These were source-backed audit findings. The implementation preserves MR replace
 | Coat | `clearcoat`, `clearcoat_roughness` plus connected coat maps. |
 | Iridescence | `iridescence`, `iridescence_ior`, `iridescence_thickness_min/max`. Explain thin-film colour; minimum thickness matters only with its thickness map. |
 | Emission | `emission_r/g/b`, `emission_intensity`; separately addressed scene-object `emission_strength` labelled Object gain. |
-| Glass | `transmission`, `volume_thickness`, `volume_attenuation_distance/color_r/g/b`, `dispersion`; show Surface IOR by reference to the same row, never another slot. Explain thickness/IOR dependence without promising visible dispersion at every setting. |
+| Glass | `transmission`, `volume_thickness`, `volume_attenuation_distance/color_r/g/b`, `dispersion`; include the existing IOR row, without creating another slot. Explain thickness/IOR dependence without promising visible dispersion at every setting. |
 | Sheen | `sheen_color_r/g/b`, `sheen_roughness`. |
 | Anisotropy | `anisotropy_strength`, `anisotropy_rotation`. |
 | Translucency | `translucency`; help text: light through thin surfaces, not volumetric subsurface scattering. |
 | Textures | Five independent families: base (`uv_*`, unprefixed samplers), normal (`nrm_*`), metallic/roughness (`mr_*`), occlusion (`occ_*`), emission (`em_*`). Each owns six UV fields and four sampler fields. All other connected texture ports show source and supported/shared sampling facts. |
-| Advanced surface | `ambient`, `specular`, `specular_tint_r/g/b`, `ior`, `baked_look`, plus dormant/raw representations on demand. |
+| Advanced surface | `ambient`, `specular`, `specular_tint_r/g/b`, `baked_look`, plus dormant/raw representations on demand. |
 
-Every original PBR descriptor must be assigned exactly once. References such as Glass → IOR navigate to its canonical control. Unclassified future parameters appear in Advanced and fail the schema coverage test until deliberately classified; they must not disappear.
+Every original PBR descriptor must be assigned exactly once. IOR has one canonical control under Glass. Unclassified future parameters appear in Advanced and fail the schema coverage test until deliberately classified; they must not disappear.
 
 An untouched neutral feature lives in Add Feature. A feature stays visible when its mode is explicitly Off/On, its controlling authored factor is non-neutral, one of its relevant maps is connected, or one of its members has a wire/driver/envelope/audio/mapping/automation attachment. This is a structural/authored predicate, never a test of the current animated sample; LFO zero crossings do not rearrange the panel. Non-neutral secondary settings alone remain accessible through Add Feature and are never reset.
 

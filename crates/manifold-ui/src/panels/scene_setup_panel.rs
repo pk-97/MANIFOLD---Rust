@@ -2688,6 +2688,11 @@ impl ScenePanel {
             }
         }
         let mut info = self.properties_card.rows[slot].clone();
+        if (self.material_param_named(&info, "metallic") || self.material_param_named(&info, "roughness"))
+            && self.material_family_connected(MaterialMapFamily::MetallicRoughness)
+        {
+            info.spec.inactive_reason = Some("From texture — scalar applies without this map".into());
+        }
         if self.material_object_gain(&info) {
             info.spec.name = "Object gain".into();
         }
@@ -3212,18 +3217,6 @@ impl ScenePanel {
         object_row: &ObjectKnownRow,
         skin: Option<&SkinRowVm>,
     ) -> f32 {
-        if self.material_family_connected(MaterialMapFamily::MetallicRoughness) {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                "From texture — scalar factors apply without this map",
-                label_style(),
-            );
-            cy += ROW_H;
-        }
         if let Some(skin) = skin {
             tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Textures", section_label_style());
             cy += ROW_H;
