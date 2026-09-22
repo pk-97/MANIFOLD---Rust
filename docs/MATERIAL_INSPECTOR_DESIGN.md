@@ -1,6 +1,6 @@
 # Material inspector — understandable surface authoring
 
-**Status:** IN PROGRESS · 2026-09-22 · GPT-6 · P1–P6 implemented; final landing validation underway.
+**Status:** COMPLETE · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, local texture drawers, RGB gestures, atomic looks and affine placement.
 **Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
 
@@ -37,7 +37,7 @@ Paths below are repository-relative. Symbol anchors are intentional: executors m
 
 ### Rendering dependencies found by the audit
 
-These are source-backed findings, not reproduced bugs. Fixes require their own bounded reproduction and verification; this document does not certify shader fidelity.
+These were source-backed audit findings. The implementation preserves MR replacement semantics and explains texture ownership. The native Metal proof `material_inspector_glass_opaque_route_preserves_transmission_lobes` verifies Opaque/Blend transmission equivalence and separately observable sheen and translucency contributions. This is a bounded composition proof, not a general shader-fidelity certification.
 
 | Finding | Source | Contract for this work |
 |---|---|---|
@@ -341,7 +341,7 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Gate:** UV round-trip test with identity, rotation, reflection, shear, zero scale and a held-out imported transform; opening causes no writes. One undo restores exact pregesture values. Common checks; focused rendered UV proof where runtime sampling changes are involved.
 - **Demo/gesture:** `material-inspector-placement`: rotate a texture, undo; select sheared imported mapping, verify Advanced reason and unchanged matrix. L3+PNG. Retain P3's fully functional affine editor if this phase is not yet landed; label status accordingly.
 
-The two renderer bug repairs are separate workstreams, not an implicit extra phase. Before briefing them, reproduce the named behaviour, decide the compositing/pass fix from that evidence, and update their existing beads. This inspector contract must not be used as authority for speculative shader changes.
+The two renderer repairs were included in the authorized end-to-end work after their bounded proof was established: transmissive PBR output enters the transparent pass independently of authored alpha mode, and transmission replaces only the diffuse term while preserving additional lobes. The shader ABI is unchanged.
 
 ## 7. Decided — do not reopen
 
