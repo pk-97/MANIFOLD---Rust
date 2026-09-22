@@ -143,6 +143,13 @@ struct ThumbGen {
     runtime: Box<PresetRuntime>,
     rt: RenderTarget,
     gen_type: PresetTypeId,
+    /// A thumbnail is exposed only when preparation and frame encoding are
+    /// complete. GPU completion is protected separately by frame retirement.
+    ready: bool,
+    /// Monotonic per-runtime frame counter. Retries continue from the last
+    /// attempted frame instead of restarting stateful generators at zero.
+    frame_count: i64,
+    last_frame_status: crate::frame_status::FrameRenderStatus,
 }
 
 pub struct GeneratorRenderer {
@@ -1239,6 +1246,9 @@ impl GeneratorRenderer {
                     runtime,
                     rt,
                     gen_type: gen_type.clone(),
+                    ready: false,
+                    frame_count: 0,
+                    last_frame_status: crate::frame_status::FrameRenderStatus::Complete,
                 },
             );
         }
@@ -1259,11 +1269,14 @@ impl GeneratorRenderer {
         let frames = if needs_create { WARMUP_FRAMES } else { 1 };
 
         let t = self.thumb_gens.get_mut(clip_id)?;
+        t.ready = false;
         t.runtime.set_string_params(string_params);
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
-        for f in 0..frames {
+        for _ in 0..frames {
+            let frame_count = t.frame_count;
+            t.frame_count = t.frame_count.saturating_add(1);
             let ctx = PresetContext {
-                time: time + f as f64 * DT,
+                time: time + frame_count as f64 * DT,
                 beat,
                 dt: DT as f32,
                 width: THUMB_W,
@@ -1273,30 +1286,36 @@ impl GeneratorRenderer {
                 aspect: THUMB_W as f32 / THUMB_H as f32,
                 owner_key: 0,
                 is_clip_level: false,
-                frame_count: f as i64,
+                frame_count,
                 anim_progress: 0.0,
                 trigger_count: 0,
             };
             t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params);
         }
-        Some(&t.rt.texture)
+        t.last_frame_status = gpu.frame_status();
+        t.ready = !t.runtime.warmup_pending()
+            && t.last_frame_status == crate::frame_status::FrameRenderStatus::Complete;
+        t.ready.then_some(&t.rt.texture)
     }
 
     /// The cold-start thumbnail texture for `clip_id`, if one has been rendered.
     /// Separate from `render_clip_thumbnail` so the caller can render several
     /// (each a `&mut self` call) and then collect their textures by shared borrow.
     pub fn thumb_texture(&self, clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
-        self.thumb_gens.get(clip_id).map(|t| &t.rt.texture)
+        self.thumb_gens
+            .get(clip_id)
+            .filter(|t| {
+                t.ready
+                    && !t.runtime.warmup_pending()
+                    && t.last_frame_status == crate::frame_status::FrameRenderStatus::Complete
+            })
+            .map(|t| &t.rt.texture)
     }
 
-    /// Drop cold-start thumbnail instances for clips no longer requested, bounding
-    /// memory (each holds a generator instance + a small render target). Takes the
-    /// visible clip slice directly — no per-frame set allocation; `thumb_gens` holds
-    /// at most a handful of entries, so the linear `contains` is negligible.
-    pub fn evict_thumb_gens(&mut self, keep: &[ClipId]) {
-        if self.thumb_gens.len() != keep.len() {
-            self.thumb_gens.retain(|k, _| keep.contains(k));
-        }
+    /// Drop cold-start thumbnail instances rejected by the caller's visibility /
+    /// capture predicate, bounding memory without touching live layer generators.
+    pub fn evict_thumb_gens(&mut self, mut keep: impl FnMut(&ClipId) -> bool) {
+        self.thumb_gens.retain(|k, _| keep(k));
     }
 }
 
@@ -2065,6 +2084,227 @@ mod warmup_tests {
             .layers
             .push(apricot_weather_layer(&apricot_fixture_path().to_string_lossy()));
         project
+    }
+
+    fn insert_test_thumb(
+        renderer: &mut GeneratorRenderer,
+        clip_id: &str,
+        ready: bool,
+        status: crate::frame_status::FrameRenderStatus,
+    ) {
+        let gen_type = PresetTypeId::new("Plasma");
+        let runtime = renderer
+            .registry
+            .create_with_override(
+                renderer.device.clone(),
+                &gen_type,
+                None,
+                THUMB_W,
+                THUMB_H,
+                false,
+                None,
+                None,
+            )
+            .expect("Plasma thumbnail runtime");
+        let rt = RenderTarget::new(
+            &renderer.device,
+            THUMB_W,
+            THUMB_H,
+            renderer.format,
+            "thumbnail ownership test",
+        );
+        renderer.thumb_gens.insert(
+            ClipId::new(clip_id),
+            ThumbGen {
+                runtime,
+                rt,
+                gen_type,
+                ready,
+                frame_count: 45,
+                last_frame_status: status,
+            },
+        );
+    }
+
+    #[test]
+    fn thumbnail_pruning_handles_captured_offscreen_and_equal_size_changes() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        insert_test_thumb(
+            &mut renderer,
+            "captured",
+            true,
+            crate::frame_status::FrameRenderStatus::Complete,
+        );
+        insert_test_thumb(
+            &mut renderer,
+            "offscreen",
+            true,
+            crate::frame_status::FrameRenderStatus::Complete,
+        );
+        insert_test_thumb(
+            &mut renderer,
+            "replacement",
+            false,
+            crate::frame_status::FrameRenderStatus::PendingGeometry,
+        );
+
+        let visible = [ClipId::new("captured"), ClipId::new("replacement")];
+        let captured = [ClipId::new("captured")];
+        renderer.evict_thumb_gens(|id| visible.contains(id) && !captured.contains(id));
+
+        assert!(!renderer.thumb_gens.contains_key("captured"));
+        assert!(!renderer.thumb_gens.contains_key("offscreen"));
+        assert!(renderer.thumb_gens.contains_key("replacement"));
+        assert_eq!(renderer.thumb_gens.len(), 1);
+
+        // Equal cardinality must still prune a changed set: only `same-live`
+        // is retained even though the candidate list has three entries and
+        // names a different set from the parked map.
+        insert_test_thumb(
+            &mut renderer,
+            "same-live",
+            true,
+            crate::frame_status::FrameRenderStatus::Complete,
+        );
+        insert_test_thumb(
+            &mut renderer,
+            "same-stale-a",
+            true,
+            crate::frame_status::FrameRenderStatus::Complete,
+        );
+        let equal_size_visible = [
+            ClipId::new("same-live"),
+            ClipId::new("new-visible-a"),
+            ClipId::new("new-visible-b"),
+        ];
+        renderer.evict_thumb_gens(|id| equal_size_visible.contains(id));
+        assert!(renderer.thumb_gens.contains_key("same-live"));
+        assert!(!renderer.thumb_gens.contains_key("same-stale-a"));
+    }
+
+    #[test]
+    fn pending_visible_thumbnail_is_retained_and_live_generator_is_independent() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        let layer_id = LayerId::new("live-layer");
+        assert!(renderer.install_layer_generator(
+            layer_id.clone(),
+            PresetTypeId::new("Plasma"),
+            None,
+            None,
+            None,
+            0,
+            0,
+            BTreeMap::new(),
+            None,
+            false,
+            manifold_core::effects::RelightParams::default(),
+        ));
+        insert_test_thumb(
+            &mut renderer,
+            "pending-visible",
+            false,
+            crate::frame_status::FrameRenderStatus::PendingGeometry,
+        );
+
+        let visible = [ClipId::new("pending-visible")];
+        renderer.evict_thumb_gens(|id| visible.contains(id));
+        assert!(renderer.thumb_gens.contains_key("pending-visible"));
+        let live = &*renderer.layer_generators[&layer_id].generator as *const PresetRuntime;
+        renderer.evict_thumb_gens(|_| false);
+        assert!(renderer.thumb_gens.is_empty());
+        assert!(renderer.layer_generators.contains_key(&layer_id));
+        assert_eq!(&*renderer.layer_generators[&layer_id].generator as *const PresetRuntime, live);
+    }
+
+    #[test]
+    fn thumbnail_capture_survives_owner_drop_before_gpu_submission() {
+        let _serial = crate::test_device();
+        // Independent retirement owner: do not change the shared test device.
+        let device = std::sync::Arc::new(GpuDevice::new());
+        let event = device.create_event();
+        let (sender, mut retirement) = manifold_gpu::RetireQueue::new();
+        device.set_retirement(manifold_gpu::RetireMark::new(event.second_handle(), sender));
+        let mut renderer = GeneratorRenderer::new(
+            device.clone(), 64, 64, GpuTextureFormat::Rgba8Unorm, 0,
+        );
+        insert_test_thumb(
+            &mut renderer, "captured", true,
+            crate::frame_status::FrameRenderStatus::Complete,
+        );
+        let atlas = RenderTarget::new(
+            &device, THUMB_W, THUMB_H, GpuTextureFormat::Rgba8Unorm,
+            "thumbnail capture destination",
+        );
+        let bytes_per_row = THUMB_W * 4;
+        let readback = device.create_buffer_shared(u64::from(bytes_per_row * THUMB_H));
+        let mut encoder = device.create_encoder("thumbnail capture retirement");
+        let source = renderer.thumb_texture("captured").unwrap();
+        encoder.clear_texture(source, 1.0, 0.0, 0.0, 1.0);
+        encoder.copy_texture_to_texture(source, &atlas.texture, THUMB_W, THUMB_H, 1);
+        renderer.evict_thumb_gens(|_| false);
+        retirement.drain();
+        assert!(retirement.pending_count() > 0, "dropped owners await the frame fence");
+        assert!(renderer.thumb_gens.is_empty());
+        encoder.copy_texture_to_buffer(
+            &atlas.texture, &readback, THUMB_W, THUMB_H, bytes_per_row,
+        );
+        encoder.signal_event(&event);
+        encoder.commit_and_wait_completed();
+        retirement.drain();
+        assert_eq!(retirement.pending_count(), 0);
+        // SAFETY: the completed command buffer owns the only GPU writes;
+        // readback is shared and the slice exactly matches its allocation.
+        let pixels = unsafe {
+            std::slice::from_raw_parts(
+                readback.mapped_ptr().unwrap(), (bytes_per_row * THUMB_H) as usize,
+            )
+        };
+        assert!(pixels.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn thumbnail_output_is_withheld_until_ready_and_frame_complete() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        insert_test_thumb(
+            &mut renderer,
+            "pending",
+            false,
+            crate::frame_status::FrameRenderStatus::PendingGeometry,
+        );
+        assert!(renderer.thumb_texture("pending").is_none());
+        {
+            let thumb = renderer.thumb_gens.get_mut("pending").unwrap();
+            thumb.ready = true;
+            thumb.last_frame_status = crate::frame_status::FrameRenderStatus::Complete;
+        }
+        assert!(renderer.thumb_texture("pending").is_some());
+        renderer
+            .thumb_gens
+            .get_mut("pending")
+            .unwrap()
+            .last_frame_status = crate::frame_status::FrameRenderStatus::PendingGeometry;
+        assert!(renderer.thumb_texture("pending").is_none());
     }
 
     fn render_frames(renderer: &mut GeneratorRenderer, layers: &[Layer], frames: usize) {

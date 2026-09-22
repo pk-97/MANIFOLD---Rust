@@ -2784,22 +2784,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         if let Some((layer, clip_index, time, beat)) =
                             find_parked_generator_clip(layers, cid_str)
-                            && gen_r
-                                .render_clip_thumbnail(
-                                    &mut gpu_cold,
-                                    cid_str,
-                                    layer,
-                                    clip_index,
-                                    time,
-                                    beat,
-                                )
-                                .is_some()
                         {
+                            // A valid cold-start attempt consumes the existing
+                            // one-per-frame budget even when async runtime/GPU
+                            // readiness withholds the texture this frame.
+                            let _ = gen_r.render_clip_thumbnail(
+                                &mut gpu_cold,
+                                cid_str,
+                                layer,
+                                clip_index,
+                                time,
+                                beat,
+                            );
                             budget -= 1;
                         }
                     }
-                    // Drop thumbnail instances for clips no longer visible.
-                    gen_r.evict_thumb_gens(&self.clip_atlas_visible);
                 }
 
                 // P2b/5c-2: drive parked VIDEO clips' FILMSTRIP decode. Each clip's
@@ -3040,6 +3039,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                 }
             }
+        }
+
+        // Thumbnail runtimes are parked state, not live layer state. Retain
+        // only visible clips that have no atlas cell yet, and run
+        // this after the whole atlas block even when pressure, empty
+        // visibility, or export mode skipped capture work.
+        if let Some(gen_r) = renderers
+            .iter_mut()
+            .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>())
+        {
+            let visible = &self.clip_atlas_visible;
+            let atlas = &self.clip_atlas_cache;
+            gen_r.evict_thumb_gens(|clip_id| {
+                !export_mode && visible.contains(clip_id) && !atlas.contains_any(clip_id)
+            });
         }
 
         rtrace.mark("clip_atlas");
