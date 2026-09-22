@@ -12,9 +12,9 @@
 //      object 0 with GpuLoadAction::Clear and objects 1..N with
 //      GpuLoadAction::Load, so the depth test resolves real occlusion
 //      between objects instead of each rendering into its own buffer.
-//   2. A `lights: array<vec4<f32>, 8>` accumulator (up to 4 lights, 2
-//      vec4s each — `lights[i*2]` = dir.xyz + intensity in .w,
-//      `lights[i*2+1]` = premultiplied color.rgb) so the Phong/PBR/Cel
+//   2. A runtime-sized `lights: array<vec4<f32>>` buffer (3
+//      vec4s each — direction/position and mode, premultiplied colour
+//      and caster slot, then range) so the Phong/PBR/Cel
 //      entry points sum every wired light's direct term instead of
 //      reading exactly one `light_dir`/`light_color` pair. Ambient and
 //      emission are added exactly once (after the light loop), not
@@ -256,20 +256,44 @@ struct Uniforms {
 @group(0) @binding(5) var roughness_map: texture_2d<f32>;
 @group(0) @binding(6) var base_color_map: texture_2d<f32>;
 @group(0) @binding(7) var metallic_map: texture_2d<f32>;
-// Scene lights, 2 vec4s each, runtime-sized (was a fixed `array<vec4,8>`
+// Scene lights, 3 vec4s each, runtime-sized (was a fixed `array<vec4,8>`
 // inside Uniforms; the old cap of 4 lights is gone). Only the first
 // `scene_params.x` entries are meaningful — count flows through the
 // uniform, NOT `arrayLength` (D1). At zero lights the CPU still binds one
 // zeroed entry so Metal always sees a bound buffer (D4).
-//   lights[i*2]   = (dir.xyz: from-surface-toward-light, w: intensity)
-//   lights[i*2+1] = (color.rgb PREMULTIPLIED with intensity, w: unused)
+// Same layout as shaft_lights: Sun direction is toward the light.
+//   lights[i*3]   = (Sun: direction / Point: position, w: Sun 0 / Point 1)
+//   lights[i*3+1] = (colour.rgb premultiplied with intensity, w: caster slot)
+//   lights[i*3+2] = (range, 0, 0, 0)
 @group(0) @binding(8) var<storage, read> lights: array<vec4<f32>>;
+const LIGHT_STRIDE: u32 = 3u;
 
-// Shadow-caster table: MAX_SHADOW_CASTING_LIGHTS (=4) slots × 5 vec4.
+// Same Point meaning as Light::light_dir_at/attenuation_at and shaft_march:
+// return direction toward the light in xyz and distance attenuation in w.
+fn light_direction_attenuation(index: u32, world_pos: vec3<f32>) -> vec4<f32> {
+    let base = index * LIGHT_STRIDE;
+    let pos_or_dir = lights[base];
+    if pos_or_dir.w < 0.5 {
+        return vec4<f32>(normalize(pos_or_dir.xyz), 1.0);
+    }
+    let delta = pos_or_dir.xyz - world_pos;
+    let d_sq = dot(delta, delta);
+    let range = lights[base + 2u].x;
+    let r_sq = range * range;
+    let direction = select(
+        vec3<f32>(0.0, 0.0, 1.0),
+        delta * inverseSqrt(max(d_sq, 1e-20)),
+        d_sq >= 1e-20,
+    );
+    let attenuation = select(1.0 / (1.0 + d_sq / max(r_sq, 1e-10)), 0.0, r_sq < 1e-10);
+    return vec4<f32>(direction, attenuation);
+}
+
+// Shadow-caster table: MAX_RASTER_SHADOW_CASTERS (=4) slots × 5 vec4.
 // Per slot: [0..3] = the caster's light-space view_proj columns,
 // [4] = (bias, kernel_half_width, texel_size, light_size). Filled only for
 // active casters (zeroed otherwise); a light's caster slot rides
-// lights[i*2+1].w (−1.0 = this light casts no shadow). The four shadow maps
+// lights[i*3+1].w (−1.0 = this light casts no shadow). The four shadow maps
 // are separate bindings because WGSL has no dynamic texture-binding
 // indexing — the K=4 switch in sample_shadow() picks the right one.
 // `kernel_half_width` doubles as the PCSS dispatch: a NEGATIVE value (D12,
@@ -306,7 +330,7 @@ struct Instance {
 // `PREFILTER_MAX_MIP` must stay in sync with the Rust-side
 // `PREFILTER_MIP_COUNT - 1` (render_scene.rs) — same
 // shared-compile-time-constant discipline as `CASTER_STRIDE`/
-// `MAX_SHADOW_CASTING_LIGHTS` above.
+// `MAX_RASTER_SHADOW_CASTERS` above.
 const PREFILTER_MAX_MIP: f32 = 5.0;
 // RAYTRACING_DESIGN.md section 14 ED2: the flat ambient's knob-at-1
 // ceiling — mirrors `render_scene.rs`'s `AMBIENT_IRRADIANCE_SCALE` (0.15).
@@ -662,7 +686,7 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 }
 
 // Light visibility in [0,1]: 1 = fully lit, 0 = fully shadowed. `slot_f` is
-// lights[i*2+1].w — negative means this light casts no shadow, so the point
+// lights[i*3+1].w — negative means this light casts no shadow, so the point
 // is always lit. Reconstructs the fragment's light-space position, then
 // either runs the fixed (2·khw+1)² PCF kernel or (D12) the PCSS branch — a
 // NEGATIVE `kernel_half_width` in the caster table is the Contact-tier
@@ -696,6 +720,11 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
             return texel[ch];
         }
         return texel2[ch - 4];
+    }
+    // Raster has four map/table entries, even if this light owns an RT slot.
+    // This guard also covers RT unavailable or its shadow term switched off.
+    if slot_f >= 4.0 {
+        return 1.0;
     }
     let slot = i32(slot_f + 0.5);
     let base = u32(slot) * CASTER_STRIDE;
@@ -1364,9 +1393,9 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     var lit = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = lights[i * 2u];
-        let l_col = lights[i * 2u + 1u];
-        let L = normalize(l_dir.xyz);
+        let l_dir = light_direction_attenuation(i, in.world_pos);
+        let l_col = lights[i * LIGHT_STRIDE + 1u];
+        let L = l_dir.xyz;
         let H = normalize(L + V);
         let n_dot_l = max(dot(N, L), 0.0);
         let n_dot_h = max(dot(N, H), 0.0);
@@ -1655,9 +1684,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     var direct_translucent = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = lights[i * 2u];
-        let l_col = lights[i * 2u + 1u];
-        let L = normalize(l_dir.xyz);
+        let l_dir = light_direction_attenuation(i, in.world_pos);
+        let l_col = lights[i * LIGHT_STRIDE + 1u];
+        let L = l_dir.xyz;
         let H = normalize(L + V);
         let n_dot_l = max(dot(N, L), 0.0);
         let n_dot_h = max(dot(N, H), 0.0);
@@ -1997,9 +2026,9 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     var lit = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = lights[i * 2u];
-        let l_col = lights[i * 2u + 1u];
-        let L = normalize(l_dir.xyz);
+        let l_dir = light_direction_attenuation(i, in.world_pos);
+        let l_col = lights[i * LIGHT_STRIDE + 1u];
+        let L = l_dir.xyz;
         let n_dot_l = max(dot(N, L), 0.0);
         let snapped = floor(n_dot_l * bands) / (bands - 1.0);
         let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
