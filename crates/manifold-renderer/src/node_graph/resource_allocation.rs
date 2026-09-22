@@ -8,6 +8,7 @@ use ahash::{AHashMap, AHashSet};
 
 use super::effect_node::NodeInstanceId;
 use super::execution_plan::{ExecutionPlan, ResourceId};
+use super::freeze::classify::BoundaryReason;
 use super::graph::Graph;
 use super::graph_loader::PreAllocationError;
 use super::ports::PortType;
@@ -122,6 +123,19 @@ pub fn plan_array_allocations(
         let Some(node_inst) = graph.get_node(step.node) else {
             continue;
         };
+        // A CPU step finishes while previously encoded GPU commands may not
+        // have started. Its reads/writes therefore do not share the GPU's
+        // ordered lifetime model. Keep both sides of CPU/IO boundaries out
+        // of scratch reuse; Metal hazard tracking cannot order mapped writes.
+        if matches!(node_inst.node.boundary_reason(),
+            Some(BoundaryReason::NonGpu | BoundaryReason::IoBridge))
+        {
+            for (_, resource) in step.inputs.iter().chain(&step.outputs) {
+                if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
+                    excluded_resources.insert(*resource);
+                }
+            }
+        }
         for (input_port, output_port) in node_inst.node.aliased_array_io() {
             if let Some((_, resource)) = step.inputs.iter().find(|(name, _)| *name == *input_port)
             {
@@ -471,6 +485,7 @@ mod tests {
         inputs: Vec<NodeInput>,
         outputs: Vec<NodeOutput>,
         capacity: u32,
+        boundary: Option<BoundaryReason>,
     }
 
     impl FixedArrayNode {
@@ -485,11 +500,16 @@ mod tests {
                 inputs,
                 outputs,
                 capacity,
+                boundary: None,
             }
         }
     }
 
     impl EffectNode for FixedArrayNode {
+        fn boundary_reason(&self) -> Option<BoundaryReason> {
+            self.boundary
+        }
+
         fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
             crate::node_graph::depth_rule::DepthRule::Terminal
         }
@@ -554,6 +574,45 @@ mod tests {
         assert!(!reusable.contains_key(&other_key));
         assert_eq!(take_reusable_root(&mut reusable, key), Some(second));
         assert!(!reusable.contains_key(&key));
+    }
+
+    #[test]
+    fn cpu_and_io_array_boundaries_keep_dedicated_storage() {
+        let array = PortType::Array(ArrayType::of::<u32>());
+        for boundary in [BoundaryReason::NonGpu, BoundaryReason::IoBridge] {
+            let mut graph = Graph::new();
+            let mut nodes = Vec::new();
+            for index in 0..5 {
+                let mut node = FixedArrayNode::new(
+                    "test.array_stage",
+                    if index == 0 { vec![] } else {
+                        vec![mock_port("in", array, PortKind::Input, true)]
+                    },
+                    vec![mock_port("out", array, PortKind::Output, false)],
+                    4,
+                );
+                if index == 2 { node.boundary = Some(boundary); }
+                let id = graph.add_node(Box::new(node));
+                if let Some(&previous) = nodes.last() {
+                    graph.connect((previous, "out"), (id, "in")).unwrap();
+                }
+                nodes.push(id);
+            }
+            let plan = compile(&graph).unwrap();
+            let allocated = plan_array_allocations(
+                &graph, &plan, (64, 64), &AHashMap::default(),
+            ).unwrap();
+            let output = |node| plan.steps().iter().find(|step| step.node == node)
+                .unwrap().outputs[0].1;
+            for boundary_resource in [output(nodes[1]), output(nodes[2])] {
+                assert_eq!(allocated.storage[&boundary_resource].root, boundary_resource);
+                assert!(allocated.storage.iter().all(|(resource, storage)| {
+                    *resource == boundary_resource || storage.root != boundary_resource
+                }), "CPU/IO input and output storage cannot be overwritten by another step");
+            }
+            assert_eq!(allocated.storage[&output(nodes[3])].root, output(nodes[0]),
+                "ordinary GPU lifetimes remain eligible for reuse");
+        }
     }
 
     #[test]

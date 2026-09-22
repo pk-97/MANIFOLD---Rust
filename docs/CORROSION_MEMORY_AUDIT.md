@@ -437,6 +437,7 @@ not change the project-level measurements above.
   from the reuse inventory. Buckets now retain distinct eligible roots and remove
   roots claimed by explicit aliases. The existing lifetime, state, host-pinning,
   atomic, canvas-resize and carried-resource exclusions remain unchanged.
+  CPU and IO boundary array inputs/outputs are additionally kept dedicated.
 
 Savings depend on the visible thumbnails and graph lifetimes. A thumbnail runtime
 can contain much more than its 512×288 output texture. Neither that texture's
@@ -447,6 +448,25 @@ the previous single-root inventory would require three. This demonstrates the
 missed reuse case, not its frequency or byte impact in the saved project. Tests
 also cover thumbnail capture surviving owner release before command submission,
 and removal of obsolete effect owners without evicting disabled effects.
+
+The first complete GPU run exposed a missing lifetime boundary: Digital Plants
+camera wrap equivalence failed with mean absolute channel difference 11.614
+(required <1.0). The same isolated test passed when only the allocation planner
+was restored to `origin/main`. Static review found that ordinary step completion
+does not end a buffer lifetime across CPU evaluation and deferred GPU execution.
+Mapped CPU writes can overwrite a GPU input before its encoded command runs.
+The planner now uses the existing `NonGpu` / `IoBridge` classification to exclude
+both sides of those boundaries from scratch reuse, while GPU-only lifetimes remain
+eligible. The native retirement, shader and camera logic are unchanged.
+
+The audit also found an older, distinct limitation in `ArrayMath::run`: CPU reads
+assume CPU-produced inputs, and its output loop caps writes at 4096 elements.
+Digital Plants connects GPU-produced arrays with a larger capacity. Commit
+`f0a700400` introduced that CPU implementation for curve chains. Dedicated storage
+addresses the reuse regression; it does not establish correct same-frame transfer
+or full-capacity arithmetic across that older CPU/GPU boundary. This needs a
+separate value-level producer/consumer proof and an execution-domain fix that also
+preserves CPU curve consumers, rather than inserting per-node blocking GPU waits.
 
 ### Active/nearby scenes: audit result, not an implemented scheduler
 

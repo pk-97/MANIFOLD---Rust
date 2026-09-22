@@ -81,7 +81,10 @@ tracked bytes and budget rather than claiming hitch-free playback.
 only between arrays with identical channel layout and byte capacity whose
 execution-plan lifetimes do not overlap. Outputs acquire storage before the
 current step releases inputs. Each exact layout/capacity bucket retains all distinct
-free roots; an explicit alias removes its root from reuse. Held, persistent, prebound, atomic, explicit
+free roots; an explicit alias removes its root from reuse. Array inputs and outputs
+of `NonGpu` and `IoBridge` nodes remain dedicated: CPU evaluation can finish before
+queued GPU reads/writes execute, and GPU hazard tracking does not order mapped
+CPU access. Held, persistent, prebound, atomic, explicit
 in-place, canvas-dependent and carried/exported resources remain dedicated. Buffers stay allocated
 for the runtime; ordered encoding and native hazard tracking govern GPU access.
 Executor storage revisions detect overwritten cached outputs. This changes
