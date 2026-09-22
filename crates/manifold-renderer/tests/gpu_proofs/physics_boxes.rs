@@ -130,7 +130,38 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
                 .is_finite()
         );
     }
+    params.get_mut("40_copy_count").unwrap().value = 4_000.0;
+    params.get_mut("40_reset").unwrap().value = 3.0;
+    assert_eq!(render(184, &params).body_count, 4_003);
+    assert_eq!(render(185, &params).body_count, 4_003);
+    let full = readback_raw_halves(device, &target.texture, width, height);
+    assert!(manifold_renderer::headless_readback::mean_abs_half_diff(&full, &floor) > 0.001);
+    for bytes in full.chunks_exact(2) {
+        assert!(
+            half::f16::from_le_bytes([bytes[0], bytes[1]])
+                .to_f32()
+                .is_finite()
+        );
+    }
+    std::fs::write(
+        "/tmp/physics_boxes_4k.png",
+        readback_to_srgb_png(device, &target.texture, width, height),
+    )
+    .unwrap();
+    {
+        let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(false);
+        assert_eq!(
+            render(600, &params).body_count,
+            4_003,
+            "live stall recovers without Reset"
+        );
+        assert_eq!(
+            render(601, &params).body_count,
+            4_003,
+            "next live frame still evaluates"
+        );
+    }
     eprintln!(
-        "Physics Boxes: 256 -> pending 32 -> Reset 32 -> Reset 0 verified; images /tmp/physics_boxes_initial.png and /tmp/physics_boxes_dropped.png"
+        "Physics Boxes: 256 -> pending 32 -> Reset 32 -> Reset 0 -> Reset 4000 verified; images /tmp/physics_boxes_initial.png and /tmp/physics_boxes_dropped.png"
     );
 }

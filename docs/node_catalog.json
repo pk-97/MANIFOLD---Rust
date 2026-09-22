@@ -17657,7 +17657,7 @@
           "name": "copy_count",
           "range": [
             "0",
-            "4096"
+            "4000"
           ],
           "type": "int"
         },
@@ -17696,7 +17696,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Advance one shared Box3D rigid-body world at fixed 120 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
+      "purpose": "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Simulate colliding objects together under gravity, with speed and reset controls.",
@@ -36246,7 +36246,7 @@
         {
           "default": "256",
           "id": "40_copy_count",
-          "max": "4096",
+          "max": "4000",
           "min": "0",
           "name": "Copy Count"
         },
@@ -36293,7 +36293,7 @@
           "name": "Copy Spacing"
         },
         {
-          "default": "16",
+          "default": "24",
           "id": "40_copy_columns",
           "max": "64",
           "min": "1",
@@ -36321,7 +36321,7 @@
           "name": "Tilt"
         },
         {
-          "default": "62",
+          "default": "100",
           "id": "1_distance",
           "max": "100",
           "min": "0.01",
@@ -36335,9 +36335,9 @@
           "name": "FOV Y"
         },
         {
-          "default": "10",
+          "default": "18",
           "id": "1_look_y",
-          "max": "10",
+          "max": "18",
           "min": "-10",
           "name": "Look Y"
         },
@@ -36727,9 +36727,9 @@
           "name": "Rotation Z"
         },
         {
-          "default": "40",
+          "default": "100",
           "id": "100_scale_x",
-          "max": "40",
+          "max": "100",
           "min": "0.01",
           "name": "Scale X"
         },
@@ -36741,9 +36741,9 @@
           "name": "Scale Y"
         },
         {
-          "default": "40",
+          "default": "100",
           "id": "100_scale_z",
-          "max": "40",
+          "max": "100",
           "min": "0.01",
           "name": "Scale Z"
         },
@@ -39916,7 +39916,7 @@
         {
           "default": "100",
           "id": "40_copy_count",
-          "max": "4096",
+          "max": "4000",
           "min": "0",
           "name": "Copy Count"
         },

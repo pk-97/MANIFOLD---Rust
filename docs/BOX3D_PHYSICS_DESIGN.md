@@ -54,13 +54,16 @@ Physics Solids demo. The original larger design remains a roadmap.
   to 108 vertices; the native collision shape is the actual convex hull. Authored
   transform scale applies to both, with mesh radius one. Existing materials, lights
   and cameras remain authoritative.
-- Transport seconds advance fixed 1/120-second ticks with four solver substeps.
+- Transport seconds advance fixed 1/60-second ticks with four solver substeps.
   A stationary clock or zero speed holds motion. Reset, backward time, and the
   existing runtime state-clear path restore authored starting poses. Shape, scale
   or body membership changes rebuild the world. Mass/contact-property edits preserve
   current motion; editing a starting position/rotation repositions that body.
-  More than 128 pending ticks reports an error and holds the last poses until Reset;
-  no elapsed time is silently discarded. Arbitrary-time seek replay is not provided.
+  Each live physics world catches up at most four whole ticks, with a four-millisecond
+  stepping budget checked between native steps. If more whole ticks are pending, excess whole ticks are discarded;
+  the fractional tick is retained and the transport clock is updated to the
+  current time. A native tick cannot be preempted once started. Exact export
+  renders do not discard elapsed ticks. Arbitrary-time seek replay is not provided.
 - The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.
@@ -72,13 +75,15 @@ Physics Solids demo. The original larger design remains a roadmap.
 ### Physics Boxes demo
 
 Load **Physics Boxes** from the generator picker. **Copy Count**
-selects 0–4,096 boxes; **Reset** rebuilds the starting pile at that count. The
+selects 0–4,000 boxes; **Reset** rebuilds the starting pile at that count. The
 initial count is 256. Boxes start in a compact, deterministically jittered pile
 with varied rotations,
 then tumble onto two opposing ramps that funnel them into each other. The floor,
 ramps, box geometry/contact properties, camera and lighting are authored in the preset.
+The stress-test floor uses X/Z scale 100, with a wider camera view and up to 24
+columns per pile row.
 Play advances the drop; pause holds it. The Performance HUD shows render frame interval, Physics CPU time and Bodies (including
-the fixed floor and two ramps). The 4,096 ceiling is a bounded demo capacity, not a measured
+the fixed floor and two ramps). The 4,000 ceiling is a bounded demo capacity, not a measured
 real-time limit or a Box3D engine limit.
 
 The existing `node.physics_world` accepts an optional `copies` rigid-body
@@ -91,7 +96,7 @@ repeats the same initial arrangement; it does not introduce a new random seed.
 initialization/Reset, not on slider motion. Copies require uniform scale because the existing
 `InstanceTransform` wire has one scale component. The `instances` output feeds
 `node.scene_object.instances`; `active_count` feeds its optional `instance_count`
-input, so drawing, shadows and RT use only active copies rather than the 4,096
+input, so drawing, shadows and RT use only active copies rather than the 4,000
 buffer capacity. Unwired instance count preserves existing behavior.
 
 Physics timing covers CPU stepping and pose extraction, excludes rebuilding and
@@ -318,15 +323,14 @@ anywhere · new modulation machinery (D6).
 
 ## 6. Performance (stated honestly)
 
-Step cost is CPU, on the content thread, inline (D2): box3d is built for "large
-piles" with SIMD; at the v1 cap (4096 bodies, substeps 4, worker_count 1) the
-expected step is well under 2 ms on Apple Silicon — **expected, not measured; P1's
-render-trace gate produces the real number** and the HUD keeps it visible live.
-Budget context: content render baseline is 4.5–5.5 ms in a 16.6 ms frame. Pose
-readout + quat→euler + upload at 4096 bodies is ~130 KB/frame through the existing
-compute-upload path — noise. If the measured step blows the budget, the knobs are
-(in order): body caps, substeps, then worker_count >1 with determinism re-gated —
-never async stepping.
+Step cost is CPU, on the content thread, inline (D2). The current stress-test
+capacity is 4,000 copies, with 60 Hz outer ticks, four substeps and one worker.
+Capacity is not a measured real-time guarantee; use the HUD to measure the scene.
+Pose upload at 4,000 copies is 128 KB/frame through the existing compute-upload
+path. Each live world has a four-tick catch-up cap and a four-millisecond total
+stepping budget checked between native steps; excess whole ticks are discarded while the fractional tick is retained and
+the clock is updated. Exact export renders simulate every elapsed tick. A native
+tick cannot be preempted once started.
 
 ## 7. Decided — do not reopen
 
