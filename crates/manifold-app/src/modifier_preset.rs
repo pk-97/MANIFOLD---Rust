@@ -186,6 +186,7 @@ mod tests {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         }
     }
 

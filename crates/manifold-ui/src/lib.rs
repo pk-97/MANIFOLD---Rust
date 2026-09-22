@@ -64,8 +64,9 @@ pub use hit_targets::{HitTargetEntry, HitTargets};
 pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
 pub use param_surface::{
+    MaterialColour, MaterialFeature, MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole,
     ModifierCardInfo, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping, RowSpec, RowValue,
-    SceneRowAddr,
+    RgbChannel, SamplerComponent, SceneRowAddr, UvComponent,
 };
 pub use node::*;
 pub use panels::clip_chrome::ClipChromePanel;
@@ -73,6 +74,7 @@ pub use panels::dropdown::{DropdownAction, DropdownItem, DropdownPanel};
 pub use panels::footer::FooterPanel;
 pub use panels::header::HeaderPanel;
 pub use panels::inspector::InspectorCompositePanel;
+pub use panels::scene_setup_panel::{MaterialInspectorInfo, MaterialTextureInfo};
 pub use panels::layer_chrome::LayerChromePanel;
 pub use panels::layer_header::{LayerHeaderPanel, LayerInfo};
 pub use panels::master_chrome::MasterChromePanel;

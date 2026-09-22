@@ -13,6 +13,7 @@ mod bindings;
 pub mod atmosphere;
 pub mod camera;
 pub mod light;
+pub mod material_inspector;
 pub mod material;
 pub mod render_mode;
 pub mod scene_exposure;

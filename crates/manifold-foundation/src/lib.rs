@@ -21,6 +21,7 @@ pub mod hash;
 pub mod id;
 pub mod settings;
 pub mod units;
+pub mod uv_transform;
 
 pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_cold_touch_counts, set_transport_playing, total_cold_touches};
 

@@ -1571,7 +1571,7 @@ pub(crate) fn build_toggle_trigger_row(
         Some(reason) => format!("{} — {}", info.spec.name, reason),
         None => info.spec.name.clone(),
     };
-    let label_color = if disabled_reason.is_some() {
+    let label_color = if disabled_reason.is_some() || info.spec.inactive_reason.is_some() {
         color::TEXT_DIMMED_C32
     } else {
         color::SLIDER_TEXT_C32
@@ -1754,6 +1754,7 @@ pub(crate) fn build_toggle_trigger_row(
     // there.
     let pid: &str = &info.id;
     tree.set_name(button_id, format!("param_row.{pid}"));
+    let cy = build_inactive_reason(tree, parent, x, cy, slider_w, info);
 
     ToggleTriggerRowIds {
         label_id: Some(label_id),
@@ -2303,6 +2304,19 @@ pub(crate) fn build_param_row(
         cy += DRAWER_BOTTOM_GAP;
     }
 
-    ids.new_cy = cy;
+    ids.new_cy = build_inactive_reason(tree, parent, x, cy, row_right - x, info);
     ids
+}
+
+fn build_inactive_reason(
+    tree: &mut UITree, parent: Option<NodeId>, x: f32, cy: f32, width: f32, info: &ParamRow,
+) -> f32 {
+    let Some(reason) = info.spec.inactive_reason.as_deref() else { return cy };
+    tree.add_label(parent, x, cy, width, ROW_HEIGHT, reason, UIStyle {
+        text_color: color::TEXT_DIMMED_C32,
+        font_size: color::FONT_CAPTION,
+        text_align: TextAlign::Left,
+        ..UIStyle::default()
+    });
+    cy + ROW_HEIGHT + ROW_SPACING
 }

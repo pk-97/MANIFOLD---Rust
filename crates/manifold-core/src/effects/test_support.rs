@@ -87,6 +87,7 @@ pub(super) fn slot(id: &str, value: f32, exposed: bool) -> crate::params::Param 
         wraps: false,
         section: None,
         card_visible: true,
+        material_role: None,
     };
     let mut p = crate::params::Param::bundled(spec);
     p.value = value;

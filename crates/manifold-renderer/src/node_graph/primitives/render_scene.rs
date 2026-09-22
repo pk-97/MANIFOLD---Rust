@@ -1578,9 +1578,9 @@ struct ObjectDraw<'ctx> {
     geometry_content_known: bool,
     appearance_content_known: bool,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
-    /// model — `Blend` routes into the sorted transparent group and
-    /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
-    /// existing group, unchanged.
+    /// model — `Blend` and transmissive PBR objects route into the sorted
+    /// transparent group and skip every shadow-caster pass; `Opaque`/`Mask`
+    /// draw in the existing group when they have no transmission.
     alpha_mode: AlphaMode,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
     /// object's model-matrix translation (the interior's stand-in
@@ -1600,7 +1600,7 @@ struct ObjectDraw<'ctx> {
     cast_shadows: bool,
     /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: this object routes to
     /// Pass B AND wants the opaque-scene-color snapshot bound at
-    /// @binding(27) (`Blend` + `transmission_factor > 0`). Every
+    /// @binding(27) (`Blend` or PBR `transmission_factor > 0`). Every
     /// other draw binds the 1×1 dummy there instead — same always-
     /// bind ABI-stub discipline as `normal_map`/`mr_map`/etc above.
     is_transmissive: bool,
@@ -1623,6 +1623,14 @@ struct ObjectDraw<'ctx> {
     /// cache key) and `GpuEncoder::depth_msaa_draw_points` at the batch
     /// site.
     points: bool,
+}
+
+impl ObjectDraw<'_> {
+    /// Transmission is a separate raster route even when authored alpha stays
+    /// Opaque. The shader still receives the authored alpha mode unchanged.
+    fn routes_to_transparent(&self) -> bool {
+        self.alpha_mode == AlphaMode::Blend || self.is_transmissive
+    }
 }
 
 /// Whole-triangle vertex count of a MeshVertex buffer (the prepass draw
@@ -2118,7 +2126,8 @@ impl RenderScene {
 
             let alpha_mode = material.alpha_mode;
             let is_blend = alpha_mode == AlphaMode::Blend;
-            let is_transmissive = is_blend && material.transmission_factor > 0.0;
+            let is_transmissive = material.kind == MaterialKind::Pbr
+                && material.transmission_factor > 0.0;
             if is_transmissive {
                 has_transmission = true;
             }
@@ -2138,7 +2147,7 @@ impl RenderScene {
             let points = color_pass_points(&render_mode);
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, *velocity_wired, *ao_mask_wired, *denoise_aux_ready, is_blend, points)
+                self.pipeline_for(gpu.device, material.kind, *velocity_wired, *ao_mask_wired, *denoise_aux_ready, is_blend || is_transmissive, points)
                     .clone()
             };
 
@@ -2739,7 +2748,7 @@ impl RenderScene {
         objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
         draws: &[ObjectDraw<'ctx>],
     ) -> Result<RtFrameTables<'ctx>, FrameRenderFailure> {
-            let opaque_draws = draws.iter().filter(|d| d.alpha_mode != AlphaMode::Blend);
+            let opaque_draws = draws.iter().filter(|d| !d.routes_to_transparent());
             // RS-B: build gi_materials alongside objects (SAME order) for
             // the emissive light table at accel-build time. Reused below
             // for the GPU upload at dispatch time.
@@ -4336,7 +4345,7 @@ impl RenderScene {
                     draw.fill_mode,
                 )
             };
-            if draw.alpha_mode == AlphaMode::Blend {
+            if draw.routes_to_transparent() {
                 blend_entries.push((draw.sort_depth, call));
             } else {
                 draw_calls.push(call);
@@ -5116,7 +5125,7 @@ impl RenderScene {
         // selecting raster fallback. Reuse this exact object list for AS work.
         let rt_objects: arrayvec::ArrayVec<manifold_gpu::raytrace::RtObjectGeometry, { OBJECT_SAFETY_MAX as usize }> =
             draws.iter()
-                .filter(|d| rt_enabled && d.alpha_mode != AlphaMode::Blend)
+                .filter(|d| rt_enabled && !d.routes_to_transparent())
                 .map(|d| {
                     let rt_instances_wired =
                         matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
@@ -5310,7 +5319,7 @@ impl RenderScene {
             let gpu = ctx.gpu_encoder();
             for draw in draws
                 .iter_mut()
-                .filter(|d| d.alpha_mode == AlphaMode::Blend && !d.points)
+                .filter(|d| d.routes_to_transparent() && !d.points)
             {
                 draw.pipeline =
                     self.pipeline_for(gpu.device, draw.kind, false, false, false, true, false).clone();
@@ -8616,7 +8625,7 @@ impl EffectNode for RenderScene {
         // object's own cast_shadows toggle.
         let opaque_draws: Vec<&ObjectDraw> = draws
             .iter()
-            .filter(|d| d.alpha_mode != AlphaMode::Blend)
+            .filter(|d| !d.routes_to_transparent())
             .collect();
 
         // ---- Shadow depth pre-passes (BUG-trh7 stage 2,

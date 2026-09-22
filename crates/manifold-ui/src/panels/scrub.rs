@@ -54,6 +54,9 @@ pub enum ScrubValue {
     /// A `(min, max)` sub-range — a modulation trim-bar drag (driver / audio /
     /// Ableton), where one gesture carries both edges.
     Range(f32, f32),
+    /// Three scalar channels edited as one colour gesture while retaining
+    /// their independent parameter identities in the address.
+    Rgb([f32; 3]),
 }
 
 impl ScrubValue {
@@ -62,6 +65,7 @@ impl ScrubValue {
         match self {
             ScrubValue::Scalar(v) => Some(v),
             ScrubValue::Range(..) => None,
+            ScrubValue::Rgb(_) => None,
         }
     }
 
@@ -70,6 +74,7 @@ impl ScrubValue {
         match self {
             ScrubValue::Range(min, max) => Some((min, max)),
             ScrubValue::Scalar(_) => None,
+            ScrubValue::Rgb(_) => None,
         }
     }
 }
@@ -84,6 +89,9 @@ pub enum ValueRef {
     /// An exposed card param on an effect/generator graph — was the
     /// `ParamSnapshot` / `ParamChanged` / `ParamCommit` trio.
     Param(GraphParamTarget, ParamId),
+    /// A grouped material colour. The three ids remain the authoritative
+    /// scalar storage and bindings; the UI only gives them one gesture.
+    ParamRgb(GraphParamTarget, [ParamId; 3]),
     /// The master-opacity slider (master chrome) — was `MasterOpacity{Snapshot,
     /// Changed,Commit}`.
     MasterOpacity,

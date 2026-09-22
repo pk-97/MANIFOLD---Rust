@@ -120,6 +120,9 @@ impl From<&LoadError> for ValidationIssue {
                 param,
                 ..
             } => (Some(*node_id), Some(type_id.clone()), Some(param.clone())),
+            InvalidMaterialFeatureMode {
+                node_id, param, ..
+            } => (Some(*node_id), Some("node.pbr_material".to_string()), Some(param.clone())),
             UnknownOutputFormat {
                 node_id,
                 type_id,

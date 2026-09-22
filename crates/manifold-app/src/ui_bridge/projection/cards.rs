@@ -447,6 +447,8 @@ fn param_surface(
                     is_trigger_gate: p.spec.is_trigger_gate,
                     value_labels,
                     section: p.spec.section.clone(),
+                    material_role: p.spec.material_role.map(super::material::role),
+                    inactive_reason: None,
                     // The base projection leaves every row interactive;
                     // `modifier_surfaces` below re-locks Math View's
                     // Connect to Mesh when the chain doesn't support it.
@@ -460,6 +462,8 @@ fn param_surface(
                 modulation: RowMod::default(),
                 mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
                 scene_addr: None,
+                rgb_members: None,
+                material_attached: false,
                 audio: Default::default(),
             }
         })
@@ -867,6 +871,7 @@ mod param_label_tests {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         }
     }
 
@@ -1265,6 +1270,7 @@ mod sync_card_values_tests {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         }
     }
 

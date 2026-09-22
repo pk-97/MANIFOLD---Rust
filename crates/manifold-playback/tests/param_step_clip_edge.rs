@@ -49,6 +49,7 @@ fn add_whole_number_param(inst: &mut PresetInstance, id: &str, max: f32) {
         wraps: false,
         section: None,
         card_visible: true,
+        material_role: None,
     }));
 }
 

@@ -221,10 +221,13 @@ pub(super) fn dispatch_project(
                 // The action carries the chosen preset id directly (registry
                 // entries AND project-embedded presets), so no index lookup.
                 if new_type != old_type {
-                    ContentCommand::send(content_tx, ContentCommand::ChangeGeneratorType {
-                        layer_id: layer.layer_id.clone(),
-                        new_type,
-                    });
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::ChangeGeneratorType {
+                            layer_id: layer.layer_id.clone(),
+                            new_type,
+                        },
+                    );
                 }
             }
             DispatchResult::structural()
@@ -236,6 +239,70 @@ pub(super) fn dispatch_project(
         // `Application::watch_generator_graph` does, then dispatch the SAME
         // command a card/node-face/group-face write would — no new mutation
         // path (section 4).
+        ProjectAction::MaterialParamsSet {
+            target,
+            object,
+            material,
+            kind,
+            writes,
+            description,
+        } => {
+            dispatch_material_batch(
+                project,
+                content_tx,
+                target,
+                object,
+                material,
+                *kind,
+                writes,
+                description,
+            );
+            DispatchResult::handled()
+        }
+        ProjectAction::MaterialLookApply {
+            target,
+            object,
+            material,
+            look,
+        } => {
+            let Some(target_core) = material_graph_target(target) else {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::GraphEditRejected(
+                        "Select a scene material before applying a look".into(),
+                    ),
+                );
+                return DispatchResult::handled();
+            };
+            let result = super::projection::material::graph_def(project, &target_core)
+                .ok_or_else(|| "Material graph is unavailable".to_owned())
+                .and_then(|def| {
+                    let inst = project
+                        .preset_instance(&target_core)
+                        .ok_or("Material instance is unavailable")?;
+                    let reference = manifold_core::scene_modifier_preset::SceneNodeRef {
+                        scope: material.scope.clone(),
+                        node: material.node.clone(),
+                    };
+                    super::material_looks::writes(inst, &def, &reference, *look)
+                });
+            match result {
+                Ok(writes) => dispatch_material_batch(
+                    project,
+                    content_tx,
+                    target,
+                    object,
+                    material,
+                    manifold_ui::panels::actions::MaterialEditKind::Look,
+                    &writes,
+                    "Apply material look",
+                ),
+                Err(reason) => {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason))
+                }
+            }
+            DispatchResult::handled()
+        }
         ProjectAction::SceneSetupParamChanged(
             layer_id,
             scope_path,
@@ -367,15 +434,12 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneModifiersCopy(layer, selected) => {
             match crate::scene_modifier_transfer::ModifierClipboard::capture(
-                project,
-                layer,
-                selected,
+                project, layer, selected,
             ) {
                 Ok(clipboard) => ui.set_scene_modifier_clipboard(Some(clipboard)),
-                Err(reason) => ContentCommand::send(
-                    content_tx,
-                    ContentCommand::GraphEditRejected(reason),
-                ),
+                Err(reason) => {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason))
+                }
             }
             DispatchResult::handled()
         }
@@ -1195,27 +1259,145 @@ pub(super) fn remove_parameter_automation(
     let graph_target = crate::editing_host::to_graph_target(target);
     // A pending first recording take can create the lane at this boundary,
     // before the removal resolves its parameter on the content thread.
-    crate::content_command::ContentCommand::send(content_tx,
-        crate::content_command::ContentCommand::FinishAutomationRecording);
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::FinishAutomationRecording,
+    );
     let mut command = manifold_editing::commands::automation::RemoveLaneCommand::for_param(
-        graph_target, param_id.as_ref(),
+        graph_target,
+        param_id.as_ref(),
     );
     command.execute(project);
-    crate::content_command::ContentCommand::send(content_tx,
-        crate::content_command::ContentCommand::Execute(Box::new(command)));
-    selection.chosen_automation_params.retain(|_, (t, p)| t != target || p != param_id);
-    selection.selected_automation_points.retain(|point| point.target != *target || point.param_id != *param_id);
-    if selection.selected_automation_point.as_ref().is_some_and(|p| p.target == *target && p.param_id == *param_id) {
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::Execute(Box::new(command)),
+    );
+    selection
+        .chosen_automation_params
+        .retain(|_, (t, p)| t != target || p != param_id);
+    selection
+        .selected_automation_points
+        .retain(|point| point.target != *target || point.param_id != *param_id);
+    if selection
+        .selected_automation_point
+        .as_ref()
+        .is_some_and(|p| p.target == *target && p.param_id == *param_id)
+    {
         selection.selected_automation_point = None;
     }
-    if selection.automation_paste_context.as_ref().is_some_and(|(t, p)| t == target && p == param_id) {
+    if selection
+        .automation_paste_context
+        .as_ref()
+        .is_some_and(|(t, p)| t == target && p == param_id)
+    {
         selection.automation_paste_context = None;
     }
-    if selection.automation_feedback.as_ref().is_some_and(|f| f.target == *target && f.param_id == *param_id) {
+    if selection
+        .automation_feedback
+        .as_ref()
+        .is_some_and(|f| f.target == *target && f.param_id == *param_id)
+    {
         selection.automation_feedback = None;
     }
-    if ui.pending_automation_reveal.as_ref().is_some_and(|(t, p)| t == target && p == param_id) {
+    if ui
+        .pending_automation_reveal
+        .as_ref()
+        .is_some_and(|(t, p)| t == target && p == param_id)
+    {
         ui.pending_automation_reveal = None;
+    }
+}
+
+fn material_graph_target(
+    target: &manifold_ui::GraphParamTarget,
+) -> Option<manifold_core::GraphTarget> {
+    match target {
+        manifold_ui::GraphParamTarget::GeneratorOf(layer) => {
+            Some(manifold_core::GraphTarget::Generator(layer.clone()))
+        }
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_material_batch(
+    project: &Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    target: &manifold_ui::GraphParamTarget,
+    object: &manifold_ui::param_surface::ModifierObjectRef,
+    material: &manifold_ui::param_surface::ModifierObjectRef,
+    kind: manifold_ui::panels::actions::MaterialEditKind,
+    writes: &[manifold_ui::panels::actions::MaterialParamWrite],
+    description: &str,
+) {
+    use crate::content_command::ContentCommand;
+    use manifold_editing::commands::material::{
+        ChangeMaterialParamsCommand, MaterialEditContext, MaterialEditKind, MaterialParamChange,
+    };
+    let Some(target) = material_graph_target(target) else {
+        ContentCommand::send(
+            content_tx,
+            ContentCommand::GraphEditRejected("Material edit requires its scene layer".into()),
+        );
+        return;
+    };
+    let Some(inst) = project.preset_instance(&target) else {
+        return;
+    };
+    let kind = match kind {
+        manifold_ui::panels::actions::MaterialEditKind::Feature => MaterialEditKind::Feature,
+        manifold_ui::panels::actions::MaterialEditKind::Look => MaterialEditKind::Look,
+        manifold_ui::panels::actions::MaterialEditKind::Placement => MaterialEditKind::Placement,
+    };
+    let context = MaterialEditContext {
+        expected_preset_id: inst.effect_type().clone(),
+        object: manifold_core::scene_modifier_preset::SceneNodeRef {
+            scope: object.scope.clone(),
+            node: object.node.clone(),
+        },
+        material: manifold_core::scene_modifier_preset::SceneNodeRef {
+            scope: material.scope.clone(),
+            node: material.node.clone(),
+        },
+        kind,
+    };
+    let mut changes = Vec::with_capacity(writes.len());
+    for write in writes {
+        let Some(_) = inst.params.get(&write.param_id) else {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::GraphEditRejected(format!(
+                    "Material parameter {} is unavailable",
+                    write.param_id
+                )),
+            );
+            return;
+        };
+        changes.push(MaterialParamChange {
+            param_id: write.param_id.clone(),
+            expected: inst.get_base_param(&write.param_id),
+            value: write.value,
+        });
+    }
+    let catalog_default = super::projection::material::graph_def(project, &target);
+    match manifold_editing::commands::material::validate_material_edit(
+        project,
+        &target,
+        &context,
+        &changes,
+        catalog_default.as_ref(),
+    ) {
+        Ok(()) => ContentCommand::send(
+            content_tx,
+            ContentCommand::ExecuteOnContent(Box::new(ChangeMaterialParamsCommand::new(
+                target,
+                context,
+                changes,
+                description.to_owned(),
+                catalog_default,
+            ))),
+        ),
+        Err(reason) => ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason)),
     }
 }
 

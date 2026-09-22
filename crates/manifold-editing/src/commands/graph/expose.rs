@@ -1138,6 +1138,7 @@ mod tests {
                         wraps: false,
                         section: None,
                         card_visible: true,
+                        material_role: None,
                     },
                     ParamSpecDef {
                         id: "scale".into(),
@@ -1158,6 +1159,7 @@ mod tests {
                         wraps: false,
                         section: None,
                         card_visible: true,
+                        material_role: None,
                     },
                 ],
                 bindings: vec![
@@ -1407,6 +1409,7 @@ mod tests {
                         wraps: false,
                         section: None,
                         card_visible: true,
+                        material_role: None,
                     },
                     ParamSpecDef {
                         id: "user.render.animate.1".into(),
@@ -1427,6 +1430,7 @@ mod tests {
                         wraps: false,
                         section: None,
                         card_visible: true,
+                        material_role: None,
                     },
                 ],
                 bindings: vec![
@@ -1863,6 +1867,7 @@ mod tests {
                     wraps: false,
                     section: None,
                     card_visible: true,
+                    material_role: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),

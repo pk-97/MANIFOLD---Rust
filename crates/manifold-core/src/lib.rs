@@ -23,6 +23,7 @@ pub mod id;
 pub mod layer;
 pub mod macro_bank;
 pub mod marker;
+pub mod material_inspector;
 pub mod math;
 pub mod midi;
 pub mod params;

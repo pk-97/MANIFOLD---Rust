@@ -106,6 +106,7 @@ fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
         wraps: false,
         section: None,
         card_visible: true,
+        material_role: None,
     });
     p.value = value;
     p.base = value;

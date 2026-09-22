@@ -1525,6 +1525,7 @@ mod tests {
                     wraps: false,
                     section: None,
                     card_visible: true,
+                    material_role: None,
                 }],
                 bindings: vec![BindingDef {
                     id: param_id.to_string(),
@@ -1609,6 +1610,7 @@ mod tests {
             wraps: false,
             section: None,
             card_visible: true,
+            material_role: None,
         }));
     }
 

@@ -43,6 +43,8 @@ fn row(id: &'static str, name: &str, min: f32, max: f32, base: f32, whole: bool)
             // sheet renders.
             section: None,
             disabled: None,
+            inactive_reason: None,
+            material_role: None,
         },
         value: RowValue { base, effective: base, exposed: true, driven: false },
         modulation: RowMod::default(),
@@ -54,6 +56,8 @@ fn row(id: &'static str, name: &str, min: f32, max: f32, base: f32, whole: bool)
             mappable: false,
         },
         scene_addr: None,
+        rgb_members: None,
+        material_attached: false,
     }
 }
 

@@ -44,7 +44,7 @@ pub use viewport::HitRegion;
 // call sites reach the domain enums by the same path.
 pub use actions::{
     AudioDrawerClick, ClipTriggerDrawerClick, AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
-    MarkerAction, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
+    MarkerAction, MaterialEditKind, MaterialLook, MaterialParamWrite, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
 };
 
 // The unified scrub wire (P-I / D4): one `Scrub` arm collapses the

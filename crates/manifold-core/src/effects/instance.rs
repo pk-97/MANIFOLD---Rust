@@ -956,6 +956,7 @@ impl PresetInstance {
             // manifest entry `self.params.insert_at` restores below.
             section: binding.section.clone(),
             card_visible: true,
+            material_role: None,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -1727,6 +1728,7 @@ mod tests {
                     wraps: false,
                     section: None,
                     card_visible: true,
+                    material_role: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".to_string(),
