@@ -741,7 +741,7 @@ impl ScenePanel {
             let rgb: [u8; 3] = std::array::from_fn(|index| {
                 (self.material_full_value(&ids[index]) * 255.0).round() as u8
             });
-            let colour = Color32::new(rgb[0], rgb[1], rgb[2], 255);
+            let colour = Color32::new(rgb[0], rgb[1], rgb[2], 255); // design-token-exempt: displays authored material RGB, not a UI theme colour
             let Some(current) = tree.get_node(*node) else {
                 continue;
             };
@@ -2016,7 +2016,7 @@ mod tests {
             0.6,
             0.0,
         );
-        let rows = vec![primary.clone(), green, blue];
+        let rows = [primary.clone(), green, blue];
         assert!(ScenePanel::material_panel_row_visible(&primary));
         assert!(ScenePanel::material_panel_row_visible(&rows[1]));
         assert!(ScenePanel::material_panel_row_visible(&rows[2]));
