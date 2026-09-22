@@ -3575,7 +3575,7 @@ mod chain_pool_tests {
     #[test]
     fn empty_frame_master_effects_drop_master_chain_before_early_return() {
         let (device, mut comp) = make_compositor();
-        let mut project = manifold_core::Project::default();
+        let mut project = manifold_core::project::Project::default();
         project.settings.master_effects.push(
             manifold_core::preset_definition_registry::create_default(&PresetTypeId::MIRROR),
         );

@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn reusable_root_buckets_deduplicate_and_remove_across_keys() {
         let key = (PortType::Array(ArrayType::of::<u32>()), 16);
-        let other_key = (PortType::Array(ArrayType::of::<f32>()), 16);
+        let other_key = (PortType::Array(ArrayType::of::<u32>()), 32);
         let first = ResourceId(10);
         let second = ResourceId(11);
         let mut reusable = ReusableBuckets::default();
