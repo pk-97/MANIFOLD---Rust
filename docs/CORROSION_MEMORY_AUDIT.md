@@ -2,15 +2,17 @@
 
 <!-- index: Bounded Azalea/Vortex Fragments/Ordered Recon/Math View memory audit; measured allocation classes, source-derived costs and unverified recovery candidates. -->
 
-**Status:** Cut-remap reuse, CPU source-copy release, conservative temporary-array reuse, immutable source/converted-image sharing, loading retirement checkpoints and pool telemetry implemented and measured, 2026-09-22. Broader memory investigation remains open: BUG-dl16.
+**Status:** Earlier sharing/retirement work and the latest cleanup, RT scratch reuse and scalar-history changes are implemented; combined measurement refreshed at `9bdd865a0`, 2026-09-22. Broader memory investigation remains open: BUG-dl16.
 
-The latest combined build measures **15,736,799,232 bytes** of peak Metal
-allocations, **4,760,305,664 bytes (23.22%) below the original clean capture**.
-Peak process footprint measures **21,841,956,296 bytes**, compared with
-23,905,440,064 bytes at the start of the overnight follow-up. These are separate,
-overlapping measures from bounded headless captures, not additive memory savings.
-Loading measured 22.14 seconds; duration-independent RAM and arbitrary modifier
-complexity are not established.
+The latest matched-build capture measures **15,140,290,560 bytes** of sampled
+peak Metal allocations, **596,508,672 bytes (3.79%) below the retained previous
+build** on the same current project. Peak process footprint is 21,333,708,232
+bytes versus 21,720,141,256 bytes in the paired baseline; these overlapping
+process/GPU measures must not be added. Both runs have 0/191 intervals late by
+more than 1 ms. Loading was 28.40 versus 29.01 seconds, with no speed gain shown.
+The current total is 26.13% below the original historical Metal figure, but the
+project has since been saved again; see the matched comparison below for its
+scope. Duration-independent RAM and arbitrary modifier complexity remain unproven.
 
 Reusing identical cut remaps before fusion reduced Corrosion's measured peak
 Metal allocations by **1,926,807,552 bytes (1.794 GiB, 9.40%)**, with 0/191
@@ -647,6 +649,65 @@ renderers would remove 49,766,400 payload bytes. These are calculated payloads,
 not a new project Metal peak, process RAM, loading or performance measurement.
 Focused native verification and required landing results are recorded under
 BUG-dl16 and `/tmp/manifold-memory-firefly-scratch-20260922/`.
+
+## Combined measurement after RT reuse (2026-09-22)
+
+One baseline and one current release capture used the same current project,
+1080×1920 at 24 fps, eight seconds from beat 56, retained disk caches and
+`/usr/bin/time -l`. The saved project hash is now
+`87f1e89a4baeef5cb66da345423ae2d46c9882cb29dcc5a2a7c69dc10ee1f405`,
+different from the earlier captures. It was verified unchanged around both runs.
+The baseline is the retained converted-sharing executable (SHA256
+`254034f9cfbf4a98be88eee52630d09e837918f215f2ae49a813733f9417a469`);
+the current build is clean app source at `9bdd865a0` (binary SHA256
+`4312ca350f3722fb842de4d5f59a358072094ab4fd5d6706370834153db53289`).
+This comparison includes intervening landed rendering/lighting changes, not
+only the memory commits, and does not isolate each change's contribution.
+
+| Measurement | Retained previous build, rerun today | Current build |
+|---|---:|---:|
+| Sampled peak Metal allocations | 15,736,799,232 B | 15,140,290,560 B |
+| Warmup residency | 15,054,357,080 B / 1,207 allocations | 14,457,848,408 B / 1,189 allocations |
+| Loading | 28.397 s | 29.008 s |
+| Intervals late by more than 1 ms | 0 / 191 | 0 / 191 |
+| Maximum interval | 41.670917 ms | 41.671750 ms |
+| Maximum GPU fence wait | 0.001958 ms | 0.002500 ms |
+| Playback cold touches | 0 | 0 |
+| Maximum process RSS | 2,970,599,424 B | 3,190,112,256 B |
+| OS peak process footprint | 21,720,141,256 B | 21,333,708,232 B |
+| End free texture pool | 0 textures / 0 bytes | 0 textures / 0 bytes |
+
+The matched Metal reduction is **596,508,672 bytes (568.88 MiB, 3.79%)**.
+Cumulative warmup allocation differences increase by exactly 99,418,112 bytes
+at each of the six layers, and residency has 18 fewer allocations. That pattern
+is consistent with the three removed scratch textures plus narrower scalar
+histories across six prepared renderers, including the thistles. It is supporting
+attribution, not a resource-by-resource trace or separate cleanup measurement.
+
+The rerun baseline reproduces its earlier Metal/residency totals exactly despite
+the changed project hash. Relative to the original historical 20,497,104,896-byte
+Metal figure, today's result is 5,356,814,336 bytes (26.13%) lower. The original
+build was not rerun against today's project, so that remains a historical
+reference rather than a new controlled cumulative comparison.
+
+OS footprint falls 386,433,024 bytes while RSS rises 219,512,832 bytes. Neither
+is additive with Metal/residency or isolated to the memory changes. Metal peaks
+are sampled during playback; they do not establish the loading high-water mark.
+Both warmups and all 192 frames completed. Both logs contain an unavailable
+Ableton OSC endpoint warning; audio hardware and display presentation were not
+tested. Machine load and disk-cache contents were not controlled, and the loading
+samples establish no speed improvement. No additional render or GPU sweep ran.
+
+The latest gain is materially smaller than the earlier multi-gigabyte reductions,
+supporting diminishing returns for the demonstrated easy duplication. It does
+not prove the remaining 15.14 GB necessary or quantify further recoverable waste.
+Larger optional RT-family omission still needs the producer/consumer and history
+reset audit described above; excess geometry capacity remains unquantified.
+Actual display/audio and live-launch/seek/loop acceptance remain open in BUG-dl16.
+
+Commands, project snapshot, binary hashes, retained current executable, full logs,
+192-frame records, summaries and `comparison.json` are in
+`/tmp/manifold-memory-combined-20260922/`. No app source changed for this measurement.
 
 ## Source anchors
 
