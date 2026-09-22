@@ -184,6 +184,27 @@ int manifold_box3d_body_update(
 	return BOX3D_BRIDGE_OK;
 }
 
+int manifold_box3d_body_set_target(
+	uint64_t body_value,
+	float px,
+	float py,
+	float pz,
+	float qx,
+	float qy,
+	float qz,
+	float qw,
+	float time_step )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( b3Body_GetType( body_id ) != b3_kinematicBody || time_step <= 0.0f )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3WorldTransform target = { (b3Pos){ px, py, pz }, box3d_quat( qx, qy, qz, qw ) };
+	b3Body_SetTargetTransform( body_id, target, time_step, true );
+	return BOX3D_BRIDGE_OK;
+}
+
 int manifold_box3d_body_pose( uint64_t body_value, float* position_out, float* rotation_out )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );

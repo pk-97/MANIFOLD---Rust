@@ -50,6 +50,17 @@ mod ffi {
             restitution: f32,
             move_pose: i32,
         ) -> i32;
+        pub fn manifold_box3d_body_set_target(
+            body: u64,
+            px: f32,
+            py: f32,
+            pz: f32,
+            qx: f32,
+            qy: f32,
+            qz: f32,
+            qw: f32,
+            time_step: f32,
+        ) -> i32;
         pub fn manifold_box3d_body_pose(body: u64, position: *mut f32, rotation: *mut f32) -> i32;
         pub fn manifold_box3d_destroy_hull(hull: usize);
     }
@@ -285,6 +296,49 @@ impl PhysicsWorld {
         }
     }
 
+    /// Move an animated body through the solver over the supplied simulation time.
+    /// This gives contacts the body's linear and angular velocity; `update_body`
+    /// with `move_pose = true` is a teleport for direct edits and resets.
+    pub fn set_animated_target(
+        &mut self,
+        handle: BodyHandle,
+        config: BodyConfig,
+        time_step: Seconds,
+    ) -> Result<(), PhysicsError> {
+        let config = validate_config(config)?;
+        if config.kind != BodyKind::Animated {
+            return Err(PhysicsError::InvalidInput(
+                "target requires an animated body",
+            ));
+        }
+        let dt = time_step.0 as f32;
+        if !time_step.0.is_finite() || dt <= 0.0 || !dt.is_finite() {
+            return Err(PhysicsError::InvalidInput(
+                "target time must be finite and positive",
+            ));
+        }
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_set_target(
+                native,
+                config.position[0],
+                config.position[1],
+                config.position[2],
+                config.rotation[0],
+                config.rotation[1],
+                config.rotation[2],
+                config.rotation[3],
+                dt,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
     pub fn pose(&self, handle: BodyHandle) -> Result<BodyPose, PhysicsError> {
         let native = self.native_body(handle)?;
         let mut position = [0.0; 3];
@@ -472,6 +526,28 @@ mod tests {
             .unwrap();
         let after = world.pose(handle).unwrap();
         assert_eq!(before.position, after.position);
+    }
+
+    #[test]
+    fn animated_target_moves_during_steps_without_teleporting() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let start = BodyConfig {
+            kind: BodyKind::Animated,
+            position: [-1.0, 0.0, 0.0],
+            ..BodyConfig::default()
+        };
+        let handle = world.add_hull(&cube(0.5), start).unwrap();
+        let target = BodyConfig {
+            position: [1.0, 0.0, 0.0],
+            ..start
+        };
+        world
+            .set_animated_target(handle, target, Seconds(1.0))
+            .unwrap();
+        assert_eq!(world.pose(handle).unwrap().position, start.position);
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        let moved = world.pose(handle).unwrap().position[0];
+        assert!(moved > start.position[0] && moved < target.position[0]);
     }
 
     #[test]
