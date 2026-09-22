@@ -352,14 +352,17 @@ mod tests {
     }
 
     #[test]
-    fn pbr_metadata_classifies_every_descriptor() {
+    fn material_inspector_metadata_classifies_every_descriptor() {
         let metadata = metadata_for_node_type("node.pbr_material");
         assert_eq!(metadata.len(), 96);
         assert!(metadata.iter().all(|param| param.material_role.is_some()));
         assert_eq!(
             metadata
                 .iter()
-                .filter(|param| param.name.ends_with("_mode"))
+                .filter(|param| matches!(
+                    param.material_role,
+                    Some(manifold_core::material_inspector::MaterialParamRole::FeatureMode(_))
+                ))
                 .count(),
             7
         );

@@ -29,7 +29,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "material.section.10_uv_m00"
+          "name": "material.section.10_ambient"
         }
       }
     }

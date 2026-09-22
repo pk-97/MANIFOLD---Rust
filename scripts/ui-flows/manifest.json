@@ -21,13 +21,15 @@
       "scene-setup",
       "scene-card",
       "scene-panel",
-      "scene-skin"
+      "scene-skin",
+      "material-inspector"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
-      "scene-skin"
+      "scene-skin",
+      "material-inspector"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
