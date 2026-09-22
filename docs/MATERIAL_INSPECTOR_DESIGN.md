@@ -1,6 +1,6 @@
 # Material inspector — understandable surface authoring
 
-**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, RGB gestures and atomic looks. Scene-panel UX revision: graph-only UV/sampling, always-visible RGB channels, inline hex editing, stable feature presence and continuous sliders.
+**Status:** SHIPPED · 2026-09-22 · GPT-6 · P1–P6 implemented; descriptor-backed sections, saved feature modes, RGB gestures and atomic looks. Scene-panel UX revision: graph-only UV/sampling, always-visible RGB channels, inline hex editing, stable feature presence, continuous sliders and enable controls first in each feature section.
 Lifecycle: contract — defines the live material inspector’s feature modes, texture ownership, compound edits and compatibility invariants.
 **Prerequisites:** satisfied. The native Metal proof verifies Opaque transmission routing and separately measurable sheen/translucency contributions (BUG-1c9c, BUG-vj1p).
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. Peter authorized end-to-end implementation on 2026-09-22.
@@ -61,7 +61,7 @@ These were source-backed audit findings. The implementation preserves MR replace
 
 **D5 — Graph-only UV and sampling.** The Scene dock omits every Placement and Sampler descriptor, including dormant maps. Existing graph-node parameters, bindings, imported values and serialization remain unchanged. Skin source assignment retains the existing commands. No graph shortcut or replacement placement editor is added.
 
-**D6 — Always-visible RGB and editable hex.** Colour groups show the hex value and all three scalar sliders whenever their containing section is expanded. The hex field opens inline text entry on a single click; it is not a disclosure control. Hex commits and RGB drags reuse the three existing ParamIds and atomic RGB scrub/undo path. Every slider previews continuously; release completes one undo step. Feature modes use explicit buttons and cannot be dragged as numeric sliders.
+**D6 — Always-visible RGB and editable hex.** Colour groups show the hex value and all three scalar sliders whenever their containing section is expanded. The hex field opens inline text entry on a single click; it is not a disclosure control. Hex commits and RGB drags reuse the three existing ParamIds and atomic RGB scrub/undo path. Every slider previews continuously; release completes one undo step. Feature modes use explicit buttons at the top of their sections, before all parameter sliders, and cannot be dragged as numeric sliders.
 
 **D7 — Looks are small, atomic factor recipes.** Ship Matte, Coated and Brushed Metal first; Glass waits for its prerequisites. They preserve base colour, opacity mode, maps, UVs, samplers, Baked Look and object gain. No preset instance, material-library file format or procedural graph is introduced. A recipe is blocked if a changed target is wire-driven, modulated/automated/mapped, fan-out-bound beyond this material, texture-owned, or temporarily owned by emissive Skin. Reject the whole change with named conflicts; never partially apply a named look.
 

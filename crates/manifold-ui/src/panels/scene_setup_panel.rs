@@ -1918,7 +1918,10 @@ impl ScenePanel {
                 || self.material_object_gain(&config.rows[index])).then_some(position))
             .collect();
         let mut material_rows: Vec<usize> = material_positions.iter().map(|&position| retained[position]).collect();
-        material_rows.sort_by_key(|&index| self.material_bucket(&config.rows[index]));
+        material_rows.sort_by_key(|&index| {
+            let row = &config.rows[index];
+            (self.material_bucket(row), !matches!(row.spec.material_role, Some(MaterialParamRole::FeatureMode(_))))
+        });
         for (position, index) in material_positions.into_iter().zip(material_rows) {
             retained[position] = index;
         }
