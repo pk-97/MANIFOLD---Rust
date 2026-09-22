@@ -87,6 +87,10 @@ pub struct ContentThread {
     pub rendering_paused: bool,
     /// Content frame timer — target FPS synced from project settings.
     pub timer: FrameTimer,
+    /// Physics metrics from the most recently completed live content render.
+    /// Owned by the content thread so snapshot construction can read it after
+    /// `tick_frame` finishes rendering.
+    pub physics_metrics: manifold_renderer::node_graph::physics_metrics::PhysicsMetrics,
 
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
@@ -417,6 +421,7 @@ impl ContentThread {
         // 2. Wait for next content frame (skip tick+render when paused)
         self.timer.ensure_thread_policy();
         if self.rendering_paused {
+            self.physics_metrics = Default::default();
             std::thread::sleep(std::time::Duration::from_millis(16));
             return false;
         }
@@ -785,7 +790,7 @@ impl ContentThread {
             self.editing_service.data_version(),
             Some(self.audio_mod_runtime.visuals()),
         );
-        let physics_metrics = manifold_renderer::node_graph::physics_metrics::take_frame();
+        self.physics_metrics = manifold_renderer::node_graph::physics_metrics::take_frame();
         let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 
         // ── Live RT capture (env MANIFOLD_RT_CAPTURE, requires perf-soak) ──
@@ -1304,8 +1309,8 @@ impl ContentThread {
             content_fps: self.timer.current_fps() as f32,
             content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
             gpu_fence_wait_ms: self.content_pipeline.last_fence_wait_ms() as f32,
-            physics_cpu_ms: physics_metrics.physics_cpu_ms,
-            physics_body_count: physics_metrics.body_count,
+            physics_cpu_ms: self.physics_metrics.physics_cpu_ms,
+            physics_body_count: self.physics_metrics.body_count,
             active_clips: self.engine.active_clip_count(),
             data_version: version,
             editing_is_dirty: self.editing_service.is_dirty(),

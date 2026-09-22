@@ -16,30 +16,15 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.40_copy_count.value",
+          "name": "param_row.40_copy_count.slider",
           "nth": 0
         }
       },
-      "gesture": "DoubleClick"
-    }
-  },
-  {
-    "Key": {
-      "key": "A",
-      "modifiers": {
-        "command": true
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
-    }
-  },
-  {
-    "Text": {
-      "text": "512"
-    }
-  },
-  {
-    "Key": {
-      "key": "Enter",
-      "modifiers": {}
     }
   },
   {
@@ -51,7 +36,7 @@
         }
       },
       "check": {
-        "TextEquals": "512"
+        "TextEquals": "2048"
       }
     }
   },
@@ -94,7 +79,7 @@
         }
       },
       "check": {
-        "TextEquals": "512"
+        "TextEquals": "2048"
       }
     }
   },

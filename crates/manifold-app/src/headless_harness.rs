@@ -89,6 +89,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
         rendering_paused: false,
         timer: crate::frame_timer::FrameTimer::new(60.0),
+        physics_metrics: Default::default(),
         sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
         osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
         osc_sync: manifold_playback::osc_sync::OscSyncController::new(),

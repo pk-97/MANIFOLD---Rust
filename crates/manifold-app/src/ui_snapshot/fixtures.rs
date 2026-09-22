@@ -149,7 +149,7 @@ pub(super) fn gltf_scene() -> SceneData {
 }
 
 /// The bundled physics demo through the production preset and scene-panel path.
-fn physics_scene(preset: &str, name: &str) -> SceneData {
+fn physics_scene(preset: &'static str, name: &str) -> SceneData {
     let mut project = Project::default();
     let mut layer = Layer::new_generator(name.into(), PresetTypeId::new(preset), 0);
     layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));

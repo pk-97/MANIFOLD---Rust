@@ -15,7 +15,8 @@ const UPLOAD_TRANSFORMS: usize = 64;
 struct InstanceUploadParams {
     start: u32,
     count: u32,
-    _pad: [u32; 2],
+    _pad0: u32,
+    _pad1: u32,
     values: [[f32; 4]; UPLOAD_TRANSFORMS * 2],
 }
 

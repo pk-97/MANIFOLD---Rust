@@ -37354,49 +37354,49 @@
         {
           "default": "0",
           "id": "103_coat_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Coat Mode"
         },
         {
           "default": "0",
           "id": "103_iridescence_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Iridescence Mode"
         },
         {
           "default": "0",
           "id": "103_emission_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Emission Mode"
         },
         {
           "default": "0",
           "id": "103_glass_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Glass Mode"
         },
         {
           "default": "0",
           "id": "103_sheen_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Sheen Mode"
         },
         {
           "default": "0",
           "id": "103_anisotropy_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Anisotropy Mode"
         },
         {
           "default": "0",
           "id": "103_translucency_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Translucency Mode"
         },
@@ -38159,49 +38159,49 @@
         {
           "default": "0",
           "id": "123_coat_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Coat Mode"
         },
         {
           "default": "0",
           "id": "123_iridescence_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Iridescence Mode"
         },
         {
           "default": "0",
           "id": "123_emission_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Emission Mode"
         },
         {
           "default": "0",
           "id": "123_glass_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Glass Mode"
         },
         {
           "default": "0",
           "id": "123_sheen_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Sheen Mode"
         },
         {
           "default": "0",
           "id": "123_anisotropy_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Anisotropy Mode"
         },
         {
           "default": "0",
           "id": "123_translucency_mode",
-          "max": "2",
+          "max": "3",
           "min": "0",
           "name": "Translucency Mode"
         },
