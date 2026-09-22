@@ -53,8 +53,9 @@
 //! is scene-wide by nature, not per-object).
 //!
 //! Per docs/REALTIME_3D_DESIGN.md section 10 D11+P8 (shipped): each object also
-//! grows an optional `instances_n: Array(InstanceTransform)` port. Wired,
-//! that object draws `instance_count = buffer_size / 32` copies (main pass
+//! grows optional `instances_n: Array(InstanceTransform)` and
+//! `instance_count: ScalarF32` inputs. Wired, that object draws the requested
+//! live count clamped to the buffer capacity (main pass
 //! AND every caster's shadow pass), each instance's world transform
 //! composed as `model_n · T_instance` — instance TRS applies first, the
 //! object group's `transform_n` second, so wiring the SAME `node.transform_3d`
@@ -1560,7 +1561,8 @@ struct ObjectDraw<'ctx> {
     /// Wired `instances_n` buffer, or `None` (unwired — bind the
     /// identity stub at draw time; see `identity_instance_stub`).
     instances: Option<&'ctx manifold_gpu::GpuBuffer>,
-    /// `buffer_size / 32` when wired, else 1 (identity stub).
+    /// Requested live count clamped to `buffer_size / 32` when wired, else 1
+    /// (identity stub). An unwired count preserves the capacity behavior.
     instance_count: u32,
     /// Logical content stamps remain stable when identical data moves storage.
     vertices_content: Option<ContentVersion>,
@@ -1634,6 +1636,24 @@ impl ObjectDraw<'_> {
 /// calls' shared count — was the `vcount` closure inside evaluate()).
 fn mesh_vertex_count(buf: &manifold_gpu::GpuBuffer) -> u32 {
     ((buf.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3) * 3
+}
+
+/// Resolve the live instance count without ever allowing a scalar wire to
+/// address past the backing storage buffer. `None` for the buffer means the
+/// identity stub, which remains a single draw for compatibility with an
+/// unwired `instances` input. A non-finite or non-positive live count is a
+/// safe zero-instance draw.
+fn effective_instance_count(buffer_capacity: Option<u32>, requested: Option<f32>) -> u32 {
+    let Some(capacity) = buffer_capacity else {
+        return 1;
+    };
+    match requested {
+        None => capacity,
+        Some(value) if value.is_finite() && value > 0.0 => {
+            value.floor().min(capacity as f32) as u32
+        }
+        Some(_) => 0,
+    }
 }
 
 /// SCENE_RENDER_MODE_DESIGN.md D4 / INV-R4: modes act on the raster path
@@ -2129,17 +2149,17 @@ impl RenderScene {
                 has_transmission = true;
             }
 
-            // D11: wired instances_n draws instance_count = buffer_size / 32
-            // copies (0 → that object's draw becomes a legal instance-count-0
-            // no-op); unwired draws once via the identity stub (bound at
-            // Pass 2 — this object carries no self-owned buffer reference).
+            // D11: wired instances_n draws the optional live count, clamped
+            // to buffer capacity (0 → that object's draw becomes a legal
+            // instance-count-0 no-op); unwired draws once via the identity
+            // stub (bound at Pass 2 — this object carries no self-owned
+            // buffer reference).
             let instances_slot = object.instances;
             let instances = instances_slot.and_then(|s| inputs.array_slot(s));
             let instances_content = instances_slot.and_then(|s| inputs.content_version_of(s));
-            let instance_count = match instances {
-                Some(buf) => (buf.size / instance_size) as u32,
-                None => 1,
-            };
+            let instance_capacity = instances
+                .map(|buf| (buf.size / instance_size).min(u64::from(u32::MAX)) as u32);
+            let instance_count = effective_instance_count(instance_capacity, object.instance_count);
 
             let points = color_pass_points(&render_mode);
             let pipeline = {
@@ -2734,7 +2754,9 @@ impl RenderScene {
         objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
         draws: &[ObjectDraw<'ctx>],
     ) -> Result<RtFrameTables<'ctx>, FrameRenderFailure> {
-            let opaque_draws = draws.iter().filter(|d| !d.routes_to_transparent());
+            let opaque_draws = draws
+                .iter()
+                .filter(|d| !d.routes_to_transparent() && d.instance_count > 0);
             // RS-B: build gi_materials alongside objects (SAME order) for
             // the emissive light table at accel-build time. Reused below
             // for the GPU upload at dispatch time.
@@ -2882,9 +2904,8 @@ impl RenderScene {
             // `ensure_normal_sources` — object-indexed readers (n4.w
             // roughness, RS-C sampler) use the canonical rows,
             // instance_id-indexed readers add N via params.slot_row_base.
-            // A wired draw contributes `instance_count` (buffer capacity —
-            // D2) slot rows; unwired draws contribute their one identity
-            // slot.
+            // A wired draw contributes its live `instance_count` slot rows;
+            // unwired draws contribute their one identity slot.
             let rt_gi_slot_count: usize = objects
                 .iter()
                 .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
@@ -5111,10 +5132,9 @@ impl RenderScene {
         // selecting raster fallback. Reuse this exact object list for AS work.
         let rt_objects: arrayvec::ArrayVec<manifold_gpu::raytrace::RtObjectGeometry, { OBJECT_SAFETY_MAX as usize }> =
             draws.iter()
-                .filter(|d| rt_enabled && !d.routes_to_transparent())
+                .filter(|d| rt_enabled && !d.routes_to_transparent() && d.instance_count > 0)
                 .map(|d| {
-                    let rt_instances_wired =
-                        matches!((d.instances, d.instance_count), (Some(_), n) if n > 0);
+                    let rt_instances_wired = d.instances.is_some();
                     manifold_gpu::raytrace::RtObjectGeometry {
                     vertex_buffer: d.vertices,
                     vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
@@ -5155,22 +5175,14 @@ impl RenderScene {
                     cast_shadows: d.cast_shadows,
                     // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
                     // instance binding from `d.instances` /
-                    // `d.instance_count` — the buffer's GPU address (the
-                    // same bindless-address accessor `vertex_base_addr`
-                    // uses) plus its CAPACITY. `instance_count` is
-                    // buffer_size / 32 (D2/INV-RTI5, BUG-757c discipline:
-                    // the live count is in-band — dead slots carry
-                    // pos_scale.w == 0 — and a param change never resizes
-                    // the buffer), so a capacity change is topology (topo
-                    // key below) and rebuilds the accel; content changes
-                    // ride the accel key via `instances_content` (D9).
-                    // RT_INSTANCING_DESIGN.md D13: a wired ZERO-capacity
-                    // buffer (instance_count == 0 is a legal raster no-op)
-                    // normalizes to UNWIRED — the descriptor kernel would
-                    // otherwise read slot 0 of a zero-byte allocation (OOB
-                    // GPU read) and trace a ghost copy the raster never
-                    // draws. Unwired keeps the D7 fast path (single
-                    // identity-slot descriptor per object).
+                    // `d.instance_count` — the buffer's GPU address plus the
+                    // live slot count. The count is part of the RT topology
+                    // key below, so changing it rebuilds the descriptor
+                    // slots and keeps tracing consistent with raster/shadow
+                    // draws; content changes ride the accel key via
+                    // `instances_content` (D9).
+                    // Zero live-count objects are filtered above, so the RT
+                    // descriptor kernel never receives a zero-slot buffer.
                     instances_addr: if rt_instances_wired {
                         d.instances.map_or(0, |b| b.gpu_address())
                     } else {
@@ -8007,8 +8019,8 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) — wired, that object draws instance_count = buffer_size / 32 copies (main pass AND every caster's shadow pass), each instance's world transform composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps (IMPORT_FIDELITY_DESIGN.md D3): normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog (P3) and split-sum IBL (F-P1) apply scene-wide.",
-            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/normal_map_n/mr_map_n/occlusion_map_n/emissive_map_n/transform_n/instances_n nonuples, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n and the four D3 maps are all optional — leaving any unwired renders that object exactly as before that port existed. instances_n is optional and carries no per-object instance_count param — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
+            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) plus scene_object's optional instance_count scalar — wired, the live count is clamped to the backing buffer capacity for main, shadow, and RT draws; unwired preserves capacity-based behavior. Each instance's world transform is composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps (IMPORT_FIDELITY_DESIGN.md D3): normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog (P3) and split-sum IBL (F-P1) apply scene-wide.",
+            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/normal_map_n/mr_map_n/occlusion_map_n/emissive_map_n/transform_n/instances_n object ports, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n and the four D3 maps are all optional — leaving any unwired renders that object exactly as before that port existed. Wire scene_object's optional `instance_count` scalar to bound active copies; values are floored, clamped to capacity, and invalid/non-positive values draw zero. instances_n is optional — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
             outputs: &RENDER_SCENE_OUTPUTS,
@@ -8601,11 +8613,11 @@ impl EffectNode for RenderScene {
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the opaque/mask draw list — "a
         // window must not throw an opaque shadow". Feeds the shadow
         // prepasses, the camera depth prepass, and the RT accel structure;
-        // membership stays "every non-Blend object" regardless of each
-        // object's own cast_shadows toggle.
+        // membership stays "every drawable non-Blend object" regardless of
+        // each object's own cast_shadows toggle.
         let opaque_draws: Vec<&ObjectDraw> = draws
             .iter()
-            .filter(|d| !d.routes_to_transparent())
+            .filter(|d| !d.routes_to_transparent() && d.instance_count > 0)
             .collect();
 
         // ---- Shadow depth pre-passes (BUG-trh7 stage 2,

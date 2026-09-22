@@ -144,6 +144,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "gltfscene"
         || scene == "mushroomscene"
         || scene == "physicsscene"
+        || scene == "physicsboxes"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"

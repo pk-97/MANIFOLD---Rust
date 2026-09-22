@@ -2576,6 +2576,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 timer: crate::frame_timer::FrameTimer::new(
                     self.local_project.settings.frame_rate as f64,
                 ),
+                physics_metrics: Default::default(),
                 #[cfg(target_os = "macos")]
                 sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
                 osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),

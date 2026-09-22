@@ -34,6 +34,10 @@ pub struct PerfMetrics {
     pub render_frame_time_ms: f32,
     /// Time spent waiting for a GPU surface (ms). Non-zero = GPU saturation.
     pub gpu_fence_wait_ms: f32,
+    /// CPU time spent stepping physics worlds and extracting poses (ms).
+    pub physics_cpu_ms: f32,
+    /// Bodies evaluated by physics worlds during the live content frame.
+    pub physics_body_count: u32,
     /// Target content FPS from project settings (e.g. 60, 120, 240).
     /// Used to scale graph colors relative to the frame budget.
     pub render_target_fps: f32,
@@ -93,6 +97,8 @@ pub struct PerfHudPanel {
     render_fps_value_id: Option<NodeId>,
     render_frame_time_id: Option<NodeId>,
     gpu_fence_wait_id: Option<NodeId>,
+    physics_cpu_id: Option<NodeId>,
+    physics_body_count_id: Option<NodeId>,
     active_clips_id: Option<NodeId>,
     beat_id: Option<NodeId>,
     time_id: Option<NodeId>,
@@ -133,6 +139,8 @@ impl PerfHudPanel {
             render_fps_value_id: None,
             render_frame_time_id: None,
             gpu_fence_wait_id: None,
+            physics_cpu_id: None,
+            physics_body_count_id: None,
             active_clips_id: None,
             beat_id: None,
             time_id: None,
@@ -221,6 +229,8 @@ impl PerfHudPanel {
                 );
             }
         }
+        fmt_set!(self.physics_cpu_id, "{:.1} ms", m.physics_cpu_ms);
+        fmt_set!(self.physics_body_count_id, "{}", m.physics_body_count);
         fmt_set!(
             self.active_clips_id,
             "{} / {}",
@@ -473,6 +483,12 @@ impl PerfHudPanel {
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "GPU Wait");
         self.gpu_fence_wait_id = Some(id);
+        cy = ny;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Physics CPU");
+        self.physics_cpu_id = Some(id);
+        cy = ny;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Bodies");
+        self.physics_body_count_id = Some(id);
         cy = ny;
 
         // Render frame time graph

@@ -1,5 +1,6 @@
 //! `node.scene_object` — binds one scene object's mesh, transform, material,
-//! maps, and instances into a single [`SceneObject`] wire.
+//! maps, instances, and optional live instance count into a single
+//! [`SceneObject`] wire.
 //!
 //! Per `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D1/D3: an object today is
 //! "whatever named group happens to wrap the wires feeding `mesh_k`" — a
@@ -35,7 +36,7 @@ use crate::node_graph::scene_object::SceneObject;
 crate::primitive! {
     name: SceneObjectNode,
     type_id: "node.scene_object",
-    purpose: "Binds one scene object's mesh vertices, transform, material, seventeen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / volume thickness), and instances into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
+    purpose: "Binds one scene object's mesh vertices, transform, material, seventeen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
     inputs: {
         vertices: Array(MeshVertex) optional,
         weights: Array(f32) optional,
@@ -60,6 +61,7 @@ crate::primitive! {
         transmission_map: Texture2D optional,
         volume_thickness_map: Texture2D optional,
         instances: Array(InstanceTransform) optional,
+        instance_count: ScalarF32 optional,
         visible: ScalarF32 optional,
         cast_shadows: ScalarF32 optional,
         gain: ScalarF32 optional,
@@ -108,10 +110,10 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
+    composition_notes: "Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
     examples: [],
     picker: { label: "Scene Object", category: Driver },
-    summary: "Binds one object's mesh, transform, material, maps, and instances into a single wire. Wire it into a render_scene object slot.",
+    summary: "Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot.",
     category: Geometry3D,
     role: Source,
     aliases: ["scene object", "object", "object bundle"],
@@ -147,6 +149,10 @@ impl Primitive for SceneObjectNode {
         let transmission_map = ctx.inputs.slot_of("transmission_map");
         let volume_thickness_map = ctx.inputs.slot_of("volume_thickness_map");
         let instances = ctx.inputs.slot_of("instances");
+        let instance_count = ctx
+            .inputs
+            .scalar("instance_count")
+            .and_then(|value| value.as_scalar());
 
         let object = SceneObject {
             visible,
@@ -174,6 +180,7 @@ impl Primitive for SceneObjectNode {
             transmission_map,
             volume_thickness_map,
             instances,
+            instance_count,
             emission_strength,
             gain,
         };
@@ -218,6 +225,19 @@ mod tests {
         assert_eq!(SceneObjectNode::OUTPUTS.len(), 1);
         assert_eq!(SceneObjectNode::OUTPUTS[0].name, "object");
         assert_eq!(SceneObjectNode::OUTPUTS[0].ty, PortType::Object);
+    }
+
+    #[test]
+    fn scene_object_declares_optional_instance_count_input() {
+        let input = SceneObjectNode::INPUTS
+            .iter()
+            .find(|input| input.name == "instance_count")
+            .expect("instance_count input");
+        assert_eq!(
+            input.ty,
+            PortType::Scalar(crate::node_graph::ports::ScalarType::F32)
+        );
+        assert!(!input.required);
     }
 
     #[test]
@@ -290,6 +310,7 @@ mod tests {
         assert!(object.material.is_none());
         assert!(object.mesh.is_none());
         assert!(object.instances.is_none());
+        assert!(object.instance_count.is_none());
     }
 
     #[test]
@@ -315,6 +336,13 @@ mod tests {
             None,
             (0, 0),
         );
+        let count_slot = backend.acquire(
+            ResourceId(5),
+            PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+            None,
+            (0, 0),
+        );
+        backend.set_scalar(count_slot, ParamValue::Float(17.0));
         let mut generations = vec![0; topology_slot.0 as usize + 1];
         generations[topology_slot.0 as usize] = 7;
 
@@ -326,6 +354,7 @@ mod tests {
             ("vertices", mesh_slot),
             ("base_color_map", color_slot),
             ("instances", instances_slot),
+            ("instance_count", count_slot),
             ("topology", topology_slot),
         ];
         let outputs_bindings: &[(&'static str, Slot)] = &[("object", out_slot)];
@@ -363,6 +392,7 @@ mod tests {
         assert_eq!(object.mesh, Some(mesh_slot));
         assert_eq!(object.base_color_map, Some(color_slot));
         assert_eq!(object.instances, Some(instances_slot));
+        assert_eq!(object.instance_count, Some(17.0));
         assert_eq!(object.topology, Some(topology_slot));
         assert_eq!(object.normal_map, None);
     }

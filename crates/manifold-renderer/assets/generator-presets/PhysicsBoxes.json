@@ -1,0 +1,580 @@
+{
+  "version": 2,
+  "name": "Physics Boxes",
+  "presetMetadata": {
+    "id": "PhysicsBoxes",
+    "displayName": "Physics Boxes",
+    "category": "Geometry",
+    "oscPrefix": "physicsboxes",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "40_copy_count",
+        "name": "Box Count",
+        "min": 0,
+        "max": 4096,
+        "defaultValue": 256,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "copy_count",
+        "section": "Physics",
+        "cardVisible": true
+      },
+      {
+        "id": "40_reset",
+        "name": "Reset",
+        "min": 0,
+        "max": 1,
+        "defaultValue": 0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": true,
+        "formatString": "F0",
+        "oscSuffix": "reset",
+        "section": "Physics",
+        "cardVisible": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "40_copy_count",
+        "label": "Box Count",
+        "defaultValue": 256,
+        "target": {
+          "kind": "node",
+          "nodeId": "physics_demo_40",
+          "param": "copy_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "40_reset",
+        "label": "Reset",
+        "defaultValue": 0,
+        "target": {
+          "kind": "node",
+          "nodeId": "physics_demo_40",
+          "param": "reset"
+        },
+        "convert": {
+          "type": "Trigger"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 40,
+      "nodeId": "physics_demo_40",
+      "typeId": "node.physics_world",
+      "handle": "Boxes \u2014 Apply Count with Reset",
+      "params": {
+        "copy_count": {
+          "type": "Float",
+          "value": 256
+        },
+        "copy_columns": {
+          "type": "Float",
+          "value": 16
+        },
+        "copy_spacing": {
+          "type": "Float",
+          "value": 1.5
+        }
+      },
+      "exposedParams": [
+        "copy_count",
+        "reset"
+      ]
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": {
+          "type": "Float",
+          "value": 58
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 8
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.55
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": -12
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 25
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 15
+        }
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "lights": {
+          "type": "Float",
+          "value": 1
+        },
+        "objects": {
+          "type": "Float",
+          "value": 2
+        },
+        "rt_enabled": {
+          "type": "Bool",
+          "value": false
+        },
+        "temporal_upscale": {
+          "type": "Bool",
+          "value": false
+        }
+      }
+    },
+    {
+      "id": 31,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 101,
+      "nodeId": "physics_demo_101",
+      "typeId": "node.rigid_body",
+      "handle": "Ground Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 0
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.1
+        }
+      }
+    },
+    {
+      "id": 100,
+      "nodeId": "physics_demo_100",
+      "typeId": "node.transform_3d",
+      "handle": "Ground Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": -0.14433756729740646
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 40
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 40
+        }
+      }
+    },
+    {
+      "id": 102,
+      "nodeId": "physics_demo_102",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Ground Mesh",
+      "params": {}
+    },
+    {
+      "id": 103,
+      "nodeId": "physics_demo_103",
+      "typeId": "node.pbr_material",
+      "handle": "Ground Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.17
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.22
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.05
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 104,
+      "nodeId": "physics_demo_104",
+      "typeId": "node.scene_object",
+      "handle": "Ground",
+      "params": {}
+    },
+    {
+      "id": 121,
+      "nodeId": "physics_demo_121",
+      "typeId": "node.rigid_body",
+      "handle": "Box Body",
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "motion": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mass": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "friction": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "bounce": {
+          "type": "Float",
+          "value": 0.1
+        }
+      }
+    },
+    {
+      "id": 120,
+      "nodeId": "physics_demo_120",
+      "typeId": "node.transform_3d",
+      "handle": "Box Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 4
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0
+        },
+        "rot_x": {
+          "type": "Float",
+          "value": 0.08
+        },
+        "rot_y": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "rot_z": {
+          "type": "Float",
+          "value": 0.04
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.8
+        }
+      }
+    },
+    {
+      "id": 122,
+      "nodeId": "physics_demo_122",
+      "typeId": "node.platonic_solid_mesh",
+      "handle": "Box Mesh",
+      "params": {}
+    },
+    {
+      "id": 123,
+      "nodeId": "physics_demo_123",
+      "typeId": "node.pbr_material",
+      "handle": "Box Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 124,
+      "nodeId": "physics_demo_124",
+      "typeId": "node.scene_object",
+      "handle": "Boxes",
+      "params": {}
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "envmap",
+      "toNode": 30,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "color",
+      "toNode": 31,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "transform",
+      "toNode": 101,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "body_0"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "shape",
+      "toNode": 102,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 102,
+      "fromPort": "vertices",
+      "toNode": 104,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 103,
+      "fromPort": "out",
+      "toNode": 104,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "pose_0",
+      "toNode": 104,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 104,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 120,
+      "fromPort": "transform",
+      "toNode": 121,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 121,
+      "fromPort": "body",
+      "toNode": 40,
+      "toPort": "copies"
+    },
+    {
+      "fromNode": 121,
+      "fromPort": "shape",
+      "toNode": 122,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 122,
+      "fromPort": "vertices",
+      "toNode": 124,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 123,
+      "fromPort": "out",
+      "toNode": 124,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 124,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_1"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "instances",
+      "toNode": 124,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "active_count",
+      "toNode": 124,
+      "toPort": "instance_count"
+    }
+  ]
+}

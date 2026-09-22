@@ -65,6 +65,7 @@ pub trait SceneExposureMetadataProvider: Send + Sync {
 /// unaffected.
 pub fn card_visible_for(type_id: &str, param: &str) -> bool {
     let visible: &[&str] = match type_id {
+        "node.physics_world" => &["copy_count", "reset"],
         // `fov_y` lives on `node.orbit_camera` (not `node.camera_lens` —
         // that primitive's real params are focus_distance/f_stop/
         // shutter_angle/exposure_ev, all correctly hidden by the

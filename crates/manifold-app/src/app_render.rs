@@ -3234,6 +3234,8 @@ impl Application {
                     render_fps: self.content_state.content_fps,
                     render_frame_time_ms: self.content_state.content_frame_time_ms,
                     gpu_fence_wait_ms: self.content_state.gpu_fence_wait_ms,
+                    physics_cpu_ms: self.content_state.physics_cpu_ms,
+                    physics_body_count: self.content_state.physics_body_count,
                     render_target_fps: self.content_state.frame_rate as f32,
                     active_clips: self.content_state.active_clips,
                     preparing_clips: 0,

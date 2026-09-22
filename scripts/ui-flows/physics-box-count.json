@@ -1,0 +1,107 @@
+[
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.40_copy_count.value",
+          "nth": 0
+        }
+      },
+      "check": {
+        "TextEquals": "256"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.40_copy_count.slider",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 1510.0,
+              "y": 241.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.40_copy_count.value",
+          "nth": 0
+        }
+      },
+      "check": {
+        "TextEquals": "4096"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.40_copy_count.value",
+          "nth": 0
+        }
+      },
+      "check": {
+        "TextEquals": "256"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.40_copy_count.value",
+          "nth": 0
+        }
+      },
+      "check": {
+        "TextEquals": "4096"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.40_reset"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot"
+]

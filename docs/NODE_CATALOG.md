@@ -233,7 +233,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | Sample Triangle Grid | `node.sample_triangle_grid` | Source | Creates a small bounded lattice of triangle samples for spatial overlays. |
 | Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
 | Scene Array | `node.scene_array` | Source | Generates the corridor of instances around the camera — cells repeat by pattern, forever. |
-| Scene Object | `node.scene_object` | Source | Binds one object's mesh, transform, material, maps, and instances into a single wire. Wire it into a render_scene object slot. |
+| Scene Object | `node.scene_object` | Source | Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot. |
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
 | Slice | `node.slice_mesh` | Filter | Clamps all vertices past a plane onto the plane, turning a mesh into a flat cut face you can sweep across. |
@@ -424,7 +424,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (88)
+### Effect & generator presets (89)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -493,7 +493,8 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 772 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 287 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 775 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `SceneStarter` | Scene Starter | generator | Geometry | 135 |

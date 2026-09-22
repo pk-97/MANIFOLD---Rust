@@ -435,6 +435,52 @@
     }
 
     #[test]
+    fn instance_count_preserves_capacity_when_unwired() {
+        assert_eq!(effective_instance_count(Some(4096), None), 4096);
+        assert_eq!(effective_instance_count(None, None), 1);
+    }
+
+    #[test]
+    fn instance_count_clamps_partial_and_above_capacity_values() {
+        assert_eq!(effective_instance_count(Some(4096), Some(17.0)), 17);
+        assert_eq!(effective_instance_count(Some(4096), Some(17.9)), 17);
+        assert_eq!(effective_instance_count(Some(4096), Some(5000.0)), 4096);
+        assert_eq!(effective_instance_count(Some(0), Some(2.0)), 0);
+    }
+
+    #[test]
+    fn instance_count_invalid_values_are_safe_zero_draws() {
+        for value in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(
+                effective_instance_count(Some(4096), Some(value)),
+                0,
+                "value={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_instance_draws_are_excluded_from_rt_and_shadow_tables() {
+        let source = include_str!("../render_scene.rs");
+        let rt = source
+            .split_once("fn collect_rt_objects")
+            .expect("RT object collection")
+            .1;
+        assert!(
+            rt.contains("!d.routes_to_transparent() && d.instance_count > 0"),
+            "zero-count objects must not enter RT geometry"
+        );
+        let evaluate = source
+            .split_once("let opaque_draws: Vec<&ObjectDraw>")
+            .expect("opaque draw collection")
+            .1;
+        assert!(
+            evaluate.contains("!d.routes_to_transparent() && d.instance_count > 0"),
+            "zero-count objects must not enter shadow/depth tables"
+        );
+    }
+
+    #[test]
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): camera + envmap +
@@ -469,9 +515,9 @@
         // `rt_ao` + `rt_gi` (RT term toggles) + `rt_firefly_clamp`
         // (RT-Stage-3 P1, BUG-mkgh) — per-object TRS moved to
         // `node.scene_object`'s `transform` input
-        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3);
-        // instances carries no per-object instance_count param either
-        // (REALTIME_3D_DESIGN.md section 10 D11). Neither toggle grows with object
+        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3); the live
+        // instance count is also an optional input on `node.scene_object`,
+        // not a render_scene parameter. Neither toggle grows with object
         // count — this assertion is about object count, not the fixed
         // scene-level toggle set.
         assert_eq!(s.parameters().len(), 10);
