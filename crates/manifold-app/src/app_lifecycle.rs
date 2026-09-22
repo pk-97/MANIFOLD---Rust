@@ -1308,14 +1308,8 @@ impl Application {
 
         let id = window.id();
 
-        // Query headroom for the new output window immediately — don't wait
-        // for an NSNotification. Without this, output_edr_headroom stays at 1.0
-        // (SDR) and the blit applies ACES on top of the compositor's EDR output,
-        // causing washed-out, double-tonemapped results.
-        let h = crate::edr_surface::query_window_headroom(&window);
-        if (h - self.output_edr_headroom).abs() > 0.01 {
-            self.output_edr_headroom = h;
-        }
+        let capabilities = crate::edr_surface::query_window_capabilities(&window);
+        self.output_display_capabilities = Some(capabilities);
 
         // Direct present: content thread acquires drawables and presents
         // in its own command buffer. displaySyncEnabled handles vsync.
@@ -1333,7 +1327,9 @@ impl Application {
             self.send_content_cmd(crate::content_command::ContentCommand::SetOutputSurface(
                 surface,
             ));
-            self.send_content_cmd(crate::content_command::ContentCommand::UpdateEdrHeadroom(h));
+            self.send_content_cmd(crate::content_command::ContentCommand::UpdateDisplayCapabilities {
+                destination: manifold_renderer::presentation::DisplayDestination::Output, capabilities,
+            });
         }
 
         let state = WindowState {
@@ -1351,7 +1347,7 @@ impl Application {
             mon_name,
             proj_w_u32,
             proj_h_u32,
-            h,
+            capabilities.current().value(),
             presentation,
         );
     }
@@ -1435,7 +1431,7 @@ impl Application {
             &*window,
             size.width.max(1),
             size.height.max(1),
-            manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            manifold_renderer::presentation::UI_FORMAT,
             true,
         );
         surface.set_maximum_drawable_count(3);
@@ -1448,12 +1444,19 @@ impl Application {
         // darker/flatter than the main window. Mirrors `app.rs`'s primary
         // window setup.
         surface.configure_edr();
+        let capabilities = crate::edr_surface::query_window_capabilities(&window);
+        self.graph_display_capabilities = capabilities;
+        self.send_content_cmd(crate::content_command::ContentCommand::UpdateDisplayCapabilities {
+            destination: manifold_renderer::presentation::DisplayDestination::GraphEditor,
+            capabilities,
+        });
 
+        let Some(gpu) = &self.gpu else { return; };
         let offscreen = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: size.width.max(1),
             height: size.height.max(1),
             depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            format: manifold_renderer::presentation::UI_FORMAT,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "Graph Editor Offscreen",

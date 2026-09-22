@@ -20,9 +20,7 @@ fn bug060_dump_every() -> Option<u64> {
     })
 }
 
-/// Read `tex` (Bgra8Unorm) back and overwrite `path` with an opaque RGBA8 PNG.
-/// Alpha is forced to 255 so viewers don't render the atlas's cleared-to-zero
-/// regions as white; B/R are swapped for the PNG only.
+/// Read a linear UI target and save an opaque, sRGB-tagged diagnostic PNG.
 fn bug060_dump_png(
     device: &manifold_gpu::GpuDevice,
     tex: &manifold_gpu::GpuTexture,
@@ -32,7 +30,7 @@ fn bug060_dump_png(
     if w == 0 || h == 0 {
         return;
     }
-    let bytes_per_row = w * 4;
+    let bytes_per_row = w * tex.format.bytes_per_pixel();
     let total = u64::from(h) * u64::from(bytes_per_row);
     let buf = device.create_buffer_shared(total);
     let mut enc = device.create_encoder("bug060-dump");
@@ -43,25 +41,11 @@ fn bug060_dump_png(
         return;
     };
     let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
-    let mut rgba = bytes.to_vec();
-    for px in rgba.chunks_exact_mut(4) {
-        px.swap(0, 2);
-        px[3] = 255;
-    }
-    let file = match std::fs::File::create(path) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("[BUG-060] {path}: {e}");
-            return;
-        }
-    };
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    match encoder
-        .write_header()
-        .and_then(|mut writer| writer.write_image_data(&rgba))
-    {
+    use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
+    let result = LinearUiReadback::from_bytes(
+        bytes, w, h, tex.format, AlphaInterpretation::PremultipliedOverBlack,
+    ).and_then(|readback| readback.to_srgb_rgba8().write_png(std::path::Path::new(path)));
+    match result {
         Ok(()) => eprintln!("[BUG-060] wrote {path} ({w}x{h})"),
         Err(e) => eprintln!("[BUG-060] {path}: {e}"),
     }
@@ -750,7 +734,7 @@ impl Application {
         pseg = std::time::Instant::now();
 
         // ── Blit offscreen → drawable + present ──
-        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
         let blit_pipeline = match &self.blit_pipeline {
             Some(p) => p,
             None => return,
@@ -861,7 +845,7 @@ impl Application {
         self.ui_profile
             .add("present.fast_next_drawable", pseg.elapsed());
         *pseg = std::time::Instant::now();
-        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
         if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
             let mut enc = gpu.device.create_encoder("Re-present");
             enc.draw_fullscreen(

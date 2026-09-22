@@ -3037,13 +3037,14 @@ impl Compositor for LayerCompositor {
         // drifted from this one twice (clip-mute black-out class).
         self.composite_serial(gpu, frame);
 
-        // Tonemap the composited scene (before master glow effects).
+        // Apply the explicitly requested scene transform. The live app uses
+        // SceneLinear here: display adaptation happens after master effects,
+        // independently for each destination.
         self.tonemap
             .apply(gpu, self.main.source_texture(), &frame.tonemap);
 
-        // Apply master effects (bloom, halation, CRT) AFTER tonemapping.
-        // Glow contribution pushes values > 1.0 for HDR/EDR displays.
-        // On SDR displays, values > 1.0 clip to white — same visual result.
+        // Apply master effects once to the shared image. In SceneLinear mode
+        // their HDR contribution survives until each destination is mapped.
         //
         // The effect chain reads directly from tonemap.output (no copy into main)
         // and blits the processed result back to tonemap.output via copy.

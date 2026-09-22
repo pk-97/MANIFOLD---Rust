@@ -10,19 +10,22 @@
 #![cfg(target_os = "macos")]
 
 use std::ffi::c_void;
+use std::path::Path;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
+use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
+use manifold_renderer::presentation::UI_FORMAT;
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 
-// W*4 must be 256-byte aligned for the texture→buffer readback copy.
-// 640*4 = 2560 = 10*256. H is unconstrained.
-const W: u32 = 660;
+// W*8 must be 256-byte aligned for the RGBA16Float texture→buffer readback copy.
+// 640*8 = 5120 = 20*256. H is unconstrained.
+const W: u32 = 640;
 const H: u32 = 640;
-const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
+const FORMAT: GpuTextureFormat = UI_FORMAT;
 
 const ROW_H: f32 = 24.0;
 const SW_X: f32 = 14.0;
@@ -108,8 +111,7 @@ fn color_ramp_contact_sheet() {
     }
 
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("colour contact sheet → {png}");
 }
 
@@ -158,8 +160,7 @@ fn footer_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("footer demo → {png}");
 }
 
@@ -209,8 +210,7 @@ fn transport_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback_w(&device, &target.texture, 1920, H);
-    image::save_buffer(&png, &bytes, 1920, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, 1920, H);
     eprintln!("transport demo → {png}");
 }
 
@@ -256,8 +256,7 @@ fn header_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback_w(&device, &target.texture, 1920, H);
-    image::save_buffer(&png, &bytes, 1920, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, 1920, H);
     eprintln!("header demo → {png}");
 }
 
@@ -318,8 +317,7 @@ fn state_button_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("state button sheet → {png}");
 }
 
@@ -372,8 +370,7 @@ fn card_button_skins_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("card button skins sheet → {png}");
 }
 
@@ -437,8 +434,7 @@ fn focus_states_record_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("focus/states/record sheet → {png}");
 }
 
@@ -519,8 +515,7 @@ fn browser_popup_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("browser popup demo → {png}");
 }
 
@@ -611,8 +606,7 @@ fn browser_popup_thumbnails_paint() {
     let out_dir = std::env::var("SWATCH_OUT")
         .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
     let png = format!("{out_dir}/browser_popup_thumbnails.png");
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("browser popup thumbnails → {png}");
 }
 
@@ -647,8 +641,7 @@ fn shadow_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("shadow demo → {png}");
 }
 
@@ -694,8 +687,7 @@ fn gradient_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("gradient demo → {png}");
 }
 
@@ -809,8 +801,7 @@ fn clip_body_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("clip body sheet → {png}");
 }
 
@@ -909,8 +900,7 @@ fn clip_waveform_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("clip waveform sheet → {png}");
 }
 
@@ -1047,8 +1037,7 @@ fn clip_thumbnail_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("clip thumbnail sheet → {png}");
 }
 
@@ -1108,8 +1097,8 @@ fn box_downsample_averages_high_frequency() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback_w(&device, &target.texture, 64, 64);
-    let i = ((32 * 64 + 32) * 4) as usize;
-    let r = bytes[i];
+    let i = ((32 * 64 + 32) * FORMAT.bytes_per_pixel()) as usize;
+    let r = (half::f16::from_bits(u16::from_le_bytes([bytes[i], bytes[i + 1]])).to_f32() * 255.0).round() as u8;
     assert!(
         (64..=192).contains(&r),
         "box downsample of a checkerboard should read mid-grey, got {r}"
@@ -1194,8 +1183,7 @@ fn icon_badge_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("icon badge sheet → {png}");
 }
 
@@ -1273,8 +1261,7 @@ fn playhead_scrollbar_demo() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("playhead scrollbar demo → {png}");
 }
 
@@ -1477,8 +1464,7 @@ fn modulation_drawer_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
-    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    save_capture(&png, &bytes, W, H);
     eprintln!("modulation drawer sheet → {png}");
 }
 
@@ -1496,9 +1482,9 @@ fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
 }
 
 /// Width-parameterized readback (the transport demo renders at 1920 wide).
-/// `width * 4` must be 256-byte aligned (1920*4 = 7680 = 30*256).
+/// `width * 8` must be 256-byte aligned (1920*8 = 15360 = 60*256).
 fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32) -> Vec<u8> {
-    let bytes_per_row = width * 4;
+    let bytes_per_row = width * FORMAT.bytes_per_pixel();
     let total = u64::from(height * bytes_per_row);
     let buf = device.create_buffer_shared(total);
 
@@ -1510,6 +1496,21 @@ fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32)
     let bytes: &[u8] =
         unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total as usize) };
     bytes.to_vec()
+}
+
+fn save_capture(path: &str, bytes: &[u8], width: u32, height: u32) {
+    let capture = LinearUiReadback::from_bytes(
+        bytes,
+        width,
+        height,
+        FORMAT,
+        AlphaInterpretation::PremultipliedOverBlack,
+    )
+    .unwrap_or_else(|e| panic!("prepare {path}: {e}"));
+    capture
+        .to_srgb_rgba8()
+        .write_png(Path::new(path))
+        .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
 
 
@@ -1665,8 +1666,7 @@ fn browser_popup_real_registry_p1_demo() {
             enc.commit_and_wait_completed();
         }
         let bytes = readback(&device, &target.texture);
-        image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
-            .unwrap_or_else(|e| panic!("save {png}: {e}"));
+        save_capture(&png, &bytes, W, H);
         eprintln!("browser popup P1 demo → {png}");
     }
 }
@@ -1853,8 +1853,7 @@ fn browser_popup_real_registry_p3_demo() {
             enc.commit_and_wait_completed();
         }
         let bytes = readback_w(&device, &target.texture, PW, PH);
-        image::save_buffer(&png, &bytes, PW, PH, image::ExtendedColorType::Rgba8)
-            .unwrap_or_else(|e| panic!("save {png}: {e}"));
+        save_capture(&png, &bytes, PW, PH);
         eprintln!("browser popup P3 demo → {png}");
     }
 }

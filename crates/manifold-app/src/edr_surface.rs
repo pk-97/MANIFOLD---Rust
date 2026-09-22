@@ -12,12 +12,16 @@
 //! and won't apply the sRGB display transfer function. Subtle bloom gradients
 //! (linear 0.02) stay invisible instead of being gamma-expanded to ~0.15.
 //!
-//! ## Dynamic headroom
+//! ## Dynamic display capabilities
 //!
-//! EDR headroom varies per-display. When a window moves between monitors
-//! (e.g., MacBook HDR → external projector SDR), the tonemap must switch.
-//! An NSNotification observer watches for screen changes and sets a flag
-//! checked by the main loop.
+//! EDR capability varies per-display. A screen's current headroom describes
+//! what can be shown now, while its potential headroom describes the maximum
+//! available after EDR presentation is enabled. When a window moves between
+//! monitors (e.g., MacBook HDR → external projector SDR), the tonemap must
+//! switch. An NSNotification observer watches for screen changes and sets a
+//! flag checked by the main loop.
+
+use manifold_renderer::presentation::{CurrentHeadroom, DisplayCapabilities, PotentialHeadroom};
 
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +30,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "macos")]
 static EDR_SCREEN_CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Avoid repeating diagnostics across display notifications while native
+/// display data is unavailable or invalid.
+#[cfg(target_os = "macos")]
+static EDR_CAPABILITY_DIAGNOSTIC_EMITTED: AtomicBool = AtomicBool::new(false);
 
 /// Returns true (once) if an NSNotification fired indicating the window's
 /// screen changed or display parameters changed. Resets the flag on read.
@@ -100,14 +109,40 @@ pub(crate) fn register_screen_change_observer() {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn register_screen_change_observer() {}
 
-/// Query EDR headroom for a specific NSScreen. Lightweight — three Obj-C
-/// message sends, no allocations.
+/// Turn the two native EDR values into typed renderer capabilities.
+///
+/// This is deliberately independent of AppKit so invalid-value handling can
+/// be tested without constructing an NSScreen or NSWindow.
+fn display_capabilities_from_native(
+    potential_value: f64,
+    current_value: f64,
+) -> Result<DisplayCapabilities, String> {
+    let potential = PotentialHeadroom::new(potential_value)
+        .map_err(|error| format!("invalid potential EDR headroom {potential_value:?}: {error}"))?;
+    let current = CurrentHeadroom::new(current_value)
+        .map_err(|error| format!("invalid current EDR headroom {current_value:?}: {error}"))?;
+
+    Ok(DisplayCapabilities::new(potential, current))
+}
+
 #[cfg(target_os = "macos")]
-pub(crate) fn query_screen_headroom(screen: *mut objc2::runtime::AnyObject) -> f64 {
+fn sdr_capabilities_with_diagnostic(reason: &str) -> DisplayCapabilities {
+    if !EDR_CAPABILITY_DIAGNOSTIC_EMITTED.swap(true, Ordering::Relaxed) {
+        log::warn!("[EDR] {reason}; using explicit SDR display capabilities");
+    }
+    DisplayCapabilities::sdr()
+}
+
+/// Query typed EDR capabilities for a specific NSScreen. Lightweight — two
+/// Obj-C message sends on the valid path, with no allocations there.
+#[cfg(target_os = "macos")]
+pub(crate) fn query_screen_capabilities(
+    screen: *mut objc2::runtime::AnyObject,
+) -> DisplayCapabilities {
     use objc2::msg_send;
 
     if screen.is_null() {
-        return 1.0;
+        return sdr_capabilities_with_diagnostic("NSScreen pointer was null");
     }
 
     unsafe {
@@ -116,51 +151,45 @@ pub(crate) fn query_screen_headroom(screen: *mut objc2::runtime::AnyObject) -> f
             maximumPotentialExtendedDynamicRangeColorComponentValue
         ];
         let current: f64 = msg_send![screen, maximumExtendedDynamicRangeColorComponentValue];
-        let max_ref: f64 = msg_send![
-            screen,
-            maximumReferenceExtendedDynamicRangeColorComponentValue
-        ];
 
-        if potential > 1.0 {
-            potential
-        } else if current > 1.0 {
-            current
-        } else if max_ref > 1.0 {
-            max_ref
-        } else {
-            1.0
+        match display_capabilities_from_native(potential, current) {
+            Ok(capabilities) => capabilities,
+            Err(error) => sdr_capabilities_with_diagnostic(&format!(
+                "native EDR values were invalid (potential={potential:?}, current={current:?}): {error}"
+            )),
         }
     }
 }
 
-/// Query the EDR headroom of the screen that the given winit Window is on.
+/// Query typed EDR capabilities for the screen that the given winit Window is
+/// on. Missing or non-AppKit handles use the explicit SDR policy.
 #[cfg(target_os = "macos")]
-pub(crate) fn query_window_headroom(window: &winit::window::Window) -> f64 {
+pub(crate) fn query_window_capabilities(window: &winit::window::Window) -> DisplayCapabilities {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let Ok(handle) = window.window_handle() else {
-        return 1.0;
+        return sdr_capabilities_with_diagnostic("window handle was unavailable");
     };
     let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-        return 1.0;
+        return sdr_capabilities_with_diagnostic("window handle was not AppKit");
     };
 
     unsafe {
         let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
         let ns_window: *mut AnyObject = msg_send![ns_view, window];
         if ns_window.is_null() {
-            return 1.0;
+            return sdr_capabilities_with_diagnostic("NSView had no NSWindow");
         }
         let screen: *mut AnyObject = msg_send![ns_window, screen];
-        query_screen_headroom(screen)
+        query_screen_capabilities(screen)
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn query_window_headroom(_window: &winit::window::Window) -> f64 {
-    1.0
+pub(crate) fn query_window_capabilities(_window: &winit::window::Window) -> DisplayCapabilities {
+    DisplayCapabilities::sdr()
 }
 
 /// Set the NSWindow level for a winit window. 0 = NSNormalWindowLevel,
@@ -214,5 +243,33 @@ pub(crate) fn set_window_shadow(window: &winit::window::Window, shadow: bool) {
             return;
         }
         let _: () = msg_send![ns_window, setHasShadow: shadow];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_capabilities_from_native;
+
+    #[test]
+    fn preserves_sdr_current_headroom_with_hdr_potential() {
+        let capabilities = display_capabilities_from_native(8.0, 1.0).unwrap();
+
+        assert_eq!(capabilities.current().value(), 1.0);
+        assert_eq!(capabilities.potential().value(), 8.0);
+    }
+
+    #[test]
+    fn preserves_current_and_potential_headroom() {
+        let capabilities = display_capabilities_from_native(8.0, 2.0).unwrap();
+
+        assert_eq!(capabilities.current().value(), 2.0);
+        assert_eq!(capabilities.potential().value(), 8.0);
+    }
+
+    #[test]
+    fn rejects_nonfinite_native_headroom_for_diagnostic_path() {
+        let error = display_capabilities_from_native(f64::NAN, 2.0).unwrap_err();
+
+        assert!(error.contains("invalid potential EDR headroom"));
     }
 }

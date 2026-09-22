@@ -57,7 +57,7 @@ use std::time::Duration;
 use manifold_core::LayerId;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::undo::UndoRedoManager;
-use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_gpu::GpuDevice;
 use manifold_renderer::ui_cache_manager::UICacheManager;
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::automation::{
@@ -272,8 +272,8 @@ impl RenderState {
     /// every other headless caller of the seam).
     fn new(tex_w: u32, tex_h: u32) -> Self {
         let device = GpuDevice::new();
-        let ui_renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
-        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        let ui_renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
+        let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
         cache.ensure_atlas(&device, tex_w, tex_h);
         cache.invalidate_all();
@@ -281,11 +281,11 @@ impl RenderState {
         Self { device, ui_renderer, cache, composite, tex_w, tex_h }
     }
 
-    /// Read back the CURRENTLY composited offscreen — raw BGRA8 bytes (the
+    /// Read back the CURRENTLY composited offscreen — raw linear UI bytes (the
     /// seam's own format). Does not re-composite; callers drive that
     /// separately (`composite_frame`, called from `Runner::advance_frame` /
     /// the `Step` loop).
-    fn readback_bgra(&self) -> Vec<u8> {
+    fn readback_linear(&self) -> Vec<u8> {
         super::render::readback(&self.device, &self.composite.offscreen, self.tex_w, self.tex_h)
     }
 }
@@ -463,7 +463,7 @@ impl Runner {
                         &render.composite,
                         1.0,
                     );
-                    self.filmstrip.push(render.readback_bgra());
+                    self.filmstrip.push(render.readback_linear());
                 }
                 StepResult {
                     index,
@@ -1481,28 +1481,35 @@ impl Runner {
                 gpu_sink: None,
             },
         );
-        let mut bgra = render.readback_bgra();
+        let mut linear = render.readback_linear();
         for pt in self.last_gesture_points.drain(..) {
-            stamp_crosshair(&mut bgra, tex_w, tex_h, pt);
+            stamp_crosshair(&mut linear, tex_w, tex_h, pt);
         }
-        super::render::save_bgra_png(&bgra, tex_w, tex_h, path);
+        super::render::save_ui_png(&linear, tex_w, tex_h, path);
     }
 }
 
 /// D9b: draw a small crosshair (~11px, opaque red) centered at `pt` (logical
 /// == texel here — the harness is always scale factor 1.0, D8) directly into
-/// BGRA8 bytes of stride `tex_w * 4`. CPU-side only; never called on a
-/// texture, only on a readback `Vec<u8>` already destined for a PNG.
-fn stamp_crosshair(bgra: &mut [u8], tex_w: u32, tex_h: u32, pt: Vec2) {
+/// linear Rgba16Float bytes of stride `tex_w * 8`. CPU-side only; never called
+/// on a texture, only on a readback `Vec<u8>` already destined for a PNG.
+fn stamp_crosshair(linear: &mut [u8], tex_w: u32, tex_h: u32, pt: Vec2) {
     const RADIUS: i32 = 5;
-    const COLOR: [u8; 4] = [0, 0, 255, 255]; // BGRA8: opaque red
+    let color = [
+        half::f16::from_f32(1.0).to_bits().to_le_bytes(),
+        half::f16::from_f32(0.0).to_bits().to_le_bytes(),
+        half::f16::from_f32(0.0).to_bits().to_le_bytes(),
+        half::f16::from_f32(1.0).to_bits().to_le_bytes(),
+    ];
     let (cx, cy) = (pt.x.round() as i32, pt.y.round() as i32);
     let mut plot = |x: i32, y: i32| {
         if x < 0 || y < 0 || x as u32 >= tex_w || y as u32 >= tex_h {
             return;
         }
-        let off = ((y as u32 * tex_w + x as u32) * 4) as usize;
-        bgra[off..off + 4].copy_from_slice(&COLOR);
+        let off = ((y as u32 * tex_w + x as u32) * 8) as usize;
+        for (channel, bytes) in color.iter().enumerate() {
+            linear[off + channel * 2..off + channel * 2 + 2].copy_from_slice(bytes);
+        }
     };
     for d in -RADIUS..=RADIUS {
         plot(cx + d, cy);

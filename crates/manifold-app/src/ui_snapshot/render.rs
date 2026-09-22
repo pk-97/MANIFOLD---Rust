@@ -25,10 +25,13 @@
 //! `None` (no such renderers exist headless). See `docs/HEADLESS_UI_HARNESS.md`.
 
 use std::ffi::c_void;
+use std::path::Path;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;
+use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback, SrgbRgba8};
+use manifold_renderer::presentation::UI_FORMAT;
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::ui_cache_manager::UICacheManager;
 use manifold_renderer::ui_renderer::UIRenderer;
@@ -37,14 +40,13 @@ use super::composite_resources::{composite_frame, CompositeResources};
 use super::thumbs;
 use crate::ui_root::UIRoot;
 
-const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
 /// The seam's offscreen/atlas format (`crate::ui_frame::composite_main_ui_frame`
 /// and `CompositeResources` are both hard-wired to this, matching the live app).
-const ATLAS_FORMAT: GpuTextureFormat = GpuTextureFormat::Bgra8Unorm;
+const ATLAS_FORMAT: GpuTextureFormat = UI_FORMAT;
 
 /// Render the whole UI (`ui.tree` + clip bodies + optional injected thumbnails +
 /// clip names) into a `tex_w`×`tex_h` texture and save as PNG. `tex_w` must be a
-/// multiple of 64 so the readback stride (`tex_w * 4`) is 256-byte aligned.
+/// multiple of 64 so the readback stride (`tex_w * 8`) is 256-byte aligned.
 /// `ui` is `&mut` (was `&UIRoot`): `composite_main_ui_frame`'s panel-cache pass
 /// (Pass 1, below) clears the dirty ranges it just painted via
 /// `ui_root.tree.clear_dirty_range` — see `ui_frame.rs`'s module doc deviation
@@ -91,7 +93,7 @@ pub fn render_ui_to_png(
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
     let device = GpuDevice::new();
-    let mut renderer = UIRenderer::new(&device, ATLAS_FORMAT);
+    let mut renderer = UIRenderer::new(&device, UI_FORMAT);
     let dpi = f64::from(scale);
 
     // Pass 1 (P2, D1/D3): the real cache path, not a full-repaint lookalike —
@@ -185,16 +187,8 @@ pub fn render_ui_to_png(
         },
     );
 
-    // `target_tex` is BGRA (the seam's atlas/offscreen format, matching the
-    // live app) — swap B/R per pixel for the RGBA PNG (display-only swizzle,
-    // applied only at save time, same pattern as `cache_path_full_render`'s
-    // `save_bgra_png`).
-    let mut bytes = readback(&device, target_tex, tex_w, tex_h);
-    for px in bytes.chunks_exact_mut(4) {
-        px.swap(0, 2);
-    }
-    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+    let bytes = readback(&device, target_tex, tex_w, tex_h);
+    save_ui_png(&bytes, tex_w, tex_h, Path::new(path));
 }
 
 /// Render a graph-editor canvas — nodes, ports, wires, and **real per-node
@@ -223,8 +217,8 @@ pub fn render_graph_to_png(
     // BUG-152: `Arc<GpuDevice>` — see the `render_graph_editor_to_png` call
     // site's comment for why.
     let device = std::sync::Arc::new(GpuDevice::new());
-    let mut renderer = UIRenderer::new(&device, FORMAT);
-    let target = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-graph");
+    let mut renderer = UIRenderer::new(&device, UI_FORMAT);
+    let target = RenderTarget::new(&device, tex_w, tex_h, UI_FORMAT, "ui-snap-graph");
     let dpi = f64::from(scale);
 
     // Lay the snapshot out (topological auto-layout) and frame the whole level —
@@ -296,8 +290,7 @@ pub fn render_graph_to_png(
     // ignored node z-order (BUG-027) — is gone.
 
     let bytes = readback(&device, &target.texture, tex_w, tex_h);
-    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+    save_ui_png(&bytes, tex_w, tex_h, Path::new(path));
 }
 
 /// Render the FULL graph-editor WINDOW for a generator preset: the left
@@ -378,8 +371,8 @@ pub fn render_graph_editor_to_png(
     // function keeps working unchanged via `&Arc<GpuDevice>`'s `Deref`
     // coercion to `&GpuDevice`.
     let device = std::sync::Arc::new(GpuDevice::new());
-    let mut renderer = UIRenderer::new(&device, FORMAT);
-    let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor");
+    let mut renderer = UIRenderer::new(&device, UI_FORMAT);
+    let target_tex = RenderTarget::new(&device, tex_w, tex_h, UI_FORMAT, "ui-snap-editor");
     let dpi = f64::from(scale);
 
     // ONE `UIRoot` for the whole editor window — sidebar preview column AND
@@ -609,8 +602,7 @@ pub fn render_graph_editor_to_png(
     // blit that ignored node z-order (BUG-027) is gone.
 
     let bytes = readback(&device, &target_tex.texture, tex_w, tex_h);
-    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+    save_ui_png(&bytes, tex_w, tex_h, Path::new(path));
 }
 
 /// Visual proof for the UI transform-stack capability
@@ -634,8 +626,8 @@ pub fn render_transform_proof_to_png(path: &str) {
     assert_eq!(TEX_W % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
     let device = GpuDevice::new();
-    let mut renderer = UIRenderer::new(&device, FORMAT);
-    let target = RenderTarget::new(&device, TEX_W, TEX_H, FORMAT, "ui-snap-transform");
+    let mut renderer = UIRenderer::new(&device, UI_FORMAT);
+    let target = RenderTarget::new(&device, TEX_W, TEX_H, UI_FORMAT, "ui-snap-transform");
 
     let mut tree = UITree::new();
     // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: a standalone scratch tree
@@ -749,8 +741,7 @@ pub fn render_transform_proof_to_png(path: &str) {
     assert!(drew, "transform proof produced no draws");
 
     let bytes = readback(&device, &target.texture, TEX_W, TEX_H);
-    image::save_buffer(path, &bytes, TEX_W, TEX_H, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+    save_ui_png(&bytes, TEX_W, TEX_H, Path::new(path));
 }
 
 /// A headless one-frame render of `def`'s graph with the executor's per-node
@@ -932,7 +923,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 /// `ui_snapshot` and all its descendants, which covers the sibling test
 /// module without making this a public crate API.
 pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
-    let bytes_per_row = w * 4;
+    let bytes_per_row = w * UI_FORMAT.bytes_per_pixel();
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer_shared(total);
 
@@ -946,24 +937,22 @@ pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32)
     bytes.to_vec()
 }
 
-/// Save BGRA8 readback bytes as an RGBA8 PNG — swap B/R per pixel (a
-/// display-only swizzle; the seam's atlas/offscreen format is BGRA8,
-/// matching the live app — `CompositeResources`/`crate::ui_frame`). `pub(super)`
+/// Save linear UI readback bytes as an sRGB RGBA8 PNG. `pub(super)`
 /// for the same reason as [`readback`]: shared by `render_ui_to_png`,
 /// `script.rs`'s `Runner` (P2), and `mod.rs`'s `cache_path_full_render`.
-pub(super) fn save_bgra_png(bgra: &[u8], w: u32, h: u32, path: &std::path::Path) {
-    let mut rgba = bgra.to_vec();
-    for px in rgba.chunks_exact_mut(4) {
-        px.swap(0, 2);
-    }
-    image::save_buffer(path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+pub(super) fn save_ui_png(bytes: &[u8], w: u32, h: u32, path: &Path) {
+    let capture = LinearUiReadback::from_bytes(bytes, w, h, UI_FORMAT, AlphaInterpretation::PremultipliedOverBlack)
+        .unwrap_or_else(|e| panic!("prepare {}: {e}", path.display()));
+    capture
+        .to_srgb_rgba8()
+        .write_png(path)
         .unwrap_or_else(|e| panic!("save {}: {e}", path.display()));
 }
 
-/// Assemble filmstrip tiles (each `tile_w`x`tile_h`, raw BGRA8 bytes) into
-/// ONE contact-sheet PNG, `cols` tiles per row (D9a; trailing cells on an
-/// incomplete last row stay black). `pub(super)`, same sharing rationale as
-/// [`save_bgra_png`].
+/// Assemble filmstrip tiles (each `tile_w`x`tile_h`, raw linear UI bytes) into
+/// ONE contact-sheet PNG in encoded display space, `cols` tiles per row (D9a;
+/// trailing cells on an incomplete last row stay black). `pub(super)`, same
+/// sharing rationale as [`save_ui_png`].
 pub(super) fn save_filmstrip_png(
     tiles: &[Vec<u8>],
     tile_w: u32,
@@ -972,21 +961,15 @@ pub(super) fn save_filmstrip_png(
     path: &std::path::Path,
 ) {
     assert!(!tiles.is_empty(), "filmstrip must have at least one tile");
-    let n = tiles.len() as u32;
-    let rows = n.div_ceil(cols);
-    let sheet_w = tile_w * cols;
-    let sheet_h = tile_h * rows;
-    let mut sheet = vec![0u8; (sheet_w * sheet_h * 4) as usize];
-    let row_bytes = (tile_w * 4) as usize;
-    for (i, tile) in tiles.iter().enumerate() {
-        let i = i as u32;
-        let (col, row) = (i % cols, i / cols);
-        let (ox, oy) = (col * tile_w, row * tile_h);
-        for y in 0..tile_h {
-            let src_off = y as usize * row_bytes;
-            let dst_off = (((oy + y) * sheet_w + ox) as usize) * 4;
-            sheet[dst_off..dst_off + row_bytes].copy_from_slice(&tile[src_off..src_off + row_bytes]);
-        }
-    }
-    save_bgra_png(&sheet, sheet_w, sheet_h, path);
+    let encoded: Vec<SrgbRgba8> = tiles
+        .iter()
+        .map(|tile| {
+            LinearUiReadback::from_bytes(tile, tile_w, tile_h, UI_FORMAT, AlphaInterpretation::PremultipliedOverBlack)
+                .unwrap_or_else(|e| panic!("prepare filmstrip tile: {e}"))
+                .to_srgb_rgba8()
+        })
+        .collect();
+    SrgbRgba8::assemble_filmstrip(&encoded, tile_w, tile_h, cols)
+        .and_then(|sheet| sheet.write_png(path))
+        .unwrap_or_else(|e| panic!("save {}: {e}", path.display()));
 }

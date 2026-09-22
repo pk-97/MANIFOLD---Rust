@@ -927,7 +927,7 @@ impl ContentThread {
                 .pq_encode_for_export(paper_white, max_nits);
             Self::get_metal_texture_ptr(texture)
         } else {
-            let texture = self.content_pipeline.export_output_texture();
+            let texture = self.content_pipeline.sdr_export_output_texture();
             Self::get_metal_texture_ptr(texture)
         };
 

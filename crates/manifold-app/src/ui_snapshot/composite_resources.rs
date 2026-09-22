@@ -10,9 +10,10 @@
 //! can build through the real `UICacheManager` too, without a second copy of
 //! this shader/pipeline setup.
 
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuDevice, GpuTexture};
 use manifold_renderer::ui_cache_manager::UICacheManager;
 use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_renderer::presentation::UI_FORMAT;
 
 use crate::ui_frame::composite_main_ui_frame;
 use crate::ui_root::UIRoot;
@@ -60,7 +61,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             blit_shader,
             "vs_main",
             "fs_main",
-            GpuTextureFormat::Bgra8Unorm,
+            UI_FORMAT,
             None,
             "Blit Pipeline",
         );
@@ -82,7 +83,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             blit_shader,
             "vs_main",
             "fs_main",
-            GpuTextureFormat::Bgra8Unorm,
+            UI_FORMAT,
             Some(premultiplied_blend),
             "Atlas Blit Pipeline",
         );
@@ -97,7 +98,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             width,
             height,
             depth: 1,
-            format: GpuTextureFormat::Bgra8Unorm,
+            format: UI_FORMAT,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "UI Offscreen (harness)",

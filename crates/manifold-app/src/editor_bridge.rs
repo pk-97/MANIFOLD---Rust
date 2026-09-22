@@ -1916,7 +1916,7 @@ impl Application {
             );
             return;
         };
-        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
         let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) else {
             #[cfg(target_os = "macos")]
             crate::shared_texture::retire_leases_via_marker(
@@ -1950,7 +1950,7 @@ impl Application {
         // Composite the captured node texture (top) and the master compositor
         // output (below it) into the editor sidebar, each below its title.
         // Only when the IOSurface front buffer is available. The blit pipeline
-        // targets the drawable's Bgra8Unorm format, so these draw into the
+        // targets the drawable's float presentation format, so these draw into the
         // drawable (Load) rather than the Rgba16Float offscreen.
         #[cfg(target_os = "macos")]
         {

@@ -39,7 +39,7 @@ The presentation layer is mostly built. Do not redesign these; extend them.
 | Content-thread pacing | `mach_wait_until` + 2ms spin at project FPS | SETTLED — do not touch |
 | UI vsync | `UiDisplayLink` (CVDisplayLink per workspace window) | Content thread does NOT use display links |
 | Canvas dimensions | `ProjectSettings::output_width/output_height` + `render_scale` | Legacy single-canvas path; becomes the one-island case |
-| EDR per-display headroom | `edr_surface.rs` (event-driven headroom re-query on screen change) | Already per-window |
+| EDR per-display headroom | `edr_surface.rs`, renderer `presentation.rs` | Destination-addressed current/potential capabilities; see COLOUR_PRESENTATION_DESIGN.md |
 | LED output samples the final texture | `manifold-led` (blit + readback → Art-Net) | Already "a sampler of the canvas" |
 | Display ID lookup | `display_link.rs::display_id_for_window` (CGDirectDisplayID via NSScreen) | Runtime only — IDs are NOT stable across reboots |
 
@@ -396,8 +396,8 @@ the two `led_group_*` fields.
   falls under the existing prewarm rule (BUG-037 (glp-first-render-stall) sibling rule in
   DESIGN_DOC_STANDARD section 5).
 - `render()` (`layer_compositor.rs:2128`) is not one canvas even today — fixed main
-  composite + tonemap + master chain + the independent LED path + the serial/parallel
-  CB split. The queue was right that section 2's inventory understates this; this addendum
+  composite + scene-linear transform + master chain + per-destination mapping,
+  alongside the independent LED path. The queue was right that section 2's inventory understates this; this addendum
   and the P2 re-issue brief carry the corrected picture so the executor reads the
   real structure before the loop change.
 

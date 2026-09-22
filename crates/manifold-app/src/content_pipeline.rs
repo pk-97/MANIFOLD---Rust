@@ -12,7 +12,11 @@ use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, Compos
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
-use manifold_renderer::tonemap::TonemapSettings;
+use manifold_renderer::tonemap::{TonemapSettings, TonemapMode};
+use manifold_renderer::presentation::{
+    DisplayCapabilities, DisplayDestination, DisplayPlan, DisplayPresentationState,
+    LinearPresentationTarget, LinearSceneFrame, PresentationPipeline,
+};
 
 /// Thread-safe shared output dimensions. The content thread writes new
 /// dimensions after resize; the UI thread reads them for aspect ratio.
@@ -719,9 +723,10 @@ fn restore_clip_atlas(
 /// this allows 2 content frames in flight without starving the UI thread.
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
-    /// EDR headroom from the display (1.0 = SDR, e.g. 2.0 = 2x SDR white).
-    /// Used to compute max_display_nits for tonemapping.
-    pub edr_headroom: f64,
+    /// Content-thread owner of independent destination policies.
+    pub presentation: DisplayPresentationState,
+    presentation_curve: manifold_core::TonemapCurve,
+    sdr_output: Option<manifold_renderer::render_target::RenderTarget>,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
     /// Reusable GPU→CPU readback for single-frame (still image) export.
@@ -752,12 +757,9 @@ pub struct ContentPipeline {
     /// blocking the content thread for up to 1s on a transitioning display.
     #[cfg(target_os = "macos")]
     output_present_suspended: bool,
-    /// Blit pipeline for output present (passthrough + sampler).
+    /// One mapper shared by output and workspace preview; plans are per destination.
     #[cfg(target_os = "macos")]
-    output_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    /// Sampler for output present blit.
-    #[cfg(target_os = "macos")]
-    output_sampler: Option<manifold_gpu::GpuSampler>,
+    presentation_pipeline: Option<PresentationPipeline>,
     /// Triple-buffered IOSurface textures for the workspace preview.
     #[cfg(target_os = "macos")]
     preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
@@ -1075,6 +1077,8 @@ struct PreviewPipelines<'a> {
     normal: Option<&'a manifold_gpu::GpuRenderPipeline>,
     depth: Option<&'a manifold_gpu::GpuRenderPipeline>,
     raw: Option<&'a manifold_gpu::GpuRenderPipeline>,
+    presentation: Option<&'a PresentationPipeline>,
+    plan: Option<DisplayPlan>,
 }
 
 impl ContentPipeline {
@@ -1082,7 +1086,9 @@ impl ContentPipeline {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
-            edr_headroom: 1.0,
+            presentation: DisplayPresentationState::default(),
+            presentation_curve: manifold_core::TonemapCurve::AcesNarkowicz,
+            sdr_output: None,
             pq_encoder: None,
             #[cfg(target_os = "macos")]
             still_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
@@ -1098,9 +1104,7 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             output_present_suspended: false,
             #[cfg(target_os = "macos")]
-            output_pipeline: None,
-            #[cfg(target_os = "macos")]
-            output_sampler: None,
+            presentation_pipeline: None,
             #[cfg(target_os = "macos")]
             preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
@@ -1313,6 +1317,7 @@ impl ContentPipeline {
         device.set_retirement(std::sync::Arc::clone(&retire_mark));
         pool.set_retire_mark(retire_mark);
         self.retire_queue = Some(retire_queue);
+        self.presentation_pipeline = Some(PresentationPipeline::new(&device));
         let preview_shader = r#"
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
@@ -1774,44 +1779,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         surface.set_background_color(0.0, 0.0, 0.0, 1.0);
         surface.set_maximum_drawable_count(3);
         surface.set_presents_with_transaction(false);
-        if self.output_pipeline.is_none()
-            && let Some(ref device) = self.native_device
-        {
-            let shader = r#"
-@group(0) @binding(0) var t_source: texture_2d<f32>;
-@group(0) @binding(1) var s_source: sampler;
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-@vertex
-fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
-    var out: VertexOutput;
-    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
-    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_source, s_source, in.uv);
-}
-"#;
-            self.output_pipeline = Some(device.create_render_pipeline(
-                shader,
-                "vs_main",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                None,
-                "Output Present Blit",
-            ));
-            self.output_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Linear,
-                mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                ..Default::default()
-            }));
-        }
         self.output_surface = Some(surface);
         log::info!("[ContentPipeline] Output surface attached — direct present");
     }
@@ -1834,6 +1801,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     #[cfg(target_os = "macos")]
     pub fn clear_output_surface(&mut self) {
         self.output_surface = None;
+        self.presentation.remove(DisplayDestination::Output);
     }
 
     #[cfg(target_os = "macos")]
@@ -2183,6 +2151,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
+        self.presentation_curve = project.map_or(manifold_core::TonemapCurve::AcesNarkowicz, |p| p.settings.tonemap_curve);
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
         // Fold this tick's fires into the renderer's per-layer/master
@@ -2607,9 +2576,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             led_composite_size: self.led_grid_size,
             tonemap: TonemapSettings {
                 exposure: 1.0,
-                hdr_output_enabled: self.edr_headroom > 1.0,
+                mode: TonemapMode::SceneLinear,
                 paper_white_nits: 200.0,
-                max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
+                max_display_nits: 10000.0,
                 curve: project.map_or(manifold_core::TonemapCurve::AcesNarkowicz, |p| {
                     p.settings.tonemap_curve
                 }),
@@ -3094,8 +3063,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // handles vsync-aligned delivery. No CVDisplayLink, no IOSurface.
             if let Some(ref surface) = self.output_surface
                 && !self.output_present_suspended
-                && let Some(ref pipeline) = self.output_pipeline
-                && let Some(ref sampler) = self.output_sampler
+                && let Some(ref pipeline) = self.presentation_pipeline
+                && let Some(plan) = self.presentation.plan(DisplayDestination::Output, self.presentation_curve)
                 && let Some(drawable) = surface.next_drawable()
             {
                 let target = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Rgba16Float);
@@ -3110,22 +3079,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 };
                 let fit_x = (draw_w - fit_w) * 0.5;
                 let fit_y = (draw_h - fit_h) * 0.5;
-                native_enc.draw_fullscreen_viewport(
-                    pipeline,
-                    &target,
-                    &[
-                        manifold_gpu::GpuBinding::Texture {
-                            binding: 0,
-                            texture: final_output,
-                        },
-                        manifold_gpu::GpuBinding::Sampler {
-                            binding: 1,
-                            sampler,
-                        },
-                    ],
+                pipeline.encode(
+                    &mut native_enc,
+                    LinearSceneFrame::new(final_output).expect("content output is linear float"),
+                    LinearPresentationTarget::new(&target).expect("output drawable is float"),
+                    plan,
                     (fit_x, fit_y, fit_w, fit_h),
                     manifold_gpu::GpuLoadAction::Clear,
-                    "Output Present",
                 );
                 native_enc.present_drawable(&drawable);
             }
@@ -3133,13 +3093,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             rtrace.mark("upscale_present");
 
             // ── Workspace preview (downscaled IOSurface) ────────────
-            Self::update_workspace_preview(
-                &mut native_enc,
-                final_output,
+            if let (Some(target), Some(pipeline), Some(plan)) = (
                 self.preview_textures[self.write_surface_index].as_ref(),
-                self.preview_pipeline.as_ref(),
-                self.preview_sampler.as_ref(),
-            );
+                self.presentation_pipeline.as_ref(),
+                self.presentation.plan(DisplayDestination::Workspace, self.presentation_curve),
+            ) {
+                pipeline.encode(
+                    &mut native_enc,
+                    LinearSceneFrame::new(final_output).expect("content output is linear float"),
+                    LinearPresentationTarget::new(target).expect("preview bridge is float"),
+                    plan,
+                    (0.0, 0.0, target.width as f32, target.height as f32),
+                    manifold_gpu::GpuLoadAction::Clear,
+                );
+            }
 
             // ── Node-output preview (downscaled IOSurface) ──────────
             // If a node is being previewed and its chain captured a texture
@@ -3266,10 +3233,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     } else {
                         self.compositor.output_texture()
                     };
+                    // Recording is an SDR destination, independent of either
+                    // monitor. Keep the shared HDR frame intact for displays.
+                    if self.sdr_output.as_ref().is_none_or(|t| t.width != src.width || t.height != src.height) {
+                        self.sdr_output = Some(manifold_renderer::render_target::RenderTarget::new(
+                            native_device, src.width, src.height,
+                            manifold_renderer::presentation::UI_FORMAT, "SDR recording output",
+                        ));
+                    }
+                    let mapped = &self.sdr_output.as_ref().expect("SDR target allocated").texture;
+                    self.presentation_pipeline.as_ref().expect("presentation initialized").encode(
+                        &mut native_enc,
+                        LinearSceneFrame::new(src).expect("recording source is linear float"),
+                        LinearPresentationTarget::new(mapped).expect("SDR mapped target is float"),
+                        DisplayPlan::new(DisplayCapabilities::sdr(), self.presentation_curve),
+                        (0.0, 0.0, src.width as f32, src.height as f32),
+                        manifold_gpu::GpuLoadAction::Clear,
+                    );
                     let dst = session.pool_texture(tex_idx);
                     // Compute dispatch: Rgba16Float → sRGB Bgra8Unorm.
                     // Uses the native GpuEncoder directly (same command buffer).
-                    session.encode_format_conversion(&mut native_enc, src, dst);
+                    session.encode_format_conversion(&mut native_enc, mapped, dst);
                     session.submit_frame(pool_slot, fence.clone());
                     Some(fence)
                 } else {
@@ -3633,6 +3617,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             normal: self.node_preview_normal_pipeline.as_ref(),
             depth: self.node_preview_depth_pipeline.as_ref(),
             raw: self.preview_pipeline.as_ref(),
+            presentation: self.presentation_pipeline.as_ref(),
+            plan: self.presentation.plan(DisplayDestination::GraphEditor, self.presentation_curve),
         }
     }
 
@@ -3649,8 +3635,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let Some(target) = target else {
             return;
         };
-        // Pick the encoding pipeline. `Color` (and smart-off) fall through to
-        // the raw blit; a missing pipeline also falls through.
+        // Data visualizations use their encoding pipeline when smart is on.
+        // Colour always uses the destination mapping; smart-off data is raw.
         let pipeline = if smart {
             match encoding {
                 PreviewEncoding::ScalarLift => pipelines.scalar_lift,
@@ -3683,7 +3669,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
             return;
         }
-        Self::update_workspace_preview(enc, source, Some(target), pipelines.raw, sampler);
+        if encoding == PreviewEncoding::Color
+            && let (Some(presentation), Some(plan)) = (pipelines.presentation, pipelines.plan)
+        {
+            presentation.encode(
+                enc,
+                LinearSceneFrame::from_color_texture(source).expect("colour node output has a colour format"),
+                LinearPresentationTarget::new(target).expect("node preview bridge is float"),
+                plan,
+                (0.0, 0.0, target.width as f32, target.height as f32),
+                manifold_gpu::GpuLoadAction::Clear,
+            );
+        } else {
+            Self::update_workspace_preview(enc, source, Some(target), pipelines.raw, sampler);
+        }
     }
 
     /// Toggle auto-gain/normalization on the node-output preview. On by
@@ -3866,15 +3865,44 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    /// Export output texture (post-tonemap, post-effects).
+    /// Canonical linear HDR output after master effects. Display settings do
+    /// not affect it; SDR video must use `sdr_export_output_texture` instead.
     pub fn export_output_texture(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.output_texture()
+    }
+
+    /// Map the canonical HDR frame to linear SDR for the video encoder.
+    /// Allocation occurs only on first use or a resolution change.
+    pub fn sdr_export_output_texture(&mut self) -> &manifold_gpu::GpuTexture {
+        let device = self.native_device.as_ref().expect("native export device");
+        let source = self.compositor.output_texture();
+        if self.sdr_output.as_ref().is_none_or(|t| t.width != source.width || t.height != source.height) {
+            self.sdr_output = Some(manifold_renderer::render_target::RenderTarget::new(
+                device, source.width, source.height, manifold_renderer::presentation::UI_FORMAT, "SDR export output",
+            ));
+        }
+        let target = &self.sdr_output.as_ref().expect("SDR target allocated").texture;
+        let mut enc = device.create_encoder("SDR Export Mapping");
+        self.presentation_pipeline.as_ref().expect("presentation pipeline initialized").encode(
+            &mut enc,
+            LinearSceneFrame::new(source).expect("content output is linear float"),
+            LinearPresentationTarget::new(target).expect("SDR mapped output is float"),
+            DisplayPlan::new(DisplayCapabilities::sdr(), self.presentation_curve),
+            (0.0, 0.0, source.width as f32, source.height as f32),
+            manifold_gpu::GpuLoadAction::Clear,
+        );
+        if let Some(event) = &self.native_event {
+            enc.signal_event(event);
+            self.native_signal_value = event.current_value();
+        }
+        enc.commit();
+        target
     }
 
     /// LED source texture. Returns `Some` only when at least one layer is
     /// LED-routed (mirror flag or LED layer type) and has active clips this
     /// frame — the LED composite carries just those layers on the active
-    /// route, post-tonemap + post-master-FX. Returns `None` when no layer is
+    /// route, linear HDR with its own master-FX tap. Returns `None` when no layer is
     /// routed to LEDs; callers should blackout in that case.
     pub fn led_source_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
         self.compositor.led_composite_texture()
