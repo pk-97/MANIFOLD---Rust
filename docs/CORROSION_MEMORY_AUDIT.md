@@ -603,6 +603,51 @@ format through independent group crossings, hold decay and resets. The existing
 resize proof also checks scalar formats, stable/replaced identities and a
 render-pass sentinel clear. These are synthetic GPU proofs, not project renders.
 
+## RT firefly resolve: bounded lifetime follow-up (2026-09-22)
+
+Static review at `aae2686c4` confirms the representative Azalea enables RT
+shadows, AO, GI and reflections. The trace, upsample, spatial filter and temporal
+accumulator bind/write these families together. Omitting a disabled family still
+requires explicit producer/consumer and re-enable/reset handling; it is not safe
+to remove its allocations based on the surface-shading toggle alone. The earlier
+four-caster selection defect above was corrected by `aae2686c4`; the remaining
+user-facing raster/RT budget difference is tracked separately in BUG-9o5s.
+
+A smaller demonstrated duplication is the firefly-clamp scene resolve. Its
+RGBA16 texture and reflection-prefilter scratch have equal render dimensions but
+nonoverlapping GPU uses:
+
+1. Upsampling writes current reflection; spatial pass one writes `rt_refl_full_b`.
+2. Spatial pass two reads that scratch and writes current reflection back.
+3. Accumulation reads current reflection, preserving independent history pairs.
+   The optional post-filter uses irradiance/normal scratch, not reflection scratch.
+4. The scene pass resolves into `rt_firefly_scratch`; transparency and shafts
+   complete there, then the firefly clamp reads it and writes a distinct target.
+
+The change makes reflection scratch renderable and aliases the firefly resolve to
+it. The next frame rewrites scratch after the preceding clamp read in queue order.
+Both handles refresh on initial allocation and trace/render resize. Clamp bypass,
+RT readiness, denoiser bypass and temporal-upscale output selection stay intact.
+Raw capture outputs and all histories remain separate; there is no CPU mapped
+access, new pool, wait, readiness policy or scene unloading.
+
+The native proof
+`rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames`
+passes with bit-identical finite results against independent backing. It queues
+actual reflection filters, 4× MSAA resolves and firefly clamps across command
+buffers without intervening CPU waits, including a clamp-bypass frame. It checks
+the earlier reflection result after reuse, preserved raw/history pixels and
+nonopaque alpha, nontrivial bright-pixel clamping, and alias refresh after both
+trace-only and render-size changes. This is a synthetic GPU proof, not displayed
+project verification.
+
+One physical RGBA16 texture is removed: `width × height × 8` payload bytes,
+**16,588,800 bytes (15.82 MiB)** at 1080×1920 per renderer. Three matching
+renderers would remove 49,766,400 payload bytes. These are calculated payloads,
+not a new project Metal peak, process RAM, loading or performance measurement.
+Focused native verification and required landing results are recorded under
+BUG-dl16 and `/tmp/manifold-memory-firefly-scratch-20260922/`.
+
 ## Source anchors
 
 Paths below are under `crates/manifold-renderer/src/` unless prefixed with `crates/`:
