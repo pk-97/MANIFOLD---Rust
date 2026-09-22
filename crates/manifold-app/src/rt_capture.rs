@@ -45,7 +45,8 @@ use crate::headless_harness::headless_content_thread;
 /// not `Rgba16Float` (8 B/px) — the old fixed-8-byte decode read the mask
 /// garbled (adjacent-pixel bytes landed in b/a), which is what made the
 /// 2026-07-28 open-plane recheck inconclusive. Decodes every capture into
-/// `[r, g, b, a]` f32 pixels; Rg16Float fills b=0, a=0. Unsupported
+/// `[r, g, b, a]` f32 pixels; scalar R16Float hold histories and Rg16Float
+/// fill missing channels with zero. Unsupported
 /// formats return an empty vec and the caller reports the skip loudly.
 pub(crate) fn decode_capture_pixels(
     cap: &RtCaptureSlot,
@@ -56,6 +57,7 @@ pub(crate) fn decode_capture_pixels(
     let (bpp, comps, is_f32) = match cap.tex.format {
         GpuTextureFormat::Rgba16Float => (8u32, 4usize, false),
         GpuTextureFormat::Rg16Float => (4u32, 2usize, false),
+        GpuTextureFormat::R16Float => (2u32, 1usize, false),
         GpuTextureFormat::Rg32Float => (8u32, 2usize, true),
         // Rgba32Float — the RT luminance-moments history (ED-A moved it from
         // Rg16Float to Rgba32Float for the variance-precision argument in

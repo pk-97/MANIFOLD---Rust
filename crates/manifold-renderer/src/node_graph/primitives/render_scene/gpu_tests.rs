@@ -77,6 +77,101 @@
         tex
     }
 
+    fn upload_rgba16f(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+        pixels: &[[f32; 4]],
+        label: &str,
+    ) -> manifold_gpu::GpuTexture {
+        assert_eq!(pixels.len(), (w * h) as usize);
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label,
+            mip_levels: 1,
+        });
+        let mut bytes = Vec::with_capacity(pixels.len() * 8);
+        for pixel in pixels {
+            for channel in pixel {
+                bytes.extend_from_slice(&f16::from_f32(*channel).to_bits().to_le_bytes());
+            }
+        }
+        device.upload_texture(&tex, &bytes);
+        tex
+    }
+
+    fn upload_rgba32f(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+        pixels: &[[f32; 4]],
+        label: &str,
+    ) -> manifold_gpu::GpuTexture {
+        assert_eq!(pixels.len(), (w * h) as usize);
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label,
+            mip_levels: 1,
+        });
+        let bytes: Vec<u8> = pixels
+            .iter()
+            .flat_map(|pixel| pixel.iter().flat_map(|channel| channel.to_le_bytes()))
+            .collect();
+        device.upload_texture(&tex, &bytes);
+        tex
+    }
+
+    fn rgba16f_target(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+        label: &str,
+    ) -> manifold_gpu::GpuTexture {
+        device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::SHADER_WRITE
+                | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        })
+    }
+
+    fn decode_rgba16f_readback(
+        buffer: &manifold_gpu::GpuBuffer,
+        pixel_count: usize,
+    ) -> Vec<[f32; 4]> {
+        let ptr = buffer.mapped_ptr().expect("shared readback buffer");
+        let halves: &[u16] = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<u16>(), pixel_count * 4)
+        };
+        halves
+            .chunks_exact(4)
+            .map(|pixel| {
+                [
+                    f16::from_bits(pixel[0]).to_f32(),
+                    f16::from_bits(pixel[1]).to_f32(),
+                    f16::from_bits(pixel[2]).to_f32(),
+                    f16::from_bits(pixel[3]).to_f32(),
+                ]
+            })
+            .collect()
+    }
+
     fn mat4_mul_vec4_test(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
         let mut out = [0.0f32; 4];
         for (row, slot) in out.iter_mut().enumerate() {
@@ -968,9 +1063,49 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // First allocation resets.
         assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        let assert_history_pair = |pair: &[Option<manifold_gpu::GpuTexture>; 2], format| {
+            let textures: Vec<_> = pair.iter().flatten().collect();
+            assert_eq!(textures.len(), 2);
+            assert!(textures.iter().all(|texture| texture.format == format));
+            assert_ne!(textures[0].identity_key(), textures[1].identity_key());
+        };
+        use GpuTextureFormat::*;
+        assert_history_pair(&s.rt_irr_history, Rgba16Float);
+        assert_history_pair(&s.rt_refl_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_m1_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_m2_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv_hold_history, R16Float);
+        assert_history_pair(&s.rt_sv2_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv2_m1_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv2_m2_history, Rgba16Float);
+        assert_history_pair(&s.rt_sv2_hold_history, R16Float);
+        assert_history_pair(&s.rt_svt_history, Rgba16Float);
+        assert_history_pair(&s.rt_depth_history, R32Float);
+        assert_history_pair(&s.rt_normal_history, Rgba16Float);
+        assert_history_pair(&s.rt_moments_history, Rgba32Float);
+        let original_hold_textures: Vec<_> = s
+            .rt_sv_hold_history
+            .iter()
+            .chain(s.rt_sv2_hold_history.iter())
+            .filter_map(Option::as_ref)
+            .cloned()
+            .collect();
+        let original_hold_ids: Vec<_> = original_hold_textures
+            .iter()
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
         s.ensure_rt_masks(&device, 128, 128, 256, 256);
         // Same dims: no realloc, no reset.
         assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        let same_size_hold_ids: Vec<_> = s
+            .rt_sv_hold_history
+            .iter()
+            .chain(s.rt_sv2_hold_history.iter())
+            .filter_map(Option::as_ref)
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
+        assert_eq!(same_size_hold_ids, original_hold_ids, "same-size ensure must preserve R16 histories");
         // Tier flip (Half → Native at fixed canvas): trace dims change.
         assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
         assert_eq!(s.rt_irr_trace_w, 256);
@@ -979,10 +1114,392 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
         assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
         assert_eq!(s.rt_irr_width, 257);
+        assert_history_pair(&s.rt_sv_hold_history, R16Float);
+        assert_history_pair(&s.rt_sv2_hold_history, R16Float);
+        for texture in s.rt_sv_hold_history.iter().flatten().chain(s.rt_sv2_hold_history.iter().flatten()) {
+            assert_eq!((texture.width, texture.height), (257, 257));
+        }
+        let resized_hold_ids: Vec<_> = s
+            .rt_sv_hold_history
+            .iter()
+            .chain(s.rt_sv2_hold_history.iter())
+            .filter_map(Option::as_ref)
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
+        assert!(resized_hold_ids.iter().all(|id| !original_hold_ids.contains(id)), "resize must replace R16 histories");
+        // R16Float has no compute clear pipeline; its render-target usage must
+        // keep the render-pass clear fallback usable for the reset sentinel.
+        let hold = s.rt_sv_hold_history[0].as_ref().expect("R16 hold history");
+        let bytes_per_row = 257 * 2;
+        let readback = device.create_buffer_shared(u64::from(257 * bytes_per_row));
+        let mut enc = device.create_encoder("rt-r16-history-clear-read");
+        enc.clear_texture(hold, 0.25, 0.0, 0.0, 0.0);
+        enc.copy_texture_to_buffer(hold, &readback, 257, 257, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("R16 history readback");
+        let values: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast(), (257 * 257) as usize) };
+        assert!((f16::from_bits(values[0]).to_f32() - 0.25).abs() < 0.01);
         // Masks guard follows the same dual-pair discipline.
         s.ensure_rt_masks(&device, 64, 64, 256, 256);
         assert_eq!(s.rt_mask_trace_w, 64);
         assert_eq!(s.rt_mask_width, 256);
+    }
+
+    /// RT-Stage-3 P4 scratch proof: the post-accumulation ping-pong pair may
+    /// reuse the completed pre-accumulation scratch handles. Run the actual
+    /// Metal `atrous_post` kernel against nonuniform inputs for odd and even
+    /// iteration counts across queued command buffers, then compare every
+    /// frame's final pixels with a dedicated backing pair. Temporal histories,
+    /// raw irradiance, and the current-frame guides must remain distinct, and
+    /// a resize must refresh both aliases.
+    #[test]
+    fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
+        use manifold_gpu::raytrace::{
+            AtrousParams, AtrousPostParams, MetalShadowRayTracer, ShadowRayTracer,
+        };
+
+        const W: u32 = 9;
+        const H: u32 = 9;
+        const FRAME_COUNT: usize = 4;
+        const POST_FRAME_COUNT: usize = FRAME_COUNT - 1;
+        let pixel_count = (W * H) as usize;
+        let device = crate::test_device();
+        let mut scene = RenderScene::new();
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
+
+        let shared_a = scene.rt_irr_filtered.as_ref().expect("filtered alias").clone();
+        let shared_b = scene.rt_irr_filtered_b.as_ref().expect("filtered alias b").clone();
+        assert!(shared_a.ptr_eq(scene.rt_irr_full_b.as_ref().expect("irr scratch")));
+        assert!(shared_b.ptr_eq(scene.rt_normal_full_b.as_ref().expect("normal scratch")));
+        assert!(!shared_a.ptr_eq(&shared_b));
+        assert_eq!(shared_a.format, GpuTextureFormat::Rgba16Float);
+        assert_eq!((shared_a.width, shared_a.height), (W, H));
+
+        let history_ids: Vec<_> = scene
+            .rt_irr_history
+            .iter()
+            .flatten()
+            .map(manifold_gpu::GpuTexture::identity_key)
+            .collect();
+        assert_eq!(history_ids.len(), 2);
+        assert_ne!(history_ids[0], history_ids[1]);
+        assert!(history_ids.iter().all(|id| *id != shared_a.identity_key() && *id != shared_b.identity_key()));
+        assert_ne!(scene.rt_irr_full.as_ref().expect("raw irradiance").identity_key(), shared_a.identity_key());
+        assert_ne!(scene.rt_normal_full.as_ref().expect("normal guide").identity_key(), shared_b.identity_key());
+        assert!(!scene.rt_moments_history.iter().flatten().any(|t| t.ptr_eq(&shared_a) || t.ptr_eq(&shared_b)));
+
+        let depth = upload_r32f(
+            &device,
+            W,
+            H,
+            &(0..pixel_count)
+                .map(|i| 0.2 + (i % W as usize) as f32 * 0.01 + (i / W as usize) as f32 * 0.02)
+                .collect::<Vec<_>>(),
+            "rt-post-scratch-depth",
+        );
+        let normal = upload_rgba16f(
+            &device,
+            W,
+            H,
+            &(0..pixel_count)
+                .map(|i| {
+                    let x = (i % W as usize) as f32 / W as f32;
+                    let y = (i / W as usize) as f32 / H as f32;
+                    [0.1 * x, 0.1 * y, 0.98, 1.0]
+                })
+                .collect::<Vec<_>>(),
+            "rt-post-scratch-normal",
+        );
+        let moments = upload_rgba32f(
+            &device,
+            W,
+            H,
+            &(0..pixel_count)
+                .map(|i| {
+                    let mean = 0.15 + (i % W as usize) as f32 * 0.02;
+                    [mean, mean * mean + 0.02, 0.0, 0.0]
+                })
+                .collect::<Vec<_>>(),
+            "rt-post-scratch-moments",
+        );
+        let sources: Vec<_> = (0..FRAME_COUNT)
+            .map(|frame| {
+                upload_rgba16f(
+                    &device,
+                    W,
+                    H,
+                    &(0..pixel_count)
+                        .map(|i| {
+                            let x = (i % W as usize) as f32;
+                            let y = (i / W as usize) as f32;
+                            let gain = 0.25 + frame as f32 * 0.17;
+                            [
+                                gain + x * 0.03 + y * 0.01,
+                                gain * 0.7 + y * 0.02,
+                                0.1 + (x + y) * 0.015,
+                                1.0,
+                            ]
+                        })
+                        .collect::<Vec<_>>(),
+                    "rt-post-scratch-history",
+                )
+            })
+            .collect();
+
+        let shared_raw_irr = scene.rt_irr_full.as_ref().expect("raw irradiance").clone();
+        let shared_guide_n = scene.rt_normal_full.as_ref().expect("normal guide").clone();
+        let dedicated_raw_irr = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-raw");
+        let dedicated_guide_n = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-guide");
+        let dedicated_a = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-a");
+        let dedicated_b = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-b");
+        let dedicated_pre_irr = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-pre-irr");
+        let dedicated_pre_n = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-pre-n");
+        let params_buffer = device.create_buffer_shared(std::mem::size_of::<AtrousPostParams>() as u64);
+        let atrous_params_buffer = device.create_buffer_shared(std::mem::size_of::<AtrousParams>() as u64);
+        let gi_materials = device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64);
+        gi_materials.zero_fill();
+        let tracer = MetalShadowRayTracer::new(&device);
+        let shared_aux_a: [manifold_gpu::GpuTexture; 4] =
+            std::array::from_fn(|_| rgba16f_target(&device, W, H, "rt-post-scratch-shared-pre-a"));
+        let shared_aux_b: [manifold_gpu::GpuTexture; 4] =
+            std::array::from_fn(|_| rgba16f_target(&device, W, H, "rt-post-scratch-shared-pre-b"));
+        let dedicated_aux_a: [manifold_gpu::GpuTexture; 4] =
+            std::array::from_fn(|_| rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-pre-a"));
+        let dedicated_aux_b: [manifold_gpu::GpuTexture; 4] =
+            std::array::from_fn(|_| rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-pre-b"));
+        let encode_prefilter =
+            |encoder: &mut manifold_gpu::GpuEncoder,
+             src_irr: &manifold_gpu::GpuTexture,
+             dst_irr: &manifold_gpu::GpuTexture,
+             src_n: &manifold_gpu::GpuTexture,
+             dst_n: &manifold_gpu::GpuTexture,
+             src_aux: [&manifold_gpu::GpuTexture; 4],
+             dst_aux: [&manifold_gpu::GpuTexture; 4],
+             label: &str| {
+                let params = AtrousParams::new([W, H], 2, true, 0);
+                tracer.atrous_pass(
+                    encoder,
+                    &params,
+                    &atrous_params_buffer,
+                    &gi_materials,
+                    &depth,
+                    &moments,
+                    src_aux[0],
+                    dst_aux[0],
+                    src_aux[1],
+                    dst_aux[1],
+                    src_irr,
+                    dst_irr,
+                    src_n,
+                    dst_n,
+                    src_aux[2],
+                    dst_aux[2],
+                    src_aux[3],
+                    dst_aux[3],
+                    label,
+                );
+            };
+        let bytes_per_row = W * 8;
+        let readback_size = u64::from(bytes_per_row * H);
+        let shared_readbacks: Vec<_> = (0..POST_FRAME_COUNT)
+            .map(|_| device.create_buffer_shared(readback_size))
+            .collect();
+        let dedicated_readbacks: Vec<_> = (0..POST_FRAME_COUNT)
+            .map(|_| device.create_buffer_shared(readback_size))
+            .collect();
+        let shared_raw_readback = device.create_buffer_shared(readback_size);
+        let dedicated_raw_readback = device.create_buffer_shared(readback_size);
+        let shared_guide_readback = device.create_buffer_shared(readback_size);
+        let dedicated_guide_readback = device.create_buffer_shared(readback_size);
+
+        let mut encoder = device.create_encoder("rt-post-scratch-parity");
+        for (frame, source) in sources.iter().enumerate() {
+            let iterations = [0u32, 1, 2, 3][frame]; // Off, odd, even, odd
+            // The two pre-accumulation passes use the shared aliases as their
+            // first-pass irradiance/normal destinations, exactly as production
+            // does before the post-accumulation block reuses those handles.
+            encode_prefilter(
+                &mut encoder,
+                source,
+                &shared_a,
+                &normal,
+                &shared_b,
+                [source, source, source, source],
+                [&shared_aux_a[0], &shared_aux_a[1], &shared_aux_a[2], &shared_aux_a[3]],
+                "rt-post-scratch-shared-prefilter-0",
+            );
+            encode_prefilter(
+                &mut encoder,
+                &shared_a,
+                &shared_raw_irr,
+                &shared_b,
+                &shared_guide_n,
+                [&shared_aux_a[0], &shared_aux_a[1], &shared_aux_a[2], &shared_aux_a[3]],
+                [&shared_aux_b[0], &shared_aux_b[1], &shared_aux_b[2], &shared_aux_b[3]],
+                "rt-post-scratch-shared-prefilter-1",
+            );
+            encode_prefilter(
+                &mut encoder,
+                source,
+                &dedicated_pre_irr,
+                &normal,
+                &dedicated_pre_n,
+                [source, source, source, source],
+                [&dedicated_aux_a[0], &dedicated_aux_a[1], &dedicated_aux_a[2], &dedicated_aux_a[3]],
+                "rt-post-scratch-dedicated-prefilter-0",
+            );
+            encode_prefilter(
+                &mut encoder,
+                &dedicated_pre_irr,
+                &dedicated_raw_irr,
+                &dedicated_pre_n,
+                &dedicated_guide_n,
+                [&dedicated_aux_a[0], &dedicated_aux_a[1], &dedicated_aux_a[2], &dedicated_aux_a[3]],
+                [&dedicated_aux_b[0], &dedicated_aux_b[1], &dedicated_aux_b[2], &dedicated_aux_b[3]],
+                "rt-post-scratch-dedicated-prefilter-1",
+            );
+            if iterations == 0 {
+                // Off tier: prefiltering still ran, but post filtering is
+                // intentionally skipped. Queue the next frame separately.
+                encoder.commit_and_continue(&device);
+                continue;
+            }
+            let mut shared_src = source;
+            let mut dedicated_src = source;
+            for pass in 0..iterations {
+                let params = AtrousPostParams::new([W, H], 1u32 << pass, 0.85);
+                let write_to_a = (iterations - 1 - pass).is_multiple_of(2);
+                let shared_dst = if write_to_a { &shared_a } else { &shared_b };
+                let dedicated_dst = if write_to_a { &dedicated_a } else { &dedicated_b };
+                tracer.atrous_post_pass(
+                    &mut encoder,
+                    &params,
+                    &params_buffer,
+                    &depth,
+                    &shared_guide_n,
+                    &moments,
+                    shared_src,
+                    shared_dst,
+                    "rt-post-scratch-shared",
+                );
+                tracer.atrous_post_pass(
+                    &mut encoder,
+                    &params,
+                    &params_buffer,
+                    &depth,
+                    &dedicated_guide_n,
+                    &moments,
+                    dedicated_src,
+                    dedicated_dst,
+                    "rt-post-scratch-dedicated",
+                );
+                shared_src = shared_dst;
+                dedicated_src = dedicated_dst;
+            }
+            let post_frame = frame - 1;
+            // Snapshot each queued frame before the next command buffer can
+            // overwrite the ping-pong pair.
+            encoder.copy_texture_to_buffer(
+                &shared_a,
+                &shared_readbacks[post_frame],
+                W,
+                H,
+                bytes_per_row,
+            );
+            encoder.copy_texture_to_buffer(
+                &dedicated_a,
+                &dedicated_readbacks[post_frame],
+                W,
+                H,
+                bytes_per_row,
+            );
+            if frame + 1 != FRAME_COUNT {
+                encoder.commit_and_continue(&device);
+            }
+        }
+        // The raw irradiance and current-frame normal guide are distinct from
+        // both reused post targets; snapshot them after the final post pass.
+        encoder.copy_texture_to_buffer(
+            &shared_raw_irr,
+            &shared_raw_readback,
+            W,
+            H,
+            bytes_per_row,
+        );
+        encoder.copy_texture_to_buffer(
+            &dedicated_raw_irr,
+            &dedicated_raw_readback,
+            W,
+            H,
+            bytes_per_row,
+        );
+        encoder.copy_texture_to_buffer(
+            &shared_guide_n,
+            &shared_guide_readback,
+            W,
+            H,
+            bytes_per_row,
+        );
+        encoder.copy_texture_to_buffer(
+            &dedicated_guide_n,
+            &dedicated_guide_readback,
+            W,
+            H,
+            bytes_per_row,
+        );
+        encoder.try_commit_and_wait_completed().expect("RT scratch parity GPU completion");
+
+        let assert_exact_finite = |label: &str, shared: &[[f32; 4]], dedicated: &[[f32; 4]]| {
+            assert_eq!(shared.len(), dedicated.len(), "{label} length mismatch");
+            for (pixel, (a, b)) in shared.iter().zip(dedicated).enumerate() {
+                for channel in 0..4 {
+                    assert!(a[channel].is_finite() && b[channel].is_finite(), "{label} non-finite at {pixel}/{channel}");
+                    assert_eq!(a[channel].to_bits(), b[channel].to_bits(), "{label} mismatch at {pixel}/{channel}");
+                }
+            }
+        };
+        let assert_nonuniform = |label: &str, pixels: &[[f32; 4]]| {
+            let mut min = f32::INFINITY;
+            let mut max = f32::NEG_INFINITY;
+            let mut nonzero = false;
+            for pixel in pixels {
+                for channel in pixel {
+                    assert!(channel.is_finite(), "{label} non-finite");
+                    min = min.min(*channel);
+                    max = max.max(*channel);
+                    nonzero |= *channel != 0.0;
+                }
+            }
+            assert!(nonzero, "{label} is all zero");
+            assert!(max > min, "{label} is uniform");
+            assert!(pixels.iter().any(|p| p[..3].iter().any(|v| *v != 0.0)), "{label} has no RGB signal");
+            assert!(pixels.windows(2).any(|pair| pair[0][..3] != pair[1][..3]), "{label} has no spatial variation");
+        };
+        for frame in 0..POST_FRAME_COUNT {
+            let shared_pixels = decode_rgba16f_readback(&shared_readbacks[frame], pixel_count);
+            let dedicated_pixels = decode_rgba16f_readback(&dedicated_readbacks[frame], pixel_count);
+            assert_exact_finite("post pixels", &shared_pixels, &dedicated_pixels);
+            assert_nonuniform("post pixels", &shared_pixels);
+        }
+        let shared_raw = decode_rgba16f_readback(&shared_raw_readback, pixel_count);
+        let dedicated_raw = decode_rgba16f_readback(&dedicated_raw_readback, pixel_count);
+        assert_exact_finite("raw irradiance", &shared_raw, &dedicated_raw);
+        assert_nonuniform("raw irradiance", &shared_raw);
+        let shared_guide = decode_rgba16f_readback(&shared_guide_readback, pixel_count);
+        let dedicated_guide = decode_rgba16f_readback(&dedicated_guide_readback, pixel_count);
+        assert_exact_finite("normal guide", &shared_guide, &dedicated_guide);
+        assert_nonuniform("normal guide", &shared_guide);
+
+        // A dimension change creates fresh scratch objects and refreshes both
+        // post-filter aliases; no stale handle survives the resize.
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W + 1, H + 1));
+        let resized_a = scene.rt_irr_filtered.as_ref().expect("resized filtered alias");
+        let resized_b = scene.rt_irr_filtered_b.as_ref().expect("resized filtered alias b");
+        assert_eq!((resized_a.width, resized_a.height), (W + 1, H + 1));
+        assert!(resized_a.ptr_eq(scene.rt_irr_full_b.as_ref().expect("resized irr scratch")));
+        assert!(resized_b.ptr_eq(scene.rt_normal_full_b.as_ref().expect("resized normal scratch")));
+        assert!(!resized_a.ptr_eq(&shared_a));
+        assert!(!resized_b.ptr_eq(&shared_b));
     }
 
     /// RT-Stage-3 P1 (BUG-mkgh): the firefly clamp's median is a partial

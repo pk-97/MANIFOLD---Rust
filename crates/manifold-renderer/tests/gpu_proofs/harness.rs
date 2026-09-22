@@ -166,13 +166,15 @@ pub fn assert_rt_dispatched(render_one_armed_frame: impl FnOnce(), context: &str
 }
 
 /// Read back one captured RT channel as `[r, g, b, a]` f32 pixels.
-/// `Rg16Float` channels (the masks) fill b/a with zero.
+/// `R16Float` and `Rg16Float` channels (the masks) fill missing channels with
+/// zero.
 pub fn read_rt_channel(
     device: &GpuDevice,
     cap: &manifold_renderer::node_graph::primitives::RtCaptureSlot,
 ) -> Vec<f32> {
     let (bpp, comps) = match cap.tex.format {
         GpuTextureFormat::Rgba16Float => (8u32, 4usize),
+        GpuTextureFormat::R16Float => (2, 1),
         GpuTextureFormat::Rg16Float => (4, 2),
         other => panic!("RT capture `{}` has unreadable format {other:?}", cap.label),
     };

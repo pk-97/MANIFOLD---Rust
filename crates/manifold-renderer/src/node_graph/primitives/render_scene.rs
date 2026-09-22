@@ -832,10 +832,14 @@ pub struct RenderScene {
     rt_firefly_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
     /// ping-pong pair — `atrous_post` writes into one, the composite binds
-    /// whichever was last written. Same rgba16 + full-res lifecycle as
-    /// `rt_irr_history` (ensured in `ensure_rt_irradiance`). When the
-    /// filter is off this frame, the composite falls back to the raw
-    /// history slot (existing behaviour).
+    /// whichever was last written. These handles intentionally alias the
+    /// completed pre-accumulation scratch pair (`rt_irr_full_b` and
+    /// `rt_normal_full_b`): the pre-filter passes are encoded before the
+    /// post-accumulation block writes them, and the queue orders those uses,
+    /// so the aliases remove two full-resolution allocations without sharing
+    /// temporal history.
+    /// When the filter is off this frame, the composite falls back to the
+    /// raw history slot (existing behaviour).
     rt_irr_filtered: Option<manifold_gpu::GpuTexture>,
     rt_irr_filtered_b: Option<manifold_gpu::GpuTexture>,
     /// RT-Stage-3 P4: CPU-mapped `AtrousPostParams` upload buffer —
@@ -7040,6 +7044,25 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
+        // R16Float has no storage-texture clear pipeline. Keep the hold
+        // histories renderable so `clear_texture` can use its render-pass
+        // fallback for the reset sentinel while the accumulate kernel still
+        // writes them through the normal shader-write path.
+        let make_scalar_history = |w: u32, h: u32, label: &'static str| {
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::R16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::COPY_SRC,
+                label,
+                mip_levels: 1,
+            })
+        };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         // Lighting textures (irradiance, reflection, normal) at trace resolution.
         self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
@@ -7094,8 +7117,8 @@ impl RenderScene {
         ]
         .map(Some);
         self.rt_sv_hold_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
         ]
         .map(Some);
         // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
@@ -7116,13 +7139,13 @@ impl RenderScene {
         ]
         .map(Some);
         self.rt_sv2_hold_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
+            make_scalar_history(full_w, full_h, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
         // same lifecycle, reset rule, and ping clock as rt_irr_history.
-        // Full res, Rgba16Float (same as every other history pair).
+        // Full res, Rgba16Float (the scalar hold pairs are R16Float).
         self.rt_svt_history = [
             make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
             make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
@@ -7150,11 +7173,16 @@ impl RenderScene {
             make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
         ]
         .map(Some);
-        // RT-Stage-3 P4 (BUG-eytk): post-accumulation filtered irradiance
-        // pair — same full-res rgba16 + usage lifecycle as `rt_irr_history`.
-        // The composite binds whichever was last written by `atrous_post`.
-        self.rt_irr_filtered = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered (RT-Stage-3 P4)"));
-        self.rt_irr_filtered_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_filtered_b (RT-Stage-3 P4)"));
+        // RT-Stage-3 P4 (BUG-eytk): the pre-accumulation à-trous passes
+        // above are encoded before post-accumulation filtering writes these
+        // handles; the GPU queue orders those reads before the later writes.
+        // Reuse their full-resolution RGBA16 scratch handles: cloning a
+        // GpuTexture retains the same Metal object and does not allocate.
+        // Keep the temporal history pair and raw `rt_irr_full` capture
+        // textures separately; only these two frame-local scratch lifetimes
+        // overlap at the allocator level.
+        self.rt_irr_filtered = self.rt_irr_full_b.clone();
+        self.rt_irr_filtered_b = self.rt_normal_full_b.clone();
         self.rt_moments_valid = false;
         self.rt_history_ping = 0;
         self.rt_irr_width = full_w;
