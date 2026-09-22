@@ -532,6 +532,7 @@ pub fn render_graph_editor_to_png(
             gpu_fence_wait_ms: 0.0,
             physics_cpu_ms: 0.0,
             physics_body_count: 0,
+            physics_backlog_seconds: 0.0,
             render_target_fps: 60.0,
             active_clips: 0,
             preparing_clips: 0,

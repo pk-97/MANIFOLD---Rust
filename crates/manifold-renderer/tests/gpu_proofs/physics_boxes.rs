@@ -149,16 +149,21 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     )
     .unwrap();
     {
-        let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(false);
-        assert_eq!(
-            render(600, &params).body_count,
-            4_003,
-            "live stall recovers without Reset"
+        let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::with_preview_budget(
+            false,
+            std::time::Duration::ZERO,
         );
-        assert_eq!(
-            render(601, &params).body_count,
-            4_003,
-            "next live frame still evaluates"
+        let stalled = render(600, &params);
+        assert_eq!(stalled.body_count, 4_003);
+        assert!(
+            stalled.backlog_seconds > 6.0,
+            "late preview must retain the missed ticks"
+        );
+        let next = render(601, &params);
+        assert_eq!(next.body_count, 4_003);
+        assert!(
+            next.backlog_seconds > 6.0,
+            "preview lag stays visible until worked off"
         );
     }
     eprintln!(
