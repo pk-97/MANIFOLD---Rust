@@ -60,6 +60,11 @@ pub struct AddSceneObjectCommand {
     material_metadata: Vec<SceneParamMetadata>,
     transform_metadata: Vec<SceneParamMetadata>,
     scene_object_metadata: Vec<SceneParamMetadata>,
+    /// When present, Add Object also creates a loose physics object in the
+    /// one Physics World in the current scope. The renderer metadata is kept
+    /// caller supplied because editing has no renderer dependency.
+    physics_body_metadata: Option<Vec<SceneParamMetadata>>,
+    physics_material_metadata: Option<Vec<SceneParamMetadata>>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata` (P1 exposure stamping lands there, outside
@@ -69,6 +74,7 @@ pub struct AddSceneObjectCommand {
         Vec<EffectGraphWire>,
         Option<PresetMetadata>,
     )>,
+    rejection: Option<&'static str>,
 }
 
 impl AddSceneObjectCommand {
@@ -92,10 +98,176 @@ impl AddSceneObjectCommand {
             material_metadata,
             transform_metadata,
             scene_object_metadata,
+            physics_body_metadata: None,
+            physics_material_metadata: None,
             catalog_default,
             prev: None,
+            rejection: None,
         }
     }
+
+    /// Request the physics-aware Add Object shape. If this is used in a
+    /// scope with no Physics World, the existing visual-only shape is kept.
+    /// A scope with more than one world is rejected rather than guessing.
+    pub fn with_physics_world(
+        mut self,
+        rigid_body_metadata: Vec<SceneParamMetadata>,
+        pbr_material_metadata: Vec<SceneParamMetadata>,
+    ) -> Self {
+        self.physics_body_metadata = Some(rigid_body_metadata);
+        self.physics_material_metadata = Some(pbr_material_metadata);
+        self
+    }
+
+    fn physics_world_for_scope(
+        &self,
+        project: &Project,
+    ) -> Result<Option<(u32, u32)>, &'static str> {
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+            return Ok(None);
+        };
+        let Some((nodes, wires)) = graph_level(def, &self.scope_path) else {
+            return Ok(None);
+        };
+        let worlds: Vec<u32> = nodes
+            .iter()
+            .filter(|node| node.type_id == "node.physics_world")
+            .map(|node| node.id)
+            .collect();
+        let Some(world_id) = worlds.first().copied() else {
+            return Ok(None);
+        };
+        if !self.scope_path.is_empty() {
+            return Err("Physics objects currently require a root-level scene");
+        }
+        if worlds.len() != 1 {
+            return Err("Add Object requires exactly one Physics World in the current scope");
+        }
+        let Some(body_slot) = first_free_physics_body_slot(wires, world_id) else {
+            return Err("Physics World has no free body slots");
+        };
+        Ok(Some((world_id, body_slot)))
+    }
+
+    fn execute_physics(&mut self, project: &mut Project, world_id: u32, body_slot: u32) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = self.next_index;
+        let centroid = self.centroid;
+        let Some(body_metadata) = self.physics_body_metadata.as_ref() else {
+            return;
+        };
+        let Some(material_metadata) = self.physics_material_metadata.as_ref() else {
+            return;
+        };
+        let result =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let last_id = max_node_id_over(&def.nodes).checked_add(5)?;
+                let mut taken = std::collections::HashSet::new();
+                collect_all_handles(&def.nodes, &mut taken);
+                let prev_metadata = def.preset_metadata.clone();
+                let (added, prev) = {
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let prev = (nodes.clone(), wires.clone());
+                    if !nodes.iter().any(|node| node.id == render_id) {
+                        return None;
+                    }
+                    let added = append_physics_scene_object(
+                        nodes, wires, render_id, k, world_id, body_slot, last_id, centroid,
+                        &mut taken,
+                    );
+                    nodes
+                        .iter_mut()
+                        .find(|node| node.id == render_id)?
+                        .params
+                        .insert(
+                            "objects".to_string(),
+                            SerializedParamValue::Float {
+                                value: (k + 1) as f32,
+                            },
+                        );
+                    (added, prev)
+                };
+                let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                    id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                    display_name: "Scene".to_string(),
+                    category: "Geometry".to_string(),
+                    osc_prefix: "scene".to_string(),
+                    legacy_discriminant: None,
+                    available: true,
+                    is_line_based: false,
+                    layer_types: None,
+                    params: Vec::new(),
+                    bindings: Vec::new(),
+                    param_aliases: Vec::new(),
+                    value_aliases: Vec::new(),
+                    string_params: Vec::new(),
+                    string_bindings: Vec::new(),
+                    scene_modifier: None,
+                    scene_bounds: None,
+                });
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    added.material_id,
+                    &added.material_node_id,
+                    "node.pbr_material",
+                    &format!("{} — Material", added.handle),
+                    material_metadata,
+                    &added.material_params,
+                );
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    added.transform_id,
+                    &added.transform_node_id,
+                    "node.transform_3d",
+                    &format!("{} — Transform", added.handle),
+                    &self.transform_metadata,
+                    &added.transform_params,
+                );
+                if let Some((body_id, body_node_id, body_params)) = added.physics_body {
+                    stamp_scene_node_exposures_into(
+                        &mut meta.params,
+                        &mut meta.bindings,
+                        body_id,
+                        &body_node_id,
+                        "node.rigid_body",
+                        &format!("{} — Rigid Body", added.handle),
+                        body_metadata,
+                        &body_params,
+                    );
+                }
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    added.scene_object_id,
+                    &added.scene_object_node_id,
+                    "node.scene_object",
+                    &added.handle,
+                    &self.scene_object_metadata,
+                    &BTreeMap::new(),
+                );
+                Some((prev, prev_metadata))
+            });
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
+        refresh_target_manifest(project, &self.target);
+    }
+}
+
+struct AddedSceneObject {
+    material_id: u32,
+    material_node_id: NodeId,
+    material_params: BTreeMap<String, SerializedParamValue>,
+    transform_id: u32,
+    transform_node_id: NodeId,
+    transform_params: BTreeMap<String, SerializedParamValue>,
+    scene_object_id: u32,
+    scene_object_node_id: NodeId,
+    handle: String,
+    physics_body: Option<(u32, NodeId, BTreeMap<String, SerializedParamValue>)>,
 }
 
 /// A distinct RGBA tint for object slot `k`, spread around the hue wheel by
@@ -110,12 +282,162 @@ fn scene_object_tint(k: u32) -> manifold_core::Color {
     manifold_core::Color::hsv_to_rgb(hue, 0.7, 0.85)
 }
 
+fn append_physics_scene_object(
+    nodes: &mut Vec<EffectGraphNode>,
+    wires: &mut Vec<EffectGraphWire>,
+    render_id: u32,
+    object_index: u32,
+    world_id: u32,
+    body_slot: u32,
+    last_id: u32,
+    centroid: (f32, f32),
+    taken: &mut std::collections::HashSet<String>,
+) -> AddedSceneObject {
+    let handle = dedup_handle(&format!("Object {}", object_index + 1), taken);
+    let transform_handle = dedup_handle(&format!("{handle} Transform"), taken);
+    let body_handle = dedup_handle(&format!("{handle} Body"), taken);
+    let mesh_handle = dedup_handle(&format!("{handle} Mesh"), taken);
+    let material_handle = dedup_handle(&format!("{handle} Material"), taken);
+
+    let transform_id = last_id - 4;
+    let body_id = last_id - 3;
+    let mesh_id = last_id - 2;
+    let material_id = last_id - 1;
+    let scene_object_id = last_id;
+    let tint = scene_object_tint(object_index);
+    let mut body_params = BTreeMap::new();
+    body_params.insert("shape".to_string(), SerializedParamValue::Enum { value: 1 });
+    body_params.insert(
+        "motion".to_string(),
+        SerializedParamValue::Enum { value: 1 },
+    );
+    body_params.insert(
+        "mass".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
+    body_params.insert(
+        "friction".to_string(),
+        SerializedParamValue::Float { value: 0.5 },
+    );
+    body_params.insert(
+        "bounce".to_string(),
+        SerializedParamValue::Float { value: 0.15 },
+    );
+    let mut material_params = BTreeMap::new();
+    material_params.insert(
+        "color_r".to_string(),
+        SerializedParamValue::Float { value: tint.r },
+    );
+    material_params.insert(
+        "color_g".to_string(),
+        SerializedParamValue::Float { value: tint.g },
+    );
+    material_params.insert(
+        "color_b".to_string(),
+        SerializedParamValue::Float { value: tint.b },
+    );
+    let mut transform_params = BTreeMap::new();
+    transform_params.insert(
+        "pos_y".to_string(),
+        SerializedParamValue::Float { value: 2.0 },
+    );
+
+    let mut transform = scene_build_node(
+        transform_id,
+        "node.transform_3d",
+        Some(transform_handle),
+        transform_params.clone(),
+    );
+    transform.editor_pos = Some(centroid);
+    let body = scene_build_node(
+        body_id,
+        "node.rigid_body",
+        Some(body_handle),
+        body_params.clone(),
+    );
+    let mesh = scene_build_node(
+        mesh_id,
+        "node.platonic_solid_mesh",
+        Some(mesh_handle),
+        BTreeMap::new(),
+    );
+    let material = scene_build_node(
+        material_id,
+        "node.pbr_material",
+        Some(material_handle),
+        material_params.clone(),
+    );
+    let object = scene_build_node(
+        scene_object_id,
+        "node.scene_object",
+        Some(handle.clone()),
+        BTreeMap::new(),
+    );
+    let transform_node_id = transform.node_id.clone();
+    let body_node_id = body.node_id.clone();
+    let material_node_id = material.node_id.clone();
+    let scene_object_node_id = object.node_id.clone();
+    nodes.extend([transform, body, mesh, material, object]);
+    let wire = |from_node, from_port: &str, to_node, to_port: String| EffectGraphWire {
+        from_node,
+        from_port: from_port.to_string(),
+        to_node,
+        to_port,
+    };
+    wires.extend([
+        wire(transform_id, "transform", body_id, "transform".to_string()),
+        wire(body_id, "body", world_id, format!("body_{body_slot}")),
+        wire(body_id, "shape", mesh_id, "shape".to_string()),
+        wire(mesh_id, "vertices", scene_object_id, "vertices".to_string()),
+        wire(material_id, "out", scene_object_id, "material".to_string()),
+        wire(
+            world_id,
+            &format!("pose_{body_slot}"),
+            scene_object_id,
+            "transform".to_string(),
+        ),
+        wire(
+            scene_object_id,
+            "object",
+            render_id,
+            format!("object_{object_index}"),
+        ),
+    ]);
+    AddedSceneObject {
+        material_id,
+        material_node_id,
+        material_params,
+        transform_id,
+        transform_node_id,
+        transform_params,
+        scene_object_id,
+        scene_object_node_id,
+        handle,
+        physics_body: Some((body_id, body_node_id, body_params)),
+    }
+}
+
 impl Command for AddSceneObjectCommand {
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
     fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        if self.physics_body_metadata.is_some() {
+            match self.physics_world_for_scope(project) {
+                Ok(Some((world_id, body_slot))) => {
+                    self.execute_physics(project, world_id, body_slot);
+                    return;
+                }
+                Err(reason) => {
+                    self.rejection = Some(reason);
+                    return;
+                }
+                Ok(None) => {}
+            }
+        }
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.next_index;
@@ -348,6 +670,14 @@ impl Command for AddSceneObjectCommand {
 
     fn description(&self) -> &str {
         "Add Object"
+    }
+
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
     }
 }
 
@@ -1076,6 +1406,7 @@ const PHYSICS_BODY_SLOTS: u32 = 16;
 struct PhysicsSceneObject {
     world_id: u32,
     body_slot: u32,
+    copies: bool,
     transform_id: u32,
     object_id: u32,
     owned_ids: Vec<u32>,
@@ -1134,23 +1465,17 @@ fn physics_scene_object_match(
         return PhysicsSceneObjectMatch::NotPhysics;
     }
 
-    // The Physics Boxes copies path is a singleton world output, not an
-    // independent body slot. The ordinary loose-object command would clone
-    // only the render node or leave its body chain orphaned on removal.
-    if wires.iter().any(|wire| {
-        wire.to_node == object_id
-            && (wire.to_port == "instances" || wire.to_port == "instance_count")
-            && nodes.iter().any(|node| {
-                node.id == wire.from_node && node.type_id == "node.physics_world"
-            })
-    }) {
-        return PhysicsSceneObjectMatch::Malformed(
-            "Physics copies object requires a dedicated copies edit",
-        );
+    if physics_copies_candidate(nodes, wires, object_id) {
+        return physics_copies_scene_object_match(nodes, wires, render_id, object_index, object_id);
     }
+
+    let body_mesh = rigid_body_mesh_candidate(nodes, wires, object_id);
 
     let transform_wire = match unique_input(wires, object_id, "transform") {
         Ok(Some(wire)) => wire,
+        Ok(None) if body_mesh => {
+            return PhysicsSceneObjectMatch::Malformed("Physics object pose input is missing");
+        }
         Ok(None) => return PhysicsSceneObjectMatch::NotPhysics,
         Err(()) => {
             return PhysicsSceneObjectMatch::Malformed(
@@ -1158,11 +1483,22 @@ fn physics_scene_object_match(
             );
         }
     };
-    let Some(world) = nodes.iter().find(|node| node.id == transform_wire.from_node) else {
-        return PhysicsSceneObjectMatch::NotPhysics;
+    let Some(world) = nodes
+        .iter()
+        .find(|node| node.id == transform_wire.from_node)
+    else {
+        return if body_mesh {
+            PhysicsSceneObjectMatch::Malformed("Physics object pose world is unavailable")
+        } else {
+            PhysicsSceneObjectMatch::NotPhysics
+        };
     };
     if world.type_id != "node.physics_world" {
-        return PhysicsSceneObjectMatch::NotPhysics;
+        return if body_mesh {
+            PhysicsSceneObjectMatch::Malformed("Physics object pose world is malformed")
+        } else {
+            PhysicsSceneObjectMatch::NotPhysics
+        };
     }
 
     let Some(body_suffix) = transform_wire.from_port.strip_prefix("pose_") else {
@@ -1176,14 +1512,18 @@ fn physics_scene_object_match(
     }
     let Ok(Some(pose_wire)) = unique_output(wires, world.id, transform_wire.from_port.as_str())
     else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object pose output is missing or shared");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object pose output is missing or shared",
+        );
     };
     if pose_wire.to_node != object_id || pose_wire.to_port != "transform" {
         return PhysicsSceneObjectMatch::Malformed("Physics object pose output is malformed");
     }
     let body_port = format!("body_{body_slot}");
     let Ok(Some(body_wire)) = unique_input(wires, world.id, &body_port) else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object body input is missing or duplicated");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object body input is missing or duplicated",
+        );
     };
     if body_wire.from_port != "body" {
         return PhysicsSceneObjectMatch::Malformed("Physics object body output is malformed");
@@ -1196,22 +1536,30 @@ fn physics_scene_object_match(
     }
 
     let Ok(Some(authored_transform_wire)) = unique_input(wires, body.id, "transform") else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object authored transform is missing or duplicated");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object authored transform is missing or duplicated",
+        );
     };
     let Some(authored_transform) = nodes
         .iter()
         .find(|node| node.id == authored_transform_wire.from_node)
     else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object authored transform is unavailable");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object authored transform is unavailable",
+        );
     };
     if authored_transform.type_id != "node.transform_3d"
         || authored_transform_wire.from_port != "transform"
     {
-        return PhysicsSceneObjectMatch::Malformed("Physics object authored transform is malformed");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object authored transform is malformed",
+        );
     }
 
     let Ok(Some(shape_wire)) = unique_output(wires, body.id, "shape") else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object mesh shape input is missing or duplicated");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object mesh shape input is missing or duplicated",
+        );
     };
     let Some(mesh) = nodes.iter().find(|node| node.id == shape_wire.to_node) else {
         return PhysicsSceneObjectMatch::Malformed("Physics object mesh node is unavailable");
@@ -1224,14 +1572,18 @@ fn physics_scene_object_match(
     }
 
     let Ok(Some(vertices_wire)) = unique_input(wires, object_id, "vertices") else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object mesh output is missing or duplicated");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object mesh output is missing or duplicated",
+        );
     };
     if vertices_wire.from_node != mesh.id || vertices_wire.from_port != "vertices" {
         return PhysicsSceneObjectMatch::Malformed("Physics object mesh output is malformed");
     }
 
     let Ok(Some(material_wire)) = unique_input(wires, object_id, "material") else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object material input is missing or duplicated");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object material input is missing or duplicated",
+        );
     };
     let Some(material) = nodes.iter().find(|node| node.id == material_wire.from_node) else {
         return PhysicsSceneObjectMatch::Malformed("Physics object material node is unavailable");
@@ -1241,11 +1593,11 @@ fn physics_scene_object_match(
     }
 
     let Ok(Some(object_wire)) = unique_output(wires, object_id, "object") else {
-        return PhysicsSceneObjectMatch::Malformed("Physics object render output is missing or duplicated");
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics object render output is missing or duplicated",
+        );
     };
-    if object_wire.to_node != render_id
-        || object_wire.to_port != format!("object_{object_index}")
-    {
+    if object_wire.to_node != render_id || object_wire.to_port != format!("object_{object_index}") {
         return PhysicsSceneObjectMatch::Malformed("Physics object render output is malformed");
     }
 
@@ -1256,7 +1608,10 @@ fn physics_scene_object_match(
         material.id,
         object.id,
     ];
-    let owned = owned_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+    let owned = owned_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
 
     // Owned outputs must stay exclusive to this object. External parameter
     // inputs (such as an LFO driving rotation) can be copied to a duplicate.
@@ -1294,7 +1649,7 @@ fn physics_scene_object_match(
                 && wire.from_port == "object"
                 && wire.to_node == render_id
                 && wire.to_port == format!("object_{object_index}")
-            || external_parameter_input)
+                || external_parameter_input)
     };
     if wires.iter().any(|wire| {
         (owned.contains(&wire.from_node) || owned.contains(&wire.to_node)) && !allowed(wire)
@@ -1305,16 +1660,327 @@ fn physics_scene_object_match(
     PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
         world_id: world.id,
         body_slot,
+        copies: false,
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,
     })
 }
 
-fn first_free_physics_body_slot(
+/// Detect the shipped Physics Boxes `copies` shape before ordinary pose-slot
+/// matching. This stays deliberately local to the scene object and its direct
+/// producers, so a partially edited copies chain is rejected atomically.
+fn physics_copies_candidate(
+    nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
-    world_id: u32,
-) -> Option<u32> {
+    object_id: u32,
+) -> bool {
+    let world_input = |wire: &EffectGraphWire| {
+        (wire.to_port == "instances" || wire.to_port == "instance_count")
+            && wire.to_node == object_id
+            && nodes
+                .iter()
+                .any(|node| node.id == wire.from_node && node.type_id == "node.physics_world")
+    };
+    if wires.iter().any(world_input) {
+        return true;
+    }
+
+    let Some(vertices_wire) = wires
+        .iter()
+        .find(|wire| wire.to_node == object_id && wire.to_port == "vertices")
+    else {
+        return false;
+    };
+    let Some(mesh) = nodes.iter().find(|node| node.id == vertices_wire.from_node) else {
+        return false;
+    };
+    let has_shape_body = wires.iter().any(|shape_wire| {
+        shape_wire.to_node == mesh.id
+            && shape_wire.to_port == "shape"
+            && shape_wire.from_port == "shape"
+            && nodes.iter().any(|node| {
+                node.id == shape_wire.from_node
+                    && node.type_id == "node.rigid_body"
+                    && wires.iter().any(|body_wire| {
+                        body_wire.from_node == node.id
+                            && body_wire.from_port == "body"
+                            && body_wire.to_port == "copies"
+                            && nodes.iter().any(|world| {
+                                world.id == body_wire.to_node
+                                    && world.type_id == "node.physics_world"
+                            })
+                    })
+            })
+    });
+    if has_shape_body {
+        return true;
+    }
+
+    false
+}
+
+fn rigid_body_mesh_candidate(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    object_id: u32,
+) -> bool {
+    wires.iter().any(|wire| {
+        wire.to_node == object_id
+            && wire.to_port == "vertices"
+            && nodes.iter().any(|mesh| {
+                mesh.id == wire.from_node
+                    && mesh.type_id == "node.platonic_solid_mesh"
+                    && wires.iter().any(|shape| {
+                        shape.to_node == mesh.id
+                            && shape.to_port == "shape"
+                            && nodes.iter().any(|body| {
+                                body.id == shape.from_node && body.type_id == "node.rigid_body"
+                            })
+                    })
+            })
+    })
+}
+
+fn physics_copies_scene_object_match(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    render_id: u32,
+    object_index: u32,
+    object_id: u32,
+) -> PhysicsSceneObjectMatch {
+    let object = nodes
+        .iter()
+        .find(|node| node.id == object_id)
+        .expect("copies candidate has an object node");
+
+    let Ok(Some(vertices_wire)) = unique_input(wires, object_id, "vertices") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object mesh output is missing or duplicated",
+        );
+    };
+    if vertices_wire.from_port != "vertices" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object mesh output is malformed",
+        );
+    }
+    let Some(mesh) = nodes.iter().find(|node| node.id == vertices_wire.from_node) else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object mesh node is unavailable",
+        );
+    };
+    if mesh.type_id != "node.platonic_solid_mesh" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object mesh node has the wrong type",
+        );
+    }
+
+    let Ok(Some(shape_wire)) = unique_input(wires, mesh.id, "shape") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object mesh shape input is missing or duplicated",
+        );
+    };
+    if shape_wire.from_port != "shape" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object mesh shape input is malformed",
+        );
+    }
+    let Some(body) = nodes.iter().find(|node| node.id == shape_wire.from_node) else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object body node is unavailable",
+        );
+    };
+    if body.type_id != "node.rigid_body" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object body node has the wrong type",
+        );
+    }
+
+    let Ok(Some(body_wire)) = unique_output(wires, body.id, "body") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object body output is missing or duplicated",
+        );
+    };
+    if body_wire.to_port != "copies" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object body output is malformed",
+        );
+    }
+    let Some(world) = nodes.iter().find(|node| node.id == body_wire.to_node) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics copies object world is unavailable");
+    };
+    if world.type_id != "node.physics_world" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object world has the wrong type",
+        );
+    }
+    let Ok(Some(copies_wire)) = unique_input(wires, world.id, "copies") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies world input is missing or duplicated",
+        );
+    };
+    if copies_wire.from_node != body.id || copies_wire.from_port != "body" {
+        return PhysicsSceneObjectMatch::Malformed("Physics copies world input is malformed");
+    }
+
+    let Ok(Some(authored_transform_wire)) = unique_input(wires, body.id, "transform") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object authored transform is missing or duplicated",
+        );
+    };
+    let Some(authored_transform) = nodes
+        .iter()
+        .find(|node| node.id == authored_transform_wire.from_node)
+    else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object authored transform is unavailable",
+        );
+    };
+    if authored_transform.type_id != "node.transform_3d"
+        || authored_transform_wire.from_port != "transform"
+    {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object authored transform is malformed",
+        );
+    }
+
+    let Ok(Some(material_wire)) = unique_input(wires, object_id, "material") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object material input is missing or duplicated",
+        );
+    };
+    let Some(material) = nodes.iter().find(|node| node.id == material_wire.from_node) else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object material node is unavailable",
+        );
+    };
+    if material.type_id != "node.pbr_material" || material_wire.from_port != "out" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object material input is malformed",
+        );
+    }
+
+    let Ok(Some(instances_wire)) = unique_input(wires, object_id, "instances") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object instances input is missing or duplicated",
+        );
+    };
+    if instances_wire.from_node != world.id || instances_wire.from_port != "instances" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object instances input is malformed",
+        );
+    }
+    let Ok(Some(world_instances_wire)) = unique_output(wires, world.id, "instances") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies world instances output is missing or shared",
+        );
+    };
+    if world_instances_wire.to_node != object_id || world_instances_wire.to_port != "instances" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies world instances output is malformed",
+        );
+    }
+
+    let Ok(Some(count_wire)) = unique_input(wires, object_id, "instance_count") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object count input is missing or duplicated",
+        );
+    };
+    if count_wire.from_node != world.id || count_wire.from_port != "active_count" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object count input is malformed",
+        );
+    }
+    let Ok(Some(world_count_wire)) = unique_output(wires, world.id, "active_count") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies world count output is missing or shared",
+        );
+    };
+    if world_count_wire.to_node != object_id || world_count_wire.to_port != "instance_count" {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies world count output is malformed",
+        );
+    }
+
+    let Ok(Some(object_wire)) = unique_output(wires, object_id, "object") else {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object render output is missing or duplicated",
+        );
+    };
+    if object_wire.to_node != render_id || object_wire.to_port != format!("object_{object_index}") {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object render output is malformed",
+        );
+    }
+
+    let owned_ids = vec![
+        authored_transform.id,
+        body.id,
+        mesh.id,
+        material.id,
+        object.id,
+    ];
+    let owned = owned_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let allowed = |wire: &EffectGraphWire| {
+        let external_parameter_input = !owned.contains(&wire.from_node)
+            && ((wire.to_node == authored_transform.id && wire.to_port != "transform")
+                || (wire.to_node == body.id
+                    && wire.to_port != "transform"
+                    && wire.to_port != "shape"));
+        (wire.from_node == authored_transform.id
+            && wire.from_port == "transform"
+            && wire.to_node == body.id
+            && wire.to_port == "transform")
+            || (wire.from_node == body.id
+                && wire.from_port == "body"
+                && wire.to_node == world.id
+                && wire.to_port == "copies")
+            || (wire.from_node == body.id
+                && wire.from_port == "shape"
+                && wire.to_node == mesh.id
+                && wire.to_port == "shape")
+            || (wire.from_node == mesh.id
+                && wire.from_port == "vertices"
+                && wire.to_node == object.id
+                && wire.to_port == "vertices")
+            || (wire.from_node == material.id
+                && wire.from_port == "out"
+                && wire.to_node == object.id
+                && wire.to_port == "material")
+            || (wire.from_node == world.id
+                && wire.from_port == "instances"
+                && wire.to_node == object.id
+                && wire.to_port == "instances")
+            || (wire.from_node == world.id
+                && wire.from_port == "active_count"
+                && wire.to_node == object.id
+                && wire.to_port == "instance_count")
+            || (wire.from_node == object.id
+                && wire.from_port == "object"
+                && wire.to_node == render_id
+                && wire.to_port == format!("object_{object_index}"))
+            || external_parameter_input
+    };
+    if wires.iter().any(|wire| {
+        (owned.contains(&wire.from_node) || owned.contains(&wire.to_node)) && !allowed(wire)
+    }) {
+        return PhysicsSceneObjectMatch::Malformed("Physics copies object chain is shared");
+    }
+
+    PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
+        world_id: world.id,
+        body_slot: 0,
+        copies: true,
+        transform_id: authored_transform.id,
+        object_id: object.id,
+        owned_ids,
+    })
+}
+
+fn first_free_physics_body_slot(wires: &[EffectGraphWire], world_id: u32) -> Option<u32> {
     (0..PHYSICS_BODY_SLOTS).find(|slot| {
         let body_port = format!("body_{slot}");
         let pose_port = format!("pose_{slot}");
@@ -1536,10 +2202,7 @@ fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> 
 /// numeric exposures are part of the shared preset metadata rather than a
 /// group-local card surface. Each copied binding gets a fresh id while fanout
 /// bindings retain one id for all cloned targets.
-fn clone_physics_scene_bindings(
-    def: &mut EffectGraphDef,
-    node_id_map: &[(NodeId, NodeId)],
-) {
+fn clone_physics_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) {
     let Some(meta) = def.preset_metadata.as_mut() else {
         return;
     };
@@ -1578,9 +2241,10 @@ fn clone_physics_scene_bindings(
             }
             binding_ids.insert(candidate.clone());
             cloned_id_by_source.insert(binding.id.clone(), candidate.clone());
-            if let Some(source_param) = source_params.iter().find(|param_spec| {
-                param_spec.id == binding.id
-            }) {
+            if let Some(source_param) = source_params
+                .iter()
+                .find(|param_spec| param_spec.id == binding.id)
+            {
                 let mut param_spec = source_param.clone();
                 param_spec.id = candidate.clone();
                 if param_ids.insert(candidate.clone()) {
@@ -1719,10 +2383,7 @@ impl Command for DuplicateSceneObjectCommand {
                 return;
             }
             let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                def.preset_metadata = self
-                    .after_metadata
-                    .clone()
-                    .flatten();
+                def.preset_metadata = self.after_metadata.clone().flatten();
             });
             self.applied = true;
             return;
@@ -1745,15 +2406,22 @@ impl Command for DuplicateSceneObjectCommand {
             self.rejection = Some((*reason).into());
             return;
         }
-        if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref()
-            && project
+        if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref() {
+            if physics.copies {
+                self.rejection =
+                    Some("Duplicate Object cannot duplicate a Physics World copies object".into());
+                return;
+            }
+            if project
                 .graph_for_target(&self.target, Some(&self.catalog_default))
                 .and_then(|def| graph_level(def, &scope))
                 .and_then(|(_, wires)| first_free_physics_body_slot(wires, physics.world_id))
                 .is_none()
-        {
-            self.rejection = Some("Duplicate Object physics world has no free body slot".into());
-            return;
+            {
+                self.rejection =
+                    Some("Duplicate Object physics world has no free body slot".into());
+                return;
+            }
         }
 
         let baseline_strings = target_string_bindings(project, &self.target, &self.catalog_default);
@@ -1906,8 +2574,13 @@ impl Command for DuplicateSceneObjectCommand {
                 Some(())
             });
         }
-        if matches!(physics_match, Some(PhysicsSceneObjectMatch::Valid(_)))
-            && !node_id_map.is_empty()
+        if matches!(
+            physics_match,
+            Some(PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
+                copies: false,
+                ..
+            }))
+        ) && !node_id_map.is_empty()
         {
             let _ = with_target_graph_def_mut(project, &self.target, |def| {
                 clone_physics_scene_bindings(def, &node_id_map);

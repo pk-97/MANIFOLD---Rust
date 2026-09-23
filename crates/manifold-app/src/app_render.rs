@@ -2951,6 +2951,14 @@ impl Application {
                             manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
                             manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
                             default.clone(),
+                        )
+                        .with_physics_world(
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                                "node.rigid_body",
+                            ),
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                                "node.pbr_material",
+                            ),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }

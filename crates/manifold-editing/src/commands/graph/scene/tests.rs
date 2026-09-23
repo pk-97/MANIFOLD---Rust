@@ -83,12 +83,7 @@ fn physics_scene_graph() -> EffectGraphDef {
     );
     def.nodes.extend([
         node(40, "node.physics_world", "Physics", BTreeMap::new()),
-        node(
-            100,
-            "node.transform_3d",
-            "Cube Transform",
-            transform_params,
-        ),
+        node(100, "node.transform_3d", "Cube Transform", transform_params),
         node(101, "node.rigid_body", "Cube Body", body_params),
         node(
             102,
@@ -96,12 +91,7 @@ fn physics_scene_graph() -> EffectGraphDef {
             "Cube Mesh",
             BTreeMap::new(),
         ),
-        node(
-            103,
-            "node.pbr_material",
-            "Cube Material",
-            BTreeMap::new(),
-        ),
+        node(103, "node.pbr_material", "Cube Material", BTreeMap::new()),
         node(104, "node.scene_object", "Cube", BTreeMap::new()),
     ]);
     let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
@@ -574,8 +564,7 @@ fn scene_modifier_explicit_object_delete_rejects_without_history_or_mutation() {
     };
     let before = graph.clone();
     let version = host.graph_structure_version;
-    let command =
-        RemoveSceneObjectCommand::new(owner_target.clone(), vec![], 0, 0, before.clone());
+    let command = RemoveSceneObjectCommand::new(owner_target.clone(), vec![], 0, 0, before.clone());
     let mut undo = crate::undo::UndoRedoManager::new();
     assert!(!undo.execute(Box::new(command), &mut project));
     let host = project.graph_target_owner(&owner_target).unwrap();
@@ -690,9 +679,7 @@ fn duplicate_physics_scene_object_clones_complete_chain_and_undo_redo() {
         Some(&SerializedParamValue::Float { value: 1.5 })
     );
     assert!(def.wires.iter().any(|wire| {
-        wire.from_node == clone.id
-            && wire.to_node == 0
-            && wire.to_port == "object_1"
+        wire.from_node == clone.id && wire.to_node == 0 && wire.to_port == "object_1"
     }));
     assert!(def.wires.iter().any(|wire| {
         wire.from_node == 40
@@ -737,7 +724,11 @@ fn duplicate_physics_scene_object_clones_complete_chain_and_undo_redo() {
     assert!(second.was_applied());
     let def = graph_of(&project, &fx);
     assert_eq!(def.nodes.len(), before.nodes.len() + 10);
-    assert!(def.nodes.iter().any(|node| node.handle.as_deref() == Some("Cube 3")));
+    assert!(
+        def.nodes
+            .iter()
+            .any(|node| node.handle.as_deref() == Some("Cube 3"))
+    );
 }
 
 #[test]
@@ -760,7 +751,12 @@ fn remove_physics_scene_object_deletes_owned_chain_and_preserves_world() {
     assert!(def.wires.is_empty(), "all object-owned wires are removed");
     assert!(def.nodes.iter().any(|node| node.id == 40));
     assert_eq!(
-        def.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"),
+        def.nodes
+            .iter()
+            .find(|node| node.id == 0)
+            .unwrap()
+            .params
+            .get("objects"),
         Some(&SerializedParamValue::Float { value: 0.0 })
     );
     command.undo(&mut project);
@@ -770,7 +766,12 @@ fn remove_physics_scene_object_deletes_owned_chain_and_preserves_world() {
 #[test]
 fn physics_scene_commands_reject_shared_pose_atomically() {
     let mut graph = physics_scene_graph();
-    let mut shared = graph.nodes.iter().find(|node| node.id == 104).unwrap().clone();
+    let mut shared = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 104)
+        .unwrap()
+        .clone();
     shared.id = 200;
     shared.node_id = NodeId::new("shared_object");
     shared.handle = Some("Shared Cube".to_string());
@@ -852,9 +853,27 @@ fn duplicate_physics_scene_object_rejects_full_world_atomically() {
 #[test]
 fn duplicate_physics_scene_object_preserves_numeric_and_string_bindings() {
     let mut graph = physics_scene_graph();
-    let transform_node_id = graph.nodes.iter().find(|node| node.id == 100).unwrap().node_id.clone();
-    let body_node_id = graph.nodes.iter().find(|node| node.id == 101).unwrap().node_id.clone();
-    let mesh_node_id = graph.nodes.iter().find(|node| node.id == 102).unwrap().node_id.clone();
+    let transform_node_id = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 100)
+        .unwrap()
+        .node_id
+        .clone();
+    let body_node_id = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 101)
+        .unwrap()
+        .node_id
+        .clone();
+    let mesh_node_id = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 102)
+        .unwrap()
+        .node_id
+        .clone();
     graph.preset_metadata = Some(PresetMetadata {
         id: PresetTypeId::new("physics_test"),
         display_name: "Physics Test".to_string(),
@@ -1037,12 +1056,16 @@ fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
     assert!(remove.was_applied());
     let def = graph_of(&project, &fx);
     assert!(def.nodes.iter().any(|node| node.id == 300));
-    assert!(def.wires.iter().any(|wire| {
-        wire.from_node == 300 && wire.to_node == 100 && wire.to_port == "rot_y"
-    }));
-    assert!(def.wires.iter().any(|wire| {
-        wire.from_node == 300 && wire.to_node == 101 && wire.to_port == "mass"
-    }));
+    assert!(
+        def.wires.iter().any(|wire| {
+            wire.from_node == 300 && wire.to_node == 100 && wire.to_port == "rot_y"
+        })
+    );
+    assert!(
+        def.wires
+            .iter()
+            .any(|wire| { wire.from_node == 300 && wire.to_node == 101 && wire.to_port == "mass" })
+    );
     assert!(!def.wires.iter().any(|wire| {
         wire.from_node == 300 && (wire.to_node == clone_body || wire.to_node == clone_transform)
     }));
@@ -1051,14 +1074,20 @@ fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
 #[test]
 fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
     for (source, expected_slot) in [
-        (include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
-        )), 6),
-        (include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
-        )), 3),
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+            )),
+            6,
+        ),
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+            )),
+            3,
+        ),
     ] {
         let graph: EffectGraphDef = serde_json::from_str(source).unwrap();
         let (mut project, fx) = project_with_graph(graph.clone());
@@ -1071,13 +1100,22 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
             mirror_catalog_default(),
         );
         duplicate.execute(&mut project);
-        assert!(duplicate.was_applied(), "{}: {:?}", graph.name.unwrap_or_default(), duplicate.rejection_reason());
+        assert!(
+            duplicate.was_applied(),
+            "{}: {:?}",
+            graph.name.unwrap_or_default(),
+            duplicate.rejection_reason()
+        );
         let def = graph_of(&project, &fx);
         assert_eq!(def.nodes.len(), original_nodes + 5);
-        let cloned_body = def.wires.iter().find(|wire| {
-            wire.to_node == 40 && wire.to_port == format!("body_{expected_slot}")
-        });
-        assert!(cloned_body.is_some(), "duplicate must occupy a new world body slot");
+        let cloned_body = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == 40 && wire.to_port == format!("body_{expected_slot}"));
+        assert!(
+            cloned_body.is_some(),
+            "duplicate must occupy a new world body slot"
+        );
         duplicate.undo(&mut project);
         assert_eq!(graph_of(&project, &fx), &graph);
 
@@ -1091,12 +1129,149 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
         remove.execute(&mut project);
         assert!(remove.was_applied());
         let def = graph_of(&project, &fx);
-        assert!(!def.wires.iter().any(|wire| {
-            wire.to_node == 40 && wire.to_port == "body_0"
-        }));
+        assert!(
+            !def.wires
+                .iter()
+                .any(|wire| { wire.to_node == 40 && wire.to_port == "body_0" })
+        );
         remove.undo(&mut project);
         assert_eq!(graph_of(&project, &fx), &graph);
     }
+}
+
+#[test]
+fn add_scene_object_to_shipped_physics_presets_creates_dynamic_cube_and_undoes() {
+    for (source, current_objects, expected_slot) in [
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+            )),
+            6,
+            6,
+        ),
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+            )),
+            4,
+            3,
+        ),
+    ] {
+        let graph: EffectGraphDef = serde_json::from_str(source).unwrap();
+        let (mut project, fx) = project_with_graph(graph.clone());
+        let mut command = AddSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            30,
+            current_objects,
+            (800.0, 200.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            mirror_catalog_default(),
+        )
+        .with_physics_world(Vec::new(), Vec::new());
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|node| node.id == 30).unwrap();
+        assert_eq!(
+            render.params.get("objects"),
+            Some(&SerializedParamValue::Float {
+                value: (current_objects + 1) as f32
+            })
+        );
+        let object_id = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == 30 && wire.to_port == format!("object_{current_objects}"))
+            .map(|wire| wire.from_node)
+            .unwrap();
+        let object = def.nodes.iter().find(|node| node.id == object_id).unwrap();
+        assert_eq!(object.type_id, "node.scene_object");
+        let body_wire = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == 40 && wire.to_port == format!("body_{expected_slot}"))
+            .unwrap();
+        let body = def
+            .nodes
+            .iter()
+            .find(|node| node.id == body_wire.from_node)
+            .unwrap();
+        assert_eq!(body.type_id, "node.rigid_body");
+        let transform_id = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == body.id && wire.to_port == "transform")
+            .unwrap()
+            .from_node;
+        assert_eq!(
+            def.nodes
+                .iter()
+                .find(|node| node.id == transform_id)
+                .unwrap()
+                .params
+                .get("pos_y"),
+            Some(&SerializedParamValue::Float { value: 2.0 })
+        );
+        assert_eq!(
+            body.params.get("motion"),
+            Some(&SerializedParamValue::Enum { value: 1 })
+        );
+        assert!(def.wires.iter().any(|wire| {
+            wire.from_node == 40
+                && wire.from_port == format!("pose_{expected_slot}")
+                && wire.to_node == object_id
+                && wire.to_port == "transform"
+        }));
+        let before_undo = def.clone();
+        command.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &graph);
+        assert_ne!(&before_undo, graph_of(&project, &fx));
+    }
+}
+
+#[test]
+fn add_scene_object_rejects_a_full_physics_world_atomically() {
+    let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+    )))
+    .unwrap();
+    for slot in 6..16 {
+        graph.wires.push(EffectGraphWire {
+            from_node: 101,
+            from_port: "body".to_string(),
+            to_node: 40,
+            to_port: format!("body_{slot}"),
+        });
+        graph.wires.push(EffectGraphWire {
+            from_node: 40,
+            from_port: format!("pose_{slot}"),
+            to_node: 104,
+            to_port: "transform_extra".to_string(),
+        });
+    }
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let mut command = AddSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        30,
+        6,
+        (0.0, 0.0),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        mirror_catalog_default(),
+    )
+    .with_physics_world(Vec::new(), Vec::new());
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert!(command.rejection_reason().is_some());
+    assert_eq!(graph_of(&project, &fx), &graph);
 }
 
 #[test]
@@ -1104,19 +1279,153 @@ fn shipped_physics_copies_refuse_partial_scene_edits() {
     let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
-    ))).unwrap();
+    )))
+    .unwrap();
+    let mut graph = graph;
+    graph
+        .wires
+        .retain(|wire| !(wire.from_node == 40 && wire.from_port == "active_count"));
     let (mut project, fx) = project_with_graph(graph.clone());
     let mut duplicate = DuplicateSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()), vec![], 30, 1, mirror_catalog_default(),
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        30,
+        1,
+        mirror_catalog_default(),
     );
     duplicate.execute(&mut project);
     assert!(!duplicate.was_applied());
     assert_eq!(graph_of(&project, &fx), &graph);
     let mut remove = RemoveSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()), vec![], 30, 1, mirror_catalog_default(),
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        30,
+        1,
+        mirror_catalog_default(),
     );
     remove.execute(&mut project);
     assert!(!remove.was_applied());
+    assert_eq!(graph_of(&project, &fx), &graph);
+}
+
+#[test]
+fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
+    for (source, object_index, detached_outputs) in [
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+            )),
+            0,
+            vec![("pose_0", "transform")],
+        ),
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+            )),
+            1,
+            vec![
+                ("instances", "instances"),
+                ("active_count", "instance_count"),
+                ("", "copies"),
+            ],
+        ),
+    ] {
+        let mut graph: EffectGraphDef = serde_json::from_str(source).unwrap();
+        graph.wires.retain(|wire| {
+            !detached_outputs.iter().any(|(from_port, to_port)| {
+                if *to_port == "copies" {
+                    wire.to_node == 40 && wire.to_port == "copies"
+                } else {
+                    wire.from_node == 40 && wire.from_port == *from_port && wire.to_port == *to_port
+                }
+            })
+        });
+        let (mut project, fx) = project_with_graph(graph.clone());
+        let mut remove = RemoveSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            30,
+            object_index,
+            mirror_catalog_default(),
+        );
+        remove.execute(&mut project);
+        assert!(!remove.was_applied());
+        assert!(remove.rejection_reason().is_some());
+        assert_eq!(graph_of(&project, &fx), &graph);
+    }
+}
+
+#[test]
+fn shipped_physics_copies_remove_as_one_owned_object_and_undoes() {
+    let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+    )))
+    .unwrap();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let mut duplicate = DuplicateSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        30,
+        1,
+        mirror_catalog_default(),
+    );
+    duplicate.execute(&mut project);
+    assert!(!duplicate.was_applied());
+    assert_eq!(
+        duplicate.rejection_reason(),
+        Some("Duplicate Object cannot duplicate a Physics World copies object")
+    );
+    assert_eq!(graph_of(&project, &fx), &graph);
+    let mut remove = RemoveSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        30,
+        1,
+        mirror_catalog_default(),
+    );
+    remove.execute(&mut project);
+    assert!(remove.was_applied());
+    let def = graph_of(&project, &fx);
+    assert_eq!(
+        def.nodes
+            .iter()
+            .find(|node| node.id == 30)
+            .unwrap()
+            .params
+            .get("objects"),
+        Some(&SerializedParamValue::Float { value: 3.0 })
+    );
+    assert!(
+        def.nodes
+            .iter()
+            .all(|node| ![120, 121, 122, 123, 124].contains(&node.id))
+    );
+    assert!(def.nodes.iter().any(|node| node.id == 40));
+    assert!(
+        def.wires
+            .iter()
+            .any(|wire| { wire.to_node == 40 && wire.to_port == "body_1" })
+    );
+    assert!(
+        def.wires.iter().any(|wire| {
+            wire.from_node == 144 && wire.to_node == 30 && wire.to_port == "object_1"
+        })
+    );
+    assert!(
+        def.wires.iter().any(|wire| {
+            wire.from_node == 164 && wire.to_node == 30 && wire.to_port == "object_2"
+        })
+    );
+    assert!(!def.wires.iter().any(|wire| {
+        (wire.from_node == 40
+            && (wire.from_port == "instances" || wire.from_port == "active_count"))
+            || wire.from_node == 121
+            || wire.to_node == 121
+    }));
+    remove.undo(&mut project);
     assert_eq!(graph_of(&project, &fx), &graph);
 }
 
@@ -1281,8 +1590,7 @@ fn duplicate_scene_object_command_clones_grouped_object_with_fresh_ids_and_undo_
 /// `id`/`label`/`default_value` — the same mechanism as D5's rename
 /// sweep, exercised here for `DuplicateSceneObjectCommand`.
 #[test]
-fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_undo_restores()
-{
+fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_undo_restores() {
     use manifold_core::effect_graph_def::BindingTarget;
 
     let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
@@ -1933,8 +2241,7 @@ fn add_scene_fog_scales_density_with_scene_bounds() {
     }).expect("fog density exposure must be stamped");
 
     let (expected_min, expected_max) =
-        super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])))
-            .unwrap();
+        super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0]))).unwrap();
     assert_eq!(density_spec.min, expected_min, "density min must be 0.0");
     // The widen rule expands the band to contain the stamped default (0.5
     // from scene_param_meta) when it falls outside the derived range.
@@ -2006,8 +2313,7 @@ fn fog_density_range_unit() {
     // radius = max(0, 0.01) = 0.01 → max = 2/0.01 = 200.0
     assert!((max - 200.0).abs() < 1e-6);
     let (_, max) =
-        super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0])))
-            .unwrap();
+        super::super::fog_density_range(Some(([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0]))).unwrap();
     // bbox diagonal = sqrt(20^2+20^2+20^2) = sqrt(1200) = 20*sqrt(3)
     // radius = diagonal/2 = 10*sqrt(3) ≈ 17.32 -> max = 2/(10*sqrt(3)) ≈ 0.11547
     let expected_radius = 10.0 * (3.0_f32).sqrt();
@@ -2537,13 +2843,8 @@ fn scene_modifier_duplicate_copies_local_string_binding_and_preserves_sibling() 
                 },
             });
     }
-    let mut command = DuplicateSceneObjectCommand::new(
-        target.clone(),
-        vec![],
-        0,
-        0,
-        render_scene_graph(0, 0),
-    );
+    let mut command =
+        DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, render_scene_graph(0, 0));
     command.execute(&mut project);
     let host = project.graph_target_owner(&target).unwrap();
     let local = target.graph_in(host.graph.as_ref().unwrap()).unwrap();
