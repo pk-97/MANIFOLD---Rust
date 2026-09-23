@@ -188,8 +188,8 @@ fn classify(row: &[u32], classes: &mut [u8]) {
                     .iter()
                     .all(|&c| (c as u8).is_ascii_hexdigit())
                 && token.iter().any(|&c| (c as u8).is_ascii_digit());
-            for i in start..at {
-                classes[i] = if hex {
+            for (i, class) in classes.iter_mut().enumerate().take(at).skip(start) {
+                *class = if hex {
                     if i >= start + hex_start { 2 } else { 0 }
                 } else if decimal {
                     1
