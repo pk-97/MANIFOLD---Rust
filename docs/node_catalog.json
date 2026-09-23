@@ -24998,6 +24998,11 @@
           "name": "activity",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "layout",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Terminal Stream",
@@ -25035,12 +25040,28 @@
             "4"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Single",
+            "Vertical Split",
+            "Horizontal Split",
+            "Four Panes"
+          ],
+          "label": "Layout",
+          "name": "layout",
+          "range": [
+            "0",
+            "3"
+          ],
+          "type": "enum"
         }
       ],
-      "purpose": "Emit coherent terminal character codes. With reaction wired, local image brightness, contrast and change drive distributed typing, erasing, line growth and code rewrites. Without reaction, emit the original scrolling shell. Text Size controls the 1080p-reference grid; Activity zero freezes cells, repeated beats hold, and rewinds reset deterministically.",
+      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Spatial image profiles and edges select changed passages for typing, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Types and rewrites readable code across the image, responding to local brightness and motion.",
+      "summary": "Long terminal lines with selective source-driven updates and optional tmux pane layouts.",
       "type_id": "node.terminal_stream"
     },
     {
@@ -30239,6 +30260,13 @@
           "max": "2",
           "min": "0",
           "name": "Colour"
+        },
+        {
+          "default": "0",
+          "id": "layout",
+          "max": "3",
+          "min": "0",
+          "name": "Layout"
         }
       ]
     },

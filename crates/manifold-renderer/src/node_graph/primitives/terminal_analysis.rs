@@ -76,6 +76,14 @@ impl TerminalAnalysis {
         self.latest_sequence = 0;
     }
 
+    pub(super) fn has_samples(&self) -> bool {
+        self.latest_sequence != 0
+    }
+
+    pub(super) fn latest_samples(&self) -> &[[f32; 4]; SAMPLE_COUNT] {
+        &self.samples
+    }
+
     fn poll_completed(&mut self) {
         let Some(slots) = self.slots.as_mut() else {
             return;
