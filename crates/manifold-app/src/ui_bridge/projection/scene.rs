@@ -2,8 +2,8 @@
 //! and the exposure-section doc-id resolver. Moved from state_sync.rs (P-P,
 //! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
-use manifold_core::project::Project;
 use crate::ui_root::UIRoot;
+use manifold_core::project::Project;
 
 /// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
 /// sibling of [`sync_card_values`]: push each built row's CURRENT value from
@@ -37,7 +37,8 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     // outliner selection isn't showing simply misses the join and is ignored.
     if let Some(gp) = gen_inst {
         crate::ui_translate::with_param_slots(&gp.params, |slots| {
-            ui.scene_setup_panel.sync_properties_values(&mut ui.tree, slots)
+            ui.scene_setup_panel
+                .sync_properties_values(&mut ui.tree, slots)
         });
     }
 }
@@ -73,7 +74,9 @@ pub(crate) fn sections_for_doc_ids(
     doc_ids: &[u32],
 ) -> Vec<String> {
     let Some(def) = def else { return Vec::new() };
-    let Some(meta) = def.preset_metadata.as_ref() else { return Vec::new() };
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return Vec::new();
+    };
     if doc_ids.is_empty() {
         return Vec::new();
     }
@@ -86,11 +89,29 @@ pub(crate) fn sections_for_doc_ids(
     // outer CARD's row builder (`cards::param_surface`).
     let mut sections: Vec<String> = Vec::new();
     for spec in &meta.params {
-        let Some(prefix_doc_id) = spec.id.split('_').next().and_then(|s| s.parse::<u32>().ok())
-        else {
-            continue;
+        // A cloned scene binding retains its source numeric prefix and adds
+        // `_duplicate` (or `_duplicate_N`). Resolve only these IDs through
+        // their exact binding target; ordinary IDs stay prefix-based so the
+        // BUG-291 fan-out path cannot leak sections by target walking.
+        let owned = if spec.id.contains("_duplicate") {
+            meta.bindings
+                .iter()
+                .filter(|binding| binding.id == spec.id)
+                .any(|binding| match &binding.target {
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
+                        doc_id_for_node_id(&def.nodes, node_id)
+                            .is_some_and(|owner_doc_id| doc_ids.contains(&owner_doc_id))
+                    }
+                    _ => false,
+                })
+        } else {
+            spec.id
+                .split('_')
+                .next()
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|prefix_doc_id| doc_ids.contains(&prefix_doc_id))
         };
-        if !doc_ids.contains(&prefix_doc_id) {
+        if !owned {
             continue;
         }
         let Some(section) = spec.section.clone() else {
@@ -103,6 +124,23 @@ pub(crate) fn sections_for_doc_ids(
     sections
 }
 
+fn doc_id_for_node_id(
+    nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+    wanted: &manifold_core::NodeId,
+) -> Option<u32> {
+    for node in nodes {
+        if &node.node_id == wanted {
+            return Some(node.id);
+        }
+        if let Some(group) = node.group.as_deref()
+            && let Some(doc_id) = doc_id_for_node_id(&group.nodes, wanted)
+        {
+            return Some(doc_id);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod sections_for_doc_ids_tests {
     //! BUG-291: reproduces the exact glTF-importer fan-out shape
@@ -111,13 +149,14 @@ mod sections_for_doc_ids_tests {
     //! own private fn — exercised directly (state-level, no pixels), per
     //! `docs/BUG_BACKLOG.md`'s prescribed fix shape.
     use super::*;
+    use manifold_core::NodeId;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{
-        BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
-        EFFECT_GRAPH_VERSION_WITH_METADATA,
+        BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef,
+        EffectGraphNode, ParamSpecDef, PresetMetadata,
     };
     use manifold_core::effects::ParamConvert;
-    use manifold_core::NodeId;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// World = envmap (doc id 1) [+ atmosphere, omitted — not needed to
     /// reproduce the leak]. Sun = its own light node (doc id 7). The sun's
@@ -137,7 +176,7 @@ mod sections_for_doc_ids_tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: vec![
                 ParamSpecDef {
                     id: "1_intensity".to_string(),
@@ -158,7 +197,10 @@ mod sections_for_doc_ids_tests {
                     id: "1_intensity".to_string(),
                     label: String::new(),
                     default_value: 1.0,
-                    target: BindingTarget::Node { node_id: NodeId::new("envmap"), param: "intensity".to_string() },
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("envmap"),
+                        param: "intensity".to_string(),
+                    },
                     convert: ParamConvert::Float,
                     user_added: false,
                     scale: 1.0,
@@ -170,7 +212,10 @@ mod sections_for_doc_ids_tests {
                     id: "7_pos_x".to_string(),
                     label: String::new(),
                     default_value: 5.0,
-                    target: BindingTarget::Node { node_id: NodeId::new("sun"), param: "pos_x".to_string() },
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("sun"),
+                        param: "pos_x".to_string(),
+                    },
                     convert: ParamConvert::Float,
                     user_added: false,
                     scale: 1.0,
@@ -183,7 +228,10 @@ mod sections_for_doc_ids_tests {
                     id: "7_pos_x".to_string(),
                     label: String::new(),
                     default_value: 5.0,
-                    target: BindingTarget::Node { node_id: NodeId::new("envmap"), param: "sun_x".to_string() },
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("envmap"),
+                        param: "sun_x".to_string(),
+                    },
                     convert: ParamConvert::Float,
                     user_added: false,
                     scale: 1.0,
@@ -225,5 +273,64 @@ mod sections_for_doc_ids_tests {
         // Sun's doc-id set: just its own light node (doc id 7).
         let sections = sections_for_doc_ids(Some(&def), &[7]);
         assert_eq!(sections, vec!["Sun".to_string()]);
+    }
+
+    #[test]
+    fn duplicated_ground_binding_uses_its_clone_target_for_section_ownership() {
+        let mut def = azalea_like_fixture();
+        def.nodes = vec![
+            EffectGraphNode {
+                id: 7,
+                node_id: NodeId::new("sun"),
+                type_id: "node.light".to_string(),
+                handle: Some("Ground".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            },
+            EffectGraphNode {
+                id: 107,
+                node_id: NodeId::new("sun_clone"),
+                type_id: "node.light".to_string(),
+                handle: Some("Ground 2".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            },
+        ];
+        let meta = def.preset_metadata.as_mut().expect("fixture metadata");
+        meta.params.push(ParamSpecDef {
+            id: "7_pos_x_duplicate".to_string(),
+            name: "Position X (Ground 2)".to_string(),
+            section: Some("Ground 2 — Transform".to_string()),
+            ..Default::default()
+        });
+        meta.bindings.push(BindingDef {
+            id: "7_pos_x_duplicate".to_string(),
+            label: String::new(),
+            default_value: 5.0,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("sun_clone"),
+                param: "pos_x".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        });
+
+        let sections = sections_for_doc_ids(Some(&def), &[107]);
+        assert_eq!(sections, vec!["Ground 2 — Transform".to_string()]);
     }
 }

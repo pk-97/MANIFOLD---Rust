@@ -164,7 +164,9 @@ pub(super) fn assign_texture2d_slots(
         let slot = Slot(next_slot);
         next_slot += 1;
         slot_dims.push(crate::node_graph::execution::resolve_dims(
-            plan, res_id, canvas_dims,
+            plan,
+            res_id,
+            canvas_dims,
         ));
         resource_to_slot.insert(res_id, slot);
     }
@@ -283,10 +285,12 @@ impl PresetRuntime {
         mesh_rules: &crate::node_graph::mesh_change::PreparedMeshRules,
     ) -> Result<Self, JsonGeneratorLoadError> {
         if doc.version == 0 || doc.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
-            return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
-                found: doc.version,
-                max: EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
-            }));
+            return Err(JsonGeneratorLoadError::Load(
+                LoadError::UnsupportedVersion {
+                    found: doc.version,
+                    max: EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
+                },
+            ));
         }
 
         // Load-time heal: a Float/IntRound-convert binding into a Bool-typed
@@ -319,7 +323,11 @@ impl PresetRuntime {
         // Validate boundary-node presence on the JSON document BEFORE building
         // the runtime graph — `compile()` would fail with a less informative
         // `RequiredInputUnwired` on a missing FinalOutput-source wire.
-        if !doc.nodes.iter().any(|n| n.type_id == GENERATOR_INPUT_TYPE_ID) {
+        if !doc
+            .nodes
+            .iter()
+            .any(|n| n.type_id == GENERATOR_INPUT_TYPE_ID)
+        {
             return Err(JsonGeneratorLoadError::MissingGeneratorInput);
         }
         if !doc.nodes.iter().any(|n| n.type_id == FINAL_OUTPUT_TYPE_ID) {
@@ -390,7 +398,8 @@ impl PresetRuntime {
             .unwrap_or_default();
         let mut chain_errors: Vec<ChainError> = Vec::new();
         if let Some(flat) = flat_doc.as_ref() {
-            for finding in crate::node_graph::trigger_shadow_lint::find_trigger_shadow_findings(flat)
+            for finding in
+                crate::node_graph::trigger_shadow_lint::find_trigger_shadow_findings(flat)
             {
                 if crate::node_graph::trigger_shadow_lint::is_allowlisted(
                     type_id.as_str(),
@@ -502,12 +511,9 @@ impl PresetRuntime {
         // (BUG-1l7f — this is the imported-glTF footgun, since
         // `assemble_import_graph` promotes EVERY scene-atom param to a card).
         let mut bound = BoundGraph::new(bindings, &mut graph, flat_doc.as_ref());
-        for finding in crate::node_graph::audible_shadow_findings(
-            &bound,
-            type_id.as_str(),
-            None,
-            None,
-        ) {
+        for finding in
+            crate::node_graph::audible_shadow_findings(&bound, type_id.as_str(), None, None)
+        {
             record_chain_error(
                 &mut chain_errors,
                 ChainError::CardBindingShadowsDefParam {
@@ -602,9 +608,13 @@ impl PresetRuntime {
         };
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
+        let physics_sample_steps = super::core::physics_sample_steps(&graph, &plan)
+            .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
         let mut g = Self {
             graph,
             plan,
+            physics_sample_steps,
+            last_physics_frame_time: None,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),
@@ -671,7 +681,8 @@ impl PresetRuntime {
         format: GpuTextureFormat,
         manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        Self::from_def(doc, registry, manifest)?.with_generator_device(device, width, height, format)
+        Self::from_def(doc, registry, manifest)?
+            .with_generator_device(device, width, height, format)
     }
 
     pub(crate) fn with_generator_device(
@@ -706,8 +717,7 @@ impl PresetRuntime {
         // Pre-bind a 1×1 placeholder at the FinalOutput-source slot so the slot
         // exists across frames; `install_target` swaps in the host's real target
         // via `replace_texture_2d` each render call.
-        let placeholder =
-            RenderTarget::new(&device, 1, 1, format, "preset_runtime_target_owner");
+        let placeholder = RenderTarget::new(&device, 1, 1, format, "preset_runtime_target_owner");
         let slot = backend.pre_bind_texture_2d(final_output_input_resource, placeholder);
         if let PresetIo::Generate {
             final_output_slot, ..
@@ -720,7 +730,9 @@ impl PresetRuntime {
         // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
-        for (resource,buffer) in &g.shared_arrays { backend.pre_bind_array(*resource,buffer.clone()); }
+        for (resource, buffer) in &g.shared_arrays {
+            backend.pre_bind_array(*resource, buffer.clone());
+        }
         crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
             .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
@@ -728,5 +740,4 @@ impl PresetRuntime {
         g.install_math_views(device, width, height, format)?;
         Ok(())
     }
-
 }

@@ -121,6 +121,7 @@
     ]
   },
   "flows": {
+    "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",
     "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",

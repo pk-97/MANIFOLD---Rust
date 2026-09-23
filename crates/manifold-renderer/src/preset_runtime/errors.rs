@@ -27,12 +27,20 @@ pub enum JsonGeneratorLoadError {
     /// rebind (`replace_texture_2d`) would silently overwrite whichever one
     /// lost with the host canvas's format, up to a real GPU command-buffer
     /// fault. Rejected at load rather than silently picked.
-    MultipleFinalOutputs { count: usize },
+    MultipleFinalOutputs {
+        count: usize,
+    },
     /// A primitive declared an `Array<T>` output but
     /// `EffectNode::array_output_capacity` returned `None` for that port.
-    UnsizedArrayOutput { node_type: String, port: String },
+    UnsizedArrayOutput {
+        node_type: String,
+        port: String,
+    },
     /// Sibling of `UnsizedArrayOutput` for Texture3D.
-    UnsizedTexture3DOutput { node_type: String, port: String },
+    UnsizedTexture3DOutput {
+        node_type: String,
+        port: String,
+    },
     /// Post-allocation catch-all: an `Array<T>` resource in the compiled plan
     /// has no bound slot or no underlying buffer.
     UnboundArrayResource {
@@ -43,6 +51,8 @@ pub enum JsonGeneratorLoadError {
     },
     /// A staged runtime resize could not be admitted or allocated.
     Resize(String),
+    /// A stateful or GPU graph producer cannot be replayed at physics ticks.
+    PhysicsSamplingUnsupported(String),
 }
 
 impl std::fmt::Display for JsonGeneratorLoadError {
@@ -100,6 +110,7 @@ impl std::fmt::Display for JsonGeneratorLoadError {
                 )
             }
             Self::Resize(error) => write!(f, "runtime resize preparation failed: {error}"),
+            Self::PhysicsSamplingUnsupported(error) => f.write_str(error),
         }
     }
 }
@@ -131,7 +142,10 @@ impl From<GraphError> for JsonGeneratorLoadError {
 /// the editor reads via [`PresetRuntime::errors`].
 #[derive(Debug, Clone)]
 pub enum ChainError {
-    PreparedParameterChanged { node_id: String, param: String },
+    PreparedParameterChanged {
+        node_id: String,
+        param: String,
+    },
     /// A per-instance divergent graph failed to splice; the chain
     /// fell back to the canonical preset. Most often caused by a
     /// stale handle reference after a primitive rename, or a
@@ -165,7 +179,9 @@ pub enum ChainError {
     /// [`crate::node_graph::PreAllocationError`] so the chain-level
     /// error log carries it too. The chain build returned `None`
     /// and the operator sees the layer as a black passthrough.
-    PreAllocationFailed { reason: String },
+    PreAllocationFailed {
+        reason: String,
+    },
     /// BUG-104 Part 5(b): a `node.switch_value` whose `selector` derives
     /// from a trigger source shadows a continuously-bound producer on one
     /// of its `in_N` branches instead of composing onto it — the class of
@@ -202,8 +218,10 @@ pub enum ChainError {
 impl std::fmt::Display for ChainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PreparedParameterChanged { node_id, param } => write!(f,
-                "{node_id}.{param}: prepared source or render mode changed; restore it or reapply the modifier. Rendering is suspended."),
+            Self::PreparedParameterChanged { node_id, param } => write!(
+                f,
+                "{node_id}.{param}: prepared source or render mode changed; restore it or reapply the modifier. Rendering is suspended."
+            ),
             Self::DivergentGraphFellBack {
                 effect_id,
                 effect_type,
@@ -291,7 +309,9 @@ pub(super) fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) 
     errors.push(err);
 }
 
-impl From<crate::node_graph::scene_modifier_expand::SceneModifierExpandError> for JsonGeneratorLoadError {
+impl From<crate::node_graph::scene_modifier_expand::SceneModifierExpandError>
+    for JsonGeneratorLoadError
+{
     fn from(error: crate::node_graph::scene_modifier_expand::SceneModifierExpandError) -> Self {
         Self::SceneModifier(error)
     }

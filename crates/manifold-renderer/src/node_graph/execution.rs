@@ -24,6 +24,7 @@ use crate::node_graph::execution_plan::{CompiledMeshRevisionRule, ExecutionPlan,
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevision};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::physics::PhysicsAuthoredSampleScope;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
 
 /// Resolve a resource's slot dims for `Backend::acquire` / `release`.
@@ -798,7 +799,7 @@ impl Executor {
             "Executor::execute_frame called with a plan containing node(s) that require a StateStore \
              — dispatch through `execute_frame_with_state` instead.",
         );
-        self.execute_frame_inner(graph, plan, time, None, None, 0);
+        self.execute_frame_inner(graph, plan, time, None, None, 0, None);
     }
 
     /// Run one frame of the graph with a real `GpuEncoder` available to
@@ -823,7 +824,7 @@ impl Executor {
              (Common cause: a chain containing `temporal::Feedback` dispatched via a code path \
              that hasn't been ported to the StateStore-aware execute method.)",
         );
-        self.execute_frame_inner(graph, plan, time, Some(gpu), None, 0);
+        self.execute_frame_inner(graph, plan, time, Some(gpu), None, 0, None);
     }
 
     /// Run one frame of the graph with a real `GpuEncoder` plus a
@@ -844,7 +845,32 @@ impl Executor {
         state: &mut StateStore,
         owner_key: OwnerKey,
     ) {
-        self.execute_frame_inner(graph, plan, time, Some(gpu), Some(state), owner_key);
+        self.execute_frame_inner(graph, plan, time, Some(gpu), Some(state), owner_key, None);
+    }
+
+    /// Evaluate only the caller-supplied physics input ancestry at a
+    /// historical frame time. This pass is deliberately CPU-only: it does
+    /// not provide a GPU encoder or state store, does not run late captures,
+    /// and leaves acquired resources bound for the following full frame.
+    ///
+    /// `sample_steps` is indexed exactly like [`ExecutionPlan::steps`]. The
+    /// caller owns ancestry analysis because physics sampling must follow the
+    /// graph's scalar/transform inputs without making the executor infer a
+    /// second liveness policy.
+    pub fn execute_physics_sample_frame(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        time: FrameTime,
+        sample_steps: &[bool],
+    ) {
+        assert_eq!(
+            sample_steps.len(),
+            plan.steps().len(),
+            "physics sample mask must align with execution plan steps",
+        );
+        let _scope = PhysicsAuthoredSampleScope::new();
+        self.execute_frame_inner(graph, plan, time, None, None, 0, Some(sample_steps));
     }
 
     /// Build the per-frame live-step bitset that drives mux short-
@@ -1222,8 +1248,16 @@ impl Executor {
         mut gpu: Option<&mut GpuEncoder<'_>>,
         mut state: Option<&mut StateStore>,
         owner_key: OwnerKey,
+        sample_steps: Option<&[bool]>,
     ) {
-        self.compute_live_steps(graph, plan);
+        let partial_sample = sample_steps.is_some();
+        if let Some(sample_steps) = sample_steps {
+            assert_eq!(sample_steps.len(), plan.steps().len());
+            self.live_steps.clear();
+            self.live_steps.extend_from_slice(sample_steps);
+        } else {
+            self.compute_live_steps(graph, plan);
+        }
 
         // Build the memoized-dataflow structures on first frame (or if the
         // plan shape ever changed — defensive; live executors keep one plan).
@@ -1292,7 +1326,9 @@ impl Executor {
         // would still see the old upstream texture. Host-installed
         // borrows (e.g. the chain source slot's per-frame
         // `replace_texture_2d`) are untouched.
-        self.backend.clear_skip_aliases();
+        if !partial_sample {
+            self.backend.clear_skip_aliases();
+        }
 
         // SCENE_FX P4a: dereference the raw pointer the host set this frame.
         // The content thread guarantees the registry outlives this call.
@@ -1328,6 +1364,9 @@ impl Executor {
         self.backend.declare_mipmapped(plan.mipmapped_resources());
 
         for &res_id in plan.persistent_resources() {
+            if partial_sample {
+                continue;
+            }
             let ty = plan
                 .resource_type(res_id)
                 .expect("persistent resource type known from compile()");
@@ -1357,9 +1396,11 @@ impl Executor {
             // branch below can `continue` past it. The step's own
             // declared inputs are always bound at this point, live-step,
             // memo-skipped, or mux-pruned alike.
-            for &(port, res) in &step.inputs {
-                if let Some(v) = self.read_scalar_resource(plan, res) {
-                    self.live_scalar_inputs.push((step.node, port, v));
+            if !partial_sample || self.live_steps[idx] {
+                for &(port, res) in &step.inputs {
+                    if let Some(v) = self.read_scalar_resource(plan, res) {
+                        self.live_scalar_inputs.push((step.node, port, v));
+                    }
                 }
             }
 
@@ -1382,7 +1423,8 @@ impl Executor {
             // step's held output slot still holds the valid texture, so the
             // skip records it from that slot (below) instead of paying a
             // re-execute just to capture an unchanged thumbnail.
-            let force_dirty = self.profile_force_all_live
+            let force_dirty = partial_sample
+                || self.profile_force_all_live
                 || self.profiling
                 || self.preview_target == Some(step.node);
             self.wired_scratch.clear();
@@ -1547,7 +1589,7 @@ impl Executor {
             let mut executed_pure_epoch: Option<u64> = None;
             let mut selected_input_resource: Option<ResourceId> = None;
             if let Some(inst) = graph.get_node_mut(step.node) {
-                if inst.node.is_pure() {
+                if !partial_sample && inst.node.is_pure() {
                     executed_pure_epoch = Some(inst.param_epoch);
                     // Pure/fused transforms preserve semantic content when
                     // their complete input set and parameters are unchanged,
@@ -1575,7 +1617,9 @@ impl Executor {
                 // STATIC port declaration (the live source flows through at
                 // zero cost); otherwise the node's per-frame param-driven
                 // declaration decides.
-                let skip_alias = if data_skip {
+                let skip_alias = if partial_sample {
+                    None
+                } else if data_skip {
                     inst.node.skip_passthrough_ports()
                 } else {
                     self.wired_scratch.clear();
@@ -1959,7 +2003,7 @@ impl Executor {
                     // `empty_skip_input_ports` declarers can skip. Queried
                     // only on real evaluates — an aliased passthrough never
                     // reports.
-                    if inst.node.reports_empty_output() {
+                    if !partial_sample && inst.node.reports_empty_output() {
                         for &(_, res) in &step.outputs {
                             self.empty_resources.insert(res);
                         }
@@ -2086,7 +2130,7 @@ impl Executor {
             // (PortType, format, dims) bucket. The preview-captured resource
             // is held back so its texture survives for a post-frame read; it
             // returns to the pool next frame (re-resolved at the top).
-            for &res_id in &step.free_after {
+            for &res_id in step.free_after.iter().filter(|_| !partial_sample) {
                 // A recorded dump output is held past the frame so the host can
                 // read it before its slot is reacquired and overwritten; the
                 // preview-captured resource the same. Everything else — hidden
@@ -2171,7 +2215,7 @@ impl Executor {
         // we deliberately build the context with an EMPTY output
         // scratch. `late_capture` implementations must read only inputs
         // and write to state, never to outputs.
-        for &step_idx in plan.late_capture_step_indices() {
+        for &step_idx in plan.late_capture_step_indices().iter().filter(|_| !partial_sample) {
             if !self.live_steps[step_idx] {
                 continue;
             }
@@ -3400,6 +3444,38 @@ mod tests {
             "single-branch selection must allocate fewer slots than full eager evaluation; \
              eager={slots_all}, pruned={slots_one}",
         );
+    }
+
+    #[test]
+    fn physics_sample_executes_only_masked_steps_and_full_frame_recovers() {
+        let first_evals = Arc::new(Mutex::new(0));
+        let second_evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        g.add_node(Box::new(PureCountingNode::new(false, first_evals.clone())));
+        g.add_node(Box::new(PureCountingNode::new(false, second_evals.clone())));
+        let plan = compile(&g).unwrap();
+        assert_eq!(plan.steps().len(), 2);
+
+        let mut exec = Executor::with_mock();
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[true, false]);
+        assert_eq!(*first_evals.lock().unwrap(), 1);
+        assert_eq!(*second_evals.lock().unwrap(), 0);
+
+        // The sampled pass leaves its bindings intact and does not poison the
+        // next ordinary frame's liveness or resource lifecycle.
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(*first_evals.lock().unwrap(), 2);
+        assert_eq!(*second_evals.lock().unwrap(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "physics sample mask must align")]
+    fn physics_sample_rejects_misaligned_mask() {
+        let mut g = Graph::new();
+        g.add_node(Box::new(PureCountingNode::new(false, Arc::new(Mutex::new(0)))));
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[]);
     }
 
     // ─── Memoized-dataflow (constant-subgraph hoisting) ───

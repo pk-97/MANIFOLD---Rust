@@ -131,6 +131,14 @@ fn project_with_generator_graph(def: EffectGraphDef) -> (Project, LayerId) {
     (project, lid)
 }
 
+fn graph_of_generator<'a>(project: &'a Project, layer_id: &LayerId) -> &'a EffectGraphDef {
+    project
+        .timeline
+        .find_layer_by_id(layer_id)
+        .and_then(|(_, layer)| layer.generator_graph())
+        .expect("generator graph override")
+}
+
 #[test]
 fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
@@ -984,6 +992,156 @@ fn duplicate_physics_scene_object_preserves_numeric_and_string_bindings() {
 }
 
 #[test]
+fn duplicate_physics_scene_object_renames_sections_and_repeated_ids() {
+    let mut graph = physics_scene_graph();
+    let transform_node_id = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 100)
+        .unwrap()
+        .node_id
+        .clone();
+    let body_node_id = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 101)
+        .unwrap()
+        .node_id
+        .clone();
+    graph.preset_metadata = Some(PresetMetadata {
+        id: PresetTypeId::new("physics_sections"),
+        display_name: "Physics Sections".to_string(),
+        category: String::new(),
+        osc_prefix: String::new(),
+        legacy_discriminant: None,
+        scene_modifier: None,
+        scene_bounds: None,
+        available: true,
+        is_line_based: false,
+        layer_types: None,
+        params: vec![
+            ParamSpecDef {
+                id: "transform_pos_x".to_string(),
+                name: "X".to_string(),
+                section: Some("Cube Transform — Transform".to_string()),
+                ..Default::default()
+            },
+            ParamSpecDef {
+                id: "body_mass".to_string(),
+                name: "Mass".to_string(),
+                section: Some("Cube Body — Physics".to_string()),
+                ..Default::default()
+            },
+        ],
+        bindings: vec![
+            BindingDef {
+                id: "transform_pos_x".to_string(),
+                label: "X".to_string(),
+                default_value: 1.0,
+                target: BindingTarget::Node {
+                    node_id: transform_node_id,
+                    param: "pos_x".to_string(),
+                },
+                convert: Default::default(),
+                user_added: false,
+                scale: 1.0,
+                offset: 0.0,
+                default_mirrors_node_param: true,
+            },
+            BindingDef {
+                id: "body_mass".to_string(),
+                label: "Mass".to_string(),
+                default_value: 1.0,
+                target: BindingTarget::Node {
+                    node_id: body_node_id,
+                    param: "mass".to_string(),
+                },
+                convert: Default::default(),
+                user_added: false,
+                scale: 1.0,
+                offset: 0.0,
+                default_mirrors_node_param: true,
+            },
+        ],
+        param_aliases: Vec::new(),
+        value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
+    });
+    let (mut project, fx) = project_with_graph(graph);
+
+    let mut duplicate = DuplicateSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        0,
+        0,
+        mirror_catalog_default(),
+    );
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied());
+
+    let def = graph_of(&project, &fx);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let first_transform = meta
+        .params
+        .iter()
+        .find(|param| param.id == "transform_pos_x_duplicate")
+        .unwrap();
+    let first_body = meta
+        .params
+        .iter()
+        .find(|param| param.id == "body_mass_duplicate")
+        .unwrap();
+    assert_eq!(
+        first_transform.section.as_deref(),
+        Some("Cube Transform_2 — Transform")
+    );
+    assert_eq!(first_body.section.as_deref(), Some("Cube Body_2 — Physics"));
+    assert_ne!(
+        meta.bindings
+            .iter()
+            .find(|binding| binding.id == "transform_pos_x")
+            .and_then(|binding| match &binding.target {
+                BindingTarget::Node { node_id, .. } => Some(node_id),
+                _ => None,
+            }),
+        meta.bindings
+            .iter()
+            .find(|binding| binding.id == "transform_pos_x_duplicate")
+            .and_then(|binding| match &binding.target {
+                BindingTarget::Node { node_id, .. } => Some(node_id),
+                _ => None,
+            })
+    );
+
+    let mut repeated = DuplicateSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        0,
+        0,
+        mirror_catalog_default(),
+    );
+    repeated.execute(&mut project);
+    assert!(repeated.was_applied());
+    let def = graph_of(&project, &fx);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    assert_eq!(
+        meta.params
+            .iter()
+            .find(|param| param.id == "transform_pos_x_duplicate_2")
+            .and_then(|param| param.section.as_deref()),
+        Some("Cube Transform_3 — Transform")
+    );
+    assert_eq!(
+        meta.params
+            .iter()
+            .find(|param| param.id == "body_mass_duplicate_2")
+            .and_then(|param| param.section.as_deref()),
+        Some("Cube Body_3 — Physics")
+    );
+}
+
+#[test]
 fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
     let mut graph = physics_scene_graph();
     graph.nodes.push(EffectGraphNode {
@@ -1137,6 +1295,298 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
         remove.undo(&mut project);
         assert_eq!(graph_of(&project, &fx), &graph);
     }
+}
+
+/// Generator-host regression for BUG-s7hf: a PhysicsSolids duplicate must
+/// refresh the host's live manifest, retain independent values through
+/// execute/undo/redo, and preserve fresh graph identity through save/load.
+#[test]
+fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity() {
+    let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+    )))
+    .unwrap();
+    let (mut project, layer_id) = project_with_generator_graph(graph);
+    project
+        .timeline
+        .find_layer_by_id_mut(&layer_id)
+        .unwrap()
+        .1
+        .gen_params_or_init()
+        .set_preset_id(PresetTypeId::from_string("PhysicsSolids".to_string()));
+    let target = GraphTarget::Generator(layer_id.clone());
+
+    let mut add = AddSceneObjectCommand::new(
+        target.clone(),
+        vec![],
+        30,
+        6,
+        (900.0, 200.0),
+        vec![scene_param_meta("color_r", "Red")],
+        vec![scene_param_meta("pos_y", "Y")],
+        vec![scene_param_meta("visible", "Visible")],
+        mirror_catalog_default(),
+    )
+    .with_physics_world(
+        vec![scene_param_meta("mass", "Mass")],
+        vec![scene_param_meta("color_r", "Red")],
+    );
+    add.execute(&mut project);
+    assert!(
+        add.was_applied(),
+        "the production physics add shape is valid"
+    );
+
+    let mut duplicate =
+        DuplicateSceneObjectCommand::new(target.clone(), vec![], 30, 6, mirror_catalog_default());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "PhysicsSolids duplicate applies");
+
+    let def = graph_of_generator(&project, &layer_id);
+    let clone_transform = def
+        .nodes
+        .iter()
+        .find(|node| node.handle.as_deref() == Some("Object 7 Transform_2"))
+        .expect("duplicate has a fresh authored transform");
+    let clone_identity = clone_transform.node_id.clone();
+    let clone_param_id =
+        manifold_core::effects::binding_id_for_node_param_in(def, clone_transform.id, "pos_y")
+            .expect("duplicate transform binding is stamped into metadata");
+
+    let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+    assert!(
+        layer
+            .gen_params()
+            .unwrap()
+            .params
+            .get(&clone_param_id)
+            .is_some(),
+        "execute refreshes the generator-host manifest immediately"
+    );
+    let old = layer.gen_params().unwrap().get_base_param(&clone_param_id);
+    let mut write = crate::commands::effects::ChangeGraphParamCommand::new(
+        target.clone(),
+        clone_param_id.clone(),
+        old,
+        8.5,
+    );
+    write.execute(&mut project);
+    assert_eq!(
+        project
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .get_base_param(&clone_param_id),
+        8.5,
+        "duplicate has an independent live value"
+    );
+    write.undo(&mut project);
+    assert_eq!(
+        project
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .get_base_param(&clone_param_id),
+        old,
+        "value undo restores the duplicate slot"
+    );
+    write.execute(&mut project);
+
+    duplicate.undo(&mut project);
+    assert!(
+        !project
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .params
+            .contains(&clone_param_id),
+        "duplicate undo removes its live manifest rows"
+    );
+    duplicate.execute(&mut project);
+    let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+    assert_eq!(
+        layer.gen_params().unwrap().get_base_param(&clone_param_id),
+        old,
+        "redo restores the duplicate's authored default"
+    );
+    write.execute(&mut project);
+
+    let json = serde_json::to_string(&project).expect("serialize generator project");
+    let wire: serde_json::Value = serde_json::from_str(&json).expect("parse saved project JSON");
+    fn find_param_wire(
+        value: &serde_json::Value,
+        id: &str,
+        path: &mut Vec<String>,
+    ) -> Option<(Vec<String>, serde_json::Value)> {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(entry) = map.get(id) {
+                    let mut found = path.clone();
+                    found.push(id.to_string());
+                    return Some((found, entry.clone()));
+                }
+                for (key, child) in map {
+                    path.push(key.clone());
+                    if let Some(found) = find_param_wire(child, id, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            serde_json::Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    path.push(index.to_string());
+                    if let Some(found) = find_param_wire(child, id, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    let (wire_path, wire_entry) = find_param_wire(&wire, &clone_param_id, &mut Vec::new())
+        .unwrap_or_else(|| panic!("saved JSON has no {clone_param_id} entry"));
+    assert!(
+        wire_entry.get("spec").is_some(),
+        "saved JSON entry at {} must inline the graph-local spec",
+        wire_path.join("/")
+    );
+    let reloaded: Project = serde_json::from_str(&json).expect("deserialize generator project");
+    let reloaded_def = graph_of_generator(&reloaded, &layer_id);
+    let reloaded_transform = reloaded_def
+        .nodes
+        .iter()
+        .find(|node| node.handle.as_deref() == Some("Object 7 Transform_2"))
+        .expect("duplicate transform survives save/load");
+    assert_eq!(reloaded_transform.node_id, clone_identity);
+    assert!(
+        reloaded
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .params
+            .contains(&clone_param_id),
+        "duplicate binding remains a live manifest slot after save/load"
+    );
+    assert_eq!(
+        reloaded
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .get_base_param(&clone_param_id),
+        8.5,
+        "live duplicate value survives save/load"
+    );
+}
+
+/// Mixed-scene ownership regression: a deliberately nonphysical scene object
+/// can coexist with PhysicsSolids' body chains. Its duplicate/remove edits
+/// must never consume or orphan a Physics World body slot.
+#[test]
+fn nonphysical_object_coexists_with_physics_world_through_duplicate_remove_undo_redo() {
+    let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+    )))
+    .unwrap();
+    graph.nodes.push(EffectGraphNode {
+        id: 900,
+        node_id: NodeId::new("custom_scene_object"),
+        type_id: "node.scene_object".to_string(),
+        handle: Some("Custom".to_string()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    });
+    graph.wires.push(EffectGraphWire {
+        from_node: 900,
+        from_port: "object".to_string(),
+        to_node: 30,
+        to_port: "object_6".to_string(),
+    });
+    graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 30)
+        .unwrap()
+        .params
+        .insert(
+            "objects".to_string(),
+            SerializedParamValue::Float { value: 7.0 },
+        );
+
+    let (mut project, layer_id) = project_with_generator_graph(graph);
+    project
+        .timeline
+        .find_layer_by_id_mut(&layer_id)
+        .unwrap()
+        .1
+        .gen_params_or_init()
+        .set_preset_id(PresetTypeId::from_string("PhysicsSolids".to_string()));
+    let target = GraphTarget::Generator(layer_id.clone());
+    let body_wires = |project: &Project| {
+        graph_of_generator(project, &layer_id)
+            .wires
+            .iter()
+            .filter(|wire| wire.to_node == 40 && wire.to_port.starts_with("body_"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let before_bodies = body_wires(&project);
+
+    let mut duplicate =
+        DuplicateSceneObjectCommand::new(target.clone(), vec![], 30, 6, mirror_catalog_default());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied());
+    assert_eq!(
+        graph_of_generator(&project, &layer_id)
+            .nodes
+            .iter()
+            .find(|node| node.id == 30)
+            .unwrap()
+            .params
+            .get("objects"),
+        Some(&SerializedParamValue::Float { value: 8.0 })
+    );
+    assert_eq!(body_wires(&project), before_bodies);
+
+    duplicate.undo(&mut project);
+    assert_eq!(body_wires(&project), before_bodies);
+    duplicate.execute(&mut project);
+    assert_eq!(body_wires(&project), before_bodies);
+
+    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 30, 7, mirror_catalog_default());
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "bare nonphysical object is removable");
+    assert_eq!(body_wires(&project), before_bodies);
+    remove.undo(&mut project);
+    assert_eq!(body_wires(&project), before_bodies);
+    remove.execute(&mut project);
+    assert_eq!(body_wires(&project), before_bodies);
 }
 
 #[test]

@@ -1007,21 +1007,25 @@ impl Command for RemoveSceneObjectCommand {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.object_index;
-        let physics_match = if scope.is_empty() {
-            project
-                .graph_for_target(&self.target, Some(&self.catalog_default))
-                .and_then(|def| {
-                    let (nodes, wires) = graph_level(def, &scope)?;
-                    let source_id = object_producer_id(wires, render_id, k)?;
-                    Some(physics_scene_object_match(
-                        nodes, wires, render_id, k, source_id,
-                    ))
-                })
-        } else {
-            None
-        };
+        let physics_match = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .and_then(|def| {
+                let (nodes, wires) = graph_level(def, &scope)?;
+                let source_id = object_producer_id(wires, render_id, k)?;
+                Some(physics_scene_object_match(
+                    nodes, wires, render_id, k, source_id,
+                ))
+            });
         if let Some(PhysicsSceneObjectMatch::Malformed(reason)) = &physics_match {
             self.rejection = Some(reason);
+            return;
+        }
+        if matches!(
+            physics_match.as_ref(),
+            Some(PhysicsSceneObjectMatch::Valid(_))
+        ) && !scope.is_empty()
+        {
+            self.rejection = Some("Remove Object physics ownership requires a root-level scene");
             return;
         }
         let result =
@@ -2197,12 +2201,14 @@ fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> 
         .collect()
 }
 
-/// Copy the scene-panel bindings whose targets belong to a duplicated physics
-/// object. Physics nodes are root-level, so unlike grouped D11 objects their
-/// numeric exposures are part of the shared preset metadata rather than a
-/// group-local card surface. Each copied binding gets a fresh id while fanout
-/// bindings retain one id for all cloned targets.
-fn clone_physics_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) {
+/// Copy the scene-panel numeric bindings whose targets belong to a duplicated
+/// object. Both root-level physics nodes and grouped scene nodes store these
+/// exposures in the shared preset metadata. Each copied binding gets a fresh
+/// id while fanout bindings retain one id for all cloned targets.
+fn clone_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId, NodeId)]) {
+    // The cloned nodes are already in the graph when this metadata pass runs.
+    // Snapshot handles before borrowing preset metadata mutably.
+    let node_handles = collect_node_handles(&def.nodes);
     let Some(meta) = def.preset_metadata.as_mut() else {
         return;
     };
@@ -2223,6 +2229,12 @@ fn clone_physics_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId
     let mut cloned_bindings = Vec::new();
 
     for binding in source_bindings {
+        // D11 card exposures are deliberate identities owned by the source
+        // object. Scene-panel auto exposures are the only bindings that may
+        // be copied to give a duplicate its own transform/material controls.
+        if binding.user_added {
+            continue;
+        }
         let BindingTarget::Node { node_id, param } = &binding.target else {
             continue;
         };
@@ -2247,6 +2259,25 @@ fn clone_physics_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId
             {
                 let mut param_spec = source_param.clone();
                 param_spec.id = candidate.clone();
+                if let Some(clone_node_id) = node_id_map
+                    .iter()
+                    .find(|(old, _)| old == node_id)
+                    .map(|(_, new)| new)
+                {
+                    let source_handle = node_handles
+                        .iter()
+                        .find(|(id, _)| id == node_id)
+                        .and_then(|(_, handle)| handle.as_deref());
+                    let clone_handle = node_handles
+                        .iter()
+                        .find(|(id, _)| id == clone_node_id)
+                        .and_then(|(_, handle)| handle.as_deref());
+                    param_spec.section = cloned_scene_section(
+                        param_spec.section.as_deref(),
+                        source_handle,
+                        clone_handle,
+                    );
+                }
                 if param_ids.insert(candidate.clone()) {
                     cloned_params.push(param_spec);
                 }
@@ -2263,6 +2294,41 @@ fn clone_physics_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(NodeId
     }
     meta.params.extend(cloned_params);
     meta.bindings.extend(cloned_bindings);
+}
+
+fn collect_node_handles(nodes: &[EffectGraphNode]) -> Vec<(NodeId, Option<String>)> {
+    let mut handles = Vec::new();
+    fn visit(nodes: &[EffectGraphNode], handles: &mut Vec<(NodeId, Option<String>)>) {
+        for node in nodes {
+            handles.push((node.node_id.clone(), node.handle.clone()));
+            if let Some(group) = node.group.as_deref() {
+                visit(&group.nodes, handles);
+            }
+        }
+    }
+    visit(nodes, &mut handles);
+    handles
+}
+
+/// Replace the source owner handle while retaining generated suffixes such as
+/// ` — Transform`. Unknown/custom section strings stay unchanged.
+fn cloned_scene_section(
+    section: Option<&str>,
+    source_handle: Option<&str>,
+    clone_handle: Option<&str>,
+) -> Option<String> {
+    let section = section?;
+    let (Some(source_handle), Some(clone_handle)) = (source_handle, clone_handle) else {
+        return Some(section.to_string());
+    };
+    if section == source_handle {
+        return Some(clone_handle.to_string());
+    }
+    let prefix = format!("{source_handle} — ");
+    section
+        .strip_prefix(&prefix)
+        .map(|suffix| format!("{clone_handle} — {suffix}"))
+        .or_else(|| Some(section.to_string()))
 }
 
 /// The duplicate-object gesture (D11): one undoable composite edit that
@@ -2301,6 +2367,11 @@ pub struct DuplicateSceneObjectCommand {
     after: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
     after_string_bindings: Option<Option<Vec<StringBindingDef>>>,
     after_metadata: Option<Option<PresetMetadata>>,
+    /// Live manifest/modulation state before and after the duplicate. A
+    /// structural refresh intentionally rebuilds the manifest, so retaining
+    /// these snapshots keeps authored values stable across undo/redo too.
+    prev_instance: Option<InstanceLayerSnapshot>,
+    after_instance: Option<InstanceLayerSnapshot>,
     rejection: Option<String>,
     applied: bool,
 }
@@ -2325,6 +2396,8 @@ impl DuplicateSceneObjectCommand {
             after: None,
             after_string_bindings: None,
             after_metadata: None,
+            prev_instance: None,
+            after_instance: None,
             rejection: None,
             applied: false,
         }
@@ -2385,28 +2458,39 @@ impl Command for DuplicateSceneObjectCommand {
             let _ = with_target_graph_def_mut(project, &self.target, |def| {
                 def.preset_metadata = self.after_metadata.clone().flatten();
             });
+            // Keep freshly cloned scene exposures visible to the live panel
+            // after redo; otherwise a save/load is required before the new
+            // binding slots can be edited.
+            refresh_target_manifest(project, &self.target);
+            if let (Some(snapshot), Some(instance)) = (
+                self.after_instance.clone(),
+                resolve_target_instance(&self.target, project),
+            ) {
+                snapshot.restore(instance);
+            }
             self.applied = true;
             return;
         }
 
-        let physics_match = if scope.is_empty() {
-            project
-                .graph_for_target(&self.target, Some(&self.catalog_default))
-                .and_then(|def| {
-                    let (nodes, wires) = graph_level(def, &scope)?;
-                    let source_id = object_producer_id(wires, render_id, src_k)?;
-                    Some(physics_scene_object_match(
-                        nodes, wires, render_id, src_k, source_id,
-                    ))
-                })
-        } else {
-            None
-        };
+        let physics_match = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .and_then(|def| {
+                let (nodes, wires) = graph_level(def, &scope)?;
+                let source_id = object_producer_id(wires, render_id, src_k)?;
+                Some(physics_scene_object_match(
+                    nodes, wires, render_id, src_k, source_id,
+                ))
+            });
         if let Some(PhysicsSceneObjectMatch::Malformed(reason)) = &physics_match {
             self.rejection = Some((*reason).into());
             return;
         }
         if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref() {
+            if !scope.is_empty() {
+                self.rejection =
+                    Some("Duplicate Object physics ownership requires a root-level scene".into());
+                return;
+            }
             if physics.copies {
                 self.rejection =
                     Some("Duplicate Object cannot duplicate a Physics World copies object".into());
@@ -2424,6 +2508,8 @@ impl Command for DuplicateSceneObjectCommand {
             }
         }
 
+        let baseline_instance = resolve_target_instance(&self.target, project)
+            .map(|instance| InstanceLayerSnapshot::capture(&*instance));
         let baseline_strings = target_string_bindings(project, &self.target, &self.catalog_default);
         let baseline_metadata = project
             .graph_for_target(&self.target, Some(&self.catalog_default))
@@ -2431,6 +2517,12 @@ impl Command for DuplicateSceneObjectCommand {
         let mut node_id_map: Vec<(NodeId, NodeId)> = Vec::new();
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                // Document ids and handles are global even when the edit is
+                // addressed through a nested scope. Seed both allocators
+                // from the full tree before borrowing the target level.
+                let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
+                let mut taken = std::collections::HashSet::new();
+                collect_all_handles(&def.nodes, &mut taken);
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev = (nodes.clone(), wires.clone());
 
@@ -2461,9 +2553,6 @@ impl Command for DuplicateSceneObjectCommand {
                     let source_id = object_producer_id(wires, render_id, src_k)?;
                     let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
 
-                    let mut next_id = max_node_id_over(nodes) + 1;
-                    let mut taken = std::collections::HashSet::new();
-                    collect_all_handles(nodes, &mut taken);
                     let mut clone = deep_clone_with_fresh_ids(
                         &source_node,
                         &mut next_id,
@@ -2574,16 +2663,9 @@ impl Command for DuplicateSceneObjectCommand {
                 Some(())
             });
         }
-        if matches!(
-            physics_match,
-            Some(PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
-                copies: false,
-                ..
-            }))
-        ) && !node_id_map.is_empty()
-        {
+        if !node_id_map.is_empty() {
             let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                clone_physics_scene_bindings(def, &node_id_map);
+                clone_scene_bindings(def, &node_id_map);
             });
         }
         self.prev_string_bindings = baseline_strings;
@@ -2598,6 +2680,15 @@ impl Command for DuplicateSceneObjectCommand {
             .graph_for_target(&self.target, Some(&self.catalog_default))
             .map(|def| def.preset_metadata.clone());
         self.applied = self.after.is_some();
+        if self.applied {
+            // Physics duplicates clone their numeric exposure definitions.
+            // Rebuild the host manifest now so the new rows are immediately
+            // editable and survive execute/undo/redo without save/load.
+            refresh_target_manifest(project, &self.target);
+            self.prev_instance = baseline_instance;
+            self.after_instance = resolve_target_instance(&self.target, project)
+                .map(|instance| InstanceLayerSnapshot::capture(&*instance));
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -2617,6 +2708,13 @@ impl Command for DuplicateSceneObjectCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
+        if let (Some(snapshot), Some(instance)) = (
+            self.prev_instance.clone(),
+            resolve_target_instance(&self.target, project),
+        ) {
+            snapshot.restore(instance);
+        }
         self.applied = false;
     }
 
