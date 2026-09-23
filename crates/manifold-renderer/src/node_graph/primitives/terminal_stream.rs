@@ -1,12 +1,15 @@
 //! `node.terminal_stream` — a bounded, beat-driven CPU terminal source.
 //!
-//! The source only reads the canvas dimensions. It keeps a small virtual shell
-//! history on the content thread and uploads the visible ASCII cells as a
-//! `Channels[VALUE: U32]` buffer. The fixed storage is intentionally sized for
-//! the largest supported screen, so a resize never allocates on the frame path.
+//! With a reaction image wired, local image measurements drive independent
+//! typing, erasing and rewriting regions throughout the screen. Without it,
+//! the original scrolling shell remains available. Fixed CPU storage and a
+//! fenced analysis ring keep the frame path bounded and nonblocking.
 
 use manifold_core::Beats;
 use std::borrow::Cow;
+
+use super::terminal_analysis::TerminalAnalysis;
+use super::terminal_reaction::ReactiveTerminal;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -401,9 +404,10 @@ fn append_hex(dst: &mut [u8], mut offset: usize, mut value: u64) -> usize {
 crate::primitive! {
     name: TerminalStream,
     type_id: "node.terminal_stream",
-    purpose: "Emit a live terminal pane source as a bounded CPU-written Channels[VALUE: U32] array. The canvas dimensions determine a responsive grid (row height = text_size at reference 1080p, column width = 0.6 × row height); multiple roughly 60-column panes fill the width. A beat-delta accumulator drives coherent shell commands and logs with pauses, bursts, and upward scrolling. Activity 0 freezes the existing text, repeated beat values are idempotent, and rewinds reset the stream deterministically.",
+    purpose: "Emit coherent terminal character codes. With reaction wired, local image brightness, contrast and change drive distributed typing, erasing, line growth and code rewrites. Without reaction, emit the original scrolling shell. Text Size controls the 1080p-reference grid; Activity zero freezes cells, repeated beats hold, and rewinds reset deterministically.",
     inputs: {
         canvas: Texture2D required,
+        reaction: Texture2D optional,
         text_size: ScalarF32 optional,
         activity: ScalarF32 optional,
     },
@@ -431,16 +435,20 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "`canvas` is a required dimension source; its pixels are never sampled. `text_size` is the row height at 1080p and `activity` is a port-shadowed rate from 0 (freeze) to 4 (burst). Columns and rows report the active grid, while cells always has a fixed 86400-u32 allocation and only active cells are uploaded. The CPU upload is an intentional NonGpu fusion boundary: downstream GPU consumers receive a materialized buffer of coherent UTF-32 ASCII cells.",
+    composition_notes: "canvas supplies dimensions; optional reaction supplies the image that drives character layout and content. A fixed 64×36 image analysis is read only after its GPU fence completes, normally one frame later. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
     examples: [],
     picker: { label: "Terminal Stream", category: Atom },
-    summary: "Produces a beat-driven terminal feed with readable commands, logs, panes, and scrolling history.",
+    summary: "Types and rewrites readable code across the image, responding to local brightness and motion.",
     category: Generate,
     role: Source,
     aliases: ["terminal", "live terminal", "shell stream", "console source"],
-    boundary_reason: NonGpu,
+    boundary_reason: IoBridge,
     extra_fields: {
         state: TerminalState = TerminalState::new(),
+        reactive: ReactiveTerminal = ReactiveTerminal::new(),
+        analysis: TerminalAnalysis = TerminalAnalysis::new(),
+        reaction_connected: bool = false,
+        reaction_beat: Option<Beats> = None,
     },
 }
 
@@ -461,9 +469,30 @@ impl Primitive for TerminalStream {
         let text_size = ctx.scalar_or_param("text_size", DEFAULT_TEXT_SIZE);
         let activity = ctx.scalar_or_param("activity", 1.0);
         let dimensions = grid_dimensions(canvas.width, canvas.height, text_size);
-        self.state.ensure_dimensions(dimensions);
-        self.state.advance(ctx.time.beats, activity);
-        self.state.render();
+        let reaction = ctx.inputs.texture_2d("reaction");
+        let beat = ctx.time.beats;
+        if reaction.is_some() != self.reaction_connected
+            || self.reaction_beat.is_some_and(|previous| beat < previous)
+        {
+            self.reactive.reset();
+            self.analysis.reset();
+            self.state.initialized = false;
+        }
+        self.reaction_connected = reaction.is_some();
+        self.reaction_beat = Some(beat);
+        let cells = if let Some(image) = reaction {
+            let gpu = ctx.gpu_encoder();
+            self.analysis.install(gpu.device);
+            let samples = self.analysis.sample(gpu, image);
+            self.reactive
+                .update(dimensions.columns, dimensions.rows, beat, activity, samples);
+            self.reactive.cells()
+        } else {
+            self.state.ensure_dimensions(dimensions);
+            self.state.advance(beat, activity);
+            self.state.render();
+            self.state.cells.as_ref()
+        };
 
         ctx.outputs
             .set_scalar("columns", ParamValue::Float(dimensions.columns as f32));
@@ -479,13 +508,16 @@ impl Primitive for TerminalStream {
             .min(capacity)
             .min(MAX_CELLS);
         if active != 0 {
-            unsafe { dst.write(0, bytemuck::cast_slice(&self.state.cells[..active])) };
+            unsafe { dst.write(0, bytemuck::cast_slice(&cells[..active])) };
         }
     }
 
     fn clear_state(&mut self) {
         self.state.initialized = false;
         self.state.last_beat = None;
+        self.reactive.reset();
+        self.analysis.reset();
+        self.reaction_beat = None;
     }
 }
 
@@ -654,10 +686,12 @@ mod tests {
     fn declares_canvas_and_typed_cells_contract() {
         use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(TerminalStream::TYPE_ID, "node.terminal_stream");
-        assert_eq!(TerminalStream::INPUTS.len(), 3);
+        assert_eq!(TerminalStream::INPUTS.len(), 4);
         assert_eq!(TerminalStream::INPUTS[0].name, "canvas");
         assert!(TerminalStream::INPUTS[0].required);
         assert_eq!(TerminalStream::INPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(TerminalStream::INPUTS[1].name, "reaction");
+        assert!(!TerminalStream::INPUTS[1].required);
         assert_eq!(TerminalStream::OUTPUTS.len(), 3);
         assert_eq!(TerminalStream::OUTPUTS[0].name, "cells");
         assert_eq!(

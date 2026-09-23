@@ -135,7 +135,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
 mod gpu {
     use super::*;
     use manifold_renderer::node_graph::{
-        Executor, FrameTime, MetalBackend, StateStore, pre_allocate_resources,
+        Backend, Executor, FrameTime, MetalBackend, StateStore, pre_allocate_resources,
     };
     const W: u32 = 960;
     const H: u32 = 540;
@@ -184,6 +184,27 @@ mod gpu {
         }
     }
 
+    const RECT_W: u32 = W / 5;
+    const RECT_H: u32 = H / 3;
+
+    fn source_frame(x: u32, y: u32) -> Vec<u8> {
+        let mut halves = Vec::with_capacity((W * H * 4) as usize);
+        for row in 0..H {
+            for column in 0..W {
+                let bright = (x..x + RECT_W).contains(&column) && (y..y + RECT_H).contains(&row);
+                let value = if bright { 1.0 } else { 0.02 };
+                halves.extend([value, value, value, 1.0].map(f16::from_f32));
+            }
+        }
+        unsafe {
+            std::slice::from_raw_parts(
+                halves.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(halves.as_slice()),
+            )
+        }
+        .to_vec()
+    }
+
     fn fixture(device: &GpuDevice) -> (GpuTexture, Vec<u8>) {
         let mut halves = Vec::with_capacity((W * H * 4) as usize);
         for y in 0..H {
@@ -225,14 +246,24 @@ mod gpu {
         (texture, bytes)
     }
 
+    fn source_affected_rows(y: u32, rows: usize) -> std::ops::Range<usize> {
+        let start = (y as usize * rows / H as usize).min(rows.saturating_sub(1));
+        let end = ((y + RECT_H) as usize * rows / H as usize).clamp(start + 1, rows);
+        start..end
+    }
+
     struct Harness {
         device: std::sync::Arc<GpuDevice>,
+        input: GpuTexture,
         graph: manifold_renderer::node_graph::Graph,
         plan: manifold_renderer::node_graph::ExecutionPlan,
         bound: BoundGraph,
         executor: Executor,
         state: StateStore,
         output_slot: manifold_renderer::node_graph::Slot,
+        cells_resource: manifold_renderer::node_graph::ResourceId,
+        columns_resource: manifold_renderer::node_graph::ResourceId,
+        rows_resource: manifold_renderer::node_graph::ResourceId,
     }
 
     impl Harness {
@@ -314,17 +345,79 @@ mod gpu {
                 output_resource,
                 RenderTarget::new(&device, W, H, FMT, "code-terminal-output"),
             );
+            let terminal_id = graph
+                .instance_by_node_id(&manifold_core::NodeId::new("terminal"))
+                .expect("terminal node");
+            let terminal_step = plan
+                .steps()
+                .iter()
+                .find(|step| step.node == terminal_id)
+                .expect("terminal execution step");
+            let resource_for = |port: &str| {
+                terminal_step
+                    .outputs
+                    .iter()
+                    .find(|(name, _)| *name == port)
+                    .map(|(_, resource)| *resource)
+                    .unwrap_or_else(|| panic!("terminal output {port} resource"))
+            };
+            let cells_resource = resource_for("cells");
+            let columns_resource = resource_for("columns");
+            let rows_resource = resource_for("rows");
+            // Keep observed scalar outputs alive past their final graph
+            // consumer. The normal executor releases temporary bindings.
+            for resource in [columns_resource, rows_resource] {
+                let slot = backend.acquire(
+                    resource,
+                    manifold_renderer::node_graph::ports::PortType::Scalar(
+                        manifold_renderer::node_graph::ports::ScalarType::F32,
+                    ),
+                    None,
+                    (W, H),
+                );
+                backend.bind_resource_to_slot(resource, slot);
+            }
             pre_allocate_resources(&graph, &plan, &device, &mut backend)
                 .expect("CodeTerminal resources preallocate");
             Self {
                 device,
+                input: input.clone(),
                 graph,
                 plan,
                 bound,
                 executor: Executor::new(Box::new(backend)),
                 state: StateStore::new(),
                 output_slot,
+                cells_resource,
+                columns_resource,
+                rows_resource,
             }
+        }
+
+        fn upload_source(&self, bytes: &[u8]) {
+            self.device.upload_texture(&self.input, bytes);
+        }
+
+        fn terminal_cells(&self) -> (Vec<u32>, usize, usize) {
+            let backend = self.executor.backend();
+            let scalar = |resource| {
+                let slot = backend.slot_for(resource).expect("terminal scalar slot");
+                backend
+                    .scalar(slot)
+                    .and_then(|value| value.as_scalar())
+                    .expect("terminal scalar value")
+                    .round() as usize
+            };
+            let columns = scalar(self.columns_resource);
+            let rows = scalar(self.rows_resource);
+            let slot = backend
+                .slot_for(self.cells_resource)
+                .expect("terminal cells slot");
+            let buffer = backend.array_buffer(slot).expect("terminal cells buffer");
+            let count = columns.saturating_mul(rows);
+            let ptr = buffer.mapped_ptr().expect("terminal cells mapped buffer");
+            let values = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), count) };
+            (values.to_vec(), columns, rows)
         }
 
         fn render(
@@ -362,6 +455,20 @@ mod gpu {
             readback_raw_halves(&self.device, texture, W, H)
         }
 
+        fn render_with_source(
+            &mut self,
+            source: &[u8],
+            def: &EffectGraphDef,
+            controls: Controls,
+            beat: f64,
+            frame: i64,
+        ) -> (Vec<u8>, Vec<u32>, usize, usize) {
+            self.upload_source(source);
+            let output = self.render(def, controls, beat, frame);
+            let (cells, columns, rows) = self.terminal_cells();
+            (output, cells, columns, rows)
+        }
+
         fn write_png(&self, path: &std::path::Path) {
             let texture = self
                 .executor
@@ -370,6 +477,11 @@ mod gpu {
                 .expect("CodeTerminal output texture");
             let rgba = readback_srgb_rgba8(&self.device, texture, W, H);
             std::fs::write(path, encode_rgba8_png(&rgba, W, H)).expect("write terminal artifact");
+        }
+
+        fn write_source_png(&self, path: &std::path::Path) {
+            let rgba = readback_srgb_rgba8(&self.device, &self.input, W, H);
+            std::fs::write(path, encode_rgba8_png(&rgba, W, H)).expect("write source artifact");
         }
     }
 
@@ -422,6 +534,38 @@ mod gpu {
             .zip(f32_pixels(b).iter())
             .map(|(a, b)| (a[3] - b[3]).abs())
             .fold(0.0, f32::max)
+    }
+
+    fn bright_pixel_count(raw: &[u8]) -> usize {
+        raw.chunks_exact(8)
+            .filter(|px| f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.9)
+            .count()
+    }
+
+    fn changed_rows(a: &[u32], b: &[u32], columns: usize, rows: usize) -> Vec<usize> {
+        (0..rows)
+            .filter(|row| {
+                let start = row * columns;
+                a[start..start + columns] != b[start..start + columns]
+            })
+            .collect()
+    }
+
+    fn assert_terminal_cells(cells: &[u32], columns: usize) {
+        assert!(
+            cells.iter().all(|cell| (32..=127).contains(cell)),
+            "terminal cells stay printable ASCII or cursor code"
+        );
+        assert!(
+            cells
+                .chunks(columns)
+                .all(|row| row.chunks(32).all(|segment| segment
+                    .iter()
+                    .filter(|&&cell| cell == 127)
+                    .count()
+                    <= 1)),
+            "each independently typing row segment has at most one cursor"
+        );
     }
 
     #[test]
@@ -504,6 +648,93 @@ mod gpu {
         assert!(
             mean_abs(&active_a, &active_b) > 0.0005,
             "Activity=1 advances typing/scroll"
+        );
+
+        // The reaction input is deliberately two equal-area, equal-brightness
+        // rectangles. Their spatial separation must reach the cell buffer;
+        // comparing only the final image would allow a static text mask to
+        // pass this acceptance check.
+        let source_a = source_frame(64, H / 5);
+        let source_b = source_frame(W - RECT_W - 64, H / 5);
+        assert_eq!(
+            bright_pixel_count(&source_a),
+            bright_pixel_count(&source_b),
+            "spatial source fixtures have equal total brightness"
+        );
+        let (input_a, _) = fixture(&device);
+        let (input_b, _) = fixture(&device);
+        let mut moved_a = Harness::new(std::sync::Arc::clone(&device), &def, &input_a, false);
+        let mut moved_b = Harness::new(std::sync::Arc::clone(&device), &def, &input_b, false);
+        let (_, _, columns_a, rows_a) =
+            moved_a.render_with_source(&source_a, &def, Controls::defaults(), 0.0, 0);
+        let (_, cells_a, _, _) =
+            moved_a.render_with_source(&source_a, &def, Controls::defaults(), 0.25, 1);
+        let (_, _, columns_b, rows_b) =
+            moved_b.render_with_source(&source_b, &def, Controls::defaults(), 0.0, 0);
+        let (_, cells_b, _, _) =
+            moved_b.render_with_source(&source_b, &def, Controls::defaults(), 0.25, 1);
+        assert_eq!((columns_a, rows_a), (columns_b, rows_b));
+        assert_terminal_cells(&cells_a, columns_a);
+        assert_terminal_cells(&cells_b, columns_b);
+        let source_rows = source_affected_rows(H / 5, rows_a);
+        let spatially_changed = changed_rows(&cells_a, &cells_b, columns_a, rows_a);
+        assert!(
+            spatially_changed
+                .iter()
+                .any(|row| source_rows.contains(row)),
+            "source motion changes terminal characters in source-affected rows"
+        );
+
+        // Activity 0 is a cell-state freeze, even while the reaction image
+        // moves. Resuming activity must make the previously frozen cells live.
+        let (frozen_input, _) = fixture(&device);
+        let mut frozen = Harness::new(std::sync::Arc::clone(&device), &def, &frozen_input, false);
+        let (_, frozen_a, columns, _) = frozen.render_with_source(
+            &source_a,
+            &def,
+            Controls {
+                activity: 0.0,
+                ..Controls::defaults()
+            },
+            0.0,
+            0,
+        );
+        let (_, frozen_b, _, _) = frozen.render_with_source(
+            &source_b,
+            &def,
+            Controls {
+                activity: 0.0,
+                ..Controls::defaults()
+            },
+            4.0,
+            1,
+        );
+        assert_eq!(
+            frozen_a, frozen_b,
+            "Activity=0 freezes actual terminal cells"
+        );
+        let (_, resumed, _, _) =
+            frozen.render_with_source(&source_b, &def, Controls::defaults(), 5.0, 2);
+        assert_ne!(
+            frozen_b, resumed,
+            "resuming activity reacts to the moving source"
+        );
+        assert_terminal_cells(&resumed, columns);
+
+        // A static source still animates the pane history beyond the live
+        // bottom row; this catches tests that only inspect the current cursor.
+        let (animated_input, _) = fixture(&device);
+        let mut animated =
+            Harness::new(std::sync::Arc::clone(&device), &def, &animated_input, false);
+        let (_, first_cells, columns, rows) =
+            animated.render_with_source(&source_a, &def, Controls::defaults(), 0.0, 0);
+        let (_, later_cells, _, _) =
+            animated.render_with_source(&source_a, &def, Controls::defaults(), 8.0, 1);
+        assert!(
+            changed_rows(&first_cells, &later_cells, columns, rows)
+                .iter()
+                .any(|row| *row + 1 < rows),
+            "static source animates terminal rows above the live bottom row"
         );
 
         let small = unfused.render(
@@ -598,41 +829,64 @@ mod gpu {
             .filter(|node| node.type_id == "node.wgsl_compute")
             .count();
         assert!(fused_nodes > 0, "fused preset contains actual fused nodes");
+        let mut fusion_unfused = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);
         let mut fused = Harness::new(std::sync::Arc::clone(&device), &def, &input, true);
-        let fused_raw = fused.render(&def, Controls::defaults(), 0.0, 0);
+        let mut unfused_warm = Vec::new();
+        let mut fused_warm = Vec::new();
+        for (frame, beat) in [(0_i64, 0.0), (1, 0.25), (2, 0.5)] {
+            let source = source_frame(32 + frame as u32 * 96, H / 5);
+            // Both harnesses point at the same source texture. Upload once
+            // before the frame so their fenced analysis sees the same image
+            // and beat timeline.
+            fusion_unfused.upload_source(&source);
+            unfused_warm = fusion_unfused.render(&def, Controls::defaults(), beat, frame);
+            fused_warm = fused.render(&def, Controls::defaults(), beat, frame);
+        }
         assert!(
-            mean_abs(&full, &fused_raw) < 0.001,
-            "fused and unfused CodeTerminal outputs agree"
+            mean_abs(&unfused_warm, &fused_warm) < 0.001,
+            "fused and unfused CodeTerminal outputs agree after warmup"
         );
 
         if let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_DEMO_DIR") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create terminal demo dir");
             let mut demo = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);
-            demo.render(
-                &def,
-                Controls {
-                    erosion: 0.0,
-                    ..Controls::defaults()
-                },
-                0.0,
-                0,
-            );
-            demo.write_png(&dir.join("code-terminal-source.png"));
-            demo.render(
-                &def,
-                Controls {
-                    erosion: 0.5,
-                    ..Controls::defaults()
-                },
-                0.0,
-                1,
-            );
-            demo.write_png(&dir.join("code-terminal-partial.png"));
-            demo.render(&def, Controls::defaults(), 0.0, 2);
-            demo.write_png(&dir.join("code-terminal-full.png"));
-            demo.render(&def, Controls::defaults(), 6.5, 3);
-            demo.write_png(&dir.join("code-terminal-frame-later.png"));
+            // Warm the fenced source readback before selecting evenly spaced
+            // frames from one continuous moving-silhouette capture.
+            for frame in 0_u32..4 {
+                let x = frame * (W - RECT_W) / 8;
+                let y = H / 5 + frame * (H - RECT_H - H / 5) / 8;
+                let source = source_frame(x, y);
+                demo.render_with_source(
+                    &source,
+                    &def,
+                    Controls {
+                        text_size: 32.0,
+                        ..Controls::defaults()
+                    },
+                    f64::from(frame) * 0.25,
+                    i64::from(frame),
+                );
+            }
+            // One continuous two-second capture at 32 fps: retain every
+            // frame so character-by-character typing can be reviewed.
+            for frame in 0_u32..64 {
+                let x = frame * (W - RECT_W) / 63;
+                let y = H / 4;
+                let source = source_frame(x, y);
+                demo.render_with_source(
+                    &source,
+                    &def,
+                    Controls {
+                        text_size: 32.0,
+                        ..Controls::defaults()
+                    },
+                    1.0 + f64::from(frame) / 16.0,
+                    i64::from(frame) + 4,
+                );
+                demo.write_png(&dir.join(format!("code-terminal-frame-{frame:02}.png")));
+                demo.write_source_png(&dir.join(format!("source-frame-{frame:02}.png")));
+            }
         }
     }
 }

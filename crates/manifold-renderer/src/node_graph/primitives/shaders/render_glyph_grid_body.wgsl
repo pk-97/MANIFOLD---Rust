@@ -39,12 +39,12 @@ fn body(
     let local = fract(uv * grid);
     let tile = vec2<f32>(f32(slot % ATLAS_COLUMNS), f32(slot / ATLAS_COLUMNS));
 
-    // Sample the tile's texel centers at the two edges. This gives linear
-    // antialiasing inside the tile while the half-texel inset prevents a
-    // neighbouring glyph from bleeding through at a cell boundary.
+    // Discard excess atlas padding, preserving every glyph's common baseline.
+    // The original full-tile stretch made terminal text look letter-spaced.
+    // This inner 26×44 rectangle retains the ink and stays inside the tile.
     let atlas_px = tile * vec2<f32>(TILE_WIDTH, TILE_HEIGHT)
-        + vec2<f32>(0.5)
-        + local * vec2<f32>(TILE_WIDTH - 1.0, TILE_HEIGHT - 1.0);
+        + vec2<f32>(2.5)
+        + local * vec2<f32>(25.0, 43.0);
     let atlas_uv = atlas_px / vec2<f32>(ATLAS_WIDTH, ATLAS_HEIGHT);
     let coverage = textureSampleLevel(atlas, atlas_sampler, atlas_uv, 0.0).r;
     return vec4<f32>(coverage, coverage, coverage, 1.0);

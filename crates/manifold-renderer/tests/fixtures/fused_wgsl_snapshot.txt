@@ -519,7 +519,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:CodeTerminal node:21 ===
+=== effect:CodeTerminal node:22 ===
 // @input_access: src_0 coincident
 // @input_access: src_1 coincident
 // @input_access: src_2 coincident
