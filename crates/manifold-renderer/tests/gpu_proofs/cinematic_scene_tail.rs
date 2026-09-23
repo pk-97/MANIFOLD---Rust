@@ -28,6 +28,7 @@ use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
+use std::io::Write;
 
 use crate::harness;
 
@@ -266,11 +267,13 @@ fn import_tail_frame_cost_reported_at_1080p() {
     // layer-skin precedent budgets on the measured mean, not the max).
     assert!(tail_delta_mean.is_finite(), "I4 timing measurement is invalid");
     if tail_delta_mean > 3.0 {
-        eprintln!(
+        writeln!(
+            std::io::stderr().lock(),
             "[cinematic-tail-I4] WARNING: tail exceeds the 3 ms mean frame-time target: \
              delta mean {tail_delta_mean:.2} ms at 1920x1080 \
              (with-tail mean {tail_mean:.2}, stripped mean {base_mean:.2})"
-        );
+        )
+        .expect("write tail performance warning");
     }
 }
 
@@ -313,10 +316,12 @@ fn import_tail_frame_cost_reported_at_4k() {
         "4K tail timing measurement is invalid"
     );
     if delta_max > 20.0 || delta_mean > 20.0 {
-        eprintln!(
+        writeln!(
+            std::io::stderr().lock(),
             "[cinematic-tail-I4-4K] WARNING: tail exceeds the 20 ms frame-time target: \
              delta max {delta_max:.2} ms, delta mean {delta_mean:.2} ms at 3840x2160"
-        );
+        )
+        .expect("write 4K tail performance warning");
     }
 }
 
