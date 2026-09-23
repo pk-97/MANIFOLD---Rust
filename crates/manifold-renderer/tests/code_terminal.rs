@@ -78,6 +78,11 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
     let registry = PrimitiveRegistry::with_builtin();
     let (mut graph, mut bound) = binding_graph(&roundtrip, &registry);
     compile(&graph).expect("CodeTerminal graph compiles");
+    let base = loaded_preset_view_by_id(&manifold_core::PresetTypeId::new("CodeTerminal")).unwrap();
+    assert!(
+        manifold_renderer::node_graph::freeze::install::fused_view_for(&roundtrip, base).is_some(),
+        "CodeTerminal graph supports fusion"
+    );
     assert!(
         roundtrip
             .nodes
@@ -787,8 +792,8 @@ mod gpu {
                     // glyph strokes. Compare mean luminance in 32px squares.
                     let original = f32_pixels(&source);
                     let reconstructed = f32_pixels(&full);
-                    let mut error = 0.0;
-                    let mut blocks = 0;
+                    let mut source_tones = Vec::new();
+                    let mut text_tones = Vec::new();
                     for y in (0..H as usize - 32).step_by(32) {
                         for x in (0..W as usize - 32).step_by(32) {
                             let mut sums = [0.0; 2];
@@ -803,14 +808,26 @@ mod gpu {
                                     }
                                 }
                             }
-                            error += (sums[0] - sums[1]).abs() / 1024.0;
-                            blocks += 1;
+                            source_tones.push(sums[0] / 1024.0);
+                            text_tones.push(sums[1] / 1024.0);
                         }
                     }
+                    // Black gaps deliberately reduce average light. Preserve
+                    // spatial tonal ordering rather than filling those gaps
+                    // merely to match the original image's mean brightness.
+                    let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
+                    let a = mean(&source_tones);
+                    let b = mean(&text_tones);
+                    let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+                    for (x, y) in source_tones.iter().zip(&text_tones) {
+                        ab += (x - a) * (y - b);
+                        aa += (x - a).powi(2);
+                        bb += (y - b).powi(2);
+                    }
+                    let correlation = ab / (aa * bb).sqrt().max(1e-8);
                     assert!(
-                        error / (blocks as f32) < 0.045,
-                        "clip {clip} lost image tones: {}",
-                        error / blocks as f32
+                        correlation > 0.75,
+                        "clip {clip} lost tonal structure: {correlation}"
                     );
                     harness.render(
                         &def,
@@ -836,6 +853,55 @@ mod gpu {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn code_terminal_never_lights_pixels_outside_glyphs() {
+        let device = std::sync::Arc::new(GpuDevice::new());
+        let def = preset();
+        let (input, _) = fixture(&device);
+        let mut coverage_def = def.clone();
+        coverage_def
+            .wires
+            .iter_mut()
+            .find(|wire| wire.to_node == 20)
+            .expect("final output wire")
+            .from_node = 3;
+        let mut coverage =
+            Harness::new(std::sync::Arc::clone(&device), &coverage_def, &input, false);
+        let mut effect = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);
+        let controls = Controls {
+            activity: 0.0,
+            ..Controls::defaults()
+        };
+        let glyphs = f32_pixels(&coverage.render(&coverage_def, controls, 0.0, 0));
+        effect.render(&def, controls, 0.0, 0);
+        assert_eq!(coverage.terminal_cells(), effect.terminal_cells());
+        let blanks = glyphs.iter().filter(|p| p[0] == 0.0).count();
+        assert!(
+            blanks > glyphs.len() / 2,
+            "spaces and inter-glyph gaps remain open"
+        );
+        // White is the worst case: the previous dither reconstruction filled
+        // the background here. Every palette must still consist only of text.
+        let white = vec![f16::from_f32(1.0).to_bits(); (W * H * 4) as usize];
+        let white_bytes = bytemuck::cast_slice(&white);
+        effect.upload_source(white_bytes);
+        for colour in [0.0, 1.0, 2.0] {
+            let output = f32_pixels(&effect.render(&def, Controls { colour, ..controls }, 0.0, 1));
+            for (glyph, pixel) in glyphs.iter().zip(&output) {
+                if glyph[0] == 0.0 {
+                    assert!(
+                        pixel[..3].iter().all(|v| v.abs() < 0.0001),
+                        "palette {colour} painted outside a glyph: {pixel:?}"
+                    );
+                }
+            }
+            assert!(
+                output.iter().any(|p| p[0].max(p[1]).max(p[2]) > 0.5),
+                "bright text survives"
+            );
         }
     }
 
@@ -869,8 +935,8 @@ mod gpu {
         let dark = full_pixels.iter().filter(|p| p[1] < 0.002).count();
         let lit = full_pixels.iter().filter(|p| p[1] > 0.08).count();
         assert!(
-            dark > full_pixels.len() / 100 && lit > full_pixels.len() / 3,
-            "code dithering must retain dark marks and broad image illumination"
+            dark > full_pixels.len() / 2 && lit > full_pixels.len() / 100,
+            "terminal must retain black gaps and visible glyph strokes"
         );
         assert!(
             max_alpha_error(&source_raw, &full) < 0.001,
