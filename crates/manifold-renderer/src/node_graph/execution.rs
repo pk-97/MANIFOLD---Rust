@@ -3451,13 +3451,14 @@ mod tests {
         let first_evals = Arc::new(Mutex::new(0));
         let second_evals = Arc::new(Mutex::new(0));
         let mut g = Graph::new();
-        g.add_node(Box::new(PureCountingNode::new(false, first_evals.clone())));
+        let first = g.add_node(Box::new(PureCountingNode::new(false, first_evals.clone())));
         g.add_node(Box::new(PureCountingNode::new(false, second_evals.clone())));
         let plan = compile(&g).unwrap();
         assert_eq!(plan.steps().len(), 2);
+        let mask: Vec<bool> = plan.steps().iter().map(|step| step.node == first).collect();
 
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[true, false]);
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask);
         assert_eq!(*first_evals.lock().unwrap(), 1);
         assert_eq!(*second_evals.lock().unwrap(), 0);
 
