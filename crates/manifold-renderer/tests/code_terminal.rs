@@ -274,6 +274,24 @@ mod gpu {
         .to_vec()
     }
 
+    // Demo-only curved silhouette: observe whether row contours shape text
+    // naturally while existing rectangular fixtures retain their proof scope.
+    fn curved_source_frame(center: f32) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity((W * H * 8) as usize);
+        for y in 0..H {
+            for x in 0..W {
+                let dx = (x as f32 / W as f32 - center) / 0.25;
+                let dy = (y as f32 / H as f32 - 0.5) / 0.4;
+                let coverage = ((1.0 - dx * dx - dy * dy) * 12.0).clamp(0.0, 1.0);
+                let value = 0.02 + 0.98 * coverage;
+                for channel in [value, value, value, 1.0] {
+                    bytes.extend_from_slice(&f16::from_f32(channel).to_le_bytes());
+                }
+            }
+        }
+        bytes
+    }
+
     fn fixture(device: &GpuDevice) -> (GpuTexture, Vec<u8>) {
         let mut halves = Vec::with_capacity((W * H * 4) as usize);
         for y in 0..H {
@@ -885,6 +903,17 @@ mod gpu {
                 assert_tmux_borders(&cells);
             }
             assert_meaningful_long_line(&cells, columns);
+            if layout == 3.0 {
+                for label in [b"0: shell".as_slice(), b"1: code", b"2: logs", b"3: inspect"] {
+                    assert!(
+                        cells.windows(label.len()).any(|window| window
+                            .iter()
+                            .zip(label)
+                            .all(|(&cell, &byte)| cell == u32::from(byte))),
+                        "four panes retain their role labels"
+                    );
+                }
+            }
             if layout == 0.0 {
                 assert!(
                     cells.chunks(columns).any(|row| row[64..]
@@ -1096,8 +1125,7 @@ mod gpu {
                     ..Controls::defaults()
                 };
                 for frame in 0_u32..64 {
-                    let x = frame * (W - RECT_W) / 63;
-                    let source = source_frame(x, H / 4);
+                    let source = curved_source_frame(0.25 + 0.5 * frame as f32 / 63.0);
                     demo.render_with_source(
                         &source,
                         &def,
@@ -1108,7 +1136,7 @@ mod gpu {
                     demo.write_png(&dir.join(format!("code-terminal-{name}-frame-{frame:02}.png")));
                     demo.write_source_png(&dir.join(format!("source-{name}-frame-{frame:02}.png")));
                 }
-                let settled_source = source_frame(W / 2, H / 4);
+                let settled_source = curved_source_frame(0.75);
                 settle_source_from(
                     &mut demo,
                     &settled_source,

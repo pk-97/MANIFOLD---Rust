@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "Long terminal lines update only when the source image changes. Spatial brightness and edges select changed passages to type; completed text stays still. Layout chooses Single or tmux-style splits. Activity controls edit speed; zero holds the characters.",
+  "description": "Long terminal lines update only when the source image changes. Contours shape indentation and line endings; completed text stays still. Layout chooses Single or tmux-style splits with distinct shell, code, log and inspection passages. Activity controls edit speed; zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
