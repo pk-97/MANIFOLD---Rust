@@ -40,7 +40,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 _Generated from the node registry. Do not hand-edit. 303 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
-### Color & Tone (17)
+### Color & Tone (16)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -58,7 +58,6 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Levels | `node.levels` | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | Posterize | `node.posterize` | Filter | Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result. |
 | Reinhard Tone Map | `node.reinhard_tone_map` | Filter | A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node. |
-| RGB Distance | `node.rgb_distance` | Filter | Measures each pixel's Euclidean RGB distance from a scalar-bindable target colour. |
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
@@ -137,7 +136,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | — | `node.simplex_noise_2d` | Source | Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
-### Mask (10)
+### Mask (11)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -149,6 +148,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Mask Extrema | `node.mask_extrema` | Filter | Expands or erodes a coverage mask along one image axis. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | Region Mask | `node.region_mask` | Filter | Turns observed tracked region labels into a pixel-accurate mask that preserves holes. |
+| RGB Distance | `node.rgb_distance` | Filter | Measures each pixel's Euclidean RGB distance from a scalar-bindable target colour. |
 | SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 

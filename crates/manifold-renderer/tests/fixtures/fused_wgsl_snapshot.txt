@@ -407,6 +407,1282 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r5);
 }
 
+=== effect:BlobTrackingV2 node:20 ===
+struct Element {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+struct Element2 {
+    a_index: u32,
+    b_index: u32,
+}
+
+struct Params {
+    n0_symbol: u32,
+    n0_color_x: f32,
+    n0_color_y: f32,
+    n0_color_z: f32,
+    n0_color_w: f32,
+    n0_alpha: f32,
+    n0_size_fraction: f32,
+    n0_thickness_px: f32,
+    n1_symbol: u32,
+    n1_color_x: f32,
+    n1_color_y: f32,
+    n1_color_z: f32,
+    n1_color_w: f32,
+    n1_alpha: f32,
+    n1_size_fraction: f32,
+    n1_thickness_px: f32,
+    n2_color_x: f32,
+    n2_color_y: f32,
+    n2_color_z: f32,
+    n2_color_w: f32,
+    n2_alpha: f32,
+    n2_radius_px: f32,
+    n3_color_x: f32,
+    n3_color_y: f32,
+    n3_color_z: f32,
+    n3_color_w: f32,
+    n3_alpha: f32,
+    n3_bottom_offset_px: f32,
+    n3_bar_height_px: f32,
+    n3_min_bar_width_px: f32,
+    n3_fill_scale: f32,
+    n3_thickness_px: f32,
+    n4_color_x: f32,
+    n4_color_y: f32,
+    n4_color_z: f32,
+    n4_color_w: f32,
+    n4_alpha: f32,
+    n4_right_offset_px: f32,
+    n4_long_tick_px: f32,
+    n4_short_tick_px: f32,
+    n4_thickness_px: f32,
+    n5_color_x: f32,
+    n5_color_y: f32,
+    n5_color_z: f32,
+    n5_color_w: f32,
+    n5_alpha: f32,
+    n5_thickness_px: f32,
+    n5_dash_period_px: f32,
+    n5_dash_fill: f32,
+    n5_midpoint_radius_px: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<Element2>;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let len_sq = dot(ba, ba);
+    if len_sq < 0.000001 { return 0.0; }
+    let h = saturate(dot(pa, ba) / len_sq);
+    let d = length(pa - ba * h);
+    return 1.0 - saturate(d / thickness);
+}
+
+fn n0_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n1_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n2_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let radius = radius_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let dist = length(p - center);
+        coverage = max(coverage, 1.0 - saturate(dist / radius));
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n3_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    bottom_offset_px: f32,
+    bar_height_px: f32,
+    min_bar_width_px: f32,
+    fill_scale: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let px_u = (1.0 / dims.x) * dpi_scale;
+    let px_v = (1.0 / dims.y) * dpi_scale;
+    let thickness = thickness_px * px_u;
+    let bar_height = bar_height_px * px_v;
+    let bottom_offset = bottom_offset_px * px_v;
+    let min_bar_w = min_bar_width_px * px_u;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+
+        let origin = vec2<f32>(center.x - half_size.x, center.y + half_size.y + bottom_offset);
+        let bar_w = max(d.width, min_bar_w);
+        let fill_frac = saturate(d.width * d.height * fill_scale);
+
+        let tl = origin;
+        let tr = origin + vec2<f32>(bar_w, 0.0);
+        let bl = origin + vec2<f32>(0.0, bar_height);
+        let br = origin + vec2<f32>(bar_w, bar_height);
+        coverage = max(coverage, line_seg(uv, tl, tr, thickness));
+        coverage = max(coverage, line_seg(uv, bl, br, thickness));
+        coverage = max(coverage, line_seg(uv, tl, bl, thickness));
+        coverage = max(coverage, line_seg(uv, tr, br, thickness));
+
+        let rel = uv - origin;
+        if rel.x >= 0.0 && rel.x <= bar_w * fill_frac && rel.y >= 0.0 && rel.y <= bar_height {
+            coverage = max(coverage, 0.4);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n4_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    right_offset_px: f32,
+    long_tick_px: f32,
+    short_tick_px: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let right_offset = right_offset_px * dpi_scale;
+    let long_tick = long_tick_px * dpi_scale;
+    let short_tick = short_tick_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+
+        let tick_base = vec2<f32>(center.x + half_size.x + right_offset, center.y - half_size.y);
+        let tick_spacing = half_size.y * 0.5;
+
+        for (var t: u32 = 0u; t < 4u; t = t + 1u) {
+            let tick_start = tick_base + vec2<f32>(0.0, tick_spacing * f32(t));
+            let tick_len = select(short_tick, long_tick, (t % 2u) == 0u);
+            coverage = max(coverage, line_seg(p, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n5_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    thickness_px: f32,
+    dash_period_px: f32,
+    dash_fill: f32,
+    midpoint_radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let dash_period = dash_period_px * dpi_scale;
+    let mid_radius = midpoint_radius_px * dpi_scale;
+    let p = uv * dims;
+    let det_count = arrayLength(&src_1);
+
+    var line_cov = 0.0;
+    var mid_cov = 0.0;
+    let n = arrayLength(&src_2);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let e = src_2[i];
+        if e.a_index == 0xFFFFFFFFu { continue; }
+        if e.a_index >= det_count || e.b_index >= det_count { continue; }
+        let da = src_1[e.a_index];
+        let db = src_1[e.b_index];
+        let center_a = (vec2<f32>(da.x, da.y) + vec2<f32>(da.width, da.height) * 0.5) * dims;
+        let center_b = (vec2<f32>(db.x, db.y) + vec2<f32>(db.width, db.height) * 0.5) * dims;
+
+        let ba = center_b - center_a;
+        let len_sq = dot(ba, ba);
+        if len_sq < 0.000001 { continue; }
+        let pa = p - center_a;
+        let t_val = saturate(dot(pa, ba) / len_sq);
+        let len = sqrt(len_sq);
+        let dash_phase = fract(t_val * len / dash_period);
+        let dash_mask = step(dash_fill, dash_phase);
+
+        line_cov = max(line_cov, line_seg(p, center_a, center_b, thickness) * 0.5 * dash_mask);
+
+        if mid_radius > 0.0 {
+            let mid = (center_a + center_b) * 0.5;
+            let mid_dist = length(p - mid);
+            mid_cov = max(mid_cov, (1.0 - saturate(mid_dist / mid_radius)) * 0.4);
+        }
+    }
+
+    let add = (line_cov + mid_cov) * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_symbol, vec4<f32>(params.n0_color_x, params.n0_color_y, params.n0_color_z, params.n0_color_w), params.n0_alpha, params.n0_size_fraction, params.n0_thickness_px);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_symbol, vec4<f32>(params.n1_color_x, params.n1_color_y, params.n1_color_z, params.n1_color_w), params.n1_alpha, params.n1_size_fraction, params.n1_thickness_px);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), vec4<f32>(params.n2_color_x, params.n2_color_y, params.n2_color_z, params.n2_color_w), params.n2_alpha, params.n2_radius_px);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), vec4<f32>(params.n3_color_x, params.n3_color_y, params.n3_color_z, params.n3_color_w), params.n3_alpha, params.n3_bottom_offset_px, params.n3_bar_height_px, params.n3_min_bar_width_px, params.n3_fill_scale, params.n3_thickness_px);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), vec4<f32>(params.n4_color_x, params.n4_color_y, params.n4_color_z, params.n4_color_w), params.n4_alpha, params.n4_right_offset_px, params.n4_long_tick_px, params.n4_short_tick_px, params.n4_thickness_px);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), vec4<f32>(params.n5_color_x, params.n5_color_y, params.n5_color_z, params.n5_color_w), params.n5_alpha, params.n5_thickness_px, params.n5_dash_period_px, params.n5_dash_fill, params.n5_midpoint_radius_px);
+    textureStore(dst, coord, r5);
+}
+
+=== effect:BlobTrackingV2Colour node:24 ===
+// @input_access: src_0 coincident
+struct Params {
+    n0_red: f32,
+    n0_green: f32,
+    n0_blue: f32,
+    n1_low: f32,
+    n1_high: f32,
+    n2_intensity: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, red: f32, green: f32, blue: f32) -> vec4<f32> {
+    let target_rgb = clamp(vec3<f32>(red, green, blue), vec3<f32>(0.0), vec3<f32>(1.0));
+    let distance = length(c.rgb - target_rgb);
+    return vec4<f32>(distance, distance, distance, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_red, params.n0_green, params.n0_blue);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_low, params.n1_high);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_intensity);
+    textureStore(dst, coord, r2);
+}
+
+=== effect:BlobTrackingV2Colour node:25 ===
+struct Element {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+struct Element2 {
+    a_index: u32,
+    b_index: u32,
+}
+
+struct Params {
+    n0_symbol: u32,
+    n0_color_x: f32,
+    n0_color_y: f32,
+    n0_color_z: f32,
+    n0_color_w: f32,
+    n0_alpha: f32,
+    n0_size_fraction: f32,
+    n0_thickness_px: f32,
+    n1_symbol: u32,
+    n1_color_x: f32,
+    n1_color_y: f32,
+    n1_color_z: f32,
+    n1_color_w: f32,
+    n1_alpha: f32,
+    n1_size_fraction: f32,
+    n1_thickness_px: f32,
+    n2_color_x: f32,
+    n2_color_y: f32,
+    n2_color_z: f32,
+    n2_color_w: f32,
+    n2_alpha: f32,
+    n2_radius_px: f32,
+    n3_color_x: f32,
+    n3_color_y: f32,
+    n3_color_z: f32,
+    n3_color_w: f32,
+    n3_alpha: f32,
+    n3_bottom_offset_px: f32,
+    n3_bar_height_px: f32,
+    n3_min_bar_width_px: f32,
+    n3_fill_scale: f32,
+    n3_thickness_px: f32,
+    n4_color_x: f32,
+    n4_color_y: f32,
+    n4_color_z: f32,
+    n4_color_w: f32,
+    n4_alpha: f32,
+    n4_right_offset_px: f32,
+    n4_long_tick_px: f32,
+    n4_short_tick_px: f32,
+    n4_thickness_px: f32,
+    n5_color_x: f32,
+    n5_color_y: f32,
+    n5_color_z: f32,
+    n5_color_w: f32,
+    n5_alpha: f32,
+    n5_thickness_px: f32,
+    n5_dash_period_px: f32,
+    n5_dash_fill: f32,
+    n5_midpoint_radius_px: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<Element2>;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let len_sq = dot(ba, ba);
+    if len_sq < 0.000001 { return 0.0; }
+    let h = saturate(dot(pa, ba) / len_sq);
+    let d = length(pa - ba * h);
+    return 1.0 - saturate(d / thickness);
+}
+
+fn n0_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n1_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n2_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let radius = radius_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let dist = length(p - center);
+        coverage = max(coverage, 1.0 - saturate(dist / radius));
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n3_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    bottom_offset_px: f32,
+    bar_height_px: f32,
+    min_bar_width_px: f32,
+    fill_scale: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let px_u = (1.0 / dims.x) * dpi_scale;
+    let px_v = (1.0 / dims.y) * dpi_scale;
+    let thickness = thickness_px * px_u;
+    let bar_height = bar_height_px * px_v;
+    let bottom_offset = bottom_offset_px * px_v;
+    let min_bar_w = min_bar_width_px * px_u;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+
+        let origin = vec2<f32>(center.x - half_size.x, center.y + half_size.y + bottom_offset);
+        let bar_w = max(d.width, min_bar_w);
+        let fill_frac = saturate(d.width * d.height * fill_scale);
+
+        let tl = origin;
+        let tr = origin + vec2<f32>(bar_w, 0.0);
+        let bl = origin + vec2<f32>(0.0, bar_height);
+        let br = origin + vec2<f32>(bar_w, bar_height);
+        coverage = max(coverage, line_seg(uv, tl, tr, thickness));
+        coverage = max(coverage, line_seg(uv, bl, br, thickness));
+        coverage = max(coverage, line_seg(uv, tl, bl, thickness));
+        coverage = max(coverage, line_seg(uv, tr, br, thickness));
+
+        let rel = uv - origin;
+        if rel.x >= 0.0 && rel.x <= bar_w * fill_frac && rel.y >= 0.0 && rel.y <= bar_height {
+            coverage = max(coverage, 0.4);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n4_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    right_offset_px: f32,
+    long_tick_px: f32,
+    short_tick_px: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let right_offset = right_offset_px * dpi_scale;
+    let long_tick = long_tick_px * dpi_scale;
+    let short_tick = short_tick_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+
+        let tick_base = vec2<f32>(center.x + half_size.x + right_offset, center.y - half_size.y);
+        let tick_spacing = half_size.y * 0.5;
+
+        for (var t: u32 = 0u; t < 4u; t = t + 1u) {
+            let tick_start = tick_base + vec2<f32>(0.0, tick_spacing * f32(t));
+            let tick_len = select(short_tick, long_tick, (t % 2u) == 0u);
+            coverage = max(coverage, line_seg(p, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n5_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    thickness_px: f32,
+    dash_period_px: f32,
+    dash_fill: f32,
+    midpoint_radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let dash_period = dash_period_px * dpi_scale;
+    let mid_radius = midpoint_radius_px * dpi_scale;
+    let p = uv * dims;
+    let det_count = arrayLength(&src_1);
+
+    var line_cov = 0.0;
+    var mid_cov = 0.0;
+    let n = arrayLength(&src_2);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let e = src_2[i];
+        if e.a_index == 0xFFFFFFFFu { continue; }
+        if e.a_index >= det_count || e.b_index >= det_count { continue; }
+        let da = src_1[e.a_index];
+        let db = src_1[e.b_index];
+        let center_a = (vec2<f32>(da.x, da.y) + vec2<f32>(da.width, da.height) * 0.5) * dims;
+        let center_b = (vec2<f32>(db.x, db.y) + vec2<f32>(db.width, db.height) * 0.5) * dims;
+
+        let ba = center_b - center_a;
+        let len_sq = dot(ba, ba);
+        if len_sq < 0.000001 { continue; }
+        let pa = p - center_a;
+        let t_val = saturate(dot(pa, ba) / len_sq);
+        let len = sqrt(len_sq);
+        let dash_phase = fract(t_val * len / dash_period);
+        let dash_mask = step(dash_fill, dash_phase);
+
+        line_cov = max(line_cov, line_seg(p, center_a, center_b, thickness) * 0.5 * dash_mask);
+
+        if mid_radius > 0.0 {
+            let mid = (center_a + center_b) * 0.5;
+            let mid_dist = length(p - mid);
+            mid_cov = max(mid_cov, (1.0 - saturate(mid_dist / mid_radius)) * 0.4);
+        }
+    }
+
+    let add = (line_cov + mid_cov) * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_symbol, vec4<f32>(params.n0_color_x, params.n0_color_y, params.n0_color_z, params.n0_color_w), params.n0_alpha, params.n0_size_fraction, params.n0_thickness_px);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_symbol, vec4<f32>(params.n1_color_x, params.n1_color_y, params.n1_color_z, params.n1_color_w), params.n1_alpha, params.n1_size_fraction, params.n1_thickness_px);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), vec4<f32>(params.n2_color_x, params.n2_color_y, params.n2_color_z, params.n2_color_w), params.n2_alpha, params.n2_radius_px);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), vec4<f32>(params.n3_color_x, params.n3_color_y, params.n3_color_z, params.n3_color_w), params.n3_alpha, params.n3_bottom_offset_px, params.n3_bar_height_px, params.n3_min_bar_width_px, params.n3_fill_scale, params.n3_thickness_px);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), vec4<f32>(params.n4_color_x, params.n4_color_y, params.n4_color_z, params.n4_color_w), params.n4_alpha, params.n4_right_offset_px, params.n4_long_tick_px, params.n4_short_tick_px, params.n4_thickness_px);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), vec4<f32>(params.n5_color_x, params.n5_color_y, params.n5_color_z, params.n5_color_w), params.n5_alpha, params.n5_thickness_px, params.n5_dash_period_px, params.n5_dash_fill, params.n5_midpoint_radius_px);
+    textureStore(dst, coord, r5);
+}
+
+=== effect:BlobTrackingV2Motion node:31 ===
+// @input_access: src_0 coincident
+struct Params {
+    n0_row0_x: f32,
+    n0_row0_y: f32,
+    n0_row0_z: f32,
+    n0_row0_w: f32,
+    n0_row1_x: f32,
+    n0_row1_y: f32,
+    n0_row1_z: f32,
+    n0_row1_w: f32,
+    n0_row2_x: f32,
+    n0_row2_y: f32,
+    n0_row2_z: f32,
+    n0_row2_w: f32,
+    n0_row3_x: f32,
+    n0_row3_y: f32,
+    n0_row3_z: f32,
+    n0_row3_w: f32,
+    n1_row0_x: f32,
+    n1_row0_y: f32,
+    n1_row0_z: f32,
+    n1_row0_w: f32,
+    n1_row1_x: f32,
+    n1_row1_y: f32,
+    n1_row1_z: f32,
+    n1_row1_w: f32,
+    n1_row2_x: f32,
+    n1_row2_y: f32,
+    n1_row2_z: f32,
+    n1_row2_w: f32,
+    n1_row3_x: f32,
+    n1_row3_y: f32,
+    n1_row3_z: f32,
+    n1_row3_w: f32,
+    n2_row0_x: f32,
+    n2_row0_y: f32,
+    n2_row0_z: f32,
+    n2_row0_w: f32,
+    n2_row1_x: f32,
+    n2_row1_y: f32,
+    n2_row1_z: f32,
+    n2_row1_w: f32,
+    n2_row2_x: f32,
+    n2_row2_y: f32,
+    n2_row2_z: f32,
+    n2_row2_w: f32,
+    n2_row3_x: f32,
+    n2_row3_y: f32,
+    n2_row3_z: f32,
+    n2_row3_w: f32,
+    n4_gain: f32,
+    n5_amount: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n1_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n2_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n3_body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
+    let v = c_in.rg;
+    return vec4<f32>(length(v), 0.0, 0.0, 1.0);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+fn n5_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n0_row0_x, params.n0_row0_y, params.n0_row0_z, params.n0_row0_w), vec4<f32>(params.n0_row1_x, params.n0_row1_y, params.n0_row1_z, params.n0_row1_w), vec4<f32>(params.n0_row2_x, params.n0_row2_y, params.n0_row2_z, params.n0_row2_w), vec4<f32>(params.n0_row3_x, params.n0_row3_y, params.n0_row3_z, params.n0_row3_w));
+    let r1 = n1_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n1_row0_x, params.n1_row0_y, params.n1_row0_z, params.n1_row0_w), vec4<f32>(params.n1_row1_x, params.n1_row1_y, params.n1_row1_z, params.n1_row1_w), vec4<f32>(params.n1_row2_x, params.n1_row2_y, params.n1_row2_z, params.n1_row2_w), vec4<f32>(params.n1_row3_x, params.n1_row3_y, params.n1_row3_z, params.n1_row3_w));
+    let r2 = n2_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n2_row0_x, params.n2_row0_y, params.n2_row0_z, params.n2_row0_w), vec4<f32>(params.n2_row1_x, params.n2_row1_y, params.n2_row1_z, params.n2_row1_w), vec4<f32>(params.n2_row2_x, params.n2_row2_y, params.n2_row2_z, params.n2_row2_w), vec4<f32>(params.n2_row3_x, params.n2_row3_y, params.n2_row3_z, params.n2_row3_w));
+    let r3 = n3_body(r2, uv, vec2<f32>(dims));
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_gain);
+    let r5 = n5_body(r0, r4, r1, uv, vec2<f32>(dims), params.n5_amount);
+    textureStore(dst, coord, r5);
+}
+
+=== effect:BlobTrackingV2Motion node:32 ===
+struct Element {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+struct Element2 {
+    a_index: u32,
+    b_index: u32,
+}
+
+struct Params {
+    n0_symbol: u32,
+    n0_color_x: f32,
+    n0_color_y: f32,
+    n0_color_z: f32,
+    n0_color_w: f32,
+    n0_alpha: f32,
+    n0_size_fraction: f32,
+    n0_thickness_px: f32,
+    n1_symbol: u32,
+    n1_color_x: f32,
+    n1_color_y: f32,
+    n1_color_z: f32,
+    n1_color_w: f32,
+    n1_alpha: f32,
+    n1_size_fraction: f32,
+    n1_thickness_px: f32,
+    n2_color_x: f32,
+    n2_color_y: f32,
+    n2_color_z: f32,
+    n2_color_w: f32,
+    n2_alpha: f32,
+    n2_radius_px: f32,
+    n3_color_x: f32,
+    n3_color_y: f32,
+    n3_color_z: f32,
+    n3_color_w: f32,
+    n3_alpha: f32,
+    n3_bottom_offset_px: f32,
+    n3_bar_height_px: f32,
+    n3_min_bar_width_px: f32,
+    n3_fill_scale: f32,
+    n3_thickness_px: f32,
+    n4_color_x: f32,
+    n4_color_y: f32,
+    n4_color_z: f32,
+    n4_color_w: f32,
+    n4_alpha: f32,
+    n4_right_offset_px: f32,
+    n4_long_tick_px: f32,
+    n4_short_tick_px: f32,
+    n4_thickness_px: f32,
+    n5_color_x: f32,
+    n5_color_y: f32,
+    n5_color_z: f32,
+    n5_color_w: f32,
+    n5_alpha: f32,
+    n5_thickness_px: f32,
+    n5_dash_period_px: f32,
+    n5_dash_fill: f32,
+    n5_midpoint_radius_px: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<Element2>;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let len_sq = dot(ba, ba);
+    if len_sq < 0.000001 { return 0.0; }
+    let h = saturate(dot(pa, ba) / len_sq);
+    let d = length(pa - ba * h);
+    return 1.0 - saturate(d / thickness);
+}
+
+fn n0_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n1_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(p, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n2_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let radius = radius_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+        let dist = length(p - center);
+        coverage = max(coverage, 1.0 - saturate(dist / radius));
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n3_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    bottom_offset_px: f32,
+    bar_height_px: f32,
+    min_bar_width_px: f32,
+    fill_scale: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let px_u = (1.0 / dims.x) * dpi_scale;
+    let px_v = (1.0 / dims.y) * dpi_scale;
+    let thickness = thickness_px * px_u;
+    let bar_height = bar_height_px * px_v;
+    let bottom_offset = bottom_offset_px * px_v;
+    let min_bar_w = min_bar_width_px * px_u;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+
+        let origin = vec2<f32>(center.x - half_size.x, center.y + half_size.y + bottom_offset);
+        let bar_w = max(d.width, min_bar_w);
+        let fill_frac = saturate(d.width * d.height * fill_scale);
+
+        let tl = origin;
+        let tr = origin + vec2<f32>(bar_w, 0.0);
+        let bl = origin + vec2<f32>(0.0, bar_height);
+        let br = origin + vec2<f32>(bar_w, bar_height);
+        coverage = max(coverage, line_seg(uv, tl, tr, thickness));
+        coverage = max(coverage, line_seg(uv, bl, br, thickness));
+        coverage = max(coverage, line_seg(uv, tl, bl, thickness));
+        coverage = max(coverage, line_seg(uv, tr, br, thickness));
+
+        let rel = uv - origin;
+        if rel.x >= 0.0 && rel.x <= bar_w * fill_frac && rel.y >= 0.0 && rel.y <= bar_height {
+            coverage = max(coverage, 0.4);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n4_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    right_offset_px: f32,
+    long_tick_px: f32,
+    short_tick_px: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let right_offset = right_offset_px * dpi_scale;
+    let long_tick = long_tick_px * dpi_scale;
+    let short_tick = short_tick_px * dpi_scale;
+    let p = uv * dims;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5 * dims;
+        let center = (vec2<f32>(d.x, d.y) + vec2<f32>(d.width, d.height) * 0.5) * dims;
+
+        let tick_base = vec2<f32>(center.x + half_size.x + right_offset, center.y - half_size.y);
+        let tick_spacing = half_size.y * 0.5;
+
+        for (var t: u32 = 0u; t < 4u; t = t + 1u) {
+            let tick_start = tick_base + vec2<f32>(0.0, tick_spacing * f32(t));
+            let tick_len = select(short_tick, long_tick, (t % 2u) == 0u);
+            coverage = max(coverage, line_seg(p, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n5_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    thickness_px: f32,
+    dash_period_px: f32,
+    dash_fill: f32,
+    midpoint_radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * dpi_scale;
+    let dash_period = dash_period_px * dpi_scale;
+    let mid_radius = midpoint_radius_px * dpi_scale;
+    let p = uv * dims;
+    let det_count = arrayLength(&src_1);
+
+    var line_cov = 0.0;
+    var mid_cov = 0.0;
+    let n = arrayLength(&src_2);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let e = src_2[i];
+        if e.a_index == 0xFFFFFFFFu { continue; }
+        if e.a_index >= det_count || e.b_index >= det_count { continue; }
+        let da = src_1[e.a_index];
+        let db = src_1[e.b_index];
+        let center_a = (vec2<f32>(da.x, da.y) + vec2<f32>(da.width, da.height) * 0.5) * dims;
+        let center_b = (vec2<f32>(db.x, db.y) + vec2<f32>(db.width, db.height) * 0.5) * dims;
+
+        let ba = center_b - center_a;
+        let len_sq = dot(ba, ba);
+        if len_sq < 0.000001 { continue; }
+        let pa = p - center_a;
+        let t_val = saturate(dot(pa, ba) / len_sq);
+        let len = sqrt(len_sq);
+        let dash_phase = fract(t_val * len / dash_period);
+        let dash_mask = step(dash_fill, dash_phase);
+
+        line_cov = max(line_cov, line_seg(p, center_a, center_b, thickness) * 0.5 * dash_mask);
+
+        if mid_radius > 0.0 {
+            let mid = (center_a + center_b) * 0.5;
+            let mid_dist = length(p - mid);
+            mid_cov = max(mid_cov, (1.0 - saturate(mid_dist / mid_radius)) * 0.4);
+        }
+    }
+
+    let add = (line_cov + mid_cov) * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_symbol, vec4<f32>(params.n0_color_x, params.n0_color_y, params.n0_color_z, params.n0_color_w), params.n0_alpha, params.n0_size_fraction, params.n0_thickness_px);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_symbol, vec4<f32>(params.n1_color_x, params.n1_color_y, params.n1_color_z, params.n1_color_w), params.n1_alpha, params.n1_size_fraction, params.n1_thickness_px);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), vec4<f32>(params.n2_color_x, params.n2_color_y, params.n2_color_z, params.n2_color_w), params.n2_alpha, params.n2_radius_px);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), vec4<f32>(params.n3_color_x, params.n3_color_y, params.n3_color_z, params.n3_color_w), params.n3_alpha, params.n3_bottom_offset_px, params.n3_bar_height_px, params.n3_min_bar_width_px, params.n3_fill_scale, params.n3_thickness_px);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), vec4<f32>(params.n4_color_x, params.n4_color_y, params.n4_color_z, params.n4_color_w), params.n4_alpha, params.n4_right_offset_px, params.n4_long_tick_px, params.n4_short_tick_px, params.n4_thickness_px);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), vec4<f32>(params.n5_color_x, params.n5_color_y, params.n5_color_z, params.n5_color_w), params.n5_alpha, params.n5_thickness_px, params.n5_dash_period_px, params.n5_dash_fill, params.n5_midpoint_radius_px);
+    textureStore(dst, coord, r5);
+}
+
 === effect:ChromaticAberration node:6 ===
 // @input_access: src_0 gather
 struct Params {
@@ -2640,6 +3916,1202 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let r1 = n1_body(src_0, samp, r0, uv, vec2<f32>(dims), params.n1_wrap, params.n1_mode);
     let r2 = n2_body(ext_0, r1, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
     textureStore(dst, coord, r2);
+}
+
+=== effect:MaskBlob node:17 ===
+// @input_access: src_0 gather
+struct Params {
+    n0_kernel_size: u32,
+    n0_axis: u32,
+    n0_step: f32,
+    n0_radius_mode: u32,
+    n0_radius: f32,
+    n0_address_mode: u32,
+    n1_max_dim: i32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+
+const SG_K9_0: f32 = 0.16501;
+const SG_K9_1: f32 = 0.15019;
+const SG_K9_2: f32 = 0.11325;
+const SG_K9_3: f32 = 0.07076;
+const SG_K9_4: f32 = 0.03664;
+const SG_K17_0: f32 = 0.10315;
+const SG_K17_1: f32 = 0.09998;
+const SG_K17_2: f32 = 0.09103;
+const SG_K17_3: f32 = 0.07786;
+const SG_K17_4: f32 = 0.06257;
+const SG_K17_5: f32 = 0.04723;
+const SG_K17_6: f32 = 0.03350;
+const SG_K17_7: f32 = 0.02232;
+const SG_K17_8: f32 = 0.01396;
+const SG_K25_0:  f32 = 0.07087;
+const SG_K25_1:  f32 = 0.06947;
+const SG_K25_2:  f32 = 0.06540;
+const SG_K25_3:  f32 = 0.05917;
+const SG_K25_4:  f32 = 0.05148;
+const SG_K25_5:  f32 = 0.04307;
+const SG_K25_6:  f32 = 0.03465;
+const SG_K25_7:  f32 = 0.02680;
+const SG_K25_8:  f32 = 0.01995;
+const SG_K25_9:  f32 = 0.01428;
+const SG_K25_10: f32 = 0.00983;
+const SG_K25_11: f32 = 0.00651;
+const SG_K25_12: f32 = 0.00415;
+
+fn q16(v: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(unpack2x16float(pack2x16float(v.xy)), unpack2x16float(pack2x16float(v.zw)));
+}
+
+fn n0_vsrc_in(t: vec2<i32>, vd: vec2<f32>) -> vec4<f32> {
+    let di = vec2<i32>(vd);
+    let ti = clamp(t, vec2<i32>(0), di - vec2<i32>(1));
+    let vuv = (vec2<f32>(ti) + vec2<f32>(0.5)) / vd;
+    let v1 = n1_body(src_0, samp, vuv, vd, params.n1_max_dim);
+    return q16(v1);
+}
+
+fn n0_fetch_in(c: vec2<f32>) -> vec4<f32> {
+    let vd = vec2<f32>(textureDimensions(dst));
+    let x = c * vd - vec2<f32>(0.5);
+    let f = fract(x);
+    let i0 = vec2<i32>(floor(x));
+    let c00 = n0_vsrc_in(i0, vd);
+    let c10 = n0_vsrc_in(i0 + vec2<i32>(1, 0), vd);
+    let c01 = n0_vsrc_in(i0 + vec2<i32>(0, 1), vd);
+    let c11 = n0_vsrc_in(i0 + vec2<i32>(1, 1), vd);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+fn n0_sg_blur_9(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K9_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K9_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K9_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K9_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K9_4;
+    return acc;
+}
+
+fn n0_sg_blur_17(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K17_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K17_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K17_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K17_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K17_4;
+    acc += (n0_fetch_in(uv + d * 5.0) + n0_fetch_in(uv - d * 5.0)) * SG_K17_5;
+    acc += (n0_fetch_in(uv + d * 6.0) + n0_fetch_in(uv - d * 6.0)) * SG_K17_6;
+    acc += (n0_fetch_in(uv + d * 7.0) + n0_fetch_in(uv - d * 7.0)) * SG_K17_7;
+    acc += (n0_fetch_in(uv + d * 8.0) + n0_fetch_in(uv - d * 8.0)) * SG_K17_8;
+    return acc;
+}
+
+fn n0_sg_blur_25(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K25_0;
+    acc += (n0_fetch_in(uv + d       ) + n0_fetch_in(uv - d       )) * SG_K25_1;
+    acc += (n0_fetch_in(uv + d *  2.0) + n0_fetch_in(uv - d *  2.0)) * SG_K25_2;
+    acc += (n0_fetch_in(uv + d *  3.0) + n0_fetch_in(uv - d *  3.0)) * SG_K25_3;
+    acc += (n0_fetch_in(uv + d *  4.0) + n0_fetch_in(uv - d *  4.0)) * SG_K25_4;
+    acc += (n0_fetch_in(uv + d *  5.0) + n0_fetch_in(uv - d *  5.0)) * SG_K25_5;
+    acc += (n0_fetch_in(uv + d *  6.0) + n0_fetch_in(uv - d *  6.0)) * SG_K25_6;
+    acc += (n0_fetch_in(uv + d *  7.0) + n0_fetch_in(uv - d *  7.0)) * SG_K25_7;
+    acc += (n0_fetch_in(uv + d *  8.0) + n0_fetch_in(uv - d *  8.0)) * SG_K25_8;
+    acc += (n0_fetch_in(uv + d *  9.0) + n0_fetch_in(uv - d *  9.0)) * SG_K25_9;
+    acc += (n0_fetch_in(uv + d * 10.0) + n0_fetch_in(uv - d * 10.0)) * SG_K25_10;
+    acc += (n0_fetch_in(uv + d * 11.0) + n0_fetch_in(uv - d * 11.0)) * SG_K25_11;
+    acc += (n0_fetch_in(uv + d * 12.0) + n0_fetch_in(uv - d * 12.0)) * SG_K25_12;
+    return acc;
+}
+
+// Dynamic-radius separable Gaussian — bit-exact port of the legacy fluid-sim
+// blur. Bilinear tap-pair optimisation: adjacent samples (j, j+1) collapse to one
+// bilinear fetch at their weighted midpoint.
+
+fn n0_sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    let sigma = max(radius / 3.0, 1.0);
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+
+    var result = n0_fetch_in(uv);
+    var total_weight = 1.0;
+
+    // BUG-290: cap the tap loop. `radius` is port-shadowed, so a wired
+    // control can deliver values far past the 0-256 param range (inf casts
+    // to i32::MAX = a firmware-watchdog-length loop). 2048 admits every
+    // canvas-scaled radius (256 * bw/640 = 1536 at 4K) and bounds garbage.
+    let radius_int = min(i32(radius), 2048);
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += n0_fetch_in(uv + axis_dir * offset) * w_ab;
+            result += n0_fetch_in(uv - axis_dir * offset) * w_ab;
+            total_weight += w_ab * 2.0;
+        } else {
+            result += n0_fetch_in(uv + axis_dir * fj) * w_a;
+            result += n0_fetch_in(uv - axis_dir * fj) * w_a;
+            total_weight += w_a * 2.0;
+        }
+
+        j += 2;
+    }
+
+    return result / total_weight;
+}
+
+// Linear-radius separable Gaussian — exact port of node.blur's per-axis pass
+// (blur.wgsl mode 0): sigma = max(radius/2, 0.5), one tap per integer offset
+// -r..r (no tap-pair trick), normalized by the running weight sum, radius
+// clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
+// texel centers, so fusing through this mode is filter-exact by construction.
+
+fn n0_sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    // Single-exit on purpose: an early return here leaves unreachable blocks
+    // that abort spirv-opt's merge-return pass, and the whole fused kernel
+    // then ships UNOPTIMIZED (no inlining/DCE — measured slow enough to flip
+    // the perf gate). Same arithmetic, same order, just one return.
+    let r_int = min(i32(radius), 32);
+    var result: vec4<f32>;
+    if r_int <= 0 {
+        result = n0_fetch_in(uv);
+    } else {
+        let sigma = max(radius * 0.5, 0.5);
+        let two_sigma_sq = 2.0 * sigma * sigma;
+
+        var sum = vec4<f32>(0.0);
+        var weight_sum = 0.0;
+        for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+            let s = n0_fetch_in(uv + axis_dir * f32(d));
+            let dist_sq = f32(d * d);
+            let w = exp(-dist_sq / two_sigma_sq);
+            sum = sum + s * w;
+            weight_sum = weight_sum + w;
+        }
+        result = sum / max(weight_sum, 1e-6);
+    }
+    return result;
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / dims;
+
+    var result: vec4<f32>;
+    if radius_mode == 1u || radius_mode == 2u {
+        var axis_dir: vec2<f32>;
+        if axis == 0u {
+            axis_dir = vec2<f32>(texel.x, 0.0);
+        } else {
+            axis_dir = vec2<f32>(0.0, texel.y);
+        }
+        if radius_mode == 2u {
+            result = n0_sg_blur_linear(uv, axis_dir, radius);
+        } else {
+            result = n0_sg_blur_dynamic(uv, axis_dir, radius);
+        }
+    } else {
+        var d: vec2<f32>;
+        if axis == 0u {
+            d = vec2<f32>(texel.x * step, 0.0);
+        } else {
+            d = vec2<f32>(0.0, texel.y * step);
+        }
+        if kernel_size == 0u {
+            result = n0_sg_blur_9(uv, d);
+        } else if kernel_size == 1u {
+            result = n0_sg_blur_17(uv, d);
+        } else {
+            result = n0_sg_blur_25(uv, d);
+        }
+    }
+
+    return result;
+}
+
+fn n1_body(source: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, _max_dim: i32) -> vec4<f32> {
+    let source_dims = vec2<f32>(textureDimensions(source));
+    let source_texel = 0.5 / source_dims;
+    let sample_uv = clamp(uv, source_texel, vec2<f32>(1.0) - source_texel);
+    return textureSampleLevel(source, samp, sample_uv, 0.0);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_kernel_size, params.n0_axis, params.n0_step, params.n0_radius_mode, params.n0_radius, params.n0_address_mode);
+    textureStore(dst, coord, r0);
+}
+
+=== effect:MaskBlob node:18 ===
+// @input_access: src_0 gather
+struct Params {
+    n0_kernel_size: u32,
+    n0_axis: u32,
+    n0_step: f32,
+    n0_radius_mode: u32,
+    n0_radius: f32,
+    n0_address_mode: u32,
+    n1_intensity: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    n3_scale: f32,
+    n3_offset: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+
+const SG_K9_0: f32 = 0.16501;
+const SG_K9_1: f32 = 0.15019;
+const SG_K9_2: f32 = 0.11325;
+const SG_K9_3: f32 = 0.07076;
+const SG_K9_4: f32 = 0.03664;
+const SG_K17_0: f32 = 0.10315;
+const SG_K17_1: f32 = 0.09998;
+const SG_K17_2: f32 = 0.09103;
+const SG_K17_3: f32 = 0.07786;
+const SG_K17_4: f32 = 0.06257;
+const SG_K17_5: f32 = 0.04723;
+const SG_K17_6: f32 = 0.03350;
+const SG_K17_7: f32 = 0.02232;
+const SG_K17_8: f32 = 0.01396;
+const SG_K25_0:  f32 = 0.07087;
+const SG_K25_1:  f32 = 0.06947;
+const SG_K25_2:  f32 = 0.06540;
+const SG_K25_3:  f32 = 0.05917;
+const SG_K25_4:  f32 = 0.05148;
+const SG_K25_5:  f32 = 0.04307;
+const SG_K25_6:  f32 = 0.03465;
+const SG_K25_7:  f32 = 0.02680;
+const SG_K25_8:  f32 = 0.01995;
+const SG_K25_9:  f32 = 0.01428;
+const SG_K25_10: f32 = 0.00983;
+const SG_K25_11: f32 = 0.00651;
+const SG_K25_12: f32 = 0.00415;
+
+fn n0_fetch_in(c: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(src_0, samp, c, 0.0);
+}
+
+fn n0_sg_blur_9(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K9_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K9_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K9_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K9_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K9_4;
+    return acc;
+}
+
+fn n0_sg_blur_17(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K17_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K17_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K17_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K17_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K17_4;
+    acc += (n0_fetch_in(uv + d * 5.0) + n0_fetch_in(uv - d * 5.0)) * SG_K17_5;
+    acc += (n0_fetch_in(uv + d * 6.0) + n0_fetch_in(uv - d * 6.0)) * SG_K17_6;
+    acc += (n0_fetch_in(uv + d * 7.0) + n0_fetch_in(uv - d * 7.0)) * SG_K17_7;
+    acc += (n0_fetch_in(uv + d * 8.0) + n0_fetch_in(uv - d * 8.0)) * SG_K17_8;
+    return acc;
+}
+
+fn n0_sg_blur_25(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K25_0;
+    acc += (n0_fetch_in(uv + d       ) + n0_fetch_in(uv - d       )) * SG_K25_1;
+    acc += (n0_fetch_in(uv + d *  2.0) + n0_fetch_in(uv - d *  2.0)) * SG_K25_2;
+    acc += (n0_fetch_in(uv + d *  3.0) + n0_fetch_in(uv - d *  3.0)) * SG_K25_3;
+    acc += (n0_fetch_in(uv + d *  4.0) + n0_fetch_in(uv - d *  4.0)) * SG_K25_4;
+    acc += (n0_fetch_in(uv + d *  5.0) + n0_fetch_in(uv - d *  5.0)) * SG_K25_5;
+    acc += (n0_fetch_in(uv + d *  6.0) + n0_fetch_in(uv - d *  6.0)) * SG_K25_6;
+    acc += (n0_fetch_in(uv + d *  7.0) + n0_fetch_in(uv - d *  7.0)) * SG_K25_7;
+    acc += (n0_fetch_in(uv + d *  8.0) + n0_fetch_in(uv - d *  8.0)) * SG_K25_8;
+    acc += (n0_fetch_in(uv + d *  9.0) + n0_fetch_in(uv - d *  9.0)) * SG_K25_9;
+    acc += (n0_fetch_in(uv + d * 10.0) + n0_fetch_in(uv - d * 10.0)) * SG_K25_10;
+    acc += (n0_fetch_in(uv + d * 11.0) + n0_fetch_in(uv - d * 11.0)) * SG_K25_11;
+    acc += (n0_fetch_in(uv + d * 12.0) + n0_fetch_in(uv - d * 12.0)) * SG_K25_12;
+    return acc;
+}
+
+// Dynamic-radius separable Gaussian — bit-exact port of the legacy fluid-sim
+// blur. Bilinear tap-pair optimisation: adjacent samples (j, j+1) collapse to one
+// bilinear fetch at their weighted midpoint.
+
+fn n0_sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    let sigma = max(radius / 3.0, 1.0);
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+
+    var result = n0_fetch_in(uv);
+    var total_weight = 1.0;
+
+    // BUG-290: cap the tap loop. `radius` is port-shadowed, so a wired
+    // control can deliver values far past the 0-256 param range (inf casts
+    // to i32::MAX = a firmware-watchdog-length loop). 2048 admits every
+    // canvas-scaled radius (256 * bw/640 = 1536 at 4K) and bounds garbage.
+    let radius_int = min(i32(radius), 2048);
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += n0_fetch_in(uv + axis_dir * offset) * w_ab;
+            result += n0_fetch_in(uv - axis_dir * offset) * w_ab;
+            total_weight += w_ab * 2.0;
+        } else {
+            result += n0_fetch_in(uv + axis_dir * fj) * w_a;
+            result += n0_fetch_in(uv - axis_dir * fj) * w_a;
+            total_weight += w_a * 2.0;
+        }
+
+        j += 2;
+    }
+
+    return result / total_weight;
+}
+
+// Linear-radius separable Gaussian — exact port of node.blur's per-axis pass
+// (blur.wgsl mode 0): sigma = max(radius/2, 0.5), one tap per integer offset
+// -r..r (no tap-pair trick), normalized by the running weight sum, radius
+// clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
+// texel centers, so fusing through this mode is filter-exact by construction.
+
+fn n0_sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    // Single-exit on purpose: an early return here leaves unreachable blocks
+    // that abort spirv-opt's merge-return pass, and the whole fused kernel
+    // then ships UNOPTIMIZED (no inlining/DCE — measured slow enough to flip
+    // the perf gate). Same arithmetic, same order, just one return.
+    let r_int = min(i32(radius), 32);
+    var result: vec4<f32>;
+    if r_int <= 0 {
+        result = n0_fetch_in(uv);
+    } else {
+        let sigma = max(radius * 0.5, 0.5);
+        let two_sigma_sq = 2.0 * sigma * sigma;
+
+        var sum = vec4<f32>(0.0);
+        var weight_sum = 0.0;
+        for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+            let s = n0_fetch_in(uv + axis_dir * f32(d));
+            let dist_sq = f32(d * d);
+            let w = exp(-dist_sq / two_sigma_sq);
+            sum = sum + s * w;
+            weight_sum = weight_sum + w;
+        }
+        result = sum / max(weight_sum, 1e-6);
+    }
+    return result;
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / dims;
+
+    var result: vec4<f32>;
+    if radius_mode == 1u || radius_mode == 2u {
+        var axis_dir: vec2<f32>;
+        if axis == 0u {
+            axis_dir = vec2<f32>(texel.x, 0.0);
+        } else {
+            axis_dir = vec2<f32>(0.0, texel.y);
+        }
+        if radius_mode == 2u {
+            result = n0_sg_blur_linear(uv, axis_dir, radius);
+        } else {
+            result = n0_sg_blur_dynamic(uv, axis_dir, radius);
+        }
+    } else {
+        var d: vec2<f32>;
+        if axis == 0u {
+            d = vec2<f32>(texel.x * step, 0.0);
+        } else {
+            d = vec2<f32>(0.0, texel.y * step);
+        }
+        if kernel_size == 0u {
+            result = n0_sg_blur_9(uv, d);
+        } else if kernel_size == 1u {
+            result = n0_sg_blur_17(uv, d);
+        } else {
+            result = n0_sg_blur_25(uv, d);
+        }
+    }
+
+    return result;
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_kernel_size, params.n0_axis, params.n0_step, params.n0_radius_mode, params.n0_radius, params.n0_address_mode);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_intensity);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_scale, params.n3_offset);
+    textureStore(dst, coord, r3);
+}
+
+=== effect:MaskBlobColour node:21 ===
+// @input_access: src_0 coincident
+struct Params {
+    n0_red: f32,
+    n0_green: f32,
+    n0_blue: f32,
+    n1_low: f32,
+    n1_high: f32,
+    n2_intensity: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, red: f32, green: f32, blue: f32) -> vec4<f32> {
+    let target_rgb = clamp(vec3<f32>(red, green, blue), vec3<f32>(0.0), vec3<f32>(1.0));
+    let distance = length(c.rgb - target_rgb);
+    return vec4<f32>(distance, distance, distance, 1.0);
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_red, params.n0_green, params.n0_blue);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_low, params.n1_high);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_intensity);
+    textureStore(dst, coord, r2);
+}
+
+=== effect:MaskBlobColour node:22 ===
+// @input_access: src_0 gather
+struct Params {
+    n0_kernel_size: u32,
+    n0_axis: u32,
+    n0_step: f32,
+    n0_radius_mode: u32,
+    n0_radius: f32,
+    n0_address_mode: u32,
+    n1_intensity: f32,
+    n2_scale: f32,
+    n2_offset: f32,
+    n3_scale: f32,
+    n3_offset: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+
+const SG_K9_0: f32 = 0.16501;
+const SG_K9_1: f32 = 0.15019;
+const SG_K9_2: f32 = 0.11325;
+const SG_K9_3: f32 = 0.07076;
+const SG_K9_4: f32 = 0.03664;
+const SG_K17_0: f32 = 0.10315;
+const SG_K17_1: f32 = 0.09998;
+const SG_K17_2: f32 = 0.09103;
+const SG_K17_3: f32 = 0.07786;
+const SG_K17_4: f32 = 0.06257;
+const SG_K17_5: f32 = 0.04723;
+const SG_K17_6: f32 = 0.03350;
+const SG_K17_7: f32 = 0.02232;
+const SG_K17_8: f32 = 0.01396;
+const SG_K25_0:  f32 = 0.07087;
+const SG_K25_1:  f32 = 0.06947;
+const SG_K25_2:  f32 = 0.06540;
+const SG_K25_3:  f32 = 0.05917;
+const SG_K25_4:  f32 = 0.05148;
+const SG_K25_5:  f32 = 0.04307;
+const SG_K25_6:  f32 = 0.03465;
+const SG_K25_7:  f32 = 0.02680;
+const SG_K25_8:  f32 = 0.01995;
+const SG_K25_9:  f32 = 0.01428;
+const SG_K25_10: f32 = 0.00983;
+const SG_K25_11: f32 = 0.00651;
+const SG_K25_12: f32 = 0.00415;
+
+fn n0_fetch_in(c: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(src_0, samp, c, 0.0);
+}
+
+fn n0_sg_blur_9(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K9_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K9_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K9_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K9_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K9_4;
+    return acc;
+}
+
+fn n0_sg_blur_17(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K17_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K17_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K17_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K17_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K17_4;
+    acc += (n0_fetch_in(uv + d * 5.0) + n0_fetch_in(uv - d * 5.0)) * SG_K17_5;
+    acc += (n0_fetch_in(uv + d * 6.0) + n0_fetch_in(uv - d * 6.0)) * SG_K17_6;
+    acc += (n0_fetch_in(uv + d * 7.0) + n0_fetch_in(uv - d * 7.0)) * SG_K17_7;
+    acc += (n0_fetch_in(uv + d * 8.0) + n0_fetch_in(uv - d * 8.0)) * SG_K17_8;
+    return acc;
+}
+
+fn n0_sg_blur_25(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K25_0;
+    acc += (n0_fetch_in(uv + d       ) + n0_fetch_in(uv - d       )) * SG_K25_1;
+    acc += (n0_fetch_in(uv + d *  2.0) + n0_fetch_in(uv - d *  2.0)) * SG_K25_2;
+    acc += (n0_fetch_in(uv + d *  3.0) + n0_fetch_in(uv - d *  3.0)) * SG_K25_3;
+    acc += (n0_fetch_in(uv + d *  4.0) + n0_fetch_in(uv - d *  4.0)) * SG_K25_4;
+    acc += (n0_fetch_in(uv + d *  5.0) + n0_fetch_in(uv - d *  5.0)) * SG_K25_5;
+    acc += (n0_fetch_in(uv + d *  6.0) + n0_fetch_in(uv - d *  6.0)) * SG_K25_6;
+    acc += (n0_fetch_in(uv + d *  7.0) + n0_fetch_in(uv - d *  7.0)) * SG_K25_7;
+    acc += (n0_fetch_in(uv + d *  8.0) + n0_fetch_in(uv - d *  8.0)) * SG_K25_8;
+    acc += (n0_fetch_in(uv + d *  9.0) + n0_fetch_in(uv - d *  9.0)) * SG_K25_9;
+    acc += (n0_fetch_in(uv + d * 10.0) + n0_fetch_in(uv - d * 10.0)) * SG_K25_10;
+    acc += (n0_fetch_in(uv + d * 11.0) + n0_fetch_in(uv - d * 11.0)) * SG_K25_11;
+    acc += (n0_fetch_in(uv + d * 12.0) + n0_fetch_in(uv - d * 12.0)) * SG_K25_12;
+    return acc;
+}
+
+// Dynamic-radius separable Gaussian — bit-exact port of the legacy fluid-sim
+// blur. Bilinear tap-pair optimisation: adjacent samples (j, j+1) collapse to one
+// bilinear fetch at their weighted midpoint.
+
+fn n0_sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    let sigma = max(radius / 3.0, 1.0);
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+
+    var result = n0_fetch_in(uv);
+    var total_weight = 1.0;
+
+    // BUG-290: cap the tap loop. `radius` is port-shadowed, so a wired
+    // control can deliver values far past the 0-256 param range (inf casts
+    // to i32::MAX = a firmware-watchdog-length loop). 2048 admits every
+    // canvas-scaled radius (256 * bw/640 = 1536 at 4K) and bounds garbage.
+    let radius_int = min(i32(radius), 2048);
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += n0_fetch_in(uv + axis_dir * offset) * w_ab;
+            result += n0_fetch_in(uv - axis_dir * offset) * w_ab;
+            total_weight += w_ab * 2.0;
+        } else {
+            result += n0_fetch_in(uv + axis_dir * fj) * w_a;
+            result += n0_fetch_in(uv - axis_dir * fj) * w_a;
+            total_weight += w_a * 2.0;
+        }
+
+        j += 2;
+    }
+
+    return result / total_weight;
+}
+
+// Linear-radius separable Gaussian — exact port of node.blur's per-axis pass
+// (blur.wgsl mode 0): sigma = max(radius/2, 0.5), one tap per integer offset
+// -r..r (no tap-pair trick), normalized by the running weight sum, radius
+// clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
+// texel centers, so fusing through this mode is filter-exact by construction.
+
+fn n0_sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    // Single-exit on purpose: an early return here leaves unreachable blocks
+    // that abort spirv-opt's merge-return pass, and the whole fused kernel
+    // then ships UNOPTIMIZED (no inlining/DCE — measured slow enough to flip
+    // the perf gate). Same arithmetic, same order, just one return.
+    let r_int = min(i32(radius), 32);
+    var result: vec4<f32>;
+    if r_int <= 0 {
+        result = n0_fetch_in(uv);
+    } else {
+        let sigma = max(radius * 0.5, 0.5);
+        let two_sigma_sq = 2.0 * sigma * sigma;
+
+        var sum = vec4<f32>(0.0);
+        var weight_sum = 0.0;
+        for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+            let s = n0_fetch_in(uv + axis_dir * f32(d));
+            let dist_sq = f32(d * d);
+            let w = exp(-dist_sq / two_sigma_sq);
+            sum = sum + s * w;
+            weight_sum = weight_sum + w;
+        }
+        result = sum / max(weight_sum, 1e-6);
+    }
+    return result;
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / dims;
+
+    var result: vec4<f32>;
+    if radius_mode == 1u || radius_mode == 2u {
+        var axis_dir: vec2<f32>;
+        if axis == 0u {
+            axis_dir = vec2<f32>(texel.x, 0.0);
+        } else {
+            axis_dir = vec2<f32>(0.0, texel.y);
+        }
+        if radius_mode == 2u {
+            result = n0_sg_blur_linear(uv, axis_dir, radius);
+        } else {
+            result = n0_sg_blur_dynamic(uv, axis_dir, radius);
+        }
+    } else {
+        var d: vec2<f32>;
+        if axis == 0u {
+            d = vec2<f32>(texel.x * step, 0.0);
+        } else {
+            d = vec2<f32>(0.0, texel.y * step);
+        }
+        if kernel_size == 0u {
+            result = n0_sg_blur_9(uv, d);
+        } else if kernel_size == 1u {
+            result = n0_sg_blur_17(uv, d);
+        } else {
+            result = n0_sg_blur_25(uv, d);
+        }
+    }
+
+    return result;
+}
+
+fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_kernel_size, params.n0_axis, params.n0_step, params.n0_radius_mode, params.n0_radius, params.n0_address_mode);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_intensity);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_scale, params.n2_offset);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_scale, params.n3_offset);
+    textureStore(dst, coord, r3);
+}
+
+=== effect:MaskBlobMotion node:30 ===
+// @input_access: src_0 coincident
+// @input_access: src_1 coincident
+struct Params {
+    n0_row0_x: f32,
+    n0_row0_y: f32,
+    n0_row0_z: f32,
+    n0_row0_w: f32,
+    n0_row1_x: f32,
+    n0_row1_y: f32,
+    n0_row1_z: f32,
+    n0_row1_w: f32,
+    n0_row2_x: f32,
+    n0_row2_y: f32,
+    n0_row2_z: f32,
+    n0_row2_w: f32,
+    n0_row3_x: f32,
+    n0_row3_y: f32,
+    n0_row3_z: f32,
+    n0_row3_w: f32,
+    n1_row0_x: f32,
+    n1_row0_y: f32,
+    n1_row0_z: f32,
+    n1_row0_w: f32,
+    n1_row1_x: f32,
+    n1_row1_y: f32,
+    n1_row1_z: f32,
+    n1_row1_w: f32,
+    n1_row2_x: f32,
+    n1_row2_y: f32,
+    n1_row2_z: f32,
+    n1_row2_w: f32,
+    n1_row3_x: f32,
+    n1_row3_y: f32,
+    n1_row3_z: f32,
+    n1_row3_w: f32,
+    n2_row0_x: f32,
+    n2_row0_y: f32,
+    n2_row0_z: f32,
+    n2_row0_w: f32,
+    n2_row1_x: f32,
+    n2_row1_y: f32,
+    n2_row1_z: f32,
+    n2_row1_w: f32,
+    n2_row2_x: f32,
+    n2_row2_y: f32,
+    n2_row2_z: f32,
+    n2_row2_w: f32,
+    n2_row3_x: f32,
+    n2_row3_y: f32,
+    n2_row3_z: f32,
+    n2_row3_w: f32,
+    n4_gain: f32,
+    n5_amount: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var dst_0: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(4) var dst_1: texture_storage_2d<rgba16float, write>;
+
+fn n0_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n1_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n2_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n3_body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
+    let v = c_in.rg;
+    return vec4<f32>(length(v), 0.0, 0.0, 1.0);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+fn n5_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst_0);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let ext_1 = textureLoad(src_1, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n0_row0_x, params.n0_row0_y, params.n0_row0_z, params.n0_row0_w), vec4<f32>(params.n0_row1_x, params.n0_row1_y, params.n0_row1_z, params.n0_row1_w), vec4<f32>(params.n0_row2_x, params.n0_row2_y, params.n0_row2_z, params.n0_row2_w), vec4<f32>(params.n0_row3_x, params.n0_row3_y, params.n0_row3_z, params.n0_row3_w));
+    let r1 = n1_body(ext_1, uv, vec2<f32>(dims), vec4<f32>(params.n1_row0_x, params.n1_row0_y, params.n1_row0_z, params.n1_row0_w), vec4<f32>(params.n1_row1_x, params.n1_row1_y, params.n1_row1_z, params.n1_row1_w), vec4<f32>(params.n1_row2_x, params.n1_row2_y, params.n1_row2_z, params.n1_row2_w), vec4<f32>(params.n1_row3_x, params.n1_row3_y, params.n1_row3_z, params.n1_row3_w));
+    let r2 = n2_body(ext_1, uv, vec2<f32>(dims), vec4<f32>(params.n2_row0_x, params.n2_row0_y, params.n2_row0_z, params.n2_row0_w), vec4<f32>(params.n2_row1_x, params.n2_row1_y, params.n2_row1_z, params.n2_row1_w), vec4<f32>(params.n2_row2_x, params.n2_row2_y, params.n2_row2_z, params.n2_row2_w), vec4<f32>(params.n2_row3_x, params.n2_row3_y, params.n2_row3_z, params.n2_row3_w));
+    let r3 = n3_body(r2, uv, vec2<f32>(dims));
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_gain);
+    let r5 = n5_body(r0, r4, r1, uv, vec2<f32>(dims), params.n5_amount);
+    textureStore(dst_0, coord, r1);
+    textureStore(dst_1, coord, r5);
+}
+
+=== effect:MaskBlobMotion node:31 ===
+// @input_access: src_0 coincident
+// @input_access: src_1 gather
+// @input_access: src_2 coincident
+struct Params {
+    n0_row0_x: f32,
+    n0_row0_y: f32,
+    n0_row0_z: f32,
+    n0_row0_w: f32,
+    n0_row1_x: f32,
+    n0_row1_y: f32,
+    n0_row1_z: f32,
+    n0_row1_w: f32,
+    n0_row2_x: f32,
+    n0_row2_y: f32,
+    n0_row2_z: f32,
+    n0_row2_w: f32,
+    n0_row3_x: f32,
+    n0_row3_y: f32,
+    n0_row3_z: f32,
+    n0_row3_w: f32,
+    n1_kernel_size: u32,
+    n1_axis: u32,
+    n1_step: f32,
+    n1_radius_mode: u32,
+    n1_radius: f32,
+    n1_address_mode: u32,
+    n2_intensity: f32,
+    n3_amount: f32,
+    n4_scale: f32,
+    n4_offset: f32,
+    n5_scale: f32,
+    n5_offset: f32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var src_2: texture_2d<f32>;
+@group(0) @binding(4) var samp: sampler;
+@group(0) @binding(5) var dst: texture_storage_2d<rgba16float, write>;
+
+const SG_K9_0: f32 = 0.16501;
+const SG_K9_1: f32 = 0.15019;
+const SG_K9_2: f32 = 0.11325;
+const SG_K9_3: f32 = 0.07076;
+const SG_K9_4: f32 = 0.03664;
+const SG_K17_0: f32 = 0.10315;
+const SG_K17_1: f32 = 0.09998;
+const SG_K17_2: f32 = 0.09103;
+const SG_K17_3: f32 = 0.07786;
+const SG_K17_4: f32 = 0.06257;
+const SG_K17_5: f32 = 0.04723;
+const SG_K17_6: f32 = 0.03350;
+const SG_K17_7: f32 = 0.02232;
+const SG_K17_8: f32 = 0.01396;
+const SG_K25_0:  f32 = 0.07087;
+const SG_K25_1:  f32 = 0.06947;
+const SG_K25_2:  f32 = 0.06540;
+const SG_K25_3:  f32 = 0.05917;
+const SG_K25_4:  f32 = 0.05148;
+const SG_K25_5:  f32 = 0.04307;
+const SG_K25_6:  f32 = 0.03465;
+const SG_K25_7:  f32 = 0.02680;
+const SG_K25_8:  f32 = 0.01995;
+const SG_K25_9:  f32 = 0.01428;
+const SG_K25_10: f32 = 0.00983;
+const SG_K25_11: f32 = 0.00651;
+const SG_K25_12: f32 = 0.00415;
+
+fn n1_fetch_in(c: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(src_1, samp, c, 0.0);
+}
+
+fn n0_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+) -> vec4<f32> {
+    return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
+}
+
+fn n1_sg_blur_9(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n1_fetch_in(uv) * SG_K9_0;
+    acc += (n1_fetch_in(uv + d      ) + n1_fetch_in(uv - d      )) * SG_K9_1;
+    acc += (n1_fetch_in(uv + d * 2.0) + n1_fetch_in(uv - d * 2.0)) * SG_K9_2;
+    acc += (n1_fetch_in(uv + d * 3.0) + n1_fetch_in(uv - d * 3.0)) * SG_K9_3;
+    acc += (n1_fetch_in(uv + d * 4.0) + n1_fetch_in(uv - d * 4.0)) * SG_K9_4;
+    return acc;
+}
+
+fn n1_sg_blur_17(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n1_fetch_in(uv) * SG_K17_0;
+    acc += (n1_fetch_in(uv + d      ) + n1_fetch_in(uv - d      )) * SG_K17_1;
+    acc += (n1_fetch_in(uv + d * 2.0) + n1_fetch_in(uv - d * 2.0)) * SG_K17_2;
+    acc += (n1_fetch_in(uv + d * 3.0) + n1_fetch_in(uv - d * 3.0)) * SG_K17_3;
+    acc += (n1_fetch_in(uv + d * 4.0) + n1_fetch_in(uv - d * 4.0)) * SG_K17_4;
+    acc += (n1_fetch_in(uv + d * 5.0) + n1_fetch_in(uv - d * 5.0)) * SG_K17_5;
+    acc += (n1_fetch_in(uv + d * 6.0) + n1_fetch_in(uv - d * 6.0)) * SG_K17_6;
+    acc += (n1_fetch_in(uv + d * 7.0) + n1_fetch_in(uv - d * 7.0)) * SG_K17_7;
+    acc += (n1_fetch_in(uv + d * 8.0) + n1_fetch_in(uv - d * 8.0)) * SG_K17_8;
+    return acc;
+}
+
+fn n1_sg_blur_25(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n1_fetch_in(uv) * SG_K25_0;
+    acc += (n1_fetch_in(uv + d       ) + n1_fetch_in(uv - d       )) * SG_K25_1;
+    acc += (n1_fetch_in(uv + d *  2.0) + n1_fetch_in(uv - d *  2.0)) * SG_K25_2;
+    acc += (n1_fetch_in(uv + d *  3.0) + n1_fetch_in(uv - d *  3.0)) * SG_K25_3;
+    acc += (n1_fetch_in(uv + d *  4.0) + n1_fetch_in(uv - d *  4.0)) * SG_K25_4;
+    acc += (n1_fetch_in(uv + d *  5.0) + n1_fetch_in(uv - d *  5.0)) * SG_K25_5;
+    acc += (n1_fetch_in(uv + d *  6.0) + n1_fetch_in(uv - d *  6.0)) * SG_K25_6;
+    acc += (n1_fetch_in(uv + d *  7.0) + n1_fetch_in(uv - d *  7.0)) * SG_K25_7;
+    acc += (n1_fetch_in(uv + d *  8.0) + n1_fetch_in(uv - d *  8.0)) * SG_K25_8;
+    acc += (n1_fetch_in(uv + d *  9.0) + n1_fetch_in(uv - d *  9.0)) * SG_K25_9;
+    acc += (n1_fetch_in(uv + d * 10.0) + n1_fetch_in(uv - d * 10.0)) * SG_K25_10;
+    acc += (n1_fetch_in(uv + d * 11.0) + n1_fetch_in(uv - d * 11.0)) * SG_K25_11;
+    acc += (n1_fetch_in(uv + d * 12.0) + n1_fetch_in(uv - d * 12.0)) * SG_K25_12;
+    return acc;
+}
+
+// Dynamic-radius separable Gaussian — bit-exact port of the legacy fluid-sim
+// blur. Bilinear tap-pair optimisation: adjacent samples (j, j+1) collapse to one
+// bilinear fetch at their weighted midpoint.
+
+fn n1_sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    let sigma = max(radius / 3.0, 1.0);
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+
+    var result = n1_fetch_in(uv);
+    var total_weight = 1.0;
+
+    // BUG-290: cap the tap loop. `radius` is port-shadowed, so a wired
+    // control can deliver values far past the 0-256 param range (inf casts
+    // to i32::MAX = a firmware-watchdog-length loop). 2048 admits every
+    // canvas-scaled radius (256 * bw/640 = 1536 at 4K) and bounds garbage.
+    let radius_int = min(i32(radius), 2048);
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += n1_fetch_in(uv + axis_dir * offset) * w_ab;
+            result += n1_fetch_in(uv - axis_dir * offset) * w_ab;
+            total_weight += w_ab * 2.0;
+        } else {
+            result += n1_fetch_in(uv + axis_dir * fj) * w_a;
+            result += n1_fetch_in(uv - axis_dir * fj) * w_a;
+            total_weight += w_a * 2.0;
+        }
+
+        j += 2;
+    }
+
+    return result / total_weight;
+}
+
+// Linear-radius separable Gaussian — exact port of node.blur's per-axis pass
+// (blur.wgsl mode 0): sigma = max(radius/2, 0.5), one tap per integer offset
+// -r..r (no tap-pair trick), normalized by the running weight sum, radius
+// clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
+// texel centers, so fusing through this mode is filter-exact by construction.
+
+fn n1_sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    // Single-exit on purpose: an early return here leaves unreachable blocks
+    // that abort spirv-opt's merge-return pass, and the whole fused kernel
+    // then ships UNOPTIMIZED (no inlining/DCE — measured slow enough to flip
+    // the perf gate). Same arithmetic, same order, just one return.
+    let r_int = min(i32(radius), 32);
+    var result: vec4<f32>;
+    if r_int <= 0 {
+        result = n1_fetch_in(uv);
+    } else {
+        let sigma = max(radius * 0.5, 0.5);
+        let two_sigma_sq = 2.0 * sigma * sigma;
+
+        var sum = vec4<f32>(0.0);
+        var weight_sum = 0.0;
+        for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+            let s = n1_fetch_in(uv + axis_dir * f32(d));
+            let dist_sq = f32(d * d);
+            let w = exp(-dist_sq / two_sigma_sq);
+            sum = sum + s * w;
+            weight_sum = weight_sum + w;
+        }
+        result = sum / max(weight_sum, 1e-6);
+    }
+    return result;
+}
+
+fn n1_body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / dims;
+
+    var result: vec4<f32>;
+    if radius_mode == 1u || radius_mode == 2u {
+        var axis_dir: vec2<f32>;
+        if axis == 0u {
+            axis_dir = vec2<f32>(texel.x, 0.0);
+        } else {
+            axis_dir = vec2<f32>(0.0, texel.y);
+        }
+        if radius_mode == 2u {
+            result = n1_sg_blur_linear(uv, axis_dir, radius);
+        } else {
+            result = n1_sg_blur_dynamic(uv, axis_dir, radius);
+        }
+    } else {
+        var d: vec2<f32>;
+        if axis == 0u {
+            d = vec2<f32>(texel.x * step, 0.0);
+        } else {
+            d = vec2<f32>(0.0, texel.y * step);
+        }
+        if kernel_size == 0u {
+            result = n1_sg_blur_9(uv, d);
+        } else if kernel_size == 1u {
+            result = n1_sg_blur_17(uv, d);
+        } else {
+            result = n1_sg_blur_25(uv, d);
+        }
+    }
+
+    return result;
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n3_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let ext_2 = textureLoad(src_2, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n0_row0_x, params.n0_row0_y, params.n0_row0_z, params.n0_row0_w), vec4<f32>(params.n0_row1_x, params.n0_row1_y, params.n0_row1_z, params.n0_row1_w), vec4<f32>(params.n0_row2_x, params.n0_row2_y, params.n0_row2_z, params.n0_row2_w), vec4<f32>(params.n0_row3_x, params.n0_row3_y, params.n0_row3_z, params.n0_row3_w));
+    let r1 = n1_body(uv, vec2<f32>(dims), params.n1_kernel_size, params.n1_axis, params.n1_step, params.n1_radius_mode, params.n1_radius, params.n1_address_mode);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_intensity);
+    let r3 = n3_body(r0, r2, ext_2, uv, vec2<f32>(dims), params.n3_amount);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_scale, params.n4_offset);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_scale, params.n5_offset);
+    textureStore(dst, coord, r5);
 }
 
 === effect:MaskCircle node:5 ===

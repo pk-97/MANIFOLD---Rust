@@ -20954,7 +20954,7 @@
         "color distance",
         "colour proximity"
       ],
-      "category": "Color & Tone",
+      "category": "Mask",
       "examples": [
         "BlobTrackingV2Colour",
         "MaskBlobColour"

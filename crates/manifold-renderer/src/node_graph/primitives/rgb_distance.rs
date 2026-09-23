@@ -66,7 +66,7 @@ crate::primitive! {
     examples: [],
     picker: { label: "RGB Distance", category: Atom },
     summary: "Measures each pixel's Euclidean RGB distance from a scalar-bindable target colour.",
-    category: ColorAndTone,
+    category: Mask,
     role: Filter,
     aliases: ["rgb distance", "colour distance", "color distance", "colour proximity"],
     fusion_kind: Pointwise,
