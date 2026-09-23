@@ -162,3 +162,57 @@ fn physics_solids_renders_finite_nonempty_scene_and_moves() {
         "120 simulated frames must change rendered pixels; mean_abs_diff={motion:.6}"
     );
 }
+
+#[test]
+fn physics_nonlinear_animated_graph_matches_irregular_frame_delivery() {
+    let harness = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut def: serde_json::Value = serde_json::from_str(PHYSICS_SOLIDS_JSON).unwrap();
+    for node in def["nodes"].as_array_mut().unwrap() {
+        match node["id"].as_u64() {
+            Some(111) => node["params"]["motion"] = serde_json::json!({ "type": "Enum", "value": 2 }),
+            Some(120) => {
+                node["params"]["pos_x"] = serde_json::json!({ "type": "Float", "value": 0.0 });
+                node["params"]["pos_y"] = serde_json::json!({ "type": "Float", "value": 3.8 });
+            }
+            _ => {}
+        }
+    }
+    def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": 500, "nodeId": "nonlinear_animated_x", "typeId": "node.lfo",
+        "params": {
+            "rate_mode": { "type": "Enum", "value": 1 },
+            "angular_rate": { "type": "Float", "value": 188.49556 },
+            "phase": { "type": "Float", "value": 0.75 },
+            "min": { "type": "Float", "value": -2.0 },
+            "max": { "type": "Float", "value": 2.0 }
+        }
+    }));
+    def["wires"].as_array_mut().unwrap().push(serde_json::json!({
+        "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
+    }));
+    let json = serde_json::to_string(&def).unwrap();
+    let build = || PresetRuntime::from_json_str_with_device(
+        &json,
+        &registry,
+        std::sync::Arc::clone(&harness.device),
+        harness.width,
+        harness.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    ).expect("nonlinear PhysicsSolids graph builds");
+    let mut regular = build();
+    let mut irregular = build();
+    let regular_target = harness.make_target("physics-nonlinear-regular");
+    let irregular_target = harness.make_target("physics-nonlinear-irregular");
+    for frame in 0..=8 {
+        render_frame(&mut regular, &regular_target, frame, harness.width, harness.height, &harness.device);
+        if frame % 4 == 0 {
+            render_frame(&mut irregular, &irregular_target, frame, harness.width, harness.height, &harness.device);
+        }
+    }
+    let regular_image = harness.readback(&regular_target.texture);
+    let irregular_image = harness.readback(&irregular_target.texture);
+    let diff = mean_abs_diff(&regular_image, &irregular_image);
+    assert!(diff < 0.002, "nonlinear Animated contact/render diverged under irregular delivery: mean_abs_diff={diff:.6}");
+}

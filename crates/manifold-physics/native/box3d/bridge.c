@@ -74,6 +74,11 @@ void manifold_box3d_world_set_gravity( uint32_t world_id, float gx, float gy, fl
 	b3World_SetGravity( b3LoadWorldId( world_id ), (b3Vec3){ gx, gy, gz } );
 }
 
+void manifold_box3d_world_set_max_linear_speed( uint32_t world_id, float speed )
+{
+	b3World_SetMaximumLinearSpeed( b3LoadWorldId( world_id ), speed );
+}
+
 void manifold_box3d_world_step( uint32_t world_id, float dt, uint32_t substeps )
 {
 	b3World_Step( b3LoadWorldId( world_id ), dt, (int)substeps );
@@ -162,6 +167,15 @@ int manifold_box3d_body_update(
 	if ( body_type == b3_bodyTypeCount )
 	{
 		return BOX3D_BRIDGE_ERROR;
+	}
+
+	// Box3D's bullet flag is meaningful only for dynamic bodies, but it is
+	// stored on the body independently of its type. Clear it before changing a
+	// dynamic body to static or kinematic so a later return to dynamic cannot
+	// silently re-enable the old CCD state.
+	if ( body_type != b3_dynamicBody && b3Body_GetType( body_id ) == b3_dynamicBody )
+	{
+		b3Body_SetBullet( body_id, false );
 	}
 
 	if ( b3Body_GetType( body_id ) != body_type )

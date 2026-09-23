@@ -17,6 +17,7 @@ mod ffi {
         pub fn manifold_box3d_world_create(gx: f32, gy: f32, gz: f32) -> u32;
         pub fn manifold_box3d_world_destroy(world: u32);
         pub fn manifold_box3d_world_set_gravity(world: u32, gx: f32, gy: f32, gz: f32);
+        pub fn manifold_box3d_world_set_max_linear_speed(world: u32, speed: f32);
         pub fn manifold_box3d_world_step(world: u32, dt: f32, substeps: u32);
         pub fn manifold_box3d_body_create(
             world: u32,
@@ -249,6 +250,18 @@ impl PhysicsWorld {
         unsafe {
             ffi::manifold_box3d_world_set_gravity(self.native, gravity[0], gravity[1], gravity[2]);
         }
+        Ok(())
+    }
+
+    /// Set the maximum linear speed used by Box3D for this world.
+    pub fn set_max_linear_speed(&mut self, speed: f32) -> Result<(), PhysicsError> {
+        if !speed.is_finite() || speed <= 0.0 {
+            return Err(PhysicsError::InvalidInput(
+                "maximum linear speed must be finite and positive",
+            ));
+        }
+        let _lock = native_lock();
+        unsafe { ffi::manifold_box3d_world_set_max_linear_speed(self.native, speed) };
         Ok(())
     }
 
@@ -503,6 +516,8 @@ mod tests {
         assert!(first.step(Seconds(f64::NAN), 1).is_err());
         assert!(first.step(Seconds(f64::MIN_POSITIVE), 1).is_err());
         assert!(first.step(Seconds(0.1), 0).is_err());
+        assert!(first.set_max_linear_speed(f32::NAN).is_err());
+        assert!(first.set_max_linear_speed(0.0).is_err());
         assert!(
             first
                 .add_hull(
@@ -591,6 +606,239 @@ mod tests {
     }
 
     #[test]
+    fn outgoing_bullet_targets_still_collide_after_type_changes() {
+        fn run(target_kind: BodyKind, return_to_dynamic: bool) -> ([f32; 3], [f32; 3]) {
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        kind: BodyKind::Fixed,
+                        position: [0.0, -2.0, 0.0],
+                        mass: 0.0,
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            let target = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        position: [0.0, -0.5, 0.0],
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            world.set_bullet(target, true).unwrap();
+            world
+                .update_body(
+                    target,
+                    BodyConfig {
+                        kind: target_kind,
+                        position: [0.0, -0.5, 0.0],
+                        mass: if target_kind == BodyKind::Fixed {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                        ..BodyConfig::default()
+                    },
+                    false,
+                )
+                .unwrap();
+            if return_to_dynamic {
+                world
+                    .update_body(
+                        target,
+                        BodyConfig {
+                            position: [0.0, -0.5, 0.0],
+                            ..BodyConfig::default()
+                        },
+                        false,
+                    )
+                    .unwrap();
+            }
+
+            let falling = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        position: [0.0, 3.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            world.set_bullet(falling, true).unwrap();
+            world.set_gravity([0.0, -20_000.0, 0.0]).unwrap();
+            world.step(Seconds(1.0 / 60.0), 4).unwrap();
+            (
+                world.pose(falling).unwrap().position,
+                world.linear_velocity(falling).unwrap(),
+            )
+        }
+
+        for target_kind in [BodyKind::Fixed, BodyKind::Animated] {
+            for return_to_dynamic in [false, true] {
+                let (position, velocity) = run(target_kind, return_to_dynamic);
+                assert!(
+                    (0.0..0.6).contains(&position[1]),
+                    "falling body passed {target_kind:?} target after transition (return={return_to_dynamic}): {position:?}"
+                );
+                assert!(
+                    (-1_000.0..0.0).contains(&velocity[1]),
+                    "falling body response should retain bounded downward motion after {target_kind:?} transition (return={return_to_dynamic}): {velocity:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn copied_outgoing_bullet_targets_still_collide() {
+        for target_kind in [BodyKind::Fixed, BodyKind::Animated] {
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            let target_positions = [-2.0, 2.0];
+            for x in target_positions {
+                let target = world
+                    .add_hull(
+                        &cube(0.5),
+                        BodyConfig {
+                            position: [x, 0.0, 0.0],
+                            ..BodyConfig::default()
+                        },
+                    )
+                    .unwrap();
+                world.set_bullet(target, true).unwrap();
+                world
+                    .update_body(
+                        target,
+                        BodyConfig {
+                            kind: target_kind,
+                            position: [x, 0.0, 0.0],
+                            mass: if target_kind == BodyKind::Fixed {
+                                0.0
+                            } else {
+                                1.0
+                            },
+                            ..BodyConfig::default()
+                        },
+                        false,
+                    )
+                    .unwrap();
+            }
+
+            for x in target_positions {
+                let body = world
+                    .add_hull(
+                        &cube(0.5),
+                        BodyConfig {
+                            position: [x, 3.0, 0.0],
+                            ..BodyConfig::default()
+                        },
+                    )
+                    .unwrap();
+                world.set_bullet(body, true).unwrap();
+                world.set_gravity([0.0, -20_000.0, 0.0]).unwrap();
+                world.step(Seconds(1.0 / 60.0), 4).unwrap();
+                let position = world.pose(body).unwrap().position;
+                assert!(
+                    (0.9..1.1).contains(&position[1]),
+                    "copied {target_kind:?} target was passed by a falling body: {position:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fast_bullet_dynamic_stops_at_dynamic_target() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [0.0, -2.0, 0.0],
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let target = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [0.0, -0.5, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let falling = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [0.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        world.set_bullet(falling, true).unwrap();
+        world.set_gravity([0.0, -20_000.0, 0.0]).unwrap();
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        let position = world.pose(falling).unwrap().position;
+        assert!(
+            (-0.1..0.1).contains(&position[1]),
+            "fast dynamic body passed a dynamic target: {position:?}"
+        );
+        let target_velocity = world.linear_velocity(target).unwrap();
+        assert!(
+            target_velocity[1] > -1_000.0,
+            "dynamic target received unbounded response velocity: {target_velocity:?}"
+        );
+    }
+
+    #[test]
+    fn two_fast_bullet_dynamics_reproduce_box3d_target_skip() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [0.0, -2.0, 0.0],
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let target = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [0.0, -0.5, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let falling = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [0.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        world.set_bullet(target, true).unwrap();
+        world.set_bullet(falling, true).unwrap();
+        world.set_gravity([0.0, -20_000.0, 0.0]).unwrap();
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        let position = world.pose(falling).unwrap().position;
+        assert!(
+            position[1] < -0.4,
+            "two fast bullets unexpectedly collided; Box3D target-skip contract changed: {position:?}"
+        );
+    }
+
+    #[test]
     fn fast_animated_to_dynamic_sweep_does_not_move_stationary_dynamic() {
         fn run(bullet: bool) -> ([f32; 3], [f32; 3]) {
             let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
@@ -632,6 +880,132 @@ mod tests {
         assert_eq!(animated_bullet, [2.0, 0.0, 0.0]);
         assert_eq!(dynamic_normal, [0.0, 0.0, 0.0]);
         assert_eq!(dynamic_bullet, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn rotating_animated_sweep_reaches_dynamic_contact() {
+        let bar = [
+            [-2.0, -0.25, -0.25],
+            [2.0, -0.25, -0.25],
+            [2.0, 0.25, -0.25],
+            [-2.0, 0.25, -0.25],
+            [-2.0, -0.25, 0.25],
+            [2.0, -0.25, 0.25],
+            [2.0, 0.25, 0.25],
+            [-2.0, 0.25, 0.25],
+        ];
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let animated = world
+            .add_hull(
+                &bar,
+                BodyConfig {
+                    kind: BodyKind::Animated,
+                    position: [-2.0, 0.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        let dt = Seconds(1.0 / 120.0);
+        for step in 1..=2 {
+            let angle = std::f32::consts::FRAC_PI_2 * step as f32 / 2.0;
+            world
+                .set_animated_target(
+                    animated,
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        position: [-2.0 + 4.0 * step as f32 / 2.0, 0.0, 0.0],
+                        rotation: [0.0, 0.0, (angle * 0.5).sin(), (angle * 0.5).cos()],
+                        ..BodyConfig::default()
+                    },
+                    dt,
+                )
+                .unwrap();
+            world.step(dt, 4).unwrap();
+        }
+        let position = world.pose(dynamic).unwrap().position;
+        assert!(
+            position.iter().any(|value| value.abs() > 0.01),
+            "rotating animated body did not move the dynamic body: {position:?}"
+        );
+    }
+
+    #[test]
+    fn long_animated_sweep_split_into_bounded_ticks_reaches_contact() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let animated = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Animated,
+                    position: [-8.0, 0.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        let dt = Seconds(1.0 / 60.0);
+        for step in 1..=8 {
+            world
+                .set_animated_target(
+                    animated,
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        position: [-8.0 + 16.0 * step as f32 / 8.0, 0.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                    dt,
+                )
+                .unwrap();
+            world.step(dt, 4).unwrap();
+        }
+        let position = world.pose(dynamic).unwrap().position;
+        assert!(
+            position.iter().any(|value| value.abs() > 0.01),
+            "long animated sweep failed to produce a bounded contact response: {position:?}"
+        );
+    }
+
+    #[test]
+    fn high_speed_animated_sweep_reaches_target_and_contact() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        world.set_max_linear_speed(12_000.0).unwrap();
+        let animated = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Animated,
+                    position: [-100.0, 0.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        let dt = Seconds(1.0 / (60.0 * 400.0));
+        for step in 1..=400 {
+            world
+                .set_animated_target(
+                    animated,
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        position: [-100.0 + 200.0 * step as f32 / 400.0, 0.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                    dt,
+                )
+                .unwrap();
+            world.step(dt, 1).unwrap();
+        }
+        let animated_position = world.pose(animated).unwrap().position;
+        let dynamic_position = world.pose(dynamic).unwrap().position;
+        assert!(
+            (99.9..100.1).contains(&animated_position[0]),
+            "animated target was clamped before reaching its pose: {animated_position:?}"
+        );
+        assert!(
+            dynamic_position.iter().any(|value| value.abs() > 0.01),
+            "high-speed animated sweep failed to produce contact response: {dynamic_position:?}"
+        );
     }
 
     #[test]

@@ -58,7 +58,11 @@ pub(super) struct ParamEntryWire {
 
 impl ParamEntryWire {
     /// Wire entry for a manifest param.
-    pub(super) fn from_param(p: &crate::params::Param, base_tracked: bool) -> Self {
+    pub(super) fn from_param(
+        p: &crate::params::Param,
+        base_tracked: bool,
+        inline_graph_spec: bool,
+    ) -> Self {
         Self {
             value: p.value,
             exposed: p.exposed,
@@ -69,7 +73,8 @@ impl ParamEntryWire {
                 curve: p.spec.curve,
                 invert: p.spec.invert,
             }),
-            spec: matches!(p.origin, crate::params::ParamOrigin::UserAdded)
+            spec: (inline_graph_spec
+                || matches!(p.origin, crate::params::ParamOrigin::UserAdded))
                 .then(|| p.spec.clone()),
         }
     }
@@ -103,6 +108,8 @@ impl ParamEntryWire {
 pub(super) struct ManifestSer<'a> {
     pub(super) manifest: &'a crate::params::ParamManifest,
     pub(super) base_tracked: bool,
+    pub(super) effect_type: &'a PresetTypeId,
+    pub(super) graph: Option<&'a EffectGraphDef>,
 }
 
 impl Serialize for ManifestSer<'_> {
@@ -112,11 +119,26 @@ impl Serialize for ManifestSer<'_> {
     {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(self.manifest.len()))?;
+        let template = crate::preset_definition_registry::try_get(self.effect_type);
         for p in self.manifest.iter() {
             if p.id().is_empty() {
                 continue;
             }
-            map.serialize_entry(p.id(), &ParamEntryWire::from_param(p, self.base_tracked))?;
+            // A graph-local auto exposure has Bundled origin for the scene
+            // panel, yet its freshly allocated id is absent from the preset
+            // template. The param map is decoded before the embedded graph;
+            // inline its spec so the value survives that first load pass.
+            let inline_graph_spec = self.graph.is_some_and(|graph| {
+                graph.preset_metadata.as_ref().is_some_and(|meta| {
+                    meta.params.iter().any(|spec| spec.id == p.id())
+                })
+            }) && template.as_ref().is_none_or(|definition| {
+                !definition.param_defs.iter().any(|def| def.spec.id == p.id())
+            });
+            map.serialize_entry(
+                p.id(),
+                &ParamEntryWire::from_param(p, self.base_tracked, inline_graph_spec),
+            )?;
         }
         map.end()
     }
@@ -482,6 +504,8 @@ impl Serialize for PresetInstance {
             &ManifestSer {
                 manifest: &self.params,
                 base_tracked: self.base_tracked,
+                effect_type: &self.effect_type,
+                graph: self.graph.as_ref(),
             },
         )?;
         if let Some(d) = &self.drivers {

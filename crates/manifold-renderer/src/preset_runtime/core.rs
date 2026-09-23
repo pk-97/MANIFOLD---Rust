@@ -2,9 +2,11 @@
 //! the type it owns. The other preset_runtime submodules are facets of
 //! this type. Extracted from preset_runtime.rs (Wave 3 P3-R, design D3).
 
-use super::*;
 use super::groups::splice_card_with_canonical_fallback;
+use super::*;
 use crate::node_graph::{Backend, PortType};
+
+pub(super) use super::physics_sampling::physics_sample_steps;
 
 pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
@@ -72,6 +74,9 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
+    /// Plan-aligned physics input ancestry, built once with the graph.
+    pub(super) physics_sample_steps: Option<Vec<bool>>,
+    pub(super) last_physics_frame_time: Option<FrameTime>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -93,17 +98,20 @@ pub struct PresetRuntime {
     /// Earliest counter before a real event awaiting evaluation. A loaded
     /// nonzero counter alone never creates this marker.
     pub(super) pending_trigger_baseline: Option<u32>,
-    pub(super) modifier_control_state: Option<crate::node_graph::scene_modifier_expand::PreparedModifierControlState>,
-    pub(super) modifier_events: Option<crate::node_graph::scene_modifier_expand::PreparedModifierEvents>,
+    pub(super) modifier_control_state:
+        Option<crate::node_graph::scene_modifier_expand::PreparedModifierControlState>,
+    pub(super) modifier_events:
+        Option<crate::node_graph::scene_modifier_expand::PreparedModifierEvents>,
     pub(super) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
     /// Per-frame param refresh walks this in parallel with the live
     /// `effects` slice.
     pub(super) effect_nodes: Vec<EffectSlot>,
-    pub(super) modifier_preview_routes: Vec<crate::node_graph::scene_modifier_expand::SceneModifierNodeRoute>,
+    pub(super) modifier_preview_routes:
+        Vec<crate::node_graph::scene_modifier_expand::SceneModifierNodeRoute>,
     pub(super) math_views: Vec<super::math_view::MathViewRuntime>,
-    pub(super) shared_arrays: Vec<(ResourceId,manifold_gpu::GpuBuffer)>,
+    pub(super) shared_arrays: Vec<(ResourceId, manifold_gpu::GpuBuffer)>,
     /// One slot per Mix node introduced for a wet/dry group. The
     /// Mix's `amount` param is set to the group's `wet_dry` value
     /// every frame (so dragging a wet/dry slider in the UI doesn't
@@ -198,7 +206,10 @@ pub(super) enum PresetIo {
     /// Effect chain. `source_slot` receives the upstream input texture each
     /// frame (via `replace_texture_2d`); `output_slot` holds the chain's final
     /// output texture, which the host reads via [`PresetRuntime::output_texture`].
-    Transform { source_slot: Slot, output_slot: Slot },
+    Transform {
+        source_slot: Slot,
+        output_slot: Slot,
+    },
     /// Generator. No input. The host installs its target texture into
     /// `final_output_slot` each frame; the graph renders into it. `Some(slot)`
     /// on the production path (real `MetalBackend`); `None` on the mock-backend
@@ -568,12 +579,13 @@ impl PresetRuntime {
                     i = j;
                     continue;
                 }
-                let cards = build_segment_cards(
-                    &fuse_idxs, &active_effects, primitives,
-                );
+                let cards = build_segment_cards(&fuse_idxs, &active_effects, primitives);
                 match freeze_install::fused_segment_view_for(&cards) {
                     freeze_install::SegmentLookup::Ready(view) => {
-                        units.push(SpliceUnit::Segment { cards: fuse_idxs, view });
+                        units.push(SpliceUnit::Segment {
+                            cards: fuse_idxs,
+                            view,
+                        });
                     }
                     freeze_install::SegmentLookup::Pending => {
                         pending_segments = true;
@@ -591,7 +603,10 @@ impl PresetRuntime {
 
         for unit in &units {
             let (legacy_index, fx) = match unit {
-                SpliceUnit::Segment { cards: seg_cards, view } => {
+                SpliceUnit::Segment {
+                    cards: seg_cards,
+                    view,
+                } => {
                     // Segment cards are ungrouped — close any open wet/dry
                     // group exactly as an ungrouped card would.
                     if let Some(closing) = open_group.take() {
@@ -613,24 +628,27 @@ impl PresetRuntime {
                         "[freeze] chain segment → FUSED ({} cards, one splice)",
                         seg_cards.len()
                     );
-                    let Some(SpliceResult { output, handles, generator_input_id: _ }) =
-                        splice_def_into_chain(
-                            &mut graph,
-                            (prev_node, prev_out_port),
-                            &view.def,
-                            primitives,
-                            // No per-member toggle to honor here — a
-                            // relight-on card is excluded from fusion
-                            // eligibility (`classify_segment_member`), so
-                            // every member folded into `view.def` has
-                            // `relight == false`.
-                            None,
-                            // The segment sidecar is keyed by generated
-                            // node id in the same `c{i}.`-prefixed
-                            // address space as `view.def`'s node ids
-                            // (design §3.3), so it forwards as-is.
-                            &view.mesh_rules,
-                        )
+                    let Some(SpliceResult {
+                        output,
+                        handles,
+                        generator_input_id: _,
+                    }) = splice_def_into_chain(
+                        &mut graph,
+                        (prev_node, prev_out_port),
+                        &view.def,
+                        primitives,
+                        // No per-member toggle to honor here — a
+                        // relight-on card is excluded from fusion
+                        // eligibility (`classify_segment_member`), so
+                        // every member folded into `view.def` has
+                        // `relight == false`.
+                        None,
+                        // The segment sidecar is keyed by generated
+                        // node id in the same `c{i}.`-prefixed
+                        // address space as `view.def`'s node ids
+                        // (design §3.3), so it forwards as-is.
+                        &view.mesh_rules,
+                    )
                     else {
                         // Near-unreachable: compile_segment_view verified the def
                         // builds. Follow the canonical-splice-failure precedent
@@ -726,8 +744,7 @@ impl PresetRuntime {
                         let generator_input_node = node_map.iter().find_map(|(nid, inst)| {
                             (nid.as_str().starts_with(prefix.as_str())
                                 && graph.get_node(*inst).is_some_and(|n| {
-                                    n.node.type_id().as_str()
-                                        == GENERATOR_INPUT_TYPE_ID
+                                    n.node.type_id().as_str() == GENERATOR_INPUT_TYPE_ID
                                 }))
                             .then_some(*inst)
                         });
@@ -817,7 +834,9 @@ impl PresetRuntime {
                         pre_port: prev_out_port,
                         wet_dry: group.wet_dry,
                         mask_expected: group.mask_effect_id.as_ref().is_some_and(|id| {
-                            effects.iter().any(|member| &member.id == id && member.enabled)
+                            effects
+                                .iter()
+                                .any(|member| &member.id == id && member.enabled)
                         }),
                         mask_output: None,
                     });
@@ -841,7 +860,8 @@ impl PresetRuntime {
             // FUSED attribution log) lives in `select_card_fused_view`. The
             // "effective def" is the user's edited graph when present, else the
             // canonical preset — also the splice source when unfused.
-            let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+            let effective_def: &EffectGraphDef =
+                fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
             let (fused_view, fused_pending) =
                 crate::node_graph::freeze::install::select_card_fused_view(
                     fx,
@@ -876,7 +896,8 @@ impl PresetRuntime {
             } else {
                 fx.relight_active().then_some(&fx.relight_params)
             };
-            let is_mask = fx_group.is_some_and(|group| group.mask_effect_id.as_ref() == Some(&fx.id));
+            let is_mask =
+                fx_group.is_some_and(|group| group.mask_effect_id.as_ref() == Some(&fx.id));
             let card_input = if is_mask {
                 let group = open_group.as_ref()?;
                 (group.pre_node, group.pre_port)
@@ -926,8 +947,7 @@ impl PresetRuntime {
                 for b in &meta.string_bindings {
                     if let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } =
                         &b.target
-                        && let Some((_, inst_id)) =
-                            node_map.iter().find(|(nid, _)| nid == node_id)
+                        && let Some((_, inst_id)) = node_map.iter().find(|(nid, _)| nid == node_id)
                     {
                         chain_string_bindings.push(StringBindingResolution {
                             target_node: *inst_id,
@@ -950,8 +970,7 @@ impl PresetRuntime {
             // always unfused, so `splice_def` is the user's edited graph when
             // present, else the canonical preset — either way the def whose
             // groups the editor is showing.
-            let group_preview_map =
-                manifold_core::flatten::group_output_producer_map(splice_def);
+            let group_preview_map = manifold_core::flatten::group_output_producer_map(splice_def);
             // Propagated per-node preview kind, computed from the flattened def
             // (groups inlined) so a filter inherits the data kind of whatever
             // upstream node feeds it. `node_id`s survive flatten (nodeId-safety
@@ -1115,9 +1134,7 @@ impl PresetRuntime {
                 applied_graph_version: fx.graph_version,
                 bound,
                 user_bindings_version,
-                def_content_key: crate::node_graph::freeze::install::def_content_key(
-                    effective_def,
-                ),
+                def_content_key: crate::node_graph::freeze::install::def_content_key(effective_def),
                 generator_input_node: generator_input_id,
                 card_prefix: String::new(),
                 relight_writes,
@@ -1191,9 +1208,12 @@ impl PresetRuntime {
         // Provided images have dedicated logical slots, but the producer owns
         // their storage. Keep the host's source/final target writable because
         // those slots are replaced/read as RenderTargets by the chain caller.
-        let provided_slots: AHashMap<Slot, ResourceId> = assignment.resource_to_slot.iter()
+        let provided_slots: AHashMap<Slot, ResourceId> = assignment
+            .resource_to_slot
+            .iter()
             .filter(|(resource, _)| {
-                **resource != source_resource && **resource != final_output_resource
+                **resource != source_resource
+                    && **resource != final_output_resource
                     && plan.is_provided_texture(**resource)
             })
             .map(|(&resource, &slot)| (slot, resource))
@@ -1213,7 +1233,9 @@ impl PresetRuntime {
         for slot_idx in 0..assignment.slot_count {
             if let Some(&resource) = provided_slots.get(&Slot(slot_idx)) {
                 slot_handles.push(backend.acquire_provided_texture(
-                    resource, PortType::Texture2D, plan.resource_format(resource),
+                    resource,
+                    PortType::Texture2D,
+                    plan.resource_format(resource),
                     assignment.slot_dims[slot_idx as usize],
                 ));
                 continue;
@@ -1274,9 +1296,18 @@ impl PresetRuntime {
         let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
+        let physics_sample_steps = match physics_sample_steps(&graph, &plan) {
+            Ok(steps) => steps,
+            Err(reason) => {
+                log::error!("[chain-error] {reason}");
+                return None;
+            }
+        };
         let mut runtime = Self {
             graph,
             plan,
+            physics_sample_steps,
+            last_physics_frame_time: None,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -1348,10 +1379,12 @@ impl PresetRuntime {
         // blown-out frames rotating in the loop with no escape. Toggling is
         // an intentional look change; the reset is the escape hatch.
         let same_card_set = self.effect_nodes.len() == prior.effect_nodes.len()
-            && self
-                .effect_nodes
-                .iter()
-                .all(|s| prior.effect_nodes.iter().any(|p| p.effect_id == s.effect_id));
+            && self.effect_nodes.iter().all(|s| {
+                prior
+                    .effect_nodes
+                    .iter()
+                    .any(|p| p.effect_id == s.effect_id)
+            });
         if !same_card_set {
             return;
         }
@@ -1363,13 +1396,11 @@ impl PresetRuntime {
             if slot.def_content_key == 0 {
                 continue;
             }
-            let Some((old_idx, old_slot)) =
-                prior.effect_nodes.iter().enumerate().find(|(_, s)| {
-                    s.effect_id == slot.effect_id
-                        && s.effect_type == slot.effect_type
-                        && s.def_content_key == slot.def_content_key
-                })
-            else {
+            let Some((old_idx, old_slot)) = prior.effect_nodes.iter().enumerate().find(|(_, s)| {
+                s.effect_id == slot.effect_id
+                    && s.effect_type == slot.effect_type
+                    && s.def_content_key == slot.def_content_key
+            }) else {
                 continue;
             };
             // A stateful card's state is a function of what FEEDS it — a
@@ -1390,8 +1421,7 @@ impl PresetRuntime {
                 continue;
             }
             for (node_id, new_inst) in &slot.node_map {
-                let Some((_, old_inst)) =
-                    old_slot.node_map.iter().find(|(nid, _)| nid == node_id)
+                let Some((_, old_inst)) = old_slot.node_map.iter().find(|(nid, _)| nid == node_id)
                 else {
                     continue;
                 };
@@ -1574,14 +1604,16 @@ impl PresetRuntime {
     ) -> bool {
         self.width == width
             && self.height == height
-            && self.topology_hash
-                == compute_topology_hash(effects, groups, 0, 0, preview_effect)
+            && self.topology_hash == compute_topology_hash(effects, groups, 0, 0, preview_effect)
     }
 
     /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
     /// The registry must outlive the `run`/`render` call (content thread
     /// guarantee). `None` clears the pointer.
-    pub fn set_layer_skin_registry(&mut self, registry: Option<&crate::layer_skin::LayerSkinRegistry>) {
+    pub fn set_layer_skin_registry(
+        &mut self,
+        registry: Option<&crate::layer_skin::LayerSkinRegistry>,
+    ) {
         self.layer_skin_registry = registry.map(crate::layer_skin::LayerSkinPtr::new);
     }
 
@@ -1730,7 +1762,9 @@ impl PresetRuntime {
                 let _ = self
                     .graph
                     .set_param(node, "beat", ParamValue::Float(ctx.beat as f32));
-                let _ = self.graph.set_param(node, "aspect", ParamValue::Float(aspect));
+                let _ = self
+                    .graph
+                    .set_param(node, "aspect", ParamValue::Float(aspect));
                 let _ = self.graph.set_param(
                     node,
                     "trigger_count",
@@ -1739,7 +1773,11 @@ impl PresetRuntime {
                 // Effect owners currently supply a sampled count, without
                 // the generator's real-event marker. Loading that count must
                 // therefore arm an explicitly initialized gate silently.
-                let _ = self.graph.set_param(node, "trigger_baseline", ParamValue::Float(ctx.trigger_count as f32));
+                let _ = self.graph.set_param(
+                    node,
+                    "trigger_baseline",
+                    ParamValue::Float(ctx.trigger_count as f32),
+                );
                 let _ = self.graph.set_param(
                     node,
                     "output_width",
@@ -1952,24 +1990,32 @@ impl PresetRuntime {
     /// like [`Self::awaiting_segment_swap`].
     pub fn awaiting_forced_outputs_rebuild(&self) -> bool {
         self.forced_outputs_stale
-            || self
-                .math_views
-                .iter()
-                .any(|view| view.variants.iter().any(Self::awaiting_forced_outputs_rebuild))
+            || self.math_views.iter().any(|view| {
+                view.variants
+                    .iter()
+                    .any(Self::awaiting_forced_outputs_rebuild)
+            })
     }
 
     fn refresh_prepared_parameter_error(&mut self) -> bool {
         let violation = self.graph.prepared_param_violation();
         if let Some((node, param)) = violation {
-            if !self.errors.iter().any(|error| matches!(error,
+            if !self.errors.iter().any(|error| {
+                matches!(error,
                 ChainError::PreparedParameterChanged { node_id, param: name }
-                if node_id == node.as_str() && name == param)) {
-                self.errors.retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
-                self.errors.push(ChainError::PreparedParameterChanged { node_id: node.to_string(), param: param.into() });
+                if node_id == node.as_str() && name == param)
+            }) {
+                self.errors
+                    .retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
+                self.errors.push(ChainError::PreparedParameterChanged {
+                    node_id: node.to_string(),
+                    param: param.into(),
+                });
             }
             true
         } else {
-            self.errors.retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
+            self.errors
+                .retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
             false
         }
     }
@@ -1981,8 +2027,10 @@ impl PresetRuntime {
             return;
         }
         self.refresh_plan_if_forced_outputs_changed();
+        self.sample_physics_history(time, None);
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
+        self.last_physics_frame_time = Some(time);
         self.consume_trigger_markers();
     }
 
@@ -2026,7 +2074,7 @@ impl PresetRuntime {
         params: &ParamManifest,
     ) -> f32 {
         // 1. Push per-frame timing into the generator_input node's params.
-        self.set_frame_context(FrameContextInputs {
+        let frame_context = FrameContextInputs {
             time: ctx.time as f32,
             beat: ctx.beat as f32,
             aspect: ctx.aspect,
@@ -2034,7 +2082,8 @@ impl PresetRuntime {
             anim_progress: ctx.anim_progress,
             output_width: ctx.output_width as f32,
             output_height: ctx.output_height as f32,
-        });
+        };
+        self.set_frame_context(frame_context);
 
         // 2. Push the host's outer-card slider values through the bindings.
         self.apply_param_values(params);
@@ -2060,6 +2109,7 @@ impl PresetRuntime {
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         self.refresh_plan_if_forced_outputs_changed();
+        self.sample_physics_history(frame_time, Some(frame_context));
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -2071,6 +2121,7 @@ impl PresetRuntime {
             // dead — found by the R2 accumulation gate, D-62).
             ctx.owner_key,
         );
+        self.last_physics_frame_time = Some(frame_time);
 
         self.render_math_views(gpu, target, ctx, params);
 
@@ -2081,6 +2132,7 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
+        self.last_physics_frame_time = None;
         for view in &mut self.math_views {
             view.events.clear();
             for variant in &mut view.variants {
@@ -2088,7 +2140,9 @@ impl PresetRuntime {
             }
         }
         self.pending_trigger_baseline = None;
-        if let Some(events) = &mut self.modifier_events { events.clear(); }
+        if let Some(events) = &mut self.modifier_events {
+            events.clear();
+        }
         for inst in self.graph.nodes_mut() {
             inst.node.clear_state();
         }
@@ -2125,7 +2179,9 @@ impl PresetRuntime {
             }
         }
         self.pending_trigger_baseline = None;
-        if let Some(events) = &mut self.modifier_events { events.clear(); }
+        if let Some(events) = &mut self.modifier_events {
+            events.clear();
+        }
         let mut latch_ids: Vec<NodeInstanceId> = Vec::new();
         for inst in self.graph.nodes_mut() {
             if inst.node.is_trigger_latch() {
@@ -2135,5 +2191,4 @@ impl PresetRuntime {
         }
         self.state_store.cleanup_nodes(&latch_ids);
     }
-
 }

@@ -248,6 +248,12 @@ impl Primitive for PhysicsWorldNode {
             speed,
             reset,
         );
+        if crate::node_graph::physics::authored_sample_only() {
+            if let Err(error) = result {
+                ctx.error(error);
+            }
+            return;
+        }
         if let Err(error) = result {
             ctx.error(error);
             ctx.outputs.set_scalar("physics_ms", ParamValue::Float(0.0));

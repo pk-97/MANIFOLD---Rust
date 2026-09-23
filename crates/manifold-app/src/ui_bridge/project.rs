@@ -624,7 +624,14 @@ pub(super) fn dispatch_project(
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                if boxed.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                } else if let Some(reason) = boxed.rejection_reason() {
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::GraphEditRejected(reason.to_owned()),
+                    );
+                }
             }
             DispatchResult::structural()
         }
@@ -703,7 +710,12 @@ pub(super) fn dispatch_project(
         // `DuplicateSceneObjectCommand` construction shape as
         // `SceneSetupRemoveObject` above.
         ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index) => {
-            if let Some(default) = generator_catalog_default(project, layer_id) {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                // A bundled scene can still have no graph override and no
+                // stamped scene exposures. Seed the command's undoable graph
+                // baseline before it clones source bindings, so first-use
+                // duplicates have the same live controls as migrated scenes.
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
                     target,
@@ -714,7 +726,18 @@ pub(super) fn dispatch_project(
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                if boxed.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                } else if let Some(reason) = boxed.rejection_reason() {
+                    // The panel's local mirror runs the command before it is
+                    // handed to the content thread. Surface an ownership or
+                    // malformed-graph rejection immediately instead of
+                    // silently dropping the click.
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::GraphEditRejected(reason.to_owned()),
+                    );
+                }
             }
             DispatchResult::structural()
         }
@@ -1442,6 +1465,27 @@ mod tests {
         (project, layer_id, render_scene_id)
     }
 
+    fn physics_solids_layer_project() -> (Project, LayerId, u32) {
+        let mut project = Project::default();
+        let idx = project.timeline.add_layer(
+            "Physics Solids",
+            LayerType::Generator,
+            PresetTypeId::from_string("PhysicsSolids".to_string()),
+        );
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let def = manifold_renderer::node_graph::bundled_preset_def(
+            &project.timeline.layers[idx].generator_type().clone(),
+        )
+        .expect("PhysicsSolids is a bundled preset");
+        let render_scene_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .expect("PhysicsSolids has a render_scene node")
+            .id;
+        (project, layer_id, render_scene_id)
+    }
+
     /// The layer's CURRENT effective def — the per-instance override once
     /// one exists (post-edit), falling back to the bundled catalog default
     /// beforehand (pre-edit: a fresh `SceneStarter` layer has no override
@@ -1483,6 +1527,19 @@ mod tests {
             Some(SerializedParamValue::Float { value }) => *value,
             _ => 0.0,
         }
+    }
+
+    fn find_node_recursive(
+        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+        id: u32,
+    ) -> Option<&manifold_core::effect_graph_def::EffectGraphNode> {
+        nodes.iter().find_map(|node| {
+            (node.id == id).then_some(node).or_else(|| {
+                node.group
+                    .as_deref()
+                    .and_then(|group| find_node_recursive(&group.nodes, id))
+            })
+        })
     }
 
     /// Minimal harness for `dispatch_project`'s unused-outside-the-matched-
@@ -1772,6 +1829,215 @@ mod tests {
             lights_param(&project, &layer_id, render_scene_id),
             before - 1.0
         );
+    }
+
+    /// A production SceneStarter flow: add an authored object, duplicate it,
+    /// then write the duplicate's nested transform through the same panel
+    /// action used by the live UI. The duplicate's scene binding must be live
+    /// immediately; otherwise `apply_scene_param_write` cannot resolve the
+    /// nested row and the write is silently dropped.
+    #[test]
+    fn scene_setup_duplicate_object_keeps_nested_transform_editable() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let before = objects_param(&project, &layer_id, render_scene_id) as u32;
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let add = ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before);
+        dispatch_project(
+            &add,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        let source_index = before;
+        let duplicate = ProjectAction::SceneSetupDuplicateObject(
+            layer_id.clone(),
+            render_scene_id,
+            source_index,
+        );
+        dispatch_project(
+            &duplicate,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+            .expect("SceneStarter scene VM after duplicate");
+        let transform_id = vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                    if row.index == (source_index + 1) as usize =>
+                {
+                    row.transform
+                        .as_ref()
+                        .map(|transform| transform.node_doc_id)
+                }
+                _ => None,
+            })
+            .expect("duplicated object has a transform row");
+
+        let write = ProjectAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            transform_id,
+            "pos_x".to_string(),
+            3.25,
+        );
+        dispatch_project(
+            &write,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+
+        let updated_def = effective_def(&project, &layer_id);
+        let updated = find_node_recursive(&updated_def.nodes, transform_id)
+            .expect("duplicated transform remains in the authored graph");
+        assert_eq!(
+            updated.params.get("pos_x"),
+            Some(&SerializedParamValue::Float { value: 0.5 }),
+            "a bound scene row keeps the authored duplicate default in the graph"
+        );
+        let binding_id = manifold_core::effects::binding_id_for_node_param_in(
+            &updated_def,
+            transform_id,
+            "pos_x",
+        )
+        .expect("duplicated transform has its own scene binding");
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let live_value = layer
+            .gen_params()
+            .and_then(|instance| instance.params.get(&binding_id))
+            .map(|param| param.value);
+        assert_eq!(
+            live_value,
+            Some(3.25),
+            "the duplicate's nested transform is independently editable"
+        );
+    }
+
+    /// Production PhysicsSolids flow: the physics duplicate clones its
+    /// auto-exposed transform binding, and the panel write lands in the live
+    /// generator manifest under that fresh binding id.
+    #[test]
+    fn scene_setup_physics_duplicate_param_is_live_and_independent() {
+        let (mut project, layer_id, render_scene_id) = physics_solids_layer_project();
+        let source_index = 0;
+        let duplicate_index = objects_param(&project, &layer_id, render_scene_id) as usize;
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let duplicate = ProjectAction::SceneSetupDuplicateObject(
+            layer_id.clone(),
+            render_scene_id,
+            source_index,
+        );
+        dispatch_project(
+            &duplicate,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+            .expect("PhysicsSolids scene VM after duplicate");
+        let transform_id = vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                    if row.index == duplicate_index =>
+                {
+                    row.transform
+                        .as_ref()
+                        .map(|transform| transform.node_doc_id)
+                }
+                _ => None,
+            })
+            .expect("physics duplicate has a transform row");
+        let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&def),
+            &[transform_id],
+        );
+        assert!(
+            sections.iter().any(|section| section.contains("Transform")),
+            "duplicate transform sections: {sections:?}"
+        );
+        let source_transform_id = vm.objects.iter().find_map(|object| match object {
+            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                if row.index == source_index as usize =>
+            {
+                row.transform.as_ref().map(|transform| transform.node_doc_id)
+            }
+            _ => None,
+        }).expect("source has a transform row");
+        let source_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&def), &[source_transform_id],
+        );
+        assert!(sections.iter().all(|section| !source_sections.contains(section)),
+            "duplicate properties must not include source sections");
+        let write = ProjectAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            transform_id,
+            "pos_y".to_string(),
+            8.5,
+        );
+        dispatch_project(
+            &write,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+
+        let binding_id = manifold_core::effects::binding_id_for_node_param_in(
+            &effective_def(&project, &layer_id),
+            transform_id,
+            "pos_y",
+        )
+        .expect("physics duplicate has a fresh pos_y binding");
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let section = layer
+            .gen_params()
+            .and_then(|instance| instance.params.get(&binding_id))
+            .and_then(|param| param.spec.section.clone());
+        assert!(
+            section
+                .as_deref()
+                .is_some_and(|section| section.contains("Transform")),
+            "live duplicate section: {section:?}"
+        );
+        let live_value = layer
+            .gen_params()
+            .and_then(|instance| instance.params.get(&binding_id))
+            .map(|param| param.value);
+        assert_eq!(live_value, Some(8.5));
     }
 
     /// "rename emits the sweep command": `generator_catalog_default` +

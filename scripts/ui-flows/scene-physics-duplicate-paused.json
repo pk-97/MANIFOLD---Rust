@@ -1,0 +1,11 @@
+[
+  { "Pointer": { "target": { "Query": { "text": "Scene" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "Ground" } }, "check": "Exists" } },
+  { "Pointer": { "target": { "Query": { "text": "⧉" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Pointer": { "target": { "Query": { "text": "■ Ground 2" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Assert": { "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "Ground 2" } }, "check": "Exists" } },
+  { "SetParam": { "param": { "GeneratorParam": { "param": "101_motion_duplicate" } }, "value": 2.0 } },
+  { "SetParam": { "param": { "GeneratorParam": { "param": "100_pos_x_duplicate" } }, "value": 5.0 } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.100_pos_x_duplicate.value", "nth": 1 } }, "check": { "TextEquals": "5.00" } } },
+  "Snapshot"
+]
