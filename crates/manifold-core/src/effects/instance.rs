@@ -199,6 +199,8 @@ impl PresetInstance {
             &ManifestSer {
                 manifest: &self.params,
                 base_tracked: self.base_tracked,
+                effect_type: &self.effect_type,
+                graph: self.graph.as_ref(),
             },
         )?;
         if let Some(d) = &self.drivers {
@@ -412,7 +414,7 @@ impl PresetInstance {
         let wire: std::collections::BTreeMap<String, ParamEntryWire> = self
             .params
             .iter()
-            .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked)))
+            .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked, false)))
             .collect();
         let (params, base_tracked) =
             build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), false);

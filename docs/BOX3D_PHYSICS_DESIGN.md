@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: Physics Solids and Physics Boxes demos implemented, 2026-09-22. Original broader design approved 2026-07-09; general multi-set authoring, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. General multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -29,7 +29,7 @@ Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its secti
 
 ---
 
-## Current demo contract (2026-09-22)
+## Current demo contract (2026-09-23)
 
 This section supersedes conflicting implementation details below for the first
 Physics Solids demo. The original larger design remains a roadmap.
@@ -69,9 +69,17 @@ Physics Solids demo. The original larger design remains a roadmap.
   Export drains all owed ticks with the same timestep and solver settings. A native
   tick cannot be preempted. Animated authored poses are retained by simulation
   time and interpolated for each fixed tick, including ticks owed by preview.
-  Position and raw Euler angles interpolate linearly between graph samples;
-  nonlinear upstream animation is not reevaluated at historical tick times.
-  Arbitrary-time seek replay is not provided.
+  For generator graphs, the stateless CPU ancestry of Physics World is sampled
+  at 240 Hz between delivered render frames. This includes nonlinear LFO and
+  beat motion; the solver consumes retained samples at its fixed ticks, so
+  preview catch-up and export use the same authored path. GPU and stateful
+  upstream dependencies reject generator loading with a named sampling error.
+  Position and raw Euler angles interpolate between these fixed samples.
+  Long forward frame gaps retain their full tick debt; a transport seek calls
+  the runtime state-reset path explicitly rather than guessing from gap size.
+  Backward time and Reset also rebuild. Paused Animated position/rotation edits
+  and undo teleport only the edited body (or copies) immediately, while owed historical ticks retain
+  their prior trajectory. Arbitrary-time seek replay is not provided.
 - The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.
@@ -84,9 +92,14 @@ Physics Solids demo. The original larger design remains a roadmap.
   the demo does not expose Box3D's per-body bullet option. The runtime enables
   bullet handling automatically for Dynamic bodies whose current speed and
   gravity predict movement over half their smallest scale in one fixed tick.
-  Fast Animated movement is split into up to eight equal outer Box3D steps
-  based on travel and angular sweep relative to Dynamic collider size. Extreme
-  sweeps beyond that cap and two fast bullet bodies can still miss each other.
+  Fast Animated movement is split into up to 512 equal outer Box3D steps,
+  chosen from the full sampled travel and angular sweep relative to Dynamic
+  collider size. The native world speed limit rises for the required Animated
+  speed and returns to its 400-unit default on ordinary ticks. For multiple
+  fast individual Dynamics, the runtime uses outer steps instead of enabling
+  bullet flags on both, because Box3D skips bullet targets. Copied fast
+  Dynamics still use individual bullet decisions; simultaneous fast copies
+  can miss each other. Travel beyond the 512-step cap remains a contact limit.
   For the shipped root-level single-body chain, Duplicate and Remove Object
   edit the authored transform, rigid body, mesh, material and render object as
   one undoable unit, keeping the body slot and pose wire paired. Incoming
@@ -95,7 +108,13 @@ Physics Solids demo. The original larger design remains a roadmap.
   starting at Y=2; a full world rejects the edit. Remove Object treats the
   Physics Boxes instanced copies chain as one owned collection and preserves
   the shared world and other bodies. Duplicate rejects that collection because
-  the world has only one copies input and output.
+  the world has only one copies input and output. Nested physics ownership and
+  malformed custom wiring reject visibly and atomically; nested nonphysical
+  scene objects remain editable. The graph editor can wire an intentional
+  nonphysical Scene Object beside the shared Physics World; ordinary Add
+  Object creates a nonphysical object when the scene has no physics world.
+  Duplicated auto scene bindings receive independent live controls immediately
+  and carry inline parameter descriptors through save/load.
 
 ### Physics Boxes demo
 
@@ -130,11 +149,16 @@ Physics timing covers CPU stepping and pose extraction, excludes rebuilding and
 GPU rendering, and sums worlds evaluated during the live content render. It is
 not the total frame cost. No photoscan fragmentation or sand simulation is added.
 
-Steady-state Rust stepping and pose reads use retained storage. Native solver
-allocations, large-scene throughput, multi-world contention and export/replay
-stability have not been performance-qualified. Do not infer a 16K-body capability
-from these demos. The box-count scene provides a controlled measurement surface;
-large-scene throughput has not been qualified.
+Steady-state Rust stepping and pose reads use retained storage. A bounded
+release-mode CPU comparison on Apple arm64 (8 warmup and 8 measured ticks)
+measured 256 copies at mean 0.052 ms, p95 0.064 ms; 4,000 copies at mean
+1.077 ms, p95 1.450 ms. A one-second hitch with a 16.667 ms preview budget
+left no lag at 256 and 0.650 seconds at 4,000; physics CPU for the catch-up
+call was 2.968 ms and 17.392 ms respectively. This is a synthetic solver
+benchmark, excluding graph evaluation, GPU rendering, and other project work.
+Repeat with `cargo run --release -p manifold-renderer --example physics_benchmark`.
+Native solver allocations, multi-world contention and full show throughput
+remain unqualified. Do not infer a 16K-body capability from these demos.
 
 Validation: native ownership/input tests, all five scaled hulls settling, fixed-tick
 frame partition equivalence, pause/reset/property preservation, Metal upload parity,
