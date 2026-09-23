@@ -506,6 +506,11 @@ const NON_STANDALONE: &[&str] = &[
     "node.torus_wrap_field",
     // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
     "system.mesh_input",
+    // Region detection and tracking are CPU/FFI stateful boundaries. Their
+    // Channels records are proven by the extended ABI test; neither node has
+    // a generated standalone uniform mirror for its run() path.
+    "node.detect_regions",
+    "node.track_regions",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

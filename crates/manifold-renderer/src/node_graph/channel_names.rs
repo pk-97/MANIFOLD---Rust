@@ -120,6 +120,19 @@ pub mod well_known {
         // ─── Rectangle / box geometry ───────────────────────────────
         WIDTH  = "width";
         HEIGHT = "height";
+        AREA = "area";
+        CX = "cx";
+        CY = "cy";
+
+        // ─── Connected regions and runtime tracks ──────────────────
+        ID = "id";
+        LABEL = "label";
+        OBSERVED = "observed";
+        VX = "vx";
+        VY = "vy";
+        PAD0 = "pad0";
+        PAD1 = "pad1";
+        PAD2 = "pad2";
 
         // ─── Color ──────────────────────────────────────────────────
         R     = "r";

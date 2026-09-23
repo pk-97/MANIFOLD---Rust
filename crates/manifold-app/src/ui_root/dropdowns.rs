@@ -90,6 +90,9 @@ fn mask_menu_items(
         ("Rectangle", "MaskRectangle"),
         ("Gradient", "MaskGradient"),
         ("Image", "MaskImage"),
+        ("Blob", "MaskBlob"),
+        ("Blob Colour", "MaskBlobColour"),
+        ("Blob Motion", "MaskBlobMotion"),
     ] {
         items.push(DropdownItem::new(&format!("{prefix} — {label}"))
             .with_action(PanelAction::Params(action(preset_id.to_string(), None))));

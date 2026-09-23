@@ -51,6 +51,18 @@ pub(crate) fn resolve_dims(
     if let Some(dims) = plan.resource_dims(res_id) {
         return dims;
     }
+    if let Some((num, den, max_dim)) = plan.resource_canvas_max_dim(res_id)
+        && den != 0
+    {
+        let width = (canvas_dims.0 as u64 * num as u64 / den as u64).max(1) as u32;
+        let height = (canvas_dims.1 as u64 * num as u64 / den as u64).max(1) as u32;
+        let longest = width.max(height) as u64;
+        let cap = longest.min(max_dim.max(1) as u64);
+        return (
+            ((width as u64 * cap + longest / 2) / longest).max(1) as u32,
+            ((height as u64 * cap + longest / 2) / longest).max(1) as u32,
+        );
+    }
     if let Some((num, den)) = plan.resource_canvas_scale(res_id)
         && den != 0
     {

@@ -148,6 +148,8 @@ mod rt_dynamic_export_tests;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
 mod scene_modifier_performance;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
+mod blob_v2_performance;
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
 mod rt_dynamic_held_out;
 mod window_registry;
 mod workspace;

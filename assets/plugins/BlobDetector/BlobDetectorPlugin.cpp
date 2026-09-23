@@ -13,6 +13,10 @@
 #include <algorithm>
 #include <vector>
 #include <cstring>
+#include <cstddef>
+#include <cstdint>
+#include <cmath>
+#include <limits>
 
 struct BlobDetectorState
 {
@@ -191,6 +195,292 @@ int BlobDetector_Process(
     }
 
     return blobCount;
+}
+
+} // extern "C"
+
+// BlobDetector V2 deliberately lives beside the original ABI.  The legacy
+// detector above is shipped as-is; this state is independent and only
+// exposes filled red-channel regions plus their selected label image.
+struct BlobRegionV2
+{
+    std::uint32_t label;
+    float x;
+    float y;
+    float width;
+    float height;
+    float area;
+    float cx;
+    float cy;
+};
+
+struct BlobRegionOptionsV2
+{
+    float threshold;
+    float min_area;
+    float max_area;
+    float min_aspect;
+    float max_aspect;
+    std::uint32_t max_regions;
+};
+
+static_assert(sizeof(BlobRegionV2) == 32, "BlobRegionV2 ABI size changed");
+static_assert(offsetof(BlobRegionV2, label) == 0, "BlobRegionV2 label offset changed");
+static_assert(offsetof(BlobRegionV2, x) == 4, "BlobRegionV2 x offset changed");
+static_assert(offsetof(BlobRegionV2, y) == 8, "BlobRegionV2 y offset changed");
+static_assert(offsetof(BlobRegionV2, width) == 12, "BlobRegionV2 width offset changed");
+static_assert(offsetof(BlobRegionV2, height) == 16, "BlobRegionV2 height offset changed");
+static_assert(offsetof(BlobRegionV2, area) == 20, "BlobRegionV2 area offset changed");
+static_assert(offsetof(BlobRegionV2, cx) == 24, "BlobRegionV2 cx offset changed");
+static_assert(offsetof(BlobRegionV2, cy) == 28, "BlobRegionV2 cy offset changed");
+static_assert(sizeof(BlobRegionOptionsV2) == 24, "BlobRegionOptionsV2 ABI size changed");
+static_assert(offsetof(BlobRegionOptionsV2, threshold) == 0, "BlobRegionOptionsV2 threshold offset changed");
+static_assert(offsetof(BlobRegionOptionsV2, min_area) == 4, "BlobRegionOptionsV2 min_area offset changed");
+static_assert(offsetof(BlobRegionOptionsV2, max_area) == 8, "BlobRegionOptionsV2 max_area offset changed");
+static_assert(offsetof(BlobRegionOptionsV2, min_aspect) == 12, "BlobRegionOptionsV2 min_aspect offset changed");
+static_assert(offsetof(BlobRegionOptionsV2, max_aspect) == 16, "BlobRegionOptionsV2 max_aspect offset changed");
+static_assert(offsetof(BlobRegionOptionsV2, max_regions) == 20, "BlobRegionOptionsV2 max_regions offset changed");
+
+namespace
+{
+
+constexpr std::uint32_t kBlobRegionV2MaxRegions = 32;
+constexpr std::uint32_t kBlobRegionV2MaxDimension = 1024;
+
+struct BlobRegionV2Candidate
+{
+    int label;
+    int left;
+    int top;
+    int width;
+    int height;
+    int area;
+};
+
+struct BlobDetectorV2State
+{
+    cv::Mat foreground;
+    cv::Mat component_labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    std::vector<BlobRegionV2Candidate> candidates;
+    std::vector<int> remap;
+
+    BlobDetectorV2State()
+    {
+        candidates.reserve(kBlobRegionV2MaxRegions);
+    }
+};
+
+bool is_valid_options(const BlobRegionOptionsV2& options)
+{
+    return std::isfinite(options.threshold) &&
+           std::isfinite(options.min_area) &&
+           std::isfinite(options.max_area) &&
+           std::isfinite(options.min_aspect) &&
+           std::isfinite(options.max_aspect) &&
+           options.max_regions >= 1 &&
+           options.max_regions <= kBlobRegionV2MaxRegions;
+}
+
+void clear_v2_outputs(
+    std::uint8_t* labels,
+    std::size_t labels_len,
+    BlobRegionV2* regions,
+    std::size_t regions_capacity)
+{
+    // Lengths are caller-provided even on the invalid-input path. Bound the
+    // clearing work to the maximum ABI image and record count.
+    if (labels && labels_len > 0)
+        std::memset(labels, 0, std::min<std::size_t>(labels_len, 1024u * 1024u));
+
+    if (regions && regions_capacity > 0)
+        std::memset(regions, 0,
+                    std::min<std::size_t>(regions_capacity, kBlobRegionV2MaxRegions) *
+                        sizeof(BlobRegionV2));
+}
+
+bool checked_image_sizes(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::size_t& pixel_count,
+    std::size_t& rgba_len)
+{
+    if (width < 1 || width > kBlobRegionV2MaxDimension ||
+        height < 1 || height > kBlobRegionV2MaxDimension)
+        return false;
+
+    const std::size_t width_size = static_cast<std::size_t>(width);
+    const std::size_t height_size = static_cast<std::size_t>(height);
+    if (height_size > std::numeric_limits<std::size_t>::max() / width_size)
+        return false;
+    pixel_count = width_size * height_size;
+    if (pixel_count > std::numeric_limits<std::size_t>::max() / 4)
+        return false;
+    rgba_len = pixel_count * 4;
+    return true;
+}
+
+bool candidate_precedes(const BlobRegionV2Candidate& a, const BlobRegionV2Candidate& b)
+{
+    if (a.area != b.area)
+        return a.area > b.area;
+    if (a.top != b.top)
+        return a.top < b.top;
+    if (a.left != b.left)
+        return a.left < b.left;
+    return a.label < b.label;
+}
+
+} // namespace
+
+extern "C"
+{
+
+void* BlobDetectorV2_Create(void)
+{
+    try {
+        return new BlobDetectorV2State();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void BlobDetectorV2_Destroy(void* handle)
+{
+    if (!handle)
+        return;
+    try {
+        delete static_cast<BlobDetectorV2State*>(handle);
+    } catch (...) {
+        // Do not allow a C++ destructor failure to cross the C ABI.
+    }
+}
+
+std::int32_t BlobDetectorV2_Process(
+    void* handle,
+    const std::uint8_t* rgba,
+    std::size_t rgba_len,
+    std::uint32_t width,
+    std::uint32_t height,
+    const BlobRegionOptionsV2* options,
+    std::uint8_t* labels,
+    std::size_t labels_len,
+    BlobRegionV2* regions,
+    std::size_t regions_capacity)
+{
+    clear_v2_outputs(labels, labels_len, regions, regions_capacity);
+
+    std::size_t pixel_count = 0;
+    std::size_t expected_rgba_len = 0;
+    const bool valid_sizes = checked_image_sizes(width, height, pixel_count, expected_rgba_len);
+    const bool valid_regions_capacity =
+        regions_capacity >= kBlobRegionV2MaxRegions &&
+        regions_capacity <= std::numeric_limits<std::size_t>::max() / sizeof(BlobRegionV2);
+
+    if (!handle || !rgba || !options || !labels || !regions ||
+        !valid_sizes || rgba_len != expected_rgba_len || labels_len != pixel_count ||
+        !valid_regions_capacity || !is_valid_options(*options))
+    {
+        return -1;
+    }
+
+    try {
+        auto* state = static_cast<BlobDetectorV2State*>(handle);
+        state->foreground.create(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+
+        for (std::uint32_t y = 0; y < height; ++y)
+        {
+            const std::size_t rgba_row = static_cast<std::size_t>(y) * width * 4;
+            std::uint8_t* mask_row = state->foreground.ptr<std::uint8_t>(static_cast<int>(y));
+            for (std::uint32_t x = 0; x < width; ++x)
+            {
+                const std::uint8_t red = rgba[rgba_row + static_cast<std::size_t>(x) * 4];
+                const float normalized_red = static_cast<float>(red) / 255.0f;
+                mask_row[x] = normalized_red >= options->threshold ? 255 : 0;
+            }
+        }
+
+        const int component_count = cv::connectedComponentsWithStats(
+            state->foreground,
+            state->component_labels,
+            state->stats,
+            state->centroids,
+            8,
+            CV_32S,
+            cv::CCL_SAUF);
+
+        state->candidates.clear();
+        state->remap.assign(static_cast<std::size_t>(component_count), 0);
+        const float inverse_pixel_count = 1.0f / static_cast<float>(pixel_count);
+
+        for (int component = 1; component < component_count; ++component)
+        {
+            const int left = state->stats.at<int>(component, cv::CC_STAT_LEFT);
+            const int top = state->stats.at<int>(component, cv::CC_STAT_TOP);
+            const int component_width = state->stats.at<int>(component, cv::CC_STAT_WIDTH);
+            const int component_height = state->stats.at<int>(component, cv::CC_STAT_HEIGHT);
+            const int area = state->stats.at<int>(component, cv::CC_STAT_AREA);
+            const float normalized_area = static_cast<float>(area) * inverse_pixel_count;
+            const float aspect = static_cast<float>(component_width) /
+                                 static_cast<float>(component_height);
+
+            if (normalized_area >= options->min_area &&
+                normalized_area <= options->max_area &&
+                aspect >= options->min_aspect && aspect <= options->max_aspect)
+            {
+                state->candidates.push_back({
+                    component,
+                    left,
+                    top,
+                    component_width,
+                    component_height,
+                    area,
+                });
+            }
+        }
+
+        std::sort(state->candidates.begin(), state->candidates.end(), candidate_precedes);
+        const std::size_t selected_count = std::min<std::size_t>(
+            state->candidates.size(), options->max_regions);
+
+        for (std::size_t selected = 0; selected < selected_count; ++selected)
+            state->remap[state->candidates[selected].label] = static_cast<int>(selected + 1);
+
+        for (std::uint32_t y = 0; y < height; ++y)
+        {
+            const int* source_row = state->component_labels.ptr<int>(static_cast<int>(y));
+            std::uint8_t* destination_row = labels + static_cast<std::size_t>(y) * width;
+            for (std::uint32_t x = 0; x < width; ++x)
+            {
+                const int original_label = source_row[x];
+                const int selected_label = state->remap[original_label];
+                destination_row[x] = static_cast<std::uint8_t>(selected_label);
+            }
+        }
+
+        for (std::size_t selected = 0; selected < selected_count; ++selected)
+        {
+            const BlobRegionV2Candidate& candidate = state->candidates[selected];
+            BlobRegionV2& output = regions[selected];
+            const double centroid_x = state->centroids.at<double>(candidate.label, 0);
+            const double centroid_y = state->centroids.at<double>(candidate.label, 1);
+
+            output.label = static_cast<std::uint32_t>(selected + 1);
+            output.x = static_cast<float>(candidate.left) / static_cast<float>(width);
+            output.y = static_cast<float>(candidate.top) / static_cast<float>(height);
+            output.width = static_cast<float>(candidate.width) / static_cast<float>(width);
+            output.height = static_cast<float>(candidate.height) / static_cast<float>(height);
+            output.area = static_cast<float>(candidate.area) * inverse_pixel_count;
+            output.cx = static_cast<float>((centroid_x + 0.5) / static_cast<double>(width));
+            output.cy = static_cast<float>((centroid_y + 0.5) / static_cast<double>(height));
+        }
+
+        return static_cast<std::int32_t>(selected_count);
+    } catch (...) {
+        clear_v2_outputs(labels, labels_len, regions, regions_capacity);
+        return -2;
+    }
 }
 
 } // extern "C"

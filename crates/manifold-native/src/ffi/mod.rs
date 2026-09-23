@@ -1,5 +1,6 @@
 pub mod blob_ffi;
 pub mod depth_ffi;
+pub mod region_ffi;
 
 use std::path::{Path, PathBuf};
 

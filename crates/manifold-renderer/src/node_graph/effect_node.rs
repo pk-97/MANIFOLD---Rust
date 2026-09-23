@@ -1502,6 +1502,13 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Longest-side cap for an output whose input is canvas-relative and
+    /// whose concrete dimensions cannot be known when the plan is built.
+    /// The executor applies the cap to the live canvas size at acquire time.
+    fn output_canvas_max_dim(&self, _port: &str, _params: &ParamValues) -> Option<u32> {
+        None
+    }
+
     /// Install a per-output-port canvas-relative scale override.
     /// Called by persistence to apply JSON-declared `outputCanvasScales`
     /// entries after a node is constructed. No-op on nodes whose scale

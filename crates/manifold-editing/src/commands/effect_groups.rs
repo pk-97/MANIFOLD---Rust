@@ -705,7 +705,9 @@ mod tests {
         AddEffectCommand, RemoveEffectCommand, ReorderEffectCommand,
         ReorderEffectGroupCommand,
     };
+    use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{Param, ParamManifest};
     use manifold_core::{EffectId, PresetTypeId};
 
     fn effect(name: &str) -> PresetInstance {
@@ -714,6 +716,100 @@ mod tests {
 
     fn master_target() -> EffectTarget {
         EffectTarget::Master
+    }
+
+    #[test]
+    fn blob_v2_mask_save_undo_redo() {
+        let mut project = Project::default();
+        project.settings.master_effects.push(effect("Colour"));
+
+        let mut mask = effect("MaskBlob");
+        mask.params = ParamManifest::from_params([
+            ("threshold", "Threshold", 0.0, 1.0, 0.5),
+            ("min_area", "Min Area", 0.0, 0.25, 0.001),
+            ("max_blobs", "Max Blobs", 1.0, 32.0, 8.0),
+            ("selection", "Selection", 0.0, 1.0, 0.0),
+            ("amount", "Amount", 0.0, 1.0, 1.0),
+        ]
+        .into_iter()
+        .map(|(id, name, min, max, default_value)| {
+            Param::bundled(ParamSpecDef {
+                id: id.to_string(),
+                name: name.to_string(),
+                min,
+                max,
+                default_value,
+                whole_numbers: id == "max_blobs" || id == "selection",
+                value_labels: if id == "selection" {
+                    vec!["All".to_string(), "Largest".to_string()]
+                } else {
+                    Vec::new()
+                },
+                ..ParamSpecDef::default()
+            })
+        })
+        .collect());
+        mask.base_tracked = true;
+        assert!(mask.set_base_param("threshold", 0.63));
+        assert!(mask.set_base_param("min_area", 0.012));
+        assert!(mask.set_base_param("max_blobs", 12.0));
+        assert!(mask.set_base_param("selection", 1.0));
+        assert!(mask.set_base_param("amount", 0.8));
+
+        let mask_id = mask.id.clone();
+        let mut command = AddGroupMaskCommand::new(master_target(), vec![0], mask);
+        command.execute(&mut project);
+        assert!(command.was_applied());
+
+        let group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
+        let effects = &project.settings.master_effects;
+        assert_eq!(effects.len(), 2);
+        assert_eq!(effects[0].id, mask_id);
+        assert_eq!(effects[0].effect_type(), &PresetTypeId::new("MaskBlob"));
+        assert_eq!(effects[0].get_base_param("threshold"), 0.63);
+        assert_eq!(effects[0].get_base_param("min_area"), 0.012);
+        assert_eq!(effects[0].get_base_param("max_blobs"), 12.0);
+        assert_eq!(effects[0].get_base_param("selection"), 1.0);
+        assert_eq!(effects[0].get_base_param("amount"), 0.8);
+        assert_eq!(group.mask_effect_id, Some(mask_id.clone()));
+        assert_eq!(effects[0].group_id, Some(group.id.clone()));
+
+        command.undo(&mut project);
+        assert_eq!(project.settings.master_effects.len(), 1);
+        assert!(project.settings.master_effect_groups.as_ref().unwrap().is_empty());
+
+        command.execute(&mut project);
+        let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
+        assert_eq!(redo_group.id, group.id);
+        assert_eq!(redo_group.mask_effect_id, Some(mask_id));
+
+        let saved = serde_json::to_value(&project).unwrap();
+        let saved_mask = saved["settings"]["masterEffects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|effect| effect["effectType"] == "MaskBlob")
+            .unwrap();
+        assert!(
+            (saved_mask["params"]["threshold"]["value"]
+                .as_f64()
+                .unwrap()
+                - 0.63)
+                .abs()
+                < 1.0e-6
+        );
+        assert_eq!(saved_mask["params"]["max_blobs"]["value"], 12.0);
+        assert_eq!(saved_mask["params"]["selection"]["value"], 1.0);
+
+        let loaded: Project = serde_json::from_value(saved).unwrap();
+        let loaded_mask = loaded
+            .settings
+            .master_effects
+            .iter()
+            .find(|effect| effect.effect_type() == &PresetTypeId::new("MaskBlob"))
+            .unwrap();
+        assert_eq!(loaded_mask.group_id, Some(redo_group.id));
+        assert_eq!(loaded_mask.effect_type(), &PresetTypeId::new("MaskBlob"));
     }
 
     #[test]

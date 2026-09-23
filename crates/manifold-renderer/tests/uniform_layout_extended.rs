@@ -5,6 +5,123 @@ mod support {
     pub mod texture_abi_cases;
     pub mod uniform_abi;
 }
+
+// `region_types.rs` is a wire boundary rather than a generated GPU uniform.
+// Include the production declarations so this integration proof checks the
+// compiler's actual repr(C) layout instead of reproducing the structs here.
+#[path = "../src/node_graph/primitives/region_types.rs"]
+mod region_wire_abi;
+
+const BLOB_V2_UNIFORM_MIRRORS: &[(&str, &str)] = &[
+    ("resize_limit.rs", "ResizeLimitUniforms"),
+    ("region_mask.rs", "RegionMaskUniforms"),
+    ("rgb_distance.rs", "RgbDistanceUniforms"),
+    ("mask_extrema.rs", "MaskExtremaUniforms"),
+];
+
+const BLOB_V2_WIRE_MIRRORS: &[(&str, &str)] = &[
+    ("region_types.rs", "LegacyBox"),
+    ("region_types.rs", "Region"),
+    ("region_types.rs", "TrackRecord"),
+];
+
+mod blob_v2 {
+    use super::{BLOB_V2_UNIFORM_MIRRORS, region_wire_abi, support};
+    use std::{
+        mem::{offset_of, size_of},
+        path::Path,
+    };
+
+    use manifold_renderer::node_graph::PrimitiveRegistry;
+    use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
+    use support::uniform_abi::{assert_wgsl_layout, shader_declaration};
+
+    #[test]
+    fn blob_v2_uniform_mirrors_match_generated_or_custom_layout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut failures = Vec::new();
+        for &(source, rust_struct) in BLOB_V2_UNIFORM_MIRRORS {
+            let type_id = match source {
+                "resize_limit.rs" => "node.resize_limit",
+                "region_mask.rs" => "node.region_mask",
+                "rgb_distance.rs" => "node.rgb_distance",
+                "mask_extrema.rs" => "node.mask_extrema",
+                _ => unreachable!("all Blob V2 mirror cases have a type id"),
+            };
+            let path = root.join(source);
+            let result = if source == "mask_extrema.rs" {
+                std::fs::read_to_string(root.join("shaders/mask_extrema.wgsl"))
+                    .map_err(|error| error.to_string())
+                    .and_then(|shader| shader_declaration(&shader, "Params"))
+                    .and_then(|declaration| {
+                        assert_wgsl_layout(&path, rust_struct, &declaration, "Params", &[])
+                    })
+            } else {
+                let node = registry
+                    .construct(type_id)
+                    .ok_or_else(|| format!("unregistered {type_id}"));
+                node.and_then(|node| {
+                    let mut wgsl = standalone_for_node(node.as_ref())
+                        .map_err(|error| format!("codegen: {error:?}"))?;
+                    for (token, _) in node.wgsl_specialization() {
+                        wgsl = wgsl.replace(token, "1u");
+                    }
+                    assert_wgsl_layout(&path, rust_struct, &wgsl, "Params", &[])
+                })
+            };
+            if let Err(error) = result {
+                failures.push(format!("{source} / {rust_struct}: {error}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "Blob V2 uniform ABI proof failed:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn blob_v2_region_wire_mirrors_have_exact_channel_layouts() {
+        use region_wire_abi::{LegacyBox, Region, TrackRecord};
+
+        assert_eq!(region_wire_abi::MAX_REGIONS, 32);
+        assert_eq!(size_of::<LegacyBox>(), 16);
+        assert_eq!(offset_of!(LegacyBox, x), 0);
+        assert_eq!(offset_of!(LegacyBox, y), 4);
+        assert_eq!(offset_of!(LegacyBox, width), 8);
+        assert_eq!(offset_of!(LegacyBox, height), 12);
+
+        assert_eq!(size_of::<Region>(), 32);
+        assert_eq!(offset_of!(Region, label), 0);
+        assert_eq!(offset_of!(Region, x), 4);
+        assert_eq!(offset_of!(Region, y), 8);
+        assert_eq!(offset_of!(Region, width), 12);
+        assert_eq!(offset_of!(Region, height), 16);
+        assert_eq!(offset_of!(Region, area), 20);
+        assert_eq!(offset_of!(Region, cx), 24);
+        assert_eq!(offset_of!(Region, cy), 28);
+
+        assert_eq!(size_of::<TrackRecord>(), 64);
+        assert_eq!(offset_of!(TrackRecord, id), 0);
+        assert_eq!(offset_of!(TrackRecord, label), 4);
+        assert_eq!(offset_of!(TrackRecord, observed), 8);
+        assert_eq!(offset_of!(TrackRecord, age), 12);
+        assert_eq!(offset_of!(TrackRecord, x), 16);
+        assert_eq!(offset_of!(TrackRecord, y), 20);
+        assert_eq!(offset_of!(TrackRecord, width), 24);
+        assert_eq!(offset_of!(TrackRecord, height), 28);
+        assert_eq!(offset_of!(TrackRecord, cx), 32);
+        assert_eq!(offset_of!(TrackRecord, cy), 36);
+        assert_eq!(offset_of!(TrackRecord, vx), 40);
+        assert_eq!(offset_of!(TrackRecord, vy), 44);
+        assert_eq!(offset_of!(TrackRecord, area), 48);
+        assert_eq!(offset_of!(TrackRecord, pad0), 52);
+        assert_eq!(offset_of!(TrackRecord, pad1), 56);
+        assert_eq!(offset_of!(TrackRecord, pad2), 60);
+    }
+}
+
 mod texture {
     use super::support;
     use std::path::Path;
@@ -172,6 +289,16 @@ mod custom {
                 INLINE_CASES
                     .iter()
                     .map(|(f, h, _, _)| ((*f).into(), (*h).into())),
+            )
+            .chain(
+                super::BLOB_V2_UNIFORM_MIRRORS
+                    .iter()
+                    .map(|(f, h)| ((*f).into(), (*h).into())),
+            )
+            .chain(
+                super::BLOB_V2_WIRE_MIRRORS
+                    .iter()
+                    .map(|(f, h)| ((*f).into(), (*h).into())),
             )
             .collect();
         // These two are vertex payloads, not uniforms. Their vertex descriptor owns

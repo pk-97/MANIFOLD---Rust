@@ -2,8 +2,8 @@
 
 <!-- index: Implementation contract for a new shape-preserving blob tracker and effect-group masks, retaining the original Blob Track. -->
 
-**Status:** APPROVED · 2026-09-23 · Codex · Peter authorized overnight end-to-end implementation; implementation has not started under this contract.
-**Prerequisites:** existing effect-group masks, native BlobDetector bundle, and optical-flow primitive; recheck the audit before implementation.
+**Status:** IMPLEMENTED · 2026-09-23 · Codex. Six new presets, native V2 ABI, shared detector/tracker, mask/colour/motion graphs and menu entries are present; the original Blob Track is unchanged. Focused GPU, UI and 1080p app performance proofs passed. On an M4 Max, the default 600-frame V2 app-tick p95 added 0.67 ms over legacy; detector worker p95 was 0.234 ms with one-frame readback age and two-frame capture-to-output age. Process malloc-zone retained bytes and blocks are reported; transient allocation events and detector-only retained bytes remain unmeasured under BUG-7bi8.
+**Prerequisites:** existing effect-group masks, native BlobDetector bundle, and optical-flow primitive; verified against the implementation.
 **Execution contract:** Sol at Extra High owns one continuous overnight run through P1–P4, using native Luna lanes. Phases are bounded implementation/review/landing checkpoints, not reasons to end the task or await another prompt. Peter's end-to-end instruction overrides the earlier one-phase-per-session handoff and the design standard's fresh-session default. Read `DESIGN_DOC_STANDARD.md` sections 5–6 and current `AGENTS.md`; preserve their engineering and landing gates.
 
 Build a new Blob Track V2 effect and an organic Blob Mask modifier from the same region detector. Preserve the original Blob Track: Peter explicitly said, “it must be available please that was wrong.” This is a new effect, not a replacement or project migration. Peter's mask request was “a blob tracking mask modifier that you can feed effects into.” In the existing product this means adding a mask to an effect group, then putting effects inside that group.

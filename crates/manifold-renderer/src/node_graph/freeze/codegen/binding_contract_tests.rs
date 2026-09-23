@@ -160,9 +160,11 @@ fn dispatch_tail_census_is_stable() {
     // Both are canonical texture atoms.
     // Shared cut remaps add two buffer atoms; canonical texture count is unchanged.
     // Code Terminal adds render_glyph_grid, a mixed texture/storage atom.
-    assert_eq!(total, 184, "standalone atom census drifted");
+    // Blob V2 adds region_mask (manual) plus resize_limit and rgb_distance
+    // (canonical texture atoms).
+    assert_eq!(total, 187, "standalone atom census drifted");
     assert_eq!(
-        qualifying, 91,
+        qualifying, 93,
         "canonical texture-path population drifted"
     );
 }
