@@ -2,17 +2,22 @@
 //!
 //! This is a small CPU readback bridge rather than a composable GPU primitive.
 //! The compute pass writes one record for each cell in the terminal's fixed
-//! 64×36 grid. Three persistent readback buffers keep the content thread
-//! non-blocking while the CPU consumes the newest completed result.
+//! 64×36 grid, followed by a 256×144 detail grid. Three persistent readback
+//! buffers keep the content thread non-blocking while the CPU consumes the
+//! newest completed result.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEvent, GpuTexture};
 
-use super::terminal_reaction::{SAMPLE_COLS, SAMPLE_COUNT, SAMPLE_ROWS};
+use super::terminal_reaction::SAMPLE_COUNT;
 
 const SHADER: &str = include_str!("shaders/terminal_analysis.wgsl");
 const PIPELINE_LABEL: &str = "node.terminal_stream.analysis";
 const READBACK_SLOTS: usize = 3;
-const SAMPLE_BYTES: u64 = (SAMPLE_COUNT * std::mem::size_of::<[f32; 4]>()) as u64;
+pub(super) const DETAIL_COLS: usize = 256;
+pub(super) const DETAIL_ROWS: usize = 144;
+pub(super) const DETAIL_COUNT: usize = DETAIL_COLS * DETAIL_ROWS;
+const READBACK_COUNT: usize = SAMPLE_COUNT + DETAIL_COUNT;
+const READBACK_BYTES: u64 = (READBACK_COUNT * std::mem::size_of::<[f32; 4]>()) as u64;
 
 pub(crate) fn prewarm_pipeline(device: &GpuDevice) {
     // This CPU readback bridge is outside the pure-GPU atom codegen sweep.
@@ -32,6 +37,7 @@ pub(super) struct TerminalAnalysis {
     pipeline: Option<GpuComputePipeline>,
     slots: Option<[ReadbackSlot; READBACK_SLOTS]>,
     samples: Box<[[f32; 4]; SAMPLE_COUNT]>,
+    detail_samples: Box<[[f32; 4]; DETAIL_COUNT]>,
     generation: u64,
     next_slot: usize,
     next_sequence: u64,
@@ -44,6 +50,10 @@ impl TerminalAnalysis {
             pipeline: None,
             slots: None,
             samples: Box::new([[0.0; 4]; SAMPLE_COUNT]),
+            detail_samples: vec![[0.0; 4]; DETAIL_COUNT]
+                .into_boxed_slice()
+                .try_into()
+                .expect("fixed detail sample count"),
             generation: 1,
             next_slot: 0,
             next_sequence: 0,
@@ -59,7 +69,7 @@ impl TerminalAnalysis {
         }
         if self.slots.is_none() {
             self.slots = Some(std::array::from_fn(|_| ReadbackSlot {
-                buffer: device.create_buffer_shared(SAMPLE_BYTES),
+                buffer: device.create_buffer_shared(READBACK_BYTES),
                 event: device.create_event(),
                 signal: 0,
                 generation: 0,
@@ -73,6 +83,7 @@ impl TerminalAnalysis {
     pub(super) fn reset(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.samples.fill([0.0; 4]);
+        self.detail_samples.fill([0.0; 4]);
         self.latest_sequence = 0;
     }
 
@@ -84,6 +95,10 @@ impl TerminalAnalysis {
         &self.samples
     }
 
+    pub(super) fn latest_detail_samples(&self) -> &[[f32; 4]; DETAIL_COUNT] {
+        &self.detail_samples
+    }
+
     fn poll_completed(&mut self) {
         let Some(slots) = self.slots.as_mut() else {
             return;
@@ -91,6 +106,7 @@ impl TerminalAnalysis {
 
         let generation = self.generation;
         let samples = &mut *self.samples;
+        let detail_samples = &mut *self.detail_samples;
         let latest_sequence = &mut self.latest_sequence;
         for slot in slots {
             if slot.signal == 0 || !slot.event.is_done(slot.signal) {
@@ -107,8 +123,20 @@ impl TerminalAnalysis {
                 // GPU has finished writing before this copy is observed.
                 unsafe {
                     std::ptr::copy_nonoverlapping(source, samples.as_mut_ptr(), SAMPLE_COUNT);
+                    std::ptr::copy_nonoverlapping(
+                        source.add(SAMPLE_COUNT),
+                        detail_samples.as_mut_ptr(),
+                        DETAIL_COUNT,
+                    );
                 }
                 for sample in samples.iter_mut() {
+                    for component in sample {
+                        if !component.is_finite() {
+                            *component = 0.0;
+                        }
+                    }
+                }
+                for sample in detail_samples.iter_mut() {
                     for component in sample {
                         if !component.is_finite() {
                             *component = 0.0;
@@ -170,8 +198,8 @@ impl TerminalAnalysis {
                 },
             ],
             [
-                SAMPLE_COLS.div_ceil(8) as u32,
-                SAMPLE_ROWS.div_ceil(8) as u32,
+                DETAIL_COLS.div_ceil(8) as u32,
+                DETAIL_ROWS.div_ceil(8) as u32,
                 1,
             ],
             PIPELINE_LABEL,
@@ -358,6 +386,47 @@ mod gpu_tests {
     }
 
     #[test]
+    fn fine_grid_reports_localized_source_detail() {
+        let device = crate::test_device();
+        let texture = source_texture(&device, "terminal-analysis-detail", |x, y| {
+            if (48..56).contains(&x) && (18..24).contains(&y) {
+                [255, 128, 0, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        });
+        let mut analysis = TerminalAnalysis::new();
+
+        let _ = sample_and_wait(
+            &mut analysis,
+            &device,
+            &texture,
+            "terminal-analysis-detail-1",
+        );
+        let _ = sample_and_wait(
+            &mut analysis,
+            &device,
+            &texture,
+            "terminal-analysis-detail-2",
+        );
+
+        let mut bright_count = 0;
+        for y in 0..super::DETAIL_ROWS {
+            for x in 0..super::DETAIL_COLS {
+                if analysis.latest_detail_samples()[y * super::DETAIL_COLS + x][0] > 0.9 {
+                    assert!((64..75).contains(&x), "detail x escaped source region: {x}");
+                    assert!((36..48).contains(&y), "detail y escaped source region: {y}");
+                    bright_count += 1;
+                }
+            }
+        }
+        assert!(
+            bright_count > 0,
+            "localized source was absent from detail grid"
+        );
+    }
+
+    #[test]
     fn reset_discards_pending_result_and_preserves_allocations() {
         let device = crate::test_device();
         let old_texture = source_texture(&device, "terminal-analysis-reset-old", |_, _| {
@@ -373,6 +442,7 @@ mod gpu_tests {
             .buffer
             .mapped_ptr()
             .expect("shared readback buffer") as usize;
+        let detail_ptr = analysis.detail_samples.as_ptr();
 
         let mut pending = device.create_encoder("terminal-analysis-reset-pending");
         {
@@ -380,6 +450,13 @@ mod gpu_tests {
             let _ = analysis.sample(&mut gpu, &old_texture);
         }
         analysis.reset();
+        assert!(
+            analysis
+                .latest_detail_samples()
+                .iter()
+                .all(|sample| *sample == [0.0; 4]),
+            "detail snapshot was not cleared"
+        );
         pending.commit_and_wait_completed();
 
         let discarded = sample_and_wait(
@@ -403,6 +480,11 @@ mod gpu_tests {
             analysis.samples.as_ptr(),
             samples_ptr,
             "CPU sample allocation changed"
+        );
+        assert_eq!(
+            analysis.detail_samples.as_ptr(),
+            detail_ptr,
+            "CPU detail sample allocation changed"
         );
         assert_eq!(
             analysis.slots.as_ref().expect("installed readback ring")[0]

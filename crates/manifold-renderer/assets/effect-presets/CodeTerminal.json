@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "Long terminal lines update only when the source image changes. Contours shape indentation and line endings; completed text stays still. Layout chooses Single or tmux-style splits with distinct shell, code, log and inspection passages. Activity controls edit speed; zero holds the characters.",
+  "description": "Long terminal lines update only when the source image changes. Contours shape indentation and line endings; completed text stays still. Layout chooses Single or tmux-style splits with distinct shell, code, log and inspection passages. Activity controls edit speed; zero holds the characters. Detail Reactivity makes local source changes cycle data characters briefly before settling; zero disables these fine edits.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -86,6 +86,17 @@
           "Horizontal Split",
           "Four Panes"
         ]
+      },
+      {
+        "id": "detail_reactivity",
+        "name": "Detail Reactivity",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.55,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
       }
     ],
     "bindings": [
@@ -166,6 +177,19 @@
         "convert": {
           "type": "EnumRound"
         }
+      },
+      {
+        "id": "detail_reactivity",
+        "label": "Detail Reactivity",
+        "defaultValue": 0.55,
+        "target": {
+          "kind": "node",
+          "nodeId": "terminal",
+          "param": "detail_reactivity"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ]
   },
@@ -191,6 +215,10 @@
         "activity": {
           "type": "Float",
           "value": 1.0
+        },
+        "detail_reactivity": {
+          "type": "Float",
+          "value": 0.55
         }
       }
     },

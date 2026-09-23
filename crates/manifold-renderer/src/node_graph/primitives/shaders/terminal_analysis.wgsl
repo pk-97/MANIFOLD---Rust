@@ -1,4 +1,4 @@
-// Fixed 64×36 terminal image analysis.
+// Fixed 64×36 terminal image analysis followed by a 256×144 detail grid.
 //
 // Each output cell uses nine evenly spaced integer texel loads. RGB is the
 // average linear colour and alpha stores the local Rec.709 luma contrast
@@ -9,6 +9,8 @@
 @group(0) @binding(1) var<storage, read_write> outputSamples: array<vec4<f32>>;
 
 const GRID: vec2<f32> = vec2<f32>(64.0, 36.0);
+const DETAIL_GRID: vec2<f32> = vec2<f32>(256.0, 144.0);
+const COARSE_COUNT: u32 = 2304u;
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 fn finite_or_zero(value: f32) -> f32 {
@@ -36,44 +38,68 @@ fn load_tap(cell: vec2<f32>, tap: vec2<f32>, dims: vec2<u32>) -> vec3<f32> {
     );
 }
 
+fn load_detail(cell: vec2<u32>, dims: vec2<u32>) -> vec3<f32> {
+    let max_coord = vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1);
+    let uv = (vec2<f32>(f32(cell.x), f32(cell.y)) + vec2<f32>(0.5, 0.5)) / DETAIL_GRID;
+    let coord = clamp(
+        vec2<i32>(i32(uv.x * f32(dims.x)), i32(uv.y * f32(dims.y))),
+        vec2<i32>(0, 0),
+        max_coord,
+    );
+    let raw = textureLoad(sourceTexture2D, coord, 0).rgb;
+    return vec3<f32>(
+        finite_or_zero(raw.r),
+        finite_or_zero(raw.g),
+        finite_or_zero(raw.b),
+    );
+}
+
 @compute @workgroup_size(8, 8)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= 64u || id.y >= 36u {
+    if id.x >= 256u || id.y >= 144u {
         return;
     }
 
     let dims = textureDimensions(sourceTexture2D);
-    let cell = vec2<f32>(f32(id.x), f32(id.y));
-    // One sixth, one half, and five sixths are evenly spaced inside the cell.
-    let c00 = load_tap(cell, vec2<f32>(0.16666667, 0.16666667), dims);
-    let c10 = load_tap(cell, vec2<f32>(0.5, 0.16666667), dims);
-    let c20 = load_tap(cell, vec2<f32>(0.83333333, 0.16666667), dims);
-    let c01 = load_tap(cell, vec2<f32>(0.16666667, 0.5), dims);
-    let c11 = load_tap(cell, vec2<f32>(0.5, 0.5), dims);
-    let c21 = load_tap(cell, vec2<f32>(0.83333333, 0.5), dims);
-    let c02 = load_tap(cell, vec2<f32>(0.16666667, 0.83333333), dims);
-    let c12 = load_tap(cell, vec2<f32>(0.5, 0.83333333), dims);
-    let c22 = load_tap(cell, vec2<f32>(0.83333333, 0.83333333), dims);
+    if id.x < 64u && id.y < 36u {
+        let cell = vec2<f32>(f32(id.x), f32(id.y));
+        // One sixth, one half, and five sixths are evenly spaced inside the cell.
+        let c00 = load_tap(cell, vec2<f32>(0.16666667, 0.16666667), dims);
+        let c10 = load_tap(cell, vec2<f32>(0.5, 0.16666667), dims);
+        let c20 = load_tap(cell, vec2<f32>(0.83333333, 0.16666667), dims);
+        let c01 = load_tap(cell, vec2<f32>(0.16666667, 0.5), dims);
+        let c11 = load_tap(cell, vec2<f32>(0.5, 0.5), dims);
+        let c21 = load_tap(cell, vec2<f32>(0.83333333, 0.5), dims);
+        let c02 = load_tap(cell, vec2<f32>(0.16666667, 0.83333333), dims);
+        let c12 = load_tap(cell, vec2<f32>(0.5, 0.83333333), dims);
+        let c22 = load_tap(cell, vec2<f32>(0.83333333, 0.83333333), dims);
 
-    let sum = c00 + c10 + c20 + c01 + c11 + c21 + c02 + c12 + c22;
-    let average = sum / 9.0;
-    let l00 = dot(c00, LUMA);
-    let l10 = dot(c10, LUMA);
-    let l20 = dot(c20, LUMA);
-    let l01 = dot(c01, LUMA);
-    let l11 = dot(c11, LUMA);
-    let l21 = dot(c21, LUMA);
-    let l02 = dot(c02, LUMA);
-    let l12 = dot(c12, LUMA);
-    let l22 = dot(c22, LUMA);
-    let minimum = min(min(min(l00, l10), min(l20, l01)), min(min(l11, l21), min(l02, min(l12, l22))));
-    let maximum = max(max(max(l00, l10), max(l20, l01)), max(max(l11, l21), max(l02, max(l12, l22))));
-    let contrast = finite_or_zero(maximum - minimum);
+        let sum = c00 + c10 + c20 + c01 + c11 + c21 + c02 + c12 + c22;
+        let average = sum / 9.0;
+        let l00 = dot(c00, LUMA);
+        let l10 = dot(c10, LUMA);
+        let l20 = dot(c20, LUMA);
+        let l01 = dot(c01, LUMA);
+        let l11 = dot(c11, LUMA);
+        let l21 = dot(c21, LUMA);
+        let l02 = dot(c02, LUMA);
+        let l12 = dot(c12, LUMA);
+        let l22 = dot(c22, LUMA);
+        let minimum = min(min(min(l00, l10), min(l20, l01)), min(min(l11, l21), min(l02, min(l12, l22))));
+        let maximum = max(max(max(l00, l10), max(l20, l01)), max(max(l11, l21), max(l02, max(l12, l22))));
+        let contrast = finite_or_zero(maximum - minimum);
 
-    outputSamples[id.y * 64u + id.x] = vec4<f32>(
-        finite_or_zero(average.r),
-        finite_or_zero(average.g),
-        finite_or_zero(average.b),
-        contrast,
-    );
+        outputSamples[id.y * 64u + id.x] = vec4<f32>(
+            finite_or_zero(average.r),
+            finite_or_zero(average.g),
+            finite_or_zero(average.b),
+            contrast,
+        );
+    }
+
+    let detail = load_detail(id.xy, dims);
+    let horizontal = load_detail(vec2<u32>(min(id.x + 1u, 255u), id.y), dims);
+    let vertical = load_detail(vec2<u32>(id.x, min(id.y + 1u, 143u)), dims);
+    let detail_contrast = max(abs(dot(detail - horizontal, LUMA)), abs(dot(detail - vertical, LUMA)));
+    outputSamples[COARSE_COUNT + id.y * 256u + id.x] = vec4<f32>(detail, finite_or_zero(detail_contrast));
 }
