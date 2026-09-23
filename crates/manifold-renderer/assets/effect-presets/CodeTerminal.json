@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "The image drives living code: local brightness and motion grow, indent, erase and rewrite short terminal lines throughout the screen. Activity controls typing; zero holds the characters. Erosion controls replacement, with Source, Green or Amber ink.",
+  "description": "Long terminal lines update only when the source image changes. Spatial brightness and edges select changed passages to type; completed text stays still. Layout chooses Single or tmux-style splits. Activity controls edit speed; zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -69,6 +69,23 @@
           "Green",
           "Amber"
         ]
+      },
+      {
+        "id": "layout",
+        "name": "Layout",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "valueLabels": [
+          "Single",
+          "Vertical Split",
+          "Horizontal Split",
+          "Four Panes"
+        ]
       }
     ],
     "bindings": [
@@ -135,6 +152,19 @@
         },
         "convert": {
           "type": "Float"
+        }
+      },
+      {
+        "id": "layout",
+        "label": "Layout",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "terminal",
+          "param": "layout"
+        },
+        "convert": {
+          "type": "EnumRound"
         }
       }
     ]

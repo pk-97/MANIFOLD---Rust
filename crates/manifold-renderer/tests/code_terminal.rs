@@ -2,8 +2,8 @@
 //!
 //! The CPU gate checks the on-disk contract and exercises the shared binding
 //! path.  The GPU gate renders one 960×540 fixture through the production
-//! graph executor.  It deliberately samples a small set of control values and
-//! two beat positions instead of becoming a thumbnail/render sweep.
+//! graph executor. It samples bounded source timelines and layout choices
+//! instead of becoming a thumbnail/render sweep.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
@@ -105,10 +105,11 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
             ("activity", 2.0),
             ("tonal_bias", -0.35),
             ("colour", 2.0),
+            ("layout", 2.0),
         ],
     );
     bound.apply(&mut graph, &values);
-    assert_eq!(bound.bindings.len(), 5, "every card control has a route");
+    assert_eq!(bound.bindings.len(), 6, "every card control has a route");
     for (node_id, param, expected) in [
         ("erosion_low", "a", 0.47),
         ("terminal", "text_size", 31.0),
@@ -129,6 +130,71 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
             "{node_id}.{param} binding"
         );
     }
+    assert_eq!(
+        graph
+            .get_node(
+                graph
+                    .instance_by_node_id(&manifold_core::NodeId::new("terminal"))
+                    .expect("terminal node"),
+            )
+            .expect("terminal node live")
+            .params
+            .get("layout"),
+        Some(&manifold_renderer::node_graph::ParamValue::Enum(2)),
+        "terminal.layout binding"
+    );
+
+    let layout = roundtrip
+        .preset_metadata
+        .as_ref()
+        .expect("CodeTerminal metadata")
+        .params
+        .iter()
+        .find(|spec| spec.id == "layout")
+        .expect("layout card control");
+    assert_eq!(
+        (layout.min, layout.max, layout.default_value),
+        (0.0, 3.0, 0.0)
+    );
+    assert!(layout.whole_numbers, "layout selects whole-number modes");
+    assert_eq!(
+        layout
+            .value_labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["Single", "Vertical Split", "Horizontal Split", "Four Panes"]
+    );
+
+    // A v2 graph saved before the layout control existed must still select
+    // the terminal primitive's Single-pane default when loaded today.
+    let mut legacy = roundtrip.clone();
+    if let Some(metadata) = legacy.preset_metadata.as_mut() {
+        metadata.params.retain(|spec| spec.id != "layout");
+        metadata.bindings.retain(|binding| binding.id != "layout");
+    }
+    legacy
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id == manifold_core::NodeId::new("terminal"))
+        .expect("terminal node")
+        .params
+        .remove("layout");
+    let (mut legacy_graph, mut legacy_bound) = binding_graph(&legacy, &registry);
+    compile(&legacy_graph).expect("legacy CodeTerminal graph compiles");
+    legacy_bound.apply(&mut legacy_graph, &manifest(&legacy, &[]));
+    let terminal = legacy_graph
+        .get_node(
+            legacy_graph
+                .instance_by_node_id(&manifold_core::NodeId::new("terminal"))
+                .expect("legacy terminal node"),
+        )
+        .expect("legacy terminal node live");
+    assert_eq!(
+        terminal.params.get("layout"),
+        Some(&manifold_renderer::node_graph::ParamValue::Enum(0)),
+        "absent layout defaults to Single"
+    );
 }
 
 #[cfg(feature = "gpu-proofs")]
@@ -160,6 +226,7 @@ mod gpu {
         activity: f32,
         tonal_bias: f32,
         colour: f32,
+        layout: f32,
     }
 
     impl Controls {
@@ -170,16 +237,18 @@ mod gpu {
                 activity: 1.0,
                 tonal_bias: 0.0,
                 colour: 1.0,
+                layout: 0.0,
             }
         }
 
-        fn pairs(self) -> [(&'static str, f32); 5] {
+        fn pairs(self) -> [(&'static str, f32); 6] {
             [
                 ("erosion", self.erosion),
                 ("text_size", self.text_size),
                 ("activity", self.activity),
                 ("tonal_bias", self.tonal_bias),
                 ("colour", self.colour),
+                ("layout", self.layout),
             ]
         }
     }
@@ -557,15 +626,89 @@ mod gpu {
             "terminal cells stay printable ASCII or cursor code"
         );
         assert!(
-            cells
-                .chunks(columns)
-                .all(|row| row.chunks(32).all(|segment| segment
-                    .iter()
-                    .filter(|&&cell| cell == 127)
-                    .count()
-                    <= 1)),
-            "each independently typing row segment has at most one cursor"
+            cells.iter().filter(|&&cell| cell == 127).count() <= 3,
+            "source-driven edits keep at most three active cursors"
         );
+        assert_eq!(cells.len() % columns, 0, "complete terminal rows");
+    }
+
+    fn assert_meaningful_long_line(cells: &[u32], columns: usize) {
+        let longest = cells
+            .chunks(columns)
+            .map(|row| {
+                row.iter()
+                    .filter(|&&cell| (33..=126).contains(&cell))
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(
+            longest >= 16,
+            "terminal source produces a meaningful long line (longest={longest})"
+        );
+    }
+
+    fn assert_most_rows_stable(previous: &[u32], current: &[u32], columns: usize, rows: usize) {
+        let changed = changed_rows(previous, current, columns, rows).len();
+        assert!(
+            changed <= 4,
+            "only changed source spans edit rows between adjacent frames (changed={changed})"
+        );
+    }
+
+    fn assert_tmux_borders(cells: &[u32]) {
+        for border in [b'+', b'-', b'|'] {
+            assert!(
+                cells.contains(&u32::from(border)),
+                "tmux layout contains ASCII '{}' border",
+                char::from(border)
+            );
+        }
+    }
+
+    fn settle_source(
+        harness: &mut Harness,
+        source: &[u8],
+        def: &EffectGraphDef,
+        controls: Controls,
+        label: &str,
+    ) -> (Vec<u32>, usize, usize) {
+        settle_source_from(harness, source, def, controls, label, 0)
+    }
+
+    fn settle_source_from(
+        harness: &mut Harness,
+        source: &[u8],
+        def: &EffectGraphDef,
+        controls: Controls,
+        label: &str,
+        start_frame: i64,
+    ) -> (Vec<u32>, usize, usize) {
+        let mut previous: Option<Vec<u32>> = None;
+        let mut stable_frames = 0;
+        let mut settled = None;
+        for offset in 0_i64..64 {
+            let frame = start_frame + offset;
+            let (_, cells, columns, rows) =
+                harness.render_with_source(source, def, controls, frame as f64 * 0.25, frame);
+            assert_terminal_cells(&cells, columns);
+            if let Some(previous) = previous.as_ref() {
+                if frame >= 8 {
+                    assert_most_rows_stable(previous, &cells, columns, rows);
+                }
+                if previous == &cells {
+                    stable_frames += 1;
+                } else {
+                    stable_frames = 0;
+                }
+            }
+            previous = Some(cells.clone());
+            if stable_frames >= 8 {
+                settled = Some((cells, columns, rows));
+                break;
+            }
+        }
+        settled.unwrap_or_else(|| panic!("{label} did not settle within 64 quarter-beat frames"))
     }
 
     #[test]
@@ -643,12 +786,6 @@ mod gpu {
             mean_abs(&frozen_a, &frozen_b) < 0.001,
             "Activity=0 freezes over beat time"
         );
-        let active_a = unfused.render(&def, Controls::defaults(), 5.0, 5);
-        let active_b = unfused.render(&def, Controls::defaults(), 6.5, 6);
-        assert!(
-            mean_abs(&active_a, &active_b) > 0.0005,
-            "Activity=1 advances typing/scroll"
-        );
 
         // The reaction input is deliberately two equal-area, equal-brightness
         // rectangles. Their spatial separation must reach the cell buffer;
@@ -662,20 +799,27 @@ mod gpu {
             "spatial source fixtures have equal total brightness"
         );
         let (input_a, _) = fixture(&device);
-        let (input_b, _) = fixture(&device);
-        let mut moved_a = Harness::new(std::sync::Arc::clone(&device), &def, &input_a, false);
-        let mut moved_b = Harness::new(std::sync::Arc::clone(&device), &def, &input_b, false);
-        let (_, _, columns_a, rows_a) =
-            moved_a.render_with_source(&source_a, &def, Controls::defaults(), 0.0, 0);
-        let (_, cells_a, _, _) =
-            moved_a.render_with_source(&source_a, &def, Controls::defaults(), 0.25, 1);
-        let (_, _, columns_b, rows_b) =
-            moved_b.render_with_source(&source_b, &def, Controls::defaults(), 0.0, 0);
-        let (_, cells_b, _, _) =
-            moved_b.render_with_source(&source_b, &def, Controls::defaults(), 0.25, 1);
+        let mut moved = Harness::new(std::sync::Arc::clone(&device), &def, &input_a, false);
+        let (cells_a, columns_a, rows_a) = settle_source(
+            &mut moved,
+            &source_a,
+            &def,
+            Controls::defaults(),
+            "source A",
+        );
+        let (cells_b, columns_b, rows_b) = settle_source_from(
+            &mut moved,
+            &source_b,
+            &def,
+            Controls::defaults(),
+            "source B",
+            64,
+        );
         assert_eq!((columns_a, rows_a), (columns_b, rows_b));
         assert_terminal_cells(&cells_a, columns_a);
         assert_terminal_cells(&cells_b, columns_b);
+        assert_meaningful_long_line(&cells_a, columns_a);
+        assert_meaningful_long_line(&cells_b, columns_b);
         let source_rows = source_affected_rows(H / 5, rows_a);
         let spatially_changed = changed_rows(&cells_a, &cells_b, columns_a, rows_a);
         assert!(
@@ -683,6 +827,89 @@ mod gpu {
                 .iter()
                 .any(|row| source_rows.contains(row)),
             "source motion changes terminal characters in source-affected rows"
+        );
+
+        // A settled stationary source is idempotent over advancing beats. The
+        // bounded helper also checks that source edits touch only a few rows
+        // while the shared cell buffer is settling.
+        let (static_input, _) = fixture(&device);
+        let mut stationary =
+            Harness::new(std::sync::Arc::clone(&device), &def, &static_input, false);
+        let (stationary_cells, stationary_columns, _) = settle_source(
+            &mut stationary,
+            &source_a,
+            &def,
+            Controls::defaults(),
+            "stationary source",
+        );
+        let mut repeated = stationary_cells.clone();
+        for frame in 64_i64..72 {
+            let (_, cells, columns, rows) = stationary.render_with_source(
+                &source_a,
+                &def,
+                Controls::defaults(),
+                frame as f64 * 0.25,
+                frame,
+            );
+            assert_eq!(columns, stationary_columns);
+            assert_terminal_cells(&cells, columns);
+            assert_eq!(
+                cells, repeated,
+                "static source remains stable at beat {frame}"
+            );
+            assert_most_rows_stable(&repeated, &cells, columns, rows);
+            repeated = cells;
+        }
+
+        // Each tmux layout keeps the same external grid contract while
+        // producing its own pane arrangement and ASCII border.
+        let mut layouts = Vec::new();
+        for layout_index in 0..=3 {
+            let layout = layout_index as f32;
+            let (layout_input, _) = fixture(&device);
+            let mut harness =
+                Harness::new(std::sync::Arc::clone(&device), &def, &layout_input, false);
+            let controls = Controls {
+                layout,
+                ..Controls::defaults()
+            };
+            let (cells, columns, rows) = settle_source(
+                &mut harness,
+                &source_a,
+                &def,
+                controls,
+                &format!("layout {layout}"),
+            );
+            assert_terminal_cells(&cells, columns);
+            if layout > 0.0 {
+                assert_tmux_borders(&cells);
+            }
+            assert_meaningful_long_line(&cells, columns);
+            if layout == 0.0 {
+                assert!(
+                    cells.chunks(columns).any(|row| row[64..]
+                        .iter()
+                        .filter(|&&c| (33..=126).contains(&c))
+                        .count()
+                        >= 12),
+                    "Single has statements extending beyond the old repeated columns"
+                );
+            }
+            layouts.push((cells, columns, rows));
+        }
+        for left in 0..layouts.len() {
+            for right in left + 1..layouts.len() {
+                assert_ne!(
+                    layouts[left].0, layouts[right].0,
+                    "tmux layouts {left} and {right} have distinct cell arrangements"
+                );
+            }
+        }
+        assert!(
+            layouts
+                .iter()
+                .all(|(_, columns, rows)| (*columns, *rows) == (columns_a, rows_a)),
+            "layout selection preserves the external cells/grid contract"
         );
 
         // Activity 0 is a cell-state freeze, even while the reaction image
@@ -713,29 +940,25 @@ mod gpu {
             frozen_a, frozen_b,
             "Activity=0 freezes actual terminal cells"
         );
-        let (_, resumed, _, _) =
-            frozen.render_with_source(&source_b, &def, Controls::defaults(), 5.0, 2);
+        let mut resumed = frozen_b.clone();
+        for frame in 1_i64..=64 {
+            let (_, cells, _, _) = frozen.render_with_source(
+                &source_b,
+                &def,
+                Controls::defaults(),
+                4.0 + frame as f64 * 0.25,
+                frame + 1,
+            );
+            if cells != frozen_b {
+                resumed = cells;
+                break;
+            }
+        }
         assert_ne!(
             frozen_b, resumed,
             "resuming activity reacts to the moving source"
         );
         assert_terminal_cells(&resumed, columns);
-
-        // A static source still animates the pane history beyond the live
-        // bottom row; this catches tests that only inspect the current cursor.
-        let (animated_input, _) = fixture(&device);
-        let mut animated =
-            Harness::new(std::sync::Arc::clone(&device), &def, &animated_input, false);
-        let (_, first_cells, columns, rows) =
-            animated.render_with_source(&source_a, &def, Controls::defaults(), 0.0, 0);
-        let (_, later_cells, _, _) =
-            animated.render_with_source(&source_a, &def, Controls::defaults(), 8.0, 1);
-        assert!(
-            changed_rows(&first_cells, &later_cells, columns, rows)
-                .iter()
-                .any(|row| *row + 1 < rows),
-            "static source animates terminal rows above the live bottom row"
-        );
 
         let small = unfused.render(
             &def,
@@ -846,46 +1069,55 @@ mod gpu {
             mean_abs(&unfused_warm, &fused_warm) < 0.001,
             "fused and unfused CodeTerminal outputs agree after warmup"
         );
+        let (unfused_cells, unfused_columns, unfused_rows) = fusion_unfused.terminal_cells();
+        let (fused_cells, fused_columns, fused_rows) = fused.terminal_cells();
+        assert_eq!(
+            (unfused_columns, unfused_rows),
+            (fused_columns, fused_rows),
+            "fused and unfused terminal grids agree"
+        );
+        assert_eq!(
+            unfused_cells, fused_cells,
+            "fused and unfused terminal cells agree on the same source timeline"
+        );
 
         if let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_DEMO_DIR") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create terminal demo dir");
-            let mut demo = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);
-            // Warm the fenced source readback before selecting evenly spaced
-            // frames from one continuous moving-silhouette capture.
-            for frame in 0_u32..4 {
-                let x = frame * (W - RECT_W) / 8;
-                let y = H / 5 + frame * (H - RECT_H - H / 5) / 8;
-                let source = source_frame(x, y);
-                demo.render_with_source(
-                    &source,
+            // Keep one continuous 64-frame / 32-fps moving-source sequence
+            // for each layout, then capture its settled static endpoint.
+            for (layout, name) in [(0.0_f32, "single"), (3.0_f32, "four-panes")] {
+                let (demo_input, _) = fixture(&device);
+                let mut demo =
+                    Harness::new(std::sync::Arc::clone(&device), &def, &demo_input, false);
+                let controls = Controls {
+                    text_size: 32.0,
+                    layout,
+                    ..Controls::defaults()
+                };
+                for frame in 0_u32..64 {
+                    let x = frame * (W - RECT_W) / 63;
+                    let source = source_frame(x, H / 4);
+                    demo.render_with_source(
+                        &source,
+                        &def,
+                        controls,
+                        f64::from(frame) / 16.0,
+                        i64::from(frame),
+                    );
+                    demo.write_png(&dir.join(format!("code-terminal-{name}-frame-{frame:02}.png")));
+                    demo.write_source_png(&dir.join(format!("source-{name}-frame-{frame:02}.png")));
+                }
+                let settled_source = source_frame(W / 2, H / 4);
+                settle_source_from(
+                    &mut demo,
+                    &settled_source,
                     &def,
-                    Controls {
-                        text_size: 32.0,
-                        ..Controls::defaults()
-                    },
-                    f64::from(frame) * 0.25,
-                    i64::from(frame),
+                    controls,
+                    &format!("{name} demo endpoint"),
+                    64,
                 );
-            }
-            // One continuous two-second capture at 32 fps: retain every
-            // frame so character-by-character typing can be reviewed.
-            for frame in 0_u32..64 {
-                let x = frame * (W - RECT_W) / 63;
-                let y = H / 4;
-                let source = source_frame(x, y);
-                demo.render_with_source(
-                    &source,
-                    &def,
-                    Controls {
-                        text_size: 32.0,
-                        ..Controls::defaults()
-                    },
-                    1.0 + f64::from(frame) / 16.0,
-                    i64::from(frame) + 4,
-                );
-                demo.write_png(&dir.join(format!("code-terminal-frame-{frame:02}.png")));
-                demo.write_source_png(&dir.join(format!("source-frame-{frame:02}.png")));
+                demo.write_png(&dir.join(format!("code-terminal-{name}-settled.png")));
             }
         }
     }

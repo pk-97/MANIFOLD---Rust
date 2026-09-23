@@ -1,405 +1,319 @@
-// Bounded CPU state for an image-reactive terminal source.
-//
-// The GPU readback and node wiring live beside this module.  This file owns
-// only the fixed-size state machine which turns a small image summary into
-// independently progressing terminal segments.
-
+//! Source-driven terminal lines. Completed text is stationary; a bounded
+//! scheduler types only changed spans when the image's spatial profile changes.
 use manifold_core::Beats;
 
 pub(super) const SAMPLE_COLS: usize = 64;
 pub(super) const SAMPLE_ROWS: usize = 36;
 pub(super) const SAMPLE_COUNT: usize = SAMPLE_COLS * SAMPLE_ROWS;
-
+pub(super) static EMPTY_SAMPLES: [[f32; 4]; SAMPLE_COUNT] = [[0.0; 4]; SAMPLE_COUNT];
 const MAX_COLS: usize = 640;
 const MAX_ROWS: usize = 135;
-const MAX_CELLS: usize = MAX_COLS * MAX_ROWS;
-const SEGMENT_WIDTH: usize = 32;
-const MAX_SEGMENTS: usize = MAX_COLS.div_ceil(SEGMENT_WIDTH);
-const MAX_STATES: usize = MAX_ROWS * MAX_SEGMENTS;
-const MAX_ADVANCE_BEATS: f64 = 8.0;
-const MAX_STEPS_PER_STATE: usize = 512;
-const SOURCE_EPSILON: f32 = 0.035;
-const REWRITE_COOLDOWN_BEATS: f64 = 0.35;
+const MAX_LINES: usize = MAX_ROWS * 2;
+const MAX_ACTIVE: usize = 3;
+const CHANGE_THRESHOLD: f32 = 0.025;
+type Profile = [[f32; 4]; SAMPLE_COLS];
 
-/// Fixed-size image-reactive terminal state.
-///
-/// One state slot represents one row in one roughly 32-character segment.
-/// All arrays are sized for the largest supported grid, so changing the
-/// dimensions never allocates and the update path remains bounded.
+#[derive(Clone, Copy, Default)]
+struct Region {
+    x: usize,
+    y: usize,
+    width: usize,
+    pane: usize,
+    row: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Features {
+    light: f32,
+    edge: f32,
+    center: f32,
+    span: f32,
+}
+
+#[derive(Clone, Copy)]
+struct Line {
+    region: Region,
+    shown: [u8; MAX_COLS],
+    target: [u8; MAX_COLS],
+    reference: Profile,
+    latest: Profile,
+    features: Features,
+    score: f32,
+    cursor: usize,
+    end: usize,
+    active: bool,
+    phase: f64,
+    eligible_at: f64,
+    changed_at: f64,
+}
+
+impl Line {
+    fn new() -> Self {
+        Self {
+            region: Region::default(),
+            shown: [b' '; MAX_COLS],
+            target: [b' '; MAX_COLS],
+            reference: [[0.0; 4]; SAMPLE_COLS],
+            latest: [[0.0; 4]; SAMPLE_COLS],
+            features: Features::default(),
+            score: 0.0,
+            cursor: 0,
+            end: 0,
+            active: false,
+            phase: 0.0,
+            eligible_at: 0.0,
+            changed_at: 0.0,
+        }
+    }
+}
+
+/// All text, profiles and scheduling storage is allocated once. Layout changes
+/// reuse it. There are at most two text lines per screen row (four-pane layout).
 pub(super) struct ReactiveTerminal {
     cells: Box<[u32]>,
-    line_ids: [u64; MAX_STATES],
-    visible_lengths: [u16; MAX_STATES],
-    fractional_steps: [f64; MAX_STATES],
-    hold_steps: [u16; MAX_STATES],
-    modes: [u8; MAX_STATES],
-    reaction: [f32; MAX_STATES],
-    brightness: [f32; MAX_STATES],
-    contrast: [f32; MAX_STATES],
-    pending_brightness: [f32; MAX_STATES],
-    pending_contrast: [f32; MAX_STATES],
-    pending: [bool; MAX_STATES],
-    rewrite_cooldown: [f64; MAX_STATES],
-    seen: [bool; MAX_STATES],
+    lines: Box<[Line]>,
+    line_count: usize,
     columns: usize,
     rows: usize,
+    layout: u8,
     last_beat: Option<f64>,
+    clock: f64,
+    next_start: f64,
 }
 
 impl ReactiveTerminal {
     pub(super) fn new() -> Self {
         Self {
-            cells: vec![b' ' as u32; MAX_CELLS].into_boxed_slice(),
-            line_ids: [0; MAX_STATES],
-            visible_lengths: [0; MAX_STATES],
-            fractional_steps: [0.0; MAX_STATES],
-            hold_steps: [0; MAX_STATES],
-            modes: [0; MAX_STATES],
-            reaction: [0.0; MAX_STATES],
-            brightness: [0.0; MAX_STATES],
-            contrast: [0.0; MAX_STATES],
-            pending_brightness: [0.0; MAX_STATES],
-            pending_contrast: [0.0; MAX_STATES],
-            pending: [false; MAX_STATES],
-            rewrite_cooldown: [0.0; MAX_STATES],
-            seen: [false; MAX_STATES],
+            cells: vec![u32::from(b' '); MAX_COLS * MAX_ROWS].into_boxed_slice(),
+            lines: vec![Line::new(); MAX_LINES].into_boxed_slice(),
+            line_count: 0,
             columns: 0,
             rows: 0,
+            layout: 0,
             last_beat: None,
+            clock: 0.0,
+            next_start: 0.0,
         }
     }
 
-    /// Return to the deterministic initial state without releasing storage.
     pub(super) fn reset(&mut self) {
-        self.cells.fill(b' ' as u32);
-        self.line_ids.fill(0);
-        self.visible_lengths.fill(0);
-        self.fractional_steps.fill(0.0);
-        self.hold_steps.fill(0);
-        self.modes.fill(0);
-        self.reaction.fill(0.0);
-        self.brightness.fill(0.0);
-        self.contrast.fill(0.0);
-        self.pending_brightness.fill(0.0);
-        self.pending_contrast.fill(0.0);
-        self.pending.fill(false);
-        self.rewrite_cooldown.fill(0.0);
-        self.seen.fill(false);
-        self.columns = 0;
-        self.rows = 0;
         self.last_beat = None;
+        self.line_count = 0;
+        self.clock = 0.0;
+        self.next_start = 0.0;
     }
 
-    /// Advance and render the terminal for one beat position.
-    ///
-    /// Samples are `[linear_r, linear_g, linear_b, local_contrast]`.  Invalid
-    /// values are ignored and all usable values are clamped before affecting
-    /// the state machine or its numeric fields.
     pub(super) fn update(
         &mut self,
         columns: u32,
         rows: u32,
+        layout: u8,
         beat: Beats,
         activity: f32,
         samples: &[[f32; 4]; SAMPLE_COUNT],
     ) {
         let columns = (columns as usize).clamp(1, MAX_COLS);
         let rows = (rows as usize).clamp(1, MAX_ROWS);
-        let beat = finite_beat(beat.0).unwrap_or_else(|| self.last_beat.unwrap_or(0.0));
-        let activity = if activity.is_finite() {
-            activity.clamp(0.0, 4.0)
+        let layout = layout.min(3);
+        let beat = if beat.0.is_finite() {
+            beat.0.max(0.0)
         } else {
-            0.0
+            self.last_beat.unwrap_or(0.0)
         };
-        let was_initialized = self.last_beat.is_some();
-        let dimensions_changed = self.columns != columns || self.rows != rows;
-
-        self.columns = columns;
-        self.rows = rows;
-
-        let Some(previous_beat) = self.last_beat else {
-            self.last_beat = Some(beat);
-            self.capture_source(columns, rows, samples, false);
-            self.render();
-            return;
-        };
-
-        if beat < previous_beat {
+        if self.last_beat.is_none()
+            || self.last_beat.is_some_and(|previous| beat < previous)
+            || (columns, rows, layout) != (self.columns, self.rows, self.layout)
+        {
             self.reset();
             self.columns = columns;
             self.rows = rows;
+            self.layout = layout;
             self.last_beat = Some(beat);
-            self.capture_source(columns, rows, samples, false);
+            self.build_layout();
+            for line in &mut self.lines[..self.line_count] {
+                observe(line, columns, rows, samples);
+                line.reference = line.latest;
+                make_line(&mut line.shown, line.region, line.features);
+            }
             self.render();
             return;
         }
-
-        if dimensions_changed {
-            self.reset();
-            self.columns = columns;
-            self.rows = rows;
-            self.last_beat = Some(beat);
-            self.capture_source(columns, rows, samples, false);
-            self.render();
+        let previous = self.last_beat.replace(beat).expect("initialized terminal");
+        if beat == previous || !activity.is_finite() || activity <= 0.0 {
             return;
         }
-
-        // Equal beats are deliberately a no-op.  This makes repeated graph
-        // evaluations idempotent, including when their readback differs.
-        if beat == previous_beat {
-            return;
+        let activity = f64::from(activity.min(4.0));
+        let delta = (beat - previous).clamp(0.0, 8.0);
+        self.clock += delta;
+        let mut active = 0;
+        for line in &mut self.lines[..self.line_count] {
+            observe(line, columns, rows, samples);
+            let score = profile_change(&line.reference, &line.latest);
+            if score >= CHANGE_THRESHOLD && line.score < CHANGE_THRESHOLD {
+                line.changed_at = self.clock;
+            }
+            line.score = score;
+            if line.active {
+                // Only the changed span advances. Existing text outside it
+                // remains intact, including completed neighbouring lines.
+                let exact = line.phase + delta * activity * 64.0;
+                let steps = (exact.floor() as usize).min(MAX_COLS);
+                line.phase = exact.fract();
+                let end = (line.cursor + steps).min(line.end);
+                line.shown[line.cursor..end].copy_from_slice(&line.target[line.cursor..end]);
+                line.cursor = end;
+                if end == line.end {
+                    line.active = false;
+                    line.phase = 0.0;
+                    line.eligible_at = self.clock + 0.5 / activity;
+                } else {
+                    active += 1;
+                }
+            }
         }
-        if activity <= 0.0 {
-            // Advance the reference point while frozen so resuming activity
-            // does not apply a large catch-up burst for the paused interval.
-            self.last_beat = Some(beat);
-            return;
+        // Source salience wins; aging prevents a quieter changed line from
+        // starving behind a continuously moving foreground. No idle jobs.
+        if active < MAX_ACTIVE && self.clock >= self.next_start {
+            let candidate = self.lines[..self.line_count]
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| {
+                    !line.active && line.score >= CHANGE_THRESHOLD && self.clock >= line.eligible_at
+                })
+                .max_by(|(_, a), (_, b)| {
+                    let priority =
+                        |line: &Line| line.score + ((self.clock - line.changed_at) * 0.002) as f32;
+                    priority(a).total_cmp(&priority(b))
+                })
+                .map(|(index, _)| index);
+            if let Some(index) = candidate {
+                let line = &mut self.lines[index];
+                make_line(&mut line.target, line.region, line.features);
+                let width = line.region.width;
+                let first = (0..width).find(|&x| line.shown[x] != line.target[x]);
+                line.reference = line.latest;
+                line.score = 0.0;
+                if let Some(first) = first {
+                    line.cursor = first;
+                    line.end = (first..width)
+                        .rfind(|&x| line.shown[x] != line.target[x])
+                        .expect("changed span")
+                        + 1;
+                    line.active = true;
+                    line.phase = 0.0;
+                    self.next_start = self.clock + 0.18 / activity;
+                }
+            }
         }
-
-        self.last_beat = Some(beat);
-        let delta = (beat - previous_beat).clamp(0.0, MAX_ADVANCE_BEATS);
-        self.capture_source(columns, rows, samples, was_initialized);
-        self.advance(delta, activity);
         self.render();
     }
 
     pub(super) fn cells(&self) -> &[u32] {
-        let active = self.columns.saturating_mul(self.rows).min(MAX_CELLS);
-        &self.cells[..active]
+        &self.cells[..self.columns * self.rows]
     }
 
-    fn capture_source(
+    fn add_pane(
         &mut self,
-        columns: usize,
-        rows: usize,
-        samples: &[[f32; 4]; SAMPLE_COUNT],
-        detect_changes: bool,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        pane: usize,
+        framed: bool,
     ) {
-        let segments = columns.div_ceil(SEGMENT_WIDTH).min(MAX_SEGMENTS);
-        for row in 0..rows {
-            let sy0 = row * SAMPLE_ROWS / rows;
-            let sy1 = ((row + 1) * SAMPLE_ROWS / rows)
-                .max(sy0 + 1)
-                .min(SAMPLE_ROWS);
-            for segment in 0..segments {
-                let x0 = segment * SEGMENT_WIDTH;
-                let x1 = ((segment + 1) * SEGMENT_WIDTH).min(columns);
-                let sx0 = x0 * SAMPLE_COLS / columns;
-                let sx1 = ((x1 * SAMPLE_COLS / columns).max(sx0 + 1)).min(SAMPLE_COLS);
-                let (brightness, contrast) = source_feature(samples, sx0, sx1, sy0, sy1);
-                let state = row * MAX_SEGMENTS + segment;
-                if !self.seen[state] {
-                    self.seen[state] = true;
-                    self.brightness[state] = brightness;
-                    self.contrast[state] = contrast;
-                    self.pending_brightness[state] = brightness;
-                    self.pending_contrast[state] = contrast;
-                    self.line_ids[state] = (state as u64).wrapping_mul(17).wrapping_add(1);
-                    let target = line_length(
-                        self.line_ids[state],
-                        segment,
-                        row,
-                        brightness,
-                        contrast,
-                        x1 - x0,
-                    );
-                    let stagger = ((state as u32).wrapping_mul(29) % 11) as usize;
-                    self.visible_lengths[state] = target.min(stagger as u16);
-                    self.modes[state] = if self.visible_lengths[state] >= target {
-                        1
-                    } else {
-                        0
-                    };
-                    self.fractional_steps[state] = f64::from(stagger as u16) * 0.13;
-                } else if detect_changes {
-                    self.pending_brightness[state] = brightness;
-                    self.pending_contrast[state] = contrast;
-                    let changed = (brightness - self.brightness[state]).abs() > SOURCE_EPSILON
-                        || (contrast - self.contrast[state]).abs() > SOURCE_EPSILON;
-                    if changed {
-                        self.pending[state] = true;
-                        self.reaction[state] = 1.0;
-                    } else if self.pending[state] {
-                        self.pending[state] = false;
-                    }
-                    if self.pending[state]
-                        && self.modes[state] == 1
-                        && self.rewrite_cooldown[state] <= 0.0
-                    {
-                        self.begin_rewrite(state);
-                    }
-                }
-            }
-        }
-    }
-
-    fn begin_rewrite(&mut self, state: usize) {
-        if !self.pending[state] {
+        let inset = usize::from(framed);
+        let left = x + inset.max(usize::from(width > 2));
+        let text_width = width.saturating_sub(2 * inset.max(usize::from(width > 2)));
+        if text_width == 0 {
             return;
         }
-        self.reaction[state] = 1.0;
-        self.rewrite_cooldown[state] = REWRITE_COOLDOWN_BEATS;
-        if self.visible_lengths[state] == 0 {
-            self.apply_pending(state);
-            self.modes[state] = 0;
-        } else {
-            self.modes[state] = 2;
-            self.hold_steps[state] = 0;
+        for row in 0..height.saturating_sub(2 * inset) {
+            let line = &mut self.lines[self.line_count];
+            *line = Line::new();
+            line.region = Region {
+                x: left,
+                y: y + inset + row,
+                width: text_width,
+                pane,
+                row,
+            };
+            self.line_count += 1;
         }
     }
 
-    fn apply_pending(&mut self, state: usize) {
-        if !self.pending[state] {
-            return;
-        }
-        self.brightness[state] = self.pending_brightness[state];
-        self.contrast[state] = self.pending_contrast[state];
-        self.pending[state] = false;
-    }
-
-    fn advance(&mut self, delta: f64, activity: f32) {
-        let segments = self.columns.div_ceil(SEGMENT_WIDTH).min(MAX_SEGMENTS);
-        for row in 0..self.rows {
-            for segment in 0..segments {
-                let state = row * MAX_SEGMENTS + segment;
-                let width =
-                    ((segment + 1) * SEGMENT_WIDTH).min(self.columns) - segment * SEGMENT_WIDTH;
-                let base_rate = 10.0
-                    + f64::from(self.brightness[state]) * 7.0
-                    + f64::from(self.contrast[state]) * 5.0;
-                // Independent row speeds prevent neighbouring cursors from
-                // forming a solid vertical bar over a flat source region.
-                let row_rate = 0.8 + ((state * 37 + 11) % 17) as f64 * 0.025;
-                let rate = base_rate
-                    * row_rate
-                    * f64::from(activity)
-                    * (1.0 + f64::from(self.reaction[state]) * 4.0);
-                let exact_steps = self.fractional_steps[state] + delta * rate;
-                let mut steps = exact_steps.floor().max(0.0) as usize;
-                self.fractional_steps[state] = exact_steps - steps as f64;
-                steps = steps.min(MAX_STEPS_PER_STATE);
-                for _ in 0..steps {
-                    let target = line_length(
-                        self.line_ids[state],
-                        segment,
-                        row,
-                        self.brightness[state],
-                        self.contrast[state],
-                        width,
-                    );
-                    match self.modes[state] {
-                        0 => {
-                            if usize::from(self.visible_lengths[state]) < usize::from(target) {
-                                self.visible_lengths[state] += 1;
-                            } else {
-                                self.modes[state] = 1;
-                                self.hold_steps[state] = 0;
-                            }
-                        }
-                        1 => {
-                            self.hold_steps[state] = self.hold_steps[state].saturating_add(1);
-                            let hold = 8 + ((1.0 - self.brightness[state]) * 8.0).round() as u16;
-                            if self.hold_steps[state] >= hold {
-                                self.modes[state] = 2;
-                                self.hold_steps[state] = 0;
-                            }
-                        }
-                        _ => {
-                            if self.visible_lengths[state] != 0 {
-                                self.visible_lengths[state] -= 1;
-                            } else {
-                                self.line_ids[state] = self.line_ids[state].wrapping_add(1);
-                                self.apply_pending(state);
-                                self.modes[state] = 0;
-                                self.hold_steps[state] = 0;
-                            }
-                        }
-                    }
-                }
-                self.reaction[state] =
-                    (self.reaction[state] - (delta as f32 * 0.75).clamp(0.0, 1.0)).max(0.0);
-                self.rewrite_cooldown[state] = (self.rewrite_cooldown[state] - delta).max(0.0);
-                if self.pending[state]
-                    && self.modes[state] == 1
-                    && self.rewrite_cooldown[state] <= 0.0
-                {
-                    self.begin_rewrite(state);
-                }
+    fn build_layout(&mut self) {
+        self.line_count = 0;
+        let w = self.columns;
+        let h = self.rows;
+        // Tiny canvases cannot hold a split plus both interiors. They retain
+        // a single visible line rather than constructing empty panes.
+        let layout = if w < 7 || h < 5 { 0 } else { self.layout };
+        let mx = w / 2;
+        let my = h / 2;
+        match layout {
+            1 => {
+                self.add_pane(0, 0, mx + 1, h, 0, true);
+                self.add_pane(mx, 0, w - mx, h, 1, true);
             }
+            2 => {
+                self.add_pane(0, 0, w, my + 1, 0, true);
+                self.add_pane(0, my, w, h - my, 1, true);
+            }
+            3 => {
+                self.add_pane(0, 0, mx + 1, my + 1, 0, true);
+                self.add_pane(mx, 0, w - mx, my + 1, 1, true);
+                self.add_pane(0, my, mx + 1, h - my, 2, true);
+                self.add_pane(mx, my, w - mx, h - my, 3, true);
+            }
+            _ => self.add_pane(0, 0, w, h, 0, false),
         }
     }
 
     fn render(&mut self) {
-        let segments = self.columns.div_ceil(SEGMENT_WIDTH).min(MAX_SEGMENTS);
-        let active = self.columns.saturating_mul(self.rows).min(MAX_CELLS);
-        self.cells[..active].fill(b' ' as u32);
-        for row in 0..self.rows {
-            for segment in 0..segments {
-                let x0 = segment * SEGMENT_WIDTH;
-                let width = ((segment + 1) * SEGMENT_WIDTH).min(self.columns) - x0;
-                let state = row * MAX_SEGMENTS + segment;
-                let mut line = [b' '; 64];
-                let length = make_line(
-                    &mut line,
-                    self.line_ids[state],
-                    segment,
-                    row,
-                    self.brightness[state],
-                    self.contrast[state],
-                )
-                .min(width);
-                let visible = usize::from(self.visible_lengths[state]).min(width);
-                for (local_x, &character) in line.iter().take(width).enumerate() {
-                    let index = row * self.columns + x0 + local_x;
-                    self.cells[index] =
-                        if self.modes[state] != 1 && local_x == visible && visible < width {
-                            127
-                        } else if local_x < visible.min(length) {
-                            u32::from(character)
-                        } else {
-                            b' ' as u32
-                        };
+        let count = self.columns * self.rows;
+        self.cells[..count].fill(u32::from(b' '));
+        if self.layout != 0 && self.columns >= 7 && self.rows >= 5 {
+            let w = self.columns;
+            let h = self.rows;
+            let vertical = self.layout == 1 || self.layout == 3;
+            let horizontal = self.layout == 2 || self.layout == 3;
+            for y in 0..h {
+                for x in 0..w {
+                    let v = x == 0 || x + 1 == w || (vertical && x == w / 2);
+                    let hz = y == 0 || y + 1 == h || (horizontal && y == h / 2);
+                    self.cells[y * w + x] = u32::from(match (v, hz) {
+                        (true, true) => b'+',
+                        (true, false) => b'|',
+                        (false, true) => b'-',
+                        _ => b' ',
+                    });
                 }
+            }
+            let headers: [&[u8]; 4] = [b" 0: shell ", b" 1: trace ", b" 2: edges ", b" 3: source "];
+            for line in &self.lines[..self.line_count] {
+                if line.region.row == 0 {
+                    let region = line.region;
+                    for (x, &ch) in headers[region.pane].iter().take(region.width).enumerate() {
+                        self.cells[(region.y - 1) * w + region.x + x] = u32::from(ch);
+                    }
+                }
+            }
+        }
+        for line in &self.lines[..self.line_count] {
+            let region = line.region;
+            let offset = region.y * self.columns + region.x;
+            for (x, &ch) in line.shown[..region.width].iter().enumerate() {
+                self.cells[offset + x] = if line.active && x == line.cursor {
+                    127
+                } else {
+                    u32::from(ch)
+                };
             }
         }
     }
 }
 
-fn finite_beat(value: f64) -> Option<f64> {
-    value.is_finite().then_some(value.max(0.0))
-}
-
-fn source_feature(
-    samples: &[[f32; 4]; SAMPLE_COUNT],
-    sx0: usize,
-    sx1: usize,
-    sy0: usize,
-    sy1: usize,
-) -> (f32, f32) {
-    let mut luma = 0.0_f32;
-    let mut contrast = 0.0_f32;
-    let mut count = 0.0_f32;
-    for y in sy0..sy1 {
-        for x in sx0..sx1 {
-            let sample = samples[y * SAMPLE_COLS + x];
-            let r = finite_unit(sample[0]);
-            let g = finite_unit(sample[1]);
-            let b = finite_unit(sample[2]);
-            luma += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            contrast += finite_unit(sample[3]);
-            count += 1.0;
-        }
-    }
-    if count == 0.0 {
-        return (0.0, 0.0);
-    }
-    (
-        (luma / count).clamp(0.0, 1.0),
-        (contrast / count).clamp(0.0, 1.0),
-    )
-}
-
-fn finite_unit(value: f32) -> f32 {
+fn unit(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
     } else {
@@ -407,286 +321,297 @@ fn finite_unit(value: f32) -> f32 {
     }
 }
 
-fn line_length(
-    line_id: u64,
-    segment: usize,
-    row: usize,
-    brightness: f32,
-    contrast: f32,
-    width: usize,
-) -> u16 {
-    let mut line = [b' '; 64];
-    let generated = make_line(&mut line, line_id, segment, row, brightness, contrast).min(width);
-    // Shadows retain enough of a statement to read as code. Source changes
-    // extend that statement; they do not reduce every line to a few letters.
-    let density = (0.45 + brightness * 0.45 + contrast * 0.10).clamp(0.45, 1.0);
-    let budget = if width <= 3 {
-        width
-    } else {
-        3 + (((width - 3) as f32) * density).round() as usize
+fn observe(line: &mut Line, columns: usize, rows: usize, samples: &[[f32; 4]; SAMPLE_COUNT]) {
+    let region = line.region;
+    let y0 = region.y * SAMPLE_ROWS / rows;
+    let y1 = ((region.y + 1) * SAMPLE_ROWS / rows)
+        .max(y0 + 1)
+        .min(SAMPLE_ROWS);
+    for (i, output) in line.latest.iter_mut().enumerate() {
+        let x = ((region.x * SAMPLE_COLS + region.width * i) / columns).min(SAMPLE_COLS - 1);
+        *output = [0.0; 4];
+        for y in y0..y1 {
+            for (c, component) in output.iter_mut().enumerate() {
+                *component += unit(samples[y * SAMPLE_COLS + x][c]);
+            }
+        }
+        for component in output {
+            *component /= (y1 - y0) as f32;
+        }
+    }
+    line.features = features(&line.latest);
+}
+
+fn luma(sample: [f32; 4]) -> f32 {
+    sample[0] * 0.2126 + sample[1] * 0.7152 + sample[2] * 0.0722
+}
+
+fn features(profile: &Profile) -> Features {
+    let mut light = 0.0_f32;
+    let mut edge = 0.0_f32;
+    let mut weight = 0.0_f32;
+    let mut moment = 0.0_f32;
+    let mut peak = 0.0_f32;
+    for (i, &sample) in profile.iter().enumerate() {
+        let value = luma(sample);
+        let gradient = (value - luma(profile[i.saturating_sub(1)])).abs();
+        let structure = gradient + sample[3];
+        light += value;
+        edge = edge.max(structure);
+        peak = peak.max(value);
+        let mass = value + structure * 2.0;
+        weight += mass;
+        moment += mass * (i as f32 + 0.5) / SAMPLE_COLS as f32;
+    }
+    let threshold = (peak * 0.45).max(0.025);
+    let first = profile.iter().position(|&s| luma(s) >= threshold);
+    let last = profile.iter().rposition(|&s| luma(s) >= threshold);
+    let span = match (first, last) {
+        (Some(first), Some(last)) => (last - first + 1) as f32 / SAMPLE_COLS as f32,
+        _ => 0.0,
     };
-    generated.min(budget).max(generated.min(width).min(3)) as u16
+    Features {
+        light: light / SAMPLE_COLS as f32,
+        edge: edge.min(1.0),
+        center: if weight > 0.001 { moment / weight } else { 0.5 },
+        span,
+    }
 }
 
-fn make_line(
-    dst: &mut [u8; 64],
-    line_id: u64,
-    segment: usize,
-    row: usize,
-    brightness: f32,
-    contrast: f32,
-) -> usize {
+fn profile_change(a: &Profile, b: &Profile) -> f32 {
+    let mut sum = 0.0;
+    for (a, b) in a.iter().zip(b) {
+        for (a, b) in a.iter().zip(b) {
+            sum += (a - b) * (a - b);
+        }
+    }
+    (sum / (SAMPLE_COLS * 4) as f32).sqrt()
+}
+
+fn make_line(dst: &mut [u8; MAX_COLS], region: Region, features: Features) {
     dst.fill(b' ');
-    let template = (line_id as usize + segment * 3 + row) % 8;
-    let indent = ((brightness * 4.0).round() as usize).min(4);
-    let mut offset = 0;
+    let mut text = Text { dst, at: 0 };
+    // Follow the source's left contour in two-column code indentation steps.
+    // Leave most of the row available for a single long statement.
+    let left = (features.center - features.span * 0.5).max(0.0);
+    let indent = (left * (region.width / 4).min(16) as f32 / 2.0).round() as usize * 2;
     for _ in 0..indent {
-        offset = append_bytes(dst, offset, b"  ");
+        text.bytes(b" ");
     }
-    match template {
-        0 => {
-            offset = append_bytes(dst, offset, b"$ render lane=");
-            offset = append_decimal(dst, offset, segment as u64);
-            offset = append_bytes(dst, offset, b" gain=");
-            append_thousand(dst, offset, brightness)
-        }
-        1 => {
-            offset = append_bytes(dst, offset, b"const luma = ");
-            offset = append_thousand(dst, offset, brightness);
-            append_bytes(dst, offset, b";")
-        }
-        2 => {
-            offset = append_bytes(dst, offset, b"edge += ");
-            offset = append_thousand(dst, offset, contrast);
-            append_bytes(dst, offset, b"; // local")
-        }
-        3 => append_bytes(dst, offset, b"if (luma > 0.50) draw();"),
-        4 => append_bytes(dst, offset, b"mix(buffer, patch, gain);"),
-        5 => {
-            offset = append_bytes(dst, offset, b"await sync(row=");
-            offset = append_decimal(dst, offset, row as u64);
-            append_bytes(dst, offset, b");")
-        }
-        6 => append_bytes(dst, offset, b"pixels[i] *= gain;"),
-        _ => {
-            offset = append_bytes(dst, offset, b"frame=");
-            offset = append_decimal(dst, offset, line_id % 100_000);
-            append_bytes(dst, offset, b" ready")
-        }
+    let kind = (region.row + region.pane * 3) % 6;
+    text.bytes(match kind {
+        0 => b"$ trace --row=",
+        1 => b"const region_",
+        2 => b"  patch[",
+        3 => b"  scan_row(",
+        4 => b"$ decode --row=",
+        _ => b"  resolve(row=",
+    });
+    text.number(region.row as u32, 3);
+    text.bytes(match kind {
+        1 => b" = sample(",
+        2 => b"] = rebuild(",
+        3 => b", ",
+        5 => b", ",
+        _ => b" ",
+    });
+    text.bytes(b"x=");
+    text.value(features.center);
+    text.bytes(b", span=");
+    text.value(features.span);
+    text.bytes(b", luma=");
+    text.value(features.light);
+    text.bytes(b", edge=");
+    text.value(features.edge);
+    text.bytes(match kind {
+        0 | 4 => b" /dev/video0 --follow",
+        _ => b"); // source geometry",
+    });
+    if features.edge > 0.12 {
+        text.bytes(b" [edge-lock]");
     }
 }
 
-fn append_bytes(dst: &mut [u8; 64], offset: usize, src: &[u8]) -> usize {
-    let count = src.len().min(dst.len().saturating_sub(offset));
-    dst[offset..offset + count].copy_from_slice(&src[..count]);
-    offset + count
+struct Text<'a> {
+    dst: &'a mut [u8],
+    at: usize,
 }
-
-fn append_decimal(dst: &mut [u8; 64], mut offset: usize, mut value: u64) -> usize {
-    let mut digits = [b'0'; 20];
-    let mut end = digits.len();
-    if value == 0 {
-        return append_bytes(dst, offset, b"0");
+impl Text<'_> {
+    fn bytes(&mut self, bytes: &[u8]) {
+        let n = bytes.len().min(self.dst.len().saturating_sub(self.at));
+        self.dst[self.at..self.at + n].copy_from_slice(&bytes[..n]);
+        self.at += n;
     }
-    while value != 0 && end != 0 {
-        end -= 1;
-        digits[end] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    for digit in &digits[end..] {
-        if offset == dst.len() {
-            break;
+    fn number(&mut self, mut value: u32, digits: usize) {
+        let mut buffer = [b'0'; 10];
+        for byte in buffer[..digits].iter_mut().rev() {
+            *byte += (value % 10) as u8;
+            value /= 10;
         }
-        dst[offset] = *digit;
-        offset += 1;
+        self.bytes(&buffer[..digits]);
     }
-    offset
-}
-
-fn append_thousand(dst: &mut [u8; 64], mut offset: usize, value: f32) -> usize {
-    let scaled = (finite_unit(value) * 1000.0).round() as u64;
-    if offset == dst.len() {
-        return offset;
+    fn value(&mut self, value: f32) {
+        // Quantized fields suppress tiny measurement jitter. The profile
+        // threshold separately prevents typing in response to sensor noise.
+        let quantized = (unit(value) * 64.0).round() / 64.0;
+        let thousand = (quantized * 1000.0).round() as u32;
+        self.number(thousand / 1000, 1);
+        self.bytes(b".");
+        self.number(thousand % 1000, 3);
     }
-    dst[offset] = b'0' + (scaled / 1000) as u8;
-    offset += 1;
-    if offset == dst.len() {
-        return offset;
-    }
-    dst[offset] = b'.';
-    offset += 1;
-    let fraction = scaled % 1000;
-    for divisor in [100, 10, 1] {
-        if offset == dst.len() {
-            break;
-        }
-        dst[offset] = b'0' + ((fraction / divisor) % 10) as u8;
-        offset += 1;
-    }
-    offset
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn samples(brightness: f32, contrast: f32) -> [[f32; 4]; SAMPLE_COUNT] {
-        [[brightness, brightness, brightness, contrast]; SAMPLE_COUNT]
-    }
-
-    #[test]
-    fn bright_and_dark_sources_change_layout() {
-        let mut terminal = ReactiveTerminal::new();
-        let dark = samples(0.05, 0.05);
-        let bright = samples(0.95, 0.85);
-        terminal.update(64, 12, Beats(0.0), 1.0, &dark);
-        let dark_cells = terminal.cells().to_vec();
-        terminal.update(64, 12, Beats(1.0), 1.0, &bright);
-        assert_ne!(dark_cells, terminal.cells());
-        assert!(
-            terminal
-                .cells()
-                .iter()
-                .all(|cell| (32..=127).contains(cell))
-        );
-    }
-
-    #[test]
-    fn line_density_follows_brightness_and_contrast() {
-        let dark = line_length(1, 0, 0, 0.05, 0.05, 32);
-        let bright = line_length(1, 0, 0, 0.95, 0.85, 32);
-        assert!(dark >= 12, "shadows retain a readable code fragment");
-        assert!(bright > dark);
-        assert!(bright <= 32);
-    }
-
-    #[test]
-    fn local_patch_changes_its_rows_with_equal_global_mean() {
-        let mut terminal = ReactiveTerminal::new();
-        let mut first = samples(0.5, 0.1);
-        let mut second = first;
-        for row in 12..18 {
-            for col in 24..32 {
-                first[row * SAMPLE_COLS + col] = [0.1, 0.1, 0.1, 0.1];
-                second[row * SAMPLE_COLS + col] = [0.9, 0.9, 0.9, 0.9];
+    fn source(x: usize) -> [[f32; 4]; SAMPLE_COUNT] {
+        let mut samples = [[0.03, 0.03, 0.03, 0.0]; SAMPLE_COUNT];
+        for y in 12..20 {
+            for col in x..x + 12 {
+                samples[y * SAMPLE_COLS + col] = [0.9, 0.9, 0.9, 0.5];
             }
         }
-        for row in 24..30 {
-            for col in 40..48 {
-                first[row * SAMPLE_COLS + col] = [0.9, 0.9, 0.9, 0.9];
-                second[row * SAMPLE_COLS + col] = [0.1, 0.1, 0.1, 0.1];
-            }
+        samples
+    }
+    fn settle(
+        terminal: &mut ReactiveTerminal,
+        layout: u8,
+        samples: &[[f32; 4]; SAMPLE_COUNT],
+        start: f64,
+    ) {
+        for frame in 1..=160 {
+            terminal.update(
+                128,
+                36,
+                layout,
+                Beats(start + f64::from(frame) * 0.125),
+                1.0,
+                samples,
+            );
         }
-        terminal.update(128, 36, Beats(0.0), 1.0, &first);
+    }
+    #[test]
+    fn stationary_source_has_no_idle_animation() {
+        let samples = source(8);
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
         let before = terminal.cells().to_vec();
-        terminal.update(128, 36, Beats(1.0), 1.0, &second);
-        let after = terminal.cells();
-        let changed_patch_rows = (12..18).any(|row| {
-            let start = row * 128 + 32;
-            before[start..start + 32] != after[start..start + 32]
-        });
-        let changed_elsewhere = (0..12).any(|row| {
-            let start = row * 128;
-            before[start..start + 128] != after[start..start + 128]
-        });
-        assert!(changed_patch_rows);
-        assert!(changed_elsewhere);
-    }
-
-    #[test]
-    fn animation_is_distributed_away_from_bottom() {
-        let mut terminal = ReactiveTerminal::new();
-        let source = samples(0.4, 0.3);
-        terminal.update(96, 30, Beats(0.0), 1.0, &source);
-        let first = terminal.cells().to_vec();
-        terminal.update(96, 30, Beats(0.5), 1.0, &source);
-        let second = terminal.cells();
-        assert!(first[..96 * 10] != second[..96 * 10]);
-    }
-
-    #[test]
-    fn same_beat_resize_reinitializes_the_active_grid() {
-        let mut terminal = ReactiveTerminal::new();
-        let source = samples(0.4, 0.3);
-        terminal.update(16, 2, Beats(0.0), 1.0, &source);
-        terminal.update(8, 3, Beats(0.0), 1.0, &source);
-        assert_eq!(terminal.cells().len(), 24);
-        assert!(
-            terminal
-                .cells()
-                .iter()
-                .all(|cell| (32..=127).contains(cell))
-        );
-    }
-
-    #[test]
-    fn changing_source_still_completes_useful_lines() {
-        let mut terminal = ReactiveTerminal::new();
-        let mut longest_statement = 0;
-        for frame in 0..=30 {
-            let brightness = if frame % 2 == 0 { 0.15 } else { 0.85 };
-            let source = samples(brightness, 0.5);
-            terminal.update(64, 8, Beats(f64::from(frame) * 0.1), 1.0, &source);
-            for segment in terminal.cells().chunks(SEGMENT_WIDTH) {
-                let ink = segment
-                    .iter()
-                    .filter(|&&cell| (33..=126).contains(&cell))
-                    .count();
-                longest_statement = longest_statement.max(ink);
-            }
-        }
-        assert!(
-            longest_statement >= 12,
-            "motion must allow readable statements to finish"
-        );
-    }
-
-    #[test]
-    fn activity_zero_freezes_even_when_source_changes() {
-        let mut terminal = ReactiveTerminal::new();
-        let first = samples(0.2, 0.1);
-        let second = samples(0.9, 0.8);
-        terminal.update(64, 8, Beats(0.0), 1.0, &first);
-        let before = terminal.cells().to_vec();
-        terminal.update(64, 8, Beats(4.0), 0.0, &second);
+        settle(&mut terminal, 0, &samples, 0.0);
         assert_eq!(before, terminal.cells());
-    }
-
-    #[test]
-    fn reset_and_repeated_beats_are_deterministic() {
-        let source = samples(0.4, 0.2);
-        let mut first = ReactiveTerminal::new();
-        let mut second = ReactiveTerminal::new();
-        first.update(80, 10, Beats(0.0), 1.0, &source);
-        first.update(80, 10, Beats(2.0), 1.0, &source);
-        let cells = first.cells().to_vec();
-        first.update(80, 10, Beats(2.0), 4.0, &samples(0.9, 0.9));
-        assert_eq!(cells, first.cells());
-        first.reset();
-        first.update(80, 10, Beats(0.0), 1.0, &source);
-        first.update(80, 10, Beats(2.0), 1.0, &source);
-        second.update(80, 10, Beats(0.0), 1.0, &source);
-        second.update(80, 10, Beats(2.0), 1.0, &source);
-        assert_eq!(first.cells(), second.cells());
-        first.update(80, 10, Beats(1.0), 1.0, &source);
-        second.update(80, 10, Beats(1.0), 1.0, &source);
-        assert_eq!(first.cells(), second.cells());
-    }
-
-    #[test]
-    fn finite_extremes_are_clamped_and_bounded() {
-        let mut terminal = ReactiveTerminal::new();
-        let mut source = samples(f32::NAN, f32::INFINITY);
-        source[0] = [f32::NEG_INFINITY, 4.0, -2.0, f32::NAN];
-        terminal.update(u32::MAX, u32::MAX, Beats(f64::NAN), f32::INFINITY, &source);
-        assert_eq!(terminal.cells().len(), MAX_CELLS);
+        assert!(!terminal.cells().contains(&127));
         assert!(
             terminal
                 .cells()
-                .iter()
-                .all(|cell| (32..=127).contains(cell))
+                .chunks(128)
+                .all(|row| row[64..96].iter().any(|&c| c > 32))
         );
-        terminal.update(1, 1, Beats(f64::MAX), 2.0, &source);
+    }
+    #[test]
+    fn spatial_change_updates_local_rows_and_then_stops() {
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, &source(4));
+        let initial = terminal.cells().to_vec();
+        settle(&mut terminal, 0, &source(44), 0.0);
+        let final_cells = terminal.cells().to_vec();
+        assert_ne!(initial, final_cells);
+        for row in 0..36 {
+            if !(12..20).contains(&row) {
+                assert_eq!(
+                    &initial[row * 128..(row + 1) * 128],
+                    &final_cells[row * 128..(row + 1) * 128]
+                );
+            }
+        }
+        settle(&mut terminal, 0, &source(44), 20.0);
+        assert_eq!(final_cells, terminal.cells());
+    }
+    #[test]
+    fn edits_are_sparse_and_preserve_unchanged_text() {
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, &source(4));
+        let mut prior = terminal.cells().to_vec();
+        let mut saw_cursor = false;
+        for frame in 1..120 {
+            terminal.update(128, 36, 0, Beats(f64::from(frame) / 32.0), 1.0, &source(44));
+            let cursors = terminal.cells().iter().filter(|&&c| c == 127).count();
+            assert!(cursors <= MAX_ACTIVE);
+            saw_cursor |= cursors != 0;
+            let changed = terminal
+                .cells()
+                .chunks(128)
+                .zip(prior.chunks(128))
+                .filter(|(a, b)| a != b)
+                .count();
+            assert!(changed <= MAX_ACTIVE + 1);
+            prior.copy_from_slice(terminal.cells());
+        }
+        assert!(saw_cursor);
+    }
+    #[test]
+    fn layouts_have_real_borders_and_single_has_no_subcolumns() {
+        let mut terminal = ReactiveTerminal::new();
+        for layout in 0..4 {
+            terminal.update(128, 36, layout, Beats(0.0), 1.0, &source(4));
+            assert!(terminal.cells().iter().all(|&c| (32..=127).contains(&c)));
+            if layout == 0 {
+                assert!(
+                    terminal.lines[..terminal.line_count]
+                        .iter()
+                        .all(|l| l.region.width == 126)
+                );
+            }
+            if layout == 1 || layout == 3 {
+                assert_eq!(terminal.cells()[10 * 128 + 64], u32::from(b'|'));
+            }
+            if layout == 2 || layout == 3 {
+                assert_eq!(terminal.cells()[18 * 128], u32::from(b'+'));
+            }
+        }
+    }
+    #[test]
+    fn freeze_same_beat_resize_and_rewind_are_deterministic() {
+        let samples = source(4);
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        let initial = terminal.cells().to_vec();
+        terminal.update(128, 36, 0, Beats(1.0), 0.0, &source(44));
+        assert_eq!(initial, terminal.cells());
+        terminal.update(128, 36, 0, Beats(1.0), 4.0, &source(44));
+        assert_eq!(initial, terminal.cells());
+        terminal.update(64, 20, 3, Beats(1.0), 1.0, &samples);
+        assert_eq!(terminal.cells().len(), 64 * 20);
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        assert_eq!(initial, terminal.cells());
+    }
+    #[test]
+    fn noise_below_threshold_does_not_trigger_typing() {
+        let samples = source(4);
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        let initial = terminal.cells().to_vec();
+        let mut jitter = samples;
+        for sample in &mut jitter {
+            for channel in sample {
+                *channel += 0.004;
+            }
+        }
+        settle(&mut terminal, 0, &jitter, 0.0);
+        assert_eq!(initial, terminal.cells());
+    }
+    #[test]
+    fn invalid_values_and_tiny_layouts_stay_bounded() {
+        let mut terminal = ReactiveTerminal::new();
+        let samples = [[f32::NAN, f32::INFINITY, -1.0, f32::NEG_INFINITY]; SAMPLE_COUNT];
+        terminal.update(
+            u32::MAX,
+            u32::MAX,
+            3,
+            Beats(f64::NAN),
+            f32::INFINITY,
+            &samples,
+        );
+        assert_eq!(terminal.cells().len(), MAX_COLS * MAX_ROWS);
+        terminal.update(1, 1, 3, Beats(1.0), 1.0, &samples);
         assert_eq!(terminal.cells().len(), 1);
     }
 }
