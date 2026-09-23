@@ -78,6 +78,12 @@ Physics Solids demo. The original larger design remains a roadmap.
   linear and angular motion through contact. Fixed and Dynamic starting-pose
   edits still teleport. This does not guarantee contact with fast moving bodies;
   the demo does not expose Box3D's per-body bullet option.
+  For the shipped root-level single-body chain, Duplicate and Remove Object
+  edit the authored transform, rigid body, mesh, material and render object as
+  one undoable unit, keeping the body slot and pose wire paired. Incoming
+  parameter modulation remains connected on duplicates. The Physics Boxes
+  instanced copies path uses a singleton world output; Duplicate and Remove
+  reject that object rather than making a partial edit.
 
 ### Physics Boxes demo
 

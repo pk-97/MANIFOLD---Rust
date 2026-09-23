@@ -677,6 +677,23 @@ impl Command for RemoveSceneObjectCommand {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let k = self.object_index;
+        let physics_match = if scope.is_empty() {
+            project
+                .graph_for_target(&self.target, Some(&self.catalog_default))
+                .and_then(|def| {
+                    let (nodes, wires) = graph_level(def, &scope)?;
+                    let source_id = object_producer_id(wires, render_id, k)?;
+                    Some(physics_scene_object_match(
+                        nodes, wires, render_id, k, source_id,
+                    ))
+                })
+        } else {
+            None
+        };
+        if let Some(PhysicsSceneObjectMatch::Malformed(reason)) = &physics_match {
+            self.rejection = Some(reason);
+            return;
+        }
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let prev_metadata = def.preset_metadata.clone();
@@ -702,10 +719,28 @@ impl Command for RemoveSceneObjectCommand {
 
                 let producer = nodes.iter().find(|node| node.id == producer_id)?;
                 let mut removed_ids = Vec::new();
-                collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
+                if let Some(PhysicsSceneObjectMatch::Valid(physics)) = &physics_match {
+                    removed_ids.extend(physics.owned_ids.iter().copied().filter_map(|id| {
+                        nodes
+                            .iter()
+                            .find(|node| node.id == id)
+                            .map(|node| node.node_id.clone())
+                    }));
+                    let owned = physics
+                        .owned_ids
+                        .iter()
+                        .copied()
+                        .collect::<std::collections::HashSet<_>>();
+                    nodes.retain(|node| !owned.contains(&node.id));
+                    wires.retain(|wire| {
+                        !owned.contains(&wire.from_node) && !owned.contains(&wire.to_node)
+                    });
+                } else {
+                    collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
+                    nodes.retain(|n| n.id != producer_id);
+                    wires.retain(|w| !(w.to_node == render_id && w.to_port == object_port));
+                }
 
-                nodes.retain(|n| n.id != producer_id);
-                wires.retain(|w| !(w.to_node == render_id && w.to_port == object_port));
                 shift_indexed_ports_down(wires, render_id, "object", k);
 
                 nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
@@ -1035,6 +1070,367 @@ fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Opti
         .map(|w| w.from_node)
 }
 
+const PHYSICS_BODY_SLOTS: u32 = 16;
+
+#[derive(Debug, Clone)]
+struct PhysicsSceneObject {
+    world_id: u32,
+    body_slot: u32,
+    transform_id: u32,
+    object_id: u32,
+    owned_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone)]
+enum PhysicsSceneObjectMatch {
+    NotPhysics,
+    Valid(PhysicsSceneObject),
+    Malformed(&'static str),
+}
+
+fn unique_input<'a>(
+    wires: &'a [EffectGraphWire],
+    to_node: u32,
+    to_port: &str,
+) -> Result<Option<&'a EffectGraphWire>, ()> {
+    let mut matches = wires
+        .iter()
+        .filter(|wire| wire.to_node == to_node && wire.to_port == to_port);
+    let first = matches.next();
+    if matches.next().is_some() {
+        Err(())
+    } else {
+        Ok(first)
+    }
+}
+
+fn unique_output<'a>(
+    wires: &'a [EffectGraphWire],
+    from_node: u32,
+    from_port: &str,
+) -> Result<Option<&'a EffectGraphWire>, ()> {
+    let mut matches = wires
+        .iter()
+        .filter(|wire| wire.from_node == from_node && wire.from_port == from_port);
+    let first = matches.next();
+    if matches.next().is_some() {
+        Err(())
+    } else {
+        Ok(first)
+    }
+}
+
+fn physics_scene_object_match(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    render_id: u32,
+    object_index: u32,
+    object_id: u32,
+) -> PhysicsSceneObjectMatch {
+    let Some(object) = nodes.iter().find(|node| node.id == object_id) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object node is unavailable");
+    };
+    if object.type_id != "node.scene_object" {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    }
+
+    // The Physics Boxes copies path is a singleton world output, not an
+    // independent body slot. The ordinary loose-object command would clone
+    // only the render node or leave its body chain orphaned on removal.
+    if wires.iter().any(|wire| {
+        wire.to_node == object_id
+            && (wire.to_port == "instances" || wire.to_port == "instance_count")
+            && nodes.iter().any(|node| {
+                node.id == wire.from_node && node.type_id == "node.physics_world"
+            })
+    }) {
+        return PhysicsSceneObjectMatch::Malformed(
+            "Physics copies object requires a dedicated copies edit",
+        );
+    }
+
+    let transform_wire = match unique_input(wires, object_id, "transform") {
+        Ok(Some(wire)) => wire,
+        Ok(None) => return PhysicsSceneObjectMatch::NotPhysics,
+        Err(()) => {
+            return PhysicsSceneObjectMatch::Malformed(
+                "Physics object transform input is duplicated",
+            );
+        }
+    };
+    let Some(world) = nodes.iter().find(|node| node.id == transform_wire.from_node) else {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    };
+    if world.type_id != "node.physics_world" {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    }
+
+    let Some(body_suffix) = transform_wire.from_port.strip_prefix("pose_") else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object pose port is malformed");
+    };
+    let Ok(body_slot) = body_suffix.parse::<u32>() else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object pose slot is malformed");
+    };
+    if body_slot >= PHYSICS_BODY_SLOTS {
+        return PhysicsSceneObjectMatch::Malformed("Physics object pose slot is out of range");
+    }
+    let Ok(Some(pose_wire)) = unique_output(wires, world.id, transform_wire.from_port.as_str())
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object pose output is missing or shared");
+    };
+    if pose_wire.to_node != object_id || pose_wire.to_port != "transform" {
+        return PhysicsSceneObjectMatch::Malformed("Physics object pose output is malformed");
+    }
+    let body_port = format!("body_{body_slot}");
+    let Ok(Some(body_wire)) = unique_input(wires, world.id, &body_port) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object body input is missing or duplicated");
+    };
+    if body_wire.from_port != "body" {
+        return PhysicsSceneObjectMatch::Malformed("Physics object body output is malformed");
+    }
+    let Some(body) = nodes.iter().find(|node| node.id == body_wire.from_node) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object body node is unavailable");
+    };
+    if body.type_id != "node.rigid_body" {
+        return PhysicsSceneObjectMatch::Malformed("Physics object body node has the wrong type");
+    }
+
+    let Ok(Some(authored_transform_wire)) = unique_input(wires, body.id, "transform") else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object authored transform is missing or duplicated");
+    };
+    let Some(authored_transform) = nodes
+        .iter()
+        .find(|node| node.id == authored_transform_wire.from_node)
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object authored transform is unavailable");
+    };
+    if authored_transform.type_id != "node.transform_3d"
+        || authored_transform_wire.from_port != "transform"
+    {
+        return PhysicsSceneObjectMatch::Malformed("Physics object authored transform is malformed");
+    }
+
+    let Ok(Some(shape_wire)) = unique_output(wires, body.id, "shape") else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object mesh shape input is missing or duplicated");
+    };
+    let Some(mesh) = nodes.iter().find(|node| node.id == shape_wire.to_node) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object mesh node is unavailable");
+    };
+    if mesh.type_id != "node.platonic_solid_mesh"
+        || shape_wire.from_port != "shape"
+        || shape_wire.to_port != "shape"
+    {
+        return PhysicsSceneObjectMatch::Malformed("Physics object mesh shape input is malformed");
+    }
+
+    let Ok(Some(vertices_wire)) = unique_input(wires, object_id, "vertices") else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object mesh output is missing or duplicated");
+    };
+    if vertices_wire.from_node != mesh.id || vertices_wire.from_port != "vertices" {
+        return PhysicsSceneObjectMatch::Malformed("Physics object mesh output is malformed");
+    }
+
+    let Ok(Some(material_wire)) = unique_input(wires, object_id, "material") else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object material input is missing or duplicated");
+    };
+    let Some(material) = nodes.iter().find(|node| node.id == material_wire.from_node) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object material node is unavailable");
+    };
+    if material.type_id != "node.pbr_material" || material_wire.from_port != "out" {
+        return PhysicsSceneObjectMatch::Malformed("Physics object material input is malformed");
+    }
+
+    let Ok(Some(object_wire)) = unique_output(wires, object_id, "object") else {
+        return PhysicsSceneObjectMatch::Malformed("Physics object render output is missing or duplicated");
+    };
+    if object_wire.to_node != render_id
+        || object_wire.to_port != format!("object_{object_index}")
+    {
+        return PhysicsSceneObjectMatch::Malformed("Physics object render output is malformed");
+    }
+
+    let owned_ids = vec![
+        authored_transform.id,
+        body.id,
+        mesh.id,
+        material.id,
+        object.id,
+    ];
+    let owned = owned_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+
+    // Owned outputs must stay exclusive to this object. External parameter
+    // inputs (such as an LFO driving rotation) can be copied to a duplicate.
+    let allowed = |wire: &EffectGraphWire| {
+        let external_parameter_input = !owned.contains(&wire.from_node)
+            && ((wire.to_node == authored_transform.id && wire.to_port != "transform")
+                || (wire.to_node == body.id
+                    && wire.to_port != "transform"
+                    && wire.to_port != "shape"));
+        (wire.from_node == authored_transform.id
+            && wire.from_port == "transform"
+            && wire.to_node == body.id
+            && wire.to_port == "transform")
+            || (wire.from_node == body.id
+                && wire.from_port == "body"
+                && wire.to_node == world.id
+                && wire.to_port == body_port)
+            || (wire.from_node == body.id
+                && wire.from_port == "shape"
+                && wire.to_node == mesh.id
+                && wire.to_port == "shape")
+            || (wire.from_node == mesh.id
+                && wire.from_port == "vertices"
+                && wire.to_node == object.id
+                && wire.to_port == "vertices")
+            || (wire.from_node == material.id
+                && wire.from_port == "out"
+                && wire.to_node == object.id
+                && wire.to_port == "material")
+            || (wire.from_node == world.id
+                && wire.from_port == transform_wire.from_port
+                && wire.to_node == object.id
+                && wire.to_port == "transform")
+            || (wire.from_node == object.id
+                && wire.from_port == "object"
+                && wire.to_node == render_id
+                && wire.to_port == format!("object_{object_index}")
+            || external_parameter_input)
+    };
+    if wires.iter().any(|wire| {
+        (owned.contains(&wire.from_node) || owned.contains(&wire.to_node)) && !allowed(wire)
+    }) {
+        return PhysicsSceneObjectMatch::Malformed("Physics object chain is shared");
+    }
+
+    PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
+        world_id: world.id,
+        body_slot,
+        transform_id: authored_transform.id,
+        object_id: object.id,
+        owned_ids,
+    })
+}
+
+fn first_free_physics_body_slot(
+    wires: &[EffectGraphWire],
+    world_id: u32,
+) -> Option<u32> {
+    (0..PHYSICS_BODY_SLOTS).find(|slot| {
+        let body_port = format!("body_{slot}");
+        let pose_port = format!("pose_{slot}");
+        !wires.iter().any(|wire| {
+            (wire.to_node == world_id && wire.to_port == body_port)
+                || (wire.from_node == world_id && wire.from_port == pose_port)
+        })
+    })
+}
+
+fn remap_physics_wire(
+    wire: &EffectGraphWire,
+    node_map: &std::collections::HashMap<u32, u32>,
+    world_id: u32,
+    old_slot: u32,
+    new_slot: u32,
+    render_id: u32,
+    old_object_index: u32,
+    new_object_index: u32,
+) -> EffectGraphWire {
+    let map_node = |id: u32| node_map.get(&id).copied().unwrap_or(id);
+    let mut from_port = wire.from_port.clone();
+    let mut to_port = wire.to_port.clone();
+    if wire.from_node == world_id && wire.from_port == format!("pose_{old_slot}") {
+        from_port = format!("pose_{new_slot}");
+    }
+    if wire.to_node == world_id && wire.to_port == format!("body_{old_slot}") {
+        to_port = format!("body_{new_slot}");
+    }
+    if wire.to_node == render_id && wire.to_port == format!("object_{old_object_index}") {
+        to_port = format!("object_{new_object_index}");
+    }
+    EffectGraphWire {
+        from_node: map_node(wire.from_node),
+        from_port,
+        to_node: map_node(wire.to_node),
+        to_port,
+    }
+}
+
+fn append_physics_duplicate(
+    nodes: &mut Vec<EffectGraphNode>,
+    wires: &mut Vec<EffectGraphWire>,
+    physics: &PhysicsSceneObject,
+    render_id: u32,
+    source_index: u32,
+    new_index: u32,
+    new_slot: u32,
+    node_id_map: &mut Vec<(NodeId, NodeId)>,
+) -> Option<()> {
+    let mut next_id = max_node_id_over(nodes) + 1;
+    let mut taken = std::collections::HashSet::new();
+    collect_all_handles(nodes, &mut taken);
+    let owned = physics
+        .owned_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut clones = std::collections::HashMap::<u32, EffectGraphNode>::new();
+    for old_id in &physics.owned_ids {
+        let source = nodes.iter().find(|node| node.id == *old_id)?;
+        let clone = deep_clone_with_fresh_ids(source, &mut next_id, &mut taken, node_id_map);
+        clones.insert(*old_id, clone);
+    }
+    let source_object = nodes.iter().find(|node| node.id == physics.object_id)?;
+    let cloned_handle = source_object.handle.as_ref().map(|handle| {
+        let mut suffix = 2;
+        loop {
+            let candidate = format!("{handle} {suffix}");
+            if !taken.contains(&candidate) {
+                break candidate;
+            }
+            suffix += 1;
+        }
+    });
+    if let Some(clone) = clones.get_mut(&physics.object_id) {
+        clone.handle = cloned_handle;
+        clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+    }
+    if let Some(clone) = clones.get_mut(&physics.transform_id) {
+        let current = match clone.params.get("pos_x") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            _ => 0.0,
+        };
+        clone.params.insert(
+            "pos_x".to_string(),
+            SerializedParamValue::Float {
+                value: current + 0.5,
+            },
+        );
+    }
+
+    let mut node_map = std::collections::HashMap::new();
+    for (old_id, clone) in &clones {
+        node_map.insert(*old_id, clone.id);
+    }
+    for old_id in &physics.owned_ids {
+        nodes.push(clones.remove(old_id)?);
+    }
+    for wire in wires.clone() {
+        if owned.contains(&wire.from_node) || owned.contains(&wire.to_node) {
+            wires.push(remap_physics_wire(
+                &wire,
+                &node_map,
+                physics.world_id,
+                physics.body_slot,
+                new_slot,
+                render_id,
+                source_index,
+                new_index,
+            ));
+        }
+    }
+    Some(())
+}
+
 fn graph_level<'a>(
     def: &'a EffectGraphDef,
     scope: &[u32],
@@ -1135,6 +1531,76 @@ fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> 
         .collect()
 }
 
+/// Copy the scene-panel bindings whose targets belong to a duplicated physics
+/// object. Physics nodes are root-level, so unlike grouped D11 objects their
+/// numeric exposures are part of the shared preset metadata rather than a
+/// group-local card surface. Each copied binding gets a fresh id while fanout
+/// bindings retain one id for all cloned targets.
+fn clone_physics_scene_bindings(
+    def: &mut EffectGraphDef,
+    node_id_map: &[(NodeId, NodeId)],
+) {
+    let Some(meta) = def.preset_metadata.as_mut() else {
+        return;
+    };
+    let mut binding_ids = meta
+        .bindings
+        .iter()
+        .map(|binding| binding.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut param_ids = meta
+        .params
+        .iter()
+        .map(|param| param.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let source_bindings = meta.bindings.clone();
+    let source_params = meta.params.clone();
+    let mut cloned_id_by_source = std::collections::HashMap::<String, String>::new();
+    let mut cloned_params = Vec::new();
+    let mut cloned_bindings = Vec::new();
+
+    for binding in source_bindings {
+        let BindingTarget::Node { node_id, param } = &binding.target else {
+            continue;
+        };
+        let Some((_, new_node_id)) = node_id_map.iter().find(|(old, _)| old == node_id) else {
+            continue;
+        };
+        let new_binding_id = if let Some(existing) = cloned_id_by_source.get(&binding.id) {
+            existing.clone()
+        } else {
+            let base = format!("{}_duplicate", binding.id);
+            let mut candidate = base.clone();
+            let mut suffix = 2;
+            while binding_ids.contains(&candidate) {
+                candidate = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            binding_ids.insert(candidate.clone());
+            cloned_id_by_source.insert(binding.id.clone(), candidate.clone());
+            if let Some(source_param) = source_params.iter().find(|param_spec| {
+                param_spec.id == binding.id
+            }) {
+                let mut param_spec = source_param.clone();
+                param_spec.id = candidate.clone();
+                if param_ids.insert(candidate.clone()) {
+                    cloned_params.push(param_spec);
+                }
+            }
+            candidate
+        };
+        let mut cloned = binding.clone();
+        cloned.id = new_binding_id;
+        cloned.target = BindingTarget::Node {
+            node_id: new_node_id.clone(),
+            param: param.clone(),
+        };
+        cloned_bindings.push(cloned);
+    }
+    meta.params.extend(cloned_params);
+    meta.bindings.extend(cloned_bindings);
+}
+
 /// The duplicate-object gesture (D11): one undoable composite edit that
 /// deep-clones the source object's `scene_object` (+ its enclosing group,
 /// when the object is grouped — the Add/importer shape) with fresh doc ids
@@ -1163,10 +1629,14 @@ pub struct DuplicateSceneObjectCommand {
     /// BUG-212: the WHOLE `preset_metadata.string_bindings` vec before this
     /// edit's append — whole-snapshot undo, same convention as `prev` above.
     prev_string_bindings: Option<Option<Vec<StringBindingDef>>>,
+    /// Whole metadata snapshot, including numeric scene exposures cloned for
+    /// root-level physics objects.
+    prev_metadata: Option<Option<PresetMetadata>>,
     /// Cached successful result. Redo restores these exact ids after checking
     /// that the graph and string bindings still match the pre-edit baseline.
     after: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
     after_string_bindings: Option<Option<Vec<StringBindingDef>>>,
+    after_metadata: Option<Option<PresetMetadata>>,
     rejection: Option<String>,
     applied: bool,
 }
@@ -1187,8 +1657,10 @@ impl DuplicateSceneObjectCommand {
             catalog_default,
             prev: None,
             prev_string_bindings: None,
+            prev_metadata: None,
             after: None,
             after_string_bindings: None,
+            after_metadata: None,
             rejection: None,
             applied: false,
         }
@@ -1207,7 +1679,7 @@ impl Command for DuplicateSceneObjectCommand {
         let render_id = self.render_scene_node_id;
         let src_k = self.source_index;
 
-        if let (Some(after), Some(after_strings)) =
+        if let (Some(after), Some(_after_strings)) =
             (self.after.as_ref(), self.after_string_bindings.as_ref())
         {
             let current_level = project
@@ -1220,7 +1692,13 @@ impl Command for DuplicateSceneObjectCommand {
                 .map(|(nodes, wires)| (nodes.clone(), wires.clone()));
             let current_strings =
                 target_string_bindings(project, &self.target, &self.catalog_default);
-            if current_level != baseline_level || current_strings != self.prev_string_bindings {
+            let current_metadata = project
+                .graph_for_target(&self.target, Some(&self.catalog_default))
+                .map(|def| def.preset_metadata.clone());
+            if current_level != baseline_level
+                || current_strings != self.prev_string_bindings
+                || current_metadata != self.prev_metadata
+            {
                 self.rejection = Some(
                     "Duplicate Object redo rejected: graph or source bindings changed since undo"
                         .into(),
@@ -1241,71 +1719,52 @@ impl Command for DuplicateSceneObjectCommand {
                 return;
             }
             let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                if let Some(meta) = def.preset_metadata.as_mut() {
-                    meta.string_bindings = after_strings.clone().unwrap_or_default();
-                }
+                def.preset_metadata = self
+                    .after_metadata
+                    .clone()
+                    .flatten();
             });
             self.applied = true;
             return;
         }
 
+        let physics_match = if scope.is_empty() {
+            project
+                .graph_for_target(&self.target, Some(&self.catalog_default))
+                .and_then(|def| {
+                    let (nodes, wires) = graph_level(def, &scope)?;
+                    let source_id = object_producer_id(wires, render_id, src_k)?;
+                    Some(physics_scene_object_match(
+                        nodes, wires, render_id, src_k, source_id,
+                    ))
+                })
+        } else {
+            None
+        };
+        if let Some(PhysicsSceneObjectMatch::Malformed(reason)) = &physics_match {
+            self.rejection = Some((*reason).into());
+            return;
+        }
+        if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref()
+            && project
+                .graph_for_target(&self.target, Some(&self.catalog_default))
+                .and_then(|def| graph_level(def, &scope))
+                .and_then(|(_, wires)| first_free_physics_body_slot(wires, physics.world_id))
+                .is_none()
+        {
+            self.rejection = Some("Duplicate Object physics world has no free body slot".into());
+            return;
+        }
+
         let baseline_strings = target_string_bindings(project, &self.target, &self.catalog_default);
+        let baseline_metadata = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .map(|def| def.preset_metadata.clone());
         let mut node_id_map: Vec<(NodeId, NodeId)> = Vec::new();
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev = (nodes.clone(), wires.clone());
-
-                let source_id = object_producer_id(wires, render_id, src_k)?;
-                let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
-
-                let mut next_id = max_node_id_over(nodes) + 1;
-                let mut taken = std::collections::HashSet::new();
-                collect_all_handles(nodes, &mut taken);
-                let mut clone = deep_clone_with_fresh_ids(
-                    &source_node,
-                    &mut next_id,
-                    &mut taken,
-                    &mut node_id_map,
-                );
-                // D11's exact top-level convention (handle + " 2") overrides
-                // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
-                // assigned to the TOP node — derived from the SOURCE's own
-                // handle, not the post-dedup one (the source's handle is
-                // already in `taken`, so a naive dedup on the clone would have
-                // produced e.g. "Object 1_2", not the D11 "Object 1 2" shape).
-                let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
-                clone.handle = cloned_handle.clone();
-                clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
-
-                // D6: the object's name is its scene_object's own handle — when
-                // the clone is a group, keep the inner scene_object's handle in
-                // sync with the group's (the same invariant Add/importer both
-                // maintain, and RenameSceneObjectCommand sweeps to preserve).
-                if let Some(body) = clone.group.as_deref_mut() {
-                    if let Some(inner_object) = body
-                        .nodes
-                        .iter_mut()
-                        .find(|n| n.type_id == "node.scene_object")
-                    {
-                        inner_object.handle = cloned_handle;
-                    }
-                    // D11: offset the clone's transform_3d.pos_x by +0.5.
-                    if let Some(transform_node) = body
-                        .nodes
-                        .iter_mut()
-                        .find(|n| n.type_id == "node.transform_3d")
-                    {
-                        let cur = match transform_node.params.get("pos_x") {
-                            Some(SerializedParamValue::Float { value }) => *value,
-                            _ => 0.0,
-                        };
-                        transform_node.params.insert(
-                            "pos_x".to_string(),
-                            SerializedParamValue::Float { value: cur + 0.5 },
-                        );
-                    }
-                }
 
                 let current_objects = match nodes
                     .iter()
@@ -1318,14 +1777,72 @@ impl Command for DuplicateSceneObjectCommand {
                     _ => 0.0,
                 };
                 let new_k = current_objects as u32;
-                let clone_id = clone.id;
-                nodes.push(clone);
-                wires.push(scene_build_wire(
-                    clone_id,
-                    "object",
-                    render_id,
-                    &format!("object_{new_k}"),
-                ));
+                if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref() {
+                    let new_slot = first_free_physics_body_slot(wires, physics.world_id)?;
+                    append_physics_duplicate(
+                        nodes,
+                        wires,
+                        physics,
+                        render_id,
+                        src_k,
+                        new_k,
+                        new_slot,
+                        &mut node_id_map,
+                    )?;
+                } else {
+                    let source_id = object_producer_id(wires, render_id, src_k)?;
+                    let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
+
+                    let mut next_id = max_node_id_over(nodes) + 1;
+                    let mut taken = std::collections::HashSet::new();
+                    collect_all_handles(nodes, &mut taken);
+                    let mut clone = deep_clone_with_fresh_ids(
+                        &source_node,
+                        &mut next_id,
+                        &mut taken,
+                        &mut node_id_map,
+                    );
+                    // D11's exact top-level convention (handle + " 2") overrides
+                    // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
+                    // assigned to the TOP node.
+                    let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
+                    clone.handle = cloned_handle.clone();
+                    clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+
+                    // D6: keep a grouped scene_object's name in sync with its
+                    // enclosing group, as Add/importer and Rename do.
+                    if let Some(body) = clone.group.as_deref_mut() {
+                        if let Some(inner_object) = body
+                            .nodes
+                            .iter_mut()
+                            .find(|n| n.type_id == "node.scene_object")
+                        {
+                            inner_object.handle = cloned_handle;
+                        }
+                        if let Some(transform_node) = body
+                            .nodes
+                            .iter_mut()
+                            .find(|n| n.type_id == "node.transform_3d")
+                        {
+                            let cur = match transform_node.params.get("pos_x") {
+                                Some(SerializedParamValue::Float { value }) => *value,
+                                _ => 0.0,
+                            };
+                            transform_node.params.insert(
+                                "pos_x".to_string(),
+                                SerializedParamValue::Float { value: cur + 0.5 },
+                            );
+                        }
+                    }
+                    let clone_id = clone.id;
+                    nodes.push(clone);
+                    wires.push(scene_build_wire(
+                        clone_id,
+                        "object",
+                        render_id,
+                        &format!("object_{new_k}"),
+                    ));
+                }
 
                 nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
                     "objects".to_string(),
@@ -1389,22 +1906,31 @@ impl Command for DuplicateSceneObjectCommand {
                 Some(())
             });
         }
+        if matches!(physics_match, Some(PhysicsSceneObjectMatch::Valid(_)))
+            && !node_id_map.is_empty()
+        {
+            let _ = with_target_graph_def_mut(project, &self.target, |def| {
+                clone_physics_scene_bindings(def, &node_id_map);
+            });
+        }
         self.prev_string_bindings = baseline_strings;
+        self.prev_metadata = baseline_metadata;
         self.after = with_target_graph_def_mut(project, &self.target, |def| {
             graph_level(def, &scope).map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec()))
         })
         .flatten();
         self.after_string_bindings =
             target_string_bindings(project, &self.target, &self.catalog_default);
+        self.after_metadata = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .map(|def| def.preset_metadata.clone());
         self.applied = self.after.is_some();
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(prev_sb) = self.prev_string_bindings.clone() {
+        if let Some(prev_metadata) = self.prev_metadata.clone() {
             let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                if let Some(meta) = def.preset_metadata.as_mut() {
-                    meta.string_bindings = prev_sb.unwrap_or_default();
-                }
+                def.preset_metadata = prev_metadata;
             });
         }
 
