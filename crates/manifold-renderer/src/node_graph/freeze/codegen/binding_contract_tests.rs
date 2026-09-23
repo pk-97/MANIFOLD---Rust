@@ -159,7 +159,8 @@ fn dispatch_tail_census_is_stable() {
     // Audio visualization adds magnitude_db; mosh adds block_sample.
     // Both are canonical texture atoms.
     // Shared cut remaps add two buffer atoms; canonical texture count is unchanged.
-    assert_eq!(total, 183, "standalone atom census drifted");
+    // Code Terminal adds render_glyph_grid, a mixed texture/storage atom.
+    assert_eq!(total, 184, "standalone atom census drifted");
     assert_eq!(
         qualifying, 91,
         "canonical texture-path population drifted"

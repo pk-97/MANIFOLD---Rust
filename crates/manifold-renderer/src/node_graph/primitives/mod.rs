@@ -7,6 +7,9 @@
 //! not a structural divide.
 
 mod abs_texture;
+mod glyph_atlas;
+mod render_glyph_grid;
+mod terminal_stream;
 mod audio_waveform;
 mod affine_transform;
 mod atmosphere;
