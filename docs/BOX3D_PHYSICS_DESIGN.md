@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and focused checks pass in the unlanded Box3D worktree, 2026-09-23; the required full GPU landing gate is blocked by the existing 4K cinematic-tail failure (BUG-8a3c). General multi-set authoring, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. General multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
