@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "Long terminal lines update only when the source image changes. Contours shape indentation and line endings; completed text stays still. Layout chooses Single or tmux-style splits with distinct shell, code, log and inspection passages. Activity controls edit speed; zero holds the characters.",
+  "description": "Code-shaped dithering reconstructs the source image in terminal text. Erosion replaces crisp character cells; Tonal Bias chooses highlights or shadows first. Source changes trigger local typing and brief data-character edits; still content settles. Layout selects Single or tmux-style panes. Activity zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -26,7 +26,7 @@
         "name": "Text Size",
         "min": 8.0,
         "max": 48.0,
-        "defaultValue": 24.0,
+        "defaultValue": 16.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -86,6 +86,17 @@
           "Horizontal Split",
           "Four Panes"
         ]
+      },
+      {
+        "id": "detail_reactivity",
+        "name": "Detail Reactivity",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.55,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
       }
     ],
     "bindings": [
@@ -105,7 +116,7 @@
       {
         "id": "text_size",
         "label": "Text Size",
-        "defaultValue": 24.0,
+        "defaultValue": 16.0,
         "target": {
           "kind": "node",
           "nodeId": "terminal",
@@ -166,6 +177,19 @@
         "convert": {
           "type": "EnumRound"
         }
+      },
+      {
+        "id": "detail_reactivity",
+        "label": "Detail Reactivity",
+        "defaultValue": 0.55,
+        "target": {
+          "kind": "node",
+          "nodeId": "terminal",
+          "param": "detail_reactivity"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ]
   },
@@ -186,11 +210,15 @@
       "params": {
         "text_size": {
           "type": "Float",
-          "value": 24.0
+          "value": 16.0
         },
         "activity": {
           "type": "Float",
           "value": 1.0
+        },
+        "detail_reactivity": {
+          "type": "Float",
+          "value": 0.55
         }
       }
     },
@@ -218,10 +246,10 @@
         "color_a": {
           "type": "Color",
           "value": [
-            0.025,
-            0.2,
-            0.065,
-            1.0
+            0,
+            0,
+            0,
+            1
           ]
         },
         "color_b": {
@@ -245,10 +273,10 @@
         "color_a": {
           "type": "Color",
           "value": [
-            0.2,
-            0.08,
-            0.015,
-            1.0
+            0,
+            0,
+            0,
+            1
           ]
         },
         "color_b": {
@@ -282,17 +310,13 @@
     {
       "id": 7,
       "nodeId": "ink",
-      "typeId": "node.mix",
+      "typeId": "node.dither",
       "handle": "ink",
-      "title": "Image Through Code",
+      "title": "Code Dither",
       "params": {
         "amount": {
           "type": "Float",
           "value": 1.0
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 4
         }
       }
     },
@@ -364,21 +388,13 @@
     {
       "id": 13,
       "nodeId": "noise",
-      "typeId": "node.noise",
+      "typeId": "node.dither_pattern",
       "handle": "noise",
-      "title": "Erosion Patches",
+      "title": "Digital Cell Order",
       "params": {
-        "type": {
+        "algorithm": {
           "type": "Enum",
-          "value": 1
-        },
-        "scale": {
-          "type": "Float",
-          "value": 14.0
-        },
-        "octaves": {
-          "type": "Int",
-          "value": 2
+          "value": 4
         }
       }
     },
@@ -391,7 +407,7 @@
       "params": {
         "amount": {
           "type": "Float",
-          "value": 0.3
+          "value": 0.45
         },
         "mode": {
           "type": "Enum",
@@ -419,11 +435,11 @@
         },
         "scale": {
           "type": "Float",
-          "value": -1.08
+          "value": -1.002
         },
         "offset": {
           "type": "Float",
-          "value": 1.0
+          "value": 1.001
         }
       }
     },
@@ -440,7 +456,7 @@
         },
         "offset": {
           "type": "Float",
-          "value": 0.08
+          "value": 0.001
         }
       }
     },
@@ -473,16 +489,12 @@
     },
     {
       "id": 21,
-      "nodeId": "readable_source",
-      "typeId": "node.clamp",
-      "handle": "readable_source",
-      "title": "Readable Source Ink",
+      "nodeId": "digital_cells",
+      "typeId": "node.block_sample",
+      "handle": "digital_cells",
+      "title": "Character Cell Erosion",
       "params": {
-        "min": {
-          "type": "Float",
-          "value": 0.12
-        },
-        "max": {
+        "block_size": {
           "type": "Float",
           "value": 1.0
         }
@@ -504,7 +516,7 @@
     },
     {
       "fromNode": 2,
-      "fromPort": "out",
+      "fromPort": "threshold",
       "toNode": 3,
       "toPort": "atlas"
     },
@@ -527,19 +539,19 @@
       "toPort": "rows"
     },
     {
-      "fromNode": 0,
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 4,
       "toPort": "source"
     },
     {
-      "fromNode": 0,
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 5,
       "toPort": "source"
     },
     {
-      "fromNode": 21,
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 6,
       "toPort": "in_0"
@@ -557,16 +569,16 @@
       "toPort": "in_2"
     },
     {
-      "fromNode": 6,
+      "fromNode": 0,
       "fromPort": "out",
       "toNode": 7,
-      "toPort": "a"
+      "toPort": "in"
     },
     {
       "fromNode": 3,
       "fromPort": "out",
       "toNode": 7,
-      "toPort": "b"
+      "toPort": "pattern"
     },
     {
       "fromNode": 0,
@@ -623,7 +635,7 @@
       "toPort": "in"
     },
     {
-      "fromNode": 15,
+      "fromNode": 21,
       "fromPort": "out",
       "toNode": 18,
       "toPort": "in"
@@ -653,7 +665,7 @@
       "toPort": "a"
     },
     {
-      "fromNode": 7,
+      "fromNode": 6,
       "fromPort": "out",
       "toNode": 19,
       "toPort": "b"
@@ -671,10 +683,22 @@
       "toPort": "in"
     },
     {
-      "fromNode": 0,
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 21,
       "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "columns",
+      "toNode": 21,
+      "toPort": "columns"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "rows",
+      "toNode": 21,
+      "toPort": "rows"
     }
   ]
 }

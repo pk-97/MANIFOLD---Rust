@@ -2397,6 +2397,7 @@
       ],
       "category": "Routing",
       "examples": [
+        "CodeTerminal",
         "DataMosh",
         "MotionMosh"
       ],
@@ -2409,6 +2410,16 @@
         },
         {
           "name": "block_size",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "columns",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rows",
           "required": false,
           "type": "f32"
         }
@@ -2430,9 +2441,29 @@
             "128"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Columns",
+          "name": "columns",
+          "range": [
+            "0",
+            "4096"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Rows",
+          "name": "rows",
+          "range": [
+            "0",
+            "4096"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Sample the input at the centre of each integer pixel block while keeping the output full resolution. `block_size = 1` is an identity; larger values create clean block pixelation with edge clamping.",
+      "purpose": "Sample the input at the centre of each integer pixel block while keeping the output full resolution. With columns and rows at zero, `block_size = 1` is an identity. Positive columns or rows select a normalized grid; block_size groups its cells.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Pixelates an image at full resolution by repeating each block's centre sample.",
@@ -5581,6 +5612,7 @@
       ],
       "category": "Color & Tone",
       "examples": [
+        "CodeTerminal",
         "Dither"
       ],
       "fusion": "multi_input_coincident",
@@ -5631,6 +5663,7 @@
       ],
       "category": "Stylize",
       "examples": [
+        "CodeTerminal",
         "Dither"
       ],
       "fusion": "source",
@@ -10019,10 +10052,14 @@
         {
           "name": "out",
           "type": "Texture2D"
+        },
+        {
+          "name": "threshold",
+          "type": "Texture2D"
         }
       ],
       "params": [],
-      "purpose": "Build the immutable 32 px Menlo ASCII coverage atlas for node.render_glyph_grid. Slots 0..94 contain printable ASCII 32..126, slot 95 is the solid inset cursor for codepoint 127, and the space slot is blank.",
+      "purpose": "Build the immutable 32 px Menlo ASCII coverage atlas for node.render_glyph_grid. Slots 0..94 contain printable ASCII 32..126, slot 95 is the solid inset cursor for codepoint 127, and the coverage space slot is blank. The threshold output ranks pixels around each glyph for tone-preserving code dithering.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Provides the fixed ASCII coverage atlas used by terminal glyph rendering.",
@@ -14629,7 +14666,6 @@
       ],
       "category": "Noise",
       "examples": [
-        "CodeTerminal",
         "DigitalDrift",
         "FilmGrain",
         "LED Strip Fire"
@@ -25440,6 +25476,11 @@
           "name": "layout",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "detail_reactivity",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Terminal Stream",
@@ -25458,6 +25499,16 @@
         }
       ],
       "params": [
+        {
+          "default": "0.55",
+          "label": "Detail Reactivity",
+          "name": "detail_reactivity",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
         {
           "default": "18",
           "label": "Text Size",
@@ -25495,10 +25546,10 @@
           "type": "enum"
         }
       ],
-      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image structure changes statement content; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Zero detail bypasses these edits; still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Contour-shaped shell, code and logs with source-driven typing and optional tmux panes.",
+      "summary": "Image-reactive shell, code and logs with source-driven typing and optional tmux panes.",
       "type_id": "node.terminal_stream"
     },
     {
@@ -31019,7 +31070,7 @@
           "name": "Erosion"
         },
         {
-          "default": "24",
+          "default": "16",
           "id": "text_size",
           "max": "48",
           "min": "8",
@@ -31052,6 +31103,13 @@
           "max": "3",
           "min": "0",
           "name": "Layout"
+        },
+        {
+          "default": "0.55",
+          "id": "detail_reactivity",
+          "max": "1",
+          "min": "0",
+          "name": "Detail Reactivity"
         }
       ]
     },

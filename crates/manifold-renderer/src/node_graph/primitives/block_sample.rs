@@ -17,18 +17,20 @@ use crate::node_graph::primitive::Primitive;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlockSampleUniforms {
     block_size: f32,
-    _pad0: f32,
-    _pad1: f32,
+    columns: f32,
+    rows: f32,
     _pad2: f32,
 }
 
 crate::primitive! {
     name: BlockSample,
     type_id: "node.block_sample",
-    purpose: "Sample the input at the centre of each integer pixel block while keeping the output full resolution. `block_size = 1` is an identity; larger values create clean block pixelation with edge clamping.",
+    purpose: "Sample the input at the centre of each integer pixel block while keeping the output full resolution. With columns and rows at zero, `block_size = 1` is an identity. Positive columns or rows select a normalized grid; block_size groups its cells.",
     inputs: {
         in: Texture2D required,
         block_size: ScalarF32 optional,
+        columns: ScalarF32 optional,
+        rows: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -42,9 +44,25 @@ crate::primitive! {
             range: Some((1.0, 128.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("columns"),
+            label: "Columns",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 4096.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("rows"),
+            label: "Rows",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 4096.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Inherit,
-    composition_notes: "Full-resolution pixelation for retained imagery and flow fields. The scalar input shadows the `block_size` parameter; values are rounded and clamped to at least 1. `block_size = 1` samples each source texel at its own centre, and partial blocks at the right/bottom edges clamp to the last source texel. Pair with `node.remap` or `node.mix` when the block-centre sample is one stage in a larger mosh graph.",
+    composition_notes: "Full-resolution pixelation for retained imagery and flow fields. The scalar input shadows the `block_size` parameter; values are rounded and clamped to at least 1. `block_size = 1` samples each source texel at its own centre, and partial blocks at the right/bottom edges clamp to the last source texel. Positive `columns` and `rows` divide the canvas into that many cells, with `block_size` grouping cells. Either dimension at zero keeps pixel units. Pair with `node.remap` or `node.mix` when the block-centre sample is one stage in a larger mosh graph.",
     examples: [],
     picker: { label: "Block Sample", category: Atom },
     summary: "Pixelates an image at full resolution by repeating each block's centre sample.",
@@ -59,6 +77,8 @@ crate::primitive! {
 impl Primitive for BlockSample {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let block_size = ctx.scalar_or_param("block_size", 16.0).round().max(1.0);
+        let columns = ctx.scalar_or_param("columns", 0.0).max(0.0);
+        let rows = ctx.scalar_or_param("rows", 0.0).max(0.0);
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
         };
@@ -76,8 +96,8 @@ impl Primitive for BlockSample {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
         let uniforms = BlockSampleUniforms {
             block_size,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            columns,
+            rows,
             _pad2: 0.0,
         };
         dispatch_standalone_2d(
@@ -101,7 +121,7 @@ mod tests {
     #[test]
     fn declares_full_resolution_texture_and_block_size() {
         assert_eq!(BlockSample::TYPE_ID, "node.block_sample");
-        assert_eq!(BlockSample::INPUTS.len(), 2);
+        assert_eq!(BlockSample::INPUTS.len(), 4);
         assert_eq!(BlockSample::INPUTS[0].name, "in");
         assert_eq!(BlockSample::INPUTS[0].ty, PortType::Texture2D);
         assert!(BlockSample::INPUTS[0].required);
@@ -110,7 +130,7 @@ mod tests {
         assert!(!BlockSample::INPUTS[1].required);
         assert_eq!(BlockSample::OUTPUTS.len(), 1);
         assert_eq!(BlockSample::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(BlockSample::PARAMS.len(), 1);
+        assert_eq!(BlockSample::PARAMS.len(), 3);
         assert_eq!(BlockSample::PARAMS[0].name, "block_size");
         assert_eq!(BlockSample::PARAMS[0].default, ParamValue::Float(16.0));
     }
@@ -207,6 +227,16 @@ mod gpu_tests {
         input: &manifold_gpu::GpuTexture,
         block_size: f32,
     ) -> Vec<[f32; 4]> {
+        dispatch_grid(device, input, block_size, 0.0, 0.0)
+    }
+
+    fn dispatch_grid(
+        device: &manifold_gpu::GpuDevice,
+        input: &manifold_gpu::GpuTexture,
+        block_size: f32,
+        columns: f32,
+        rows: f32,
+    ) -> Vec<[f32; 4]> {
         let pipeline = device.create_compute_pipeline(
             &standalone_for_spec::<BlockSample>().expect("block sample standalone codegen"),
             ENTRY,
@@ -228,8 +258,8 @@ mod gpu_tests {
                     binding: 0,
                     data: bytemuck::bytes_of(&BlockSampleUniforms {
                         block_size,
-                        _pad0: 0.0,
-                        _pad1: 0.0,
+                        columns,
+                        rows,
                         _pad2: 0.0,
                     }),
                 },
@@ -251,6 +281,23 @@ mod gpu_tests {
         );
         enc.commit_and_wait_completed();
         readback(device, &out.texture)
+    }
+
+    #[test]
+    fn normalized_grid_repeats_non_integer_cell_centres() {
+        let device = crate::test_device();
+        let input = rgba16_gradient(&device, 10, 6);
+        let output = dispatch_grid(&device, &input, 1.0, 3.0, 2.0);
+        for y in 0..6 {
+            for x in 0..10 {
+                let cell_x = ((x as f32 + 0.5) * 3.0 / 10.0).floor();
+                let cell_y = ((y as f32 + 0.5) / 3.0).floor();
+                let expected_x = ((cell_x + 0.5) * 10.0 / 3.0 - 0.5) / 9.0;
+                let expected_y = ((cell_y + 0.5) * 3.0 - 0.5) / 5.0;
+                assert!((output[y * 10 + x][0] - expected_x).abs() < 0.002);
+                assert!((output[y * 10 + x][1] - expected_y).abs() < 0.002);
+            }
+        }
     }
 
     #[test]

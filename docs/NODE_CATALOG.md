@@ -121,7 +121,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
 | Render Glyph Grid | `node.render_glyph_grid` | Filter | Turns terminal cell codes into a full-resolution grayscale glyph mask. |
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
-| Terminal Stream | `node.terminal_stream` | Source | Contour-shaped shell, code and logs with source-driven typing and optional tmux panes. |
+| Terminal Stream | `node.terminal_stream` | Source | Image-reactive shell, code and logs with source-driven typing and optional tmux panes. |
 | Value Overlay | `node.value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 
 ### Noise (8)
@@ -449,7 +449,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
-| `CodeTerminal` | Code Terminal | effect | Stylize | 6 |
+| `CodeTerminal` | Code Terminal | effect | Stylize | 7 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
 | `ColorGrade` | Color Grade | effect | Color | 9 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
@@ -892,7 +892,7 @@ The effect presets are listed in section 5.
 | ChromaticAberration | `radial_offset_field` + `math` → `chromatic_displace` → `mix` |
 | ColorCompass | 4× `color_sample` → `math` → `smoothing` → `affine_transform` — texture-to-scalar bridge closing the loop into image transform |
 | ColorGrade | `contrast` → `saturation` → `hue_saturation` → `colorize` → `gain` → `clamp_texture` → `mix` |
-| CodeTerminal | Source → `terminal_stream.reaction` drives selective text updates and spatial measurements; Contours shape indentation and natural line endings; Single/tmux layouts give shell, code, logs and inspection distinct source-triggered edit rhythms; `glyph_atlas` → `render_glyph_grid` renders them. Source/green/amber ink retains a readable floor, then luminance/noise-ordered erosion uses `smoothstep` → `masked_mix`. |
+| CodeTerminal | Source → `terminal_stream.reaction` drives selective text updates and spatial measurements; Fine source detail briefly cycles data characters via Detail Reactivity, then settles; contours shape indentation and natural line endings; Single/tmux layouts give shell, code, logs and inspection distinct source-triggered edit rhythms; `glyph_atlas` → `render_glyph_grid` renders them. Source/green/amber ink retains a readable floor, then luminance/noise-ordered erosion uses `smoothstep` → `masked_mix`. |
 | DepthOfField | `depth_estimate_midas` / `box_mask` / `ellipse_mask` + CoC math → `gaussian_blur_variable_width` ×2 → `masked_mix` |
 | Dither | `dither_pattern` → `dither` |
 | EdgeGlow | `edge_detect` standalone |

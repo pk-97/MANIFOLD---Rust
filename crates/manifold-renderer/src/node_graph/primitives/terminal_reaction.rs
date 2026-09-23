@@ -467,48 +467,31 @@ fn rhythm(role: Role) -> (f64, f64) {
 fn make_line(dst: &mut [u8; MAX_COLS], region: Region, features: Features, role: Role) {
     dst.fill(b' ');
     let mut scratch = [b' '; MAX_COLS];
-    let length = write_line(
-        &mut scratch,
-        role,
-        Context {
-            row: region.row,
-            left: features.left,
-            right: features.right,
-            light: features.light,
-            edge: features.edge,
-            signature: features.signature,
-        },
-    );
-    let (indent, budget) = contour_window(region.width, features);
-    let mut end = length.min(budget);
-    if length > budget {
-        // Keep natural word/token endings instead of cutting every line at
-        // the same arbitrary character. Intrinsic code indentation survives.
-        if let Some(boundary) = scratch[budget / 2..budget]
-            .iter()
-            .rposition(|&c| c == b' ' || matches!(c, b';' | b',' | b')' | b'}' | b']'))
-        {
-            end = budget / 2 + boundary;
-            if scratch[end] != b' ' {
-                end += 1;
-            }
+    let mut offset = 0;
+    let mut passage = 0;
+    // Continuous code supplies a dither texture across the entire image.
+    // Source structure changes the statements, not a silhouette-shaped margin.
+    while offset < region.width {
+        let length = write_line(
+            &mut scratch,
+            role,
+            Context {
+                row: region.row + passage,
+                left: features.left,
+                right: features.right,
+                light: features.light,
+                edge: features.edge,
+                signature: features.signature,
+            },
+        );
+        let count = length.min(region.width - offset);
+        if count == 0 {
+            break;
         }
+        dst[offset..offset + count].copy_from_slice(&scratch[..count]);
+        offset = (offset + count + 2).min(region.width);
+        passage += 1;
     }
-    dst[indent..indent + end].copy_from_slice(&scratch[..end]);
-}
-
-fn contour_window(width: usize, features: Features) -> (usize, usize) {
-    // Preserve a useful statement even over narrow image features. The left
-    // edge sets indentation; contour width opens/closes the available line.
-    let minimum = width.min(48);
-    let indent = ((features.left * width.saturating_sub(minimum) as f32 / 2.0).round() as usize
-        * 2)
-    .min(width.saturating_sub(minimum));
-    let span = (features.right - features.left).clamp(0.0, 1.0);
-    let budget = (((0.25 + span * 0.75) * width as f32).round() as usize)
-        .max(minimum)
-        .min(width - indent);
-    (indent, budget)
 }
 
 #[cfg(test)]
@@ -552,16 +535,6 @@ mod tests {
         let b = features(&dark);
         assert!((a.left - 0.25).abs() < 0.02 && (a.right - 0.5).abs() < 0.04);
         assert!((a.left - b.left).abs() < 0.02 && (a.right - b.right).abs() < 0.02);
-        let flat = features(&[[0.2, 0.2, 0.2, 0.0]; SAMPLE_COLS]);
-        assert_eq!(contour_window(128, flat), (0, 128));
-        let (indent, width) = contour_window(128, a);
-        assert!(indent > 0 && width >= 48 && indent + width < 128);
-        let shifted = Features {
-            left: 0.65,
-            right: 0.9,
-            ..a
-        };
-        assert!(contour_window(128, shifted).0 > indent);
         for inverted in [false, true] {
             for touches_left in [false, true] {
                 let background = if inverted { 0.9 } else { 0.1 };
@@ -629,8 +602,8 @@ mod tests {
             "retain some long statements"
         );
         assert!(
-            lengths.iter().any(|&n| n <= 24),
-            "short commands and code structure remain short"
+            lengths.iter().all(|&n| n >= 64),
+            "continuous code fills the image without contour-shaped blank margins"
         );
     }
     #[test]

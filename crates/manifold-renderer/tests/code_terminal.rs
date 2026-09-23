@@ -103,17 +103,19 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
             ("erosion", 0.47),
             ("text_size", 31.0),
             ("activity", 2.0),
+            ("detail_reactivity", 0.73),
             ("tonal_bias", -0.35),
             ("colour", 2.0),
             ("layout", 2.0),
         ],
     );
     bound.apply(&mut graph, &values);
-    assert_eq!(bound.bindings.len(), 6, "every card control has a route");
+    assert_eq!(bound.bindings.len(), 7, "every card control has a route");
     for (node_id, param, expected) in [
         ("erosion_low", "a", 0.47),
         ("terminal", "text_size", 31.0),
         ("terminal", "activity", 2.0),
+        ("terminal", "detail_reactivity", 0.73),
         ("bias", "a", -0.35),
         ("palette", "selector", 2.0),
     ] {
@@ -227,6 +229,7 @@ mod gpu {
         tonal_bias: f32,
         colour: f32,
         layout: f32,
+        detail_reactivity: f32,
     }
 
     impl Controls {
@@ -238,10 +241,11 @@ mod gpu {
                 tonal_bias: 0.0,
                 colour: 1.0,
                 layout: 0.0,
+                detail_reactivity: 0.0, // Isolate existing line-scheduler proofs.
             }
         }
 
-        fn pairs(self) -> [(&'static str, f32); 6] {
+        fn pairs(self) -> [(&'static str, f32); 7] {
             [
                 ("erosion", self.erosion),
                 ("text_size", self.text_size),
@@ -249,6 +253,7 @@ mod gpu {
                 ("tonal_bias", self.tonal_bias),
                 ("colour", self.colour),
                 ("layout", self.layout),
+                ("detail_reactivity", self.detail_reactivity),
             ]
         }
     }
@@ -274,7 +279,7 @@ mod gpu {
         .to_vec()
     }
 
-    // Demo-only curved silhouette: observe whether row contours shape text
+    // Demo-only curved silhouette: observe source-driven terminal updates
     // naturally while existing rectangular fixtures retain their proof scope.
     fn curved_source_frame(center: f32) -> Vec<u8> {
         let mut bytes = Vec::with_capacity((W * H * 8) as usize);
@@ -711,7 +716,7 @@ mod gpu {
                 harness.render_with_source(source, def, controls, frame as f64 * 0.25, frame);
             assert_terminal_cells(&cells, columns);
             if let Some(previous) = previous.as_ref() {
-                if frame >= 8 {
+                if frame >= 8 && controls.detail_reactivity == 0.0 {
                     assert_most_rows_stable(previous, &cells, columns, rows);
                 }
                 if previous == &cells {
@@ -727,6 +732,111 @@ mod gpu {
             }
         }
         settled.unwrap_or_else(|| panic!("{label} did not settle within 64 quarter-beat frames"))
+    }
+
+    /// Optional, bounded proof using externally supplied source frames. No
+    /// stock media is bundled or accessed by the normal test suite.
+    #[test]
+    fn code_terminal_stock_footage_reconstruction() {
+        let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_FOOTAGE_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let device = std::sync::Arc::new(GpuDevice::new());
+        let def = preset();
+        for clip in 1..=3 {
+            let (input, _) = fixture(&device);
+            let mut harness = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);
+            for frame in 0..24 {
+                let path = dir.join(format!("clip{clip}-{frame:02}.png"));
+                let image = image::open(&path).expect("supplied stock frame").to_rgba8();
+                assert_eq!(image.dimensions(), (W, H));
+                let mut source = Vec::with_capacity((W * H * 8) as usize);
+                for pixel in image.pixels() {
+                    let alpha = f32::from(pixel[3]) / 255.0;
+                    for &value in &pixel.0[..3] {
+                        let srgb = f32::from(value) / 255.0;
+                        let linear = if srgb <= 0.04045 {
+                            srgb / 12.92
+                        } else {
+                            ((srgb + 0.055) / 1.055).powf(2.4)
+                        };
+                        source.extend_from_slice(
+                            &f16::from_f32(linear * alpha).to_bits().to_ne_bytes(),
+                        );
+                    }
+                    source.extend_from_slice(&f16::from_f32(alpha).to_bits().to_ne_bytes());
+                }
+                let controls = Controls {
+                    text_size: 16.0,
+                    colour: 0.0,
+                    layout: if clip == 2 { 3.0 } else { 0.0 },
+                    detail_reactivity: 0.55,
+                    ..Controls::defaults()
+                };
+                let (full, _, _, _) = harness.render_with_source(
+                    &source,
+                    &def,
+                    controls,
+                    f64::from(frame) / 6.0,
+                    i64::from(frame),
+                );
+                harness.write_png(&dir.join(format!("full{clip}-{frame:02}.png")));
+                if frame == 0 {
+                    // Coarse image tones must survive independently of individual
+                    // glyph strokes. Compare mean luminance in 32px squares.
+                    let original = f32_pixels(&source);
+                    let reconstructed = f32_pixels(&full);
+                    let mut error = 0.0;
+                    let mut blocks = 0;
+                    for y in (0..H as usize - 32).step_by(32) {
+                        for x in (0..W as usize - 32).step_by(32) {
+                            let mut sums = [0.0; 2];
+                            for yy in y..y + 32 {
+                                for xx in x..x + 32 {
+                                    let index = yy * W as usize + xx;
+                                    for (sum, pixels) in
+                                        sums.iter_mut().zip([&original, &reconstructed])
+                                    {
+                                        let p = pixels[index];
+                                        *sum += p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722;
+                                    }
+                                }
+                            }
+                            error += (sums[0] - sums[1]).abs() / 1024.0;
+                            blocks += 1;
+                        }
+                    }
+                    assert!(
+                        error / (blocks as f32) < 0.045,
+                        "clip {clip} lost image tones: {}",
+                        error / blocks as f32
+                    );
+                    harness.render(
+                        &def,
+                        Controls {
+                            erosion: 0.5,
+                            ..controls
+                        },
+                        0.0,
+                        0,
+                    );
+                    harness.write_png(&dir.join(format!("half{clip}.png")));
+                    if clip == 1 {
+                        harness.render(
+                            &def,
+                            Controls {
+                                colour: 1.0,
+                                ..controls
+                            },
+                            0.0,
+                            0,
+                        );
+                        harness.write_png(&dir.join("green1.png"));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -759,8 +869,8 @@ mod gpu {
         let dark = full_pixels.iter().filter(|p| p[1] < 0.002).count();
         let lit = full_pixels.iter().filter(|p| p[1] > 0.08).count();
         assert!(
-            dark > full_pixels.len() / 3 && lit > full_pixels.len() / 100,
-            "terminal must contain both black cell backgrounds and visible glyph ink"
+            dark > full_pixels.len() / 100 && lit > full_pixels.len() / 3,
+            "code dithering must retain dark marks and broad image illumination"
         );
         assert!(
             max_alpha_error(&source_raw, &full) < 0.001,
@@ -780,6 +890,27 @@ mod gpu {
         assert!(
             (0.02..0.98).contains(&mid_changed),
             "intermediate erosion keeps both source and terminal regions: {mid_changed:.3}"
+        );
+
+        // At partial erosion the choice is made once per character cell.
+        // Almost every pixel is wholly source or wholly reconstructed code;
+        // no cloudy feathering across the image is allowed.
+        let source_pixels = f32_pixels(&source_raw);
+        let mid_pixels = f32_pixels(&mid);
+        let mixed = mid_pixels
+            .iter()
+            .zip(&source_pixels)
+            .zip(&full_pixels)
+            .filter(|((m, a), b)| {
+                let difference = |p: &[f32; 4], q: &[f32; 4]| {
+                    (0..3).map(|c| (p[c] - q[c]).abs()).fold(0.0_f32, f32::max)
+                };
+                difference(m, a) > 0.002 && difference(m, b) > 0.002
+            })
+            .count();
+        assert!(
+            mixed < mid_pixels.len() / 50,
+            "erosion must replace crisp cells"
         );
 
         let frozen_a = unfused.render(
@@ -904,7 +1035,12 @@ mod gpu {
             }
             assert_meaningful_long_line(&cells, columns);
             if layout == 3.0 {
-                for label in [b"0: shell".as_slice(), b"1: code", b"2: logs", b"3: inspect"] {
+                for label in [
+                    b"0: shell".as_slice(),
+                    b"1: code",
+                    b"2: logs",
+                    b"3: inspect",
+                ] {
                     assert!(
                         cells.windows(label.len()).any(|window| window
                             .iter()
@@ -1085,14 +1221,18 @@ mod gpu {
         let mut fused = Harness::new(std::sync::Arc::clone(&device), &def, &input, true);
         let mut unfused_warm = Vec::new();
         let mut fused_warm = Vec::new();
+        let fine_controls = Controls {
+            detail_reactivity: 0.55,
+            ..Controls::defaults()
+        };
         for (frame, beat) in [(0_i64, 0.0), (1, 0.25), (2, 0.5)] {
             let source = source_frame(32 + frame as u32 * 96, H / 5);
             // Both harnesses point at the same source texture. Upload once
             // before the frame so their fenced analysis sees the same image
             // and beat timeline.
             fusion_unfused.upload_source(&source);
-            unfused_warm = fusion_unfused.render(&def, Controls::defaults(), beat, frame);
-            fused_warm = fused.render(&def, Controls::defaults(), beat, frame);
+            unfused_warm = fusion_unfused.render(&def, fine_controls, beat, frame);
+            fused_warm = fused.render(&def, fine_controls, beat, frame);
         }
         assert!(
             mean_abs(&unfused_warm, &fused_warm) < 0.001,
@@ -1110,6 +1250,100 @@ mod gpu {
             "fused and unfused terminal cells agree on the same source timeline"
         );
 
+        // Small changes below the line-profile threshold must still affect
+        // individual data characters, and zero detail must retain old cells.
+        let (fine_input, _) = fixture(&device);
+        let mut fine = Harness::new(std::sync::Arc::clone(&device), &def, &fine_input, false);
+        let mut bypass = Harness::new(std::sync::Arc::clone(&device), &def, &fine_input, false);
+        let plain: Vec<u8> = (0..W * H)
+            .flat_map(|_| {
+                [0.2, 0.2, 0.2, 1.0]
+                    .into_iter()
+                    .flat_map(|c| f16::from_f32(c).to_le_bytes())
+            })
+            .collect();
+        let fine_controls = Controls {
+            detail_reactivity: 1.0,
+            ..Controls::defaults()
+        };
+        let (initial, columns, _) =
+            settle_source(&mut fine, &plain, &def, fine_controls, "fine baseline");
+        settle_source(
+            &mut bypass,
+            &plain,
+            &def,
+            Controls::defaults(),
+            "bypass baseline",
+        );
+        let mut detail_source = plain.clone();
+        let numeric: Vec<_> = initial
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| (48..=57).contains(*c))
+            .take(24)
+            .map(|(i, _)| i)
+            .collect();
+        for index in numeric {
+            let cx = (index % columns) as u32 * W / columns as u32 + W / columns as u32 / 2;
+            let cy = (index / columns) as u32 * H / rows_a as u32 + H / rows_a as u32 / 2;
+            for y in cy.saturating_sub(3)..(cy + 4).min(H) {
+                for x in cx.saturating_sub(3)..(cx + 4).min(W) {
+                    for channel in 0..3 {
+                        let offset = ((y * W + x) * 8) as usize + channel * 2;
+                        detail_source[offset..offset + 2]
+                            .copy_from_slice(&f16::from_f32(0.27).to_le_bytes());
+                    }
+                }
+            }
+        }
+        let mut saw_detail = false;
+        let mut previous = initial.clone();
+        for frame in 32_i64..56 {
+            let (_, edited, _, _) = fine.render_with_source(
+                &detail_source,
+                &def,
+                fine_controls,
+                frame as f64 / 8.0,
+                frame,
+            );
+            let (_, unchanged, _, _) = bypass.render_with_source(
+                &detail_source,
+                &def,
+                Controls::defaults(),
+                frame as f64 / 8.0,
+                frame,
+            );
+            assert_eq!(
+                unchanged, initial,
+                "fine fixture does not trigger line typing"
+            );
+            saw_detail |= edited != unchanged;
+            for (&before, &after) in initial.iter().zip(&edited) {
+                if (before as u8).is_ascii_alphabetic() && !(97..=102).contains(&before) {
+                    assert_eq!(before, after, "command words remain intact");
+                }
+            }
+            if frame >= 48 {
+                assert_eq!(edited, previous, "fine edits settle on still source");
+            }
+            previous = edited;
+        }
+        assert!(
+            saw_detail,
+            "fine source detail changes actual terminal cells"
+        );
+        let (_, frozen, _, _) = fine.render_with_source(
+            &plain,
+            &def,
+            Controls {
+                activity: 0.0,
+                ..fine_controls
+            },
+            8.0,
+            64,
+        );
+        assert_eq!(frozen, previous, "Activity zero holds fine edits too");
+
         if let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_DEMO_DIR") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create terminal demo dir");
@@ -1121,6 +1355,7 @@ mod gpu {
                     Harness::new(std::sync::Arc::clone(&device), &def, &demo_input, false);
                 let controls = Controls {
                     text_size: 32.0,
+                    detail_reactivity: 0.55,
                     layout,
                     ..Controls::defaults()
                 };
