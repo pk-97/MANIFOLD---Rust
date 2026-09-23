@@ -1,0 +1,1263 @@
+{
+  "version": 2,
+  "name": "MaskBlobMotion",
+  "presetMetadata": {
+    "id": "MaskBlobMotion",
+    "displayName": "Blob Mask \u2014 Motion",
+    "category": "Spatial",
+    "oscPrefix": "maskBlobMotion",
+    "available": false,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "motion_threshold",
+        "name": "Motion Threshold",
+        "min": 0.0,
+        "max": 0.1,
+        "defaultValue": 0.005,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "denoise",
+        "name": "Denoise",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "min_area",
+        "name": "Min Area",
+        "min": 0.0,
+        "max": 0.25,
+        "defaultValue": 0.001,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "max_area",
+        "name": "Max Area",
+        "min": 0.01,
+        "max": 1.0,
+        "defaultValue": 0.8,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "max_blobs",
+        "name": "Max Blobs",
+        "min": 1.0,
+        "max": 32.0,
+        "defaultValue": 8.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "smoothing",
+        "name": "Smoothing",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.06,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "retention",
+        "name": "Retention",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "selection",
+        "name": "Selection",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "valueLabels": [
+          "All",
+          "Largest"
+        ]
+      },
+      {
+        "id": "expand",
+        "name": "Expand",
+        "min": -32.0,
+        "max": 32.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "feather",
+        "name": "Feather",
+        "min": 0.0,
+        "max": 8.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "invert",
+        "name": "Invert",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "motion_threshold",
+        "label": "Motion Threshold",
+        "defaultValue": 0.005,
+        "target": {
+          "kind": "node",
+          "nodeId": "threshold_floor",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "denoise",
+        "label": "Denoise",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "denoise_h",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "denoise",
+        "label": "Denoise",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "denoise_v",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "min_area",
+        "label": "Min Area",
+        "defaultValue": 0.001,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "min_area"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "max_area",
+        "label": "Max Area",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "max_area"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "max_blobs",
+        "label": "Max Blobs",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "max_regions"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "smoothing",
+        "label": "Smoothing",
+        "defaultValue": 0.06,
+        "target": {
+          "kind": "node",
+          "nodeId": "tracker",
+          "param": "smoothing_seconds"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "retention",
+        "label": "Retention",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "node",
+          "nodeId": "tracker",
+          "param": "retention_seconds"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "selection",
+        "label": "Selection",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "region_mask",
+          "param": "selection"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "expand",
+        "label": "Expand",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "expand_x",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "expand",
+        "label": "Expand",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "expand_y",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "feather",
+        "label": "Feather",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "feather_h",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feather",
+        "label": "Feather",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "feather_v",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "invert",
+        "label": "Invert",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "invert",
+          "param": "intensity"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "amount",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Source"
+    },
+    {
+      "id": 1,
+      "nodeId": "optical_flow",
+      "typeId": "node.optical_flow",
+      "handle": "optical_flow",
+      "params": {
+        "analysis_max_dim": {
+          "type": "Int",
+          "value": 192
+        },
+        "update_interval": {
+          "type": "Int",
+          "value": 1
+        },
+        "fixed_lag": {
+          "type": "Bool",
+          "value": true
+        }
+      },
+      "title": "Optical Flow"
+    },
+    {
+      "id": 2,
+      "nodeId": "flow_channels",
+      "typeId": "node.channel_mixer",
+      "handle": "flow_channels",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "title": "Flow X/Y"
+    },
+    {
+      "id": 3,
+      "nodeId": "flow_length",
+      "typeId": "node.vector_length",
+      "handle": "flow_length",
+      "title": "Motion Magnitude"
+    },
+    {
+      "id": 4,
+      "nodeId": "threshold_floor",
+      "typeId": "node.math",
+      "handle": "threshold_floor",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.005
+        },
+        "b": {
+          "type": "Float",
+          "value": 1e-05
+        },
+        "op": {
+          "type": "Enum",
+          "value": 5
+        }
+      },
+      "title": "Threshold Floor"
+    },
+    {
+      "id": 5,
+      "nodeId": "threshold_reciprocal",
+      "typeId": "node.math",
+      "handle": "threshold_reciprocal",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 200.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 9
+        }
+      },
+      "title": "Threshold Reciprocal"
+    },
+    {
+      "id": 6,
+      "nodeId": "normalize",
+      "typeId": "node.exposure",
+      "handle": "normalize",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 200.0
+        }
+      },
+      "title": "Normalize Motion"
+    },
+    {
+      "id": 7,
+      "nodeId": "flow_valid",
+      "typeId": "node.channel_mixer",
+      "handle": "flow_valid",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "title": "Flow Valid"
+    },
+    {
+      "id": 8,
+      "nodeId": "zero_field",
+      "typeId": "node.channel_mixer",
+      "handle": "zero_field",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "title": "Zero Field"
+    },
+    {
+      "id": 9,
+      "nodeId": "valid_motion",
+      "typeId": "node.masked_mix",
+      "handle": "valid_motion",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Flow Validity Gate"
+    },
+    {
+      "id": 10,
+      "nodeId": "resize",
+      "typeId": "node.resize_limit",
+      "handle": "resize",
+      "params": {
+        "max_dim": {
+          "type": "Int",
+          "value": 320
+        }
+      },
+      "title": "Analysis Resize"
+    },
+    {
+      "id": 11,
+      "nodeId": "denoise_h",
+      "typeId": "node.gaussian_blur",
+      "handle": "denoise_h",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 1
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "step": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 1
+        },
+        "radius": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "address_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Denoise Horizontal"
+    },
+    {
+      "id": 12,
+      "nodeId": "denoise_v",
+      "typeId": "node.gaussian_blur",
+      "handle": "denoise_v",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 1
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "step": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 1
+        },
+        "radius": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "address_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Denoise Vertical"
+    },
+    {
+      "id": 13,
+      "nodeId": "detect",
+      "typeId": "node.detect_regions",
+      "handle": "detect",
+      "params": {
+        "threshold": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "min_area": {
+          "type": "Float",
+          "value": 0.001
+        },
+        "max_area": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "min_aspect": {
+          "type": "Float",
+          "value": 0.05
+        },
+        "max_aspect": {
+          "type": "Float",
+          "value": 20.0
+        },
+        "max_regions": {
+          "type": "Int",
+          "value": 8
+        },
+        "update_interval": {
+          "type": "Int",
+          "value": 2
+        }
+      },
+      "title": "Detect Regions"
+    },
+    {
+      "id": 14,
+      "nodeId": "tracker",
+      "typeId": "node.track_regions",
+      "handle": "tracker",
+      "params": {
+        "smoothing_seconds": {
+          "type": "Float",
+          "value": 0.06
+        },
+        "retention_seconds": {
+          "type": "Float",
+          "value": 0.15
+        }
+      },
+      "title": "Track Regions"
+    },
+    {
+      "id": 15,
+      "nodeId": "frame_size",
+      "typeId": "node.texture_size",
+      "handle": "frame_size",
+      "title": "Frame Aspect"
+    },
+    {
+      "id": 16,
+      "nodeId": "region_mask",
+      "typeId": "node.region_mask",
+      "handle": "region_mask",
+      "params": {
+        "selection": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Region Mask"
+    },
+    {
+      "id": 17,
+      "nodeId": "expand_x",
+      "typeId": "node.mask_extrema",
+      "handle": "expand_x",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "radius": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Expand Horizontal"
+    },
+    {
+      "id": 18,
+      "nodeId": "expand_y",
+      "typeId": "node.mask_extrema",
+      "handle": "expand_y",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "radius": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Expand Vertical"
+    },
+    {
+      "id": 19,
+      "nodeId": "feather_h",
+      "typeId": "node.gaussian_blur",
+      "handle": "feather_h",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 1
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "step": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 2
+        },
+        "radius": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "address_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Feather Horizontal"
+    },
+    {
+      "id": 20,
+      "nodeId": "feather_v",
+      "typeId": "node.gaussian_blur",
+      "handle": "feather_v",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 1
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "step": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 2
+        },
+        "radius": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "address_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Feather Vertical"
+    },
+    {
+      "id": 21,
+      "nodeId": "invert",
+      "typeId": "node.invert",
+      "handle": "invert",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Invert"
+    },
+    {
+      "id": 22,
+      "nodeId": "flow_zero",
+      "typeId": "node.channel_mixer",
+      "handle": "flow_zero",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "title": "Flow Zero"
+    },
+    {
+      "id": 23,
+      "nodeId": "flow_valid_gate",
+      "typeId": "node.masked_mix",
+      "handle": "flow_valid_gate",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Flow Validity Output Gate"
+    },
+    {
+      "id": 24,
+      "nodeId": "amount",
+      "typeId": "node.scale_offset_image",
+      "handle": "amount",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Amount"
+    },
+    {
+      "id": 25,
+      "nodeId": "valid_gate",
+      "typeId": "node.scale_offset_image",
+      "handle": "valid_gate",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Validity Gate"
+    },
+    {
+      "id": 26,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    },
+    {
+      "id": 27,
+      "nodeId": "cut_delta",
+      "typeId": "node.math",
+      "handle": "cut_delta",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.28
+        },
+        "op": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "title": "Cut Delta"
+    },
+    {
+      "id": 28,
+      "nodeId": "cut_scaled",
+      "typeId": "node.math",
+      "handle": "cut_scaled",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 1000000.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Cut Positive"
+    },
+    {
+      "id": 29,
+      "nodeId": "cut_reset",
+      "typeId": "node.math",
+      "handle": "cut_reset",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 11
+        }
+      },
+      "title": "Cut Reset"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "gain"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 29,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "reset"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "labels",
+      "toNode": 16,
+      "toPort": "labels"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "valid",
+      "toNode": 14,
+      "toPort": "valid"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "updated",
+      "toNode": 14,
+      "toPort": "updated"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "sample_dt",
+      "toNode": 14,
+      "toPort": "sample_dt"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "regions",
+      "toNode": 14,
+      "toPort": "regions"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "aspect",
+      "toNode": 14,
+      "toPort": "frame_aspect"
+    },
+    {
+      "fromNode": 29,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "reset"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "tracks",
+      "toNode": 16,
+      "toPort": "tracks"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 21,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 23,
+      "fromPort": "out",
+      "toNode": 24,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 24,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "valid",
+      "toNode": 25,
+      "toPort": "scale"
+    },
+    {
+      "fromNode": 25,
+      "fromPort": "out",
+      "toNode": 26,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "cut_score",
+      "toNode": 27,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "out",
+      "toNode": 28,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "a"
+    }
+  ]
+}

@@ -439,6 +439,15 @@ pub trait Primitive: PrimitiveSpec {
         None
     }
 
+    /// Mirror of [`EffectNode::output_canvas_max_dim`].
+    fn output_canvas_max_dim(
+        &self,
+        _port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<u32> {
+        None
+    }
+
     /// Mirror of [`EffectNode::set_output_canvas_scale`]. Default no-op
     /// — only dynamic-shape primitives need this.
     fn set_output_canvas_scale(&mut self, _port: &str, _scale: (u32, u32)) {}
@@ -746,6 +755,13 @@ impl<P: Primitive + 'static> EffectNode for P {
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Primitive::output_canvas_scale(self, port, params)
+    }
+    fn output_canvas_max_dim(
+        &self,
+        port: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<u32> {
+        Primitive::output_canvas_max_dim(self, port, params)
     }
     fn set_output_canvas_scale(&mut self, port: &str, scale: (u32, u32)) {
         Primitive::set_output_canvas_scale(self, port, scale);

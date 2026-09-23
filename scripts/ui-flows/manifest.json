@@ -145,6 +145,7 @@
     "gltf-import-card-sections": "gltfscene",
     "inspector-card-drag-reorder": "inspector",
     "inspector-add-mask": "inspector",
+    "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
     "inspector-drawer-filmstrip": "inspector",

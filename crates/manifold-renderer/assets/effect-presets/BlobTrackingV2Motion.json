@@ -1,0 +1,1655 @@
+{
+  "version": 2,
+  "name": "BlobTrackingV2Motion",
+  "presetMetadata": {
+    "id": "BlobTrackingV2Motion",
+    "displayName": "Blob Track V2 — Motion",
+    "category": "Stylize",
+    "oscPrefix": "blobTrackingV2Motion",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "motion_threshold",
+        "name": "Motion Threshold",
+        "min": 0.0,
+        "max": 0.1,
+        "defaultValue": 0.005,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "denoise",
+        "name": "Denoise",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "min_area",
+        "name": "Min Area",
+        "min": 0.0,
+        "max": 0.25,
+        "defaultValue": 0.001,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "max_area",
+        "name": "Max Area",
+        "min": 0.01,
+        "max": 1.0,
+        "defaultValue": 0.8,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "max_blobs",
+        "name": "Max Blobs",
+        "min": 1.0,
+        "max": 32.0,
+        "defaultValue": 8.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "smoothing",
+        "name": "Smoothing",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.06,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "retention",
+        "name": "Retention",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "connect",
+        "name": "Connect",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "amount_value",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "motion_threshold",
+        "label": "Motion Threshold",
+        "defaultValue": 0.005,
+        "target": {
+          "kind": "node",
+          "nodeId": "threshold_value",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "denoise",
+        "label": "Denoise",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "blur_h",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "denoise",
+        "label": "Denoise",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "blur_v",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "min_area",
+        "label": "Min Area",
+        "defaultValue": 0.001,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "min_area"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "max_area",
+        "label": "Max Area",
+        "defaultValue": 0.8,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "max_area"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "max_blobs",
+        "label": "Max Blobs",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "max_regions"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "smoothing",
+        "label": "Smoothing",
+        "defaultValue": 0.06,
+        "target": {
+          "kind": "node",
+          "nodeId": "tracker",
+          "param": "smoothing_seconds"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "retention",
+        "label": "Retention",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "node",
+          "nodeId": "tracker",
+          "param": "retention_seconds"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "connect",
+        "label": "Connect",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "connect_nearest",
+          "param": "max_distance"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Inputs"
+    },
+    {
+      "id": 5,
+      "nodeId": "connect_nearest",
+      "typeId": "node.connect_nearest",
+      "handle": "connect_nearest",
+      "params": {
+        "max_distance": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "max_edges": {
+          "type": "Float",
+          "value": 32.0
+        }
+      },
+      "title": "Connection Finder"
+    },
+    {
+      "id": 6,
+      "nodeId": "amount_value",
+      "typeId": "node.scale_offset_value",
+      "handle": "amount_value",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Amount"
+    },
+    {
+      "id": 17,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    },
+    {
+      "id": 19,
+      "nodeId": "Blob Detection",
+      "typeId": "group",
+      "handle": "Blob Detection",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "source",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "boxes",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 14,
+            "nodeId": "detect",
+            "typeId": "node.detect_regions",
+            "handle": "detect",
+            "params": {
+              "threshold": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "min_area": {
+                "type": "Float",
+                "value": 0.001
+              },
+              "max_area": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "min_aspect": {
+                "type": "Float",
+                "value": 0.05
+              },
+              "max_aspect": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "max_regions": {
+                "type": "Int",
+                "value": 8
+              },
+              "update_interval": {
+                "type": "Int",
+                "value": 2
+              }
+            },
+            "title": "Detect Regions"
+          },
+          {
+            "id": 15,
+            "nodeId": "tracker",
+            "typeId": "node.track_regions",
+            "handle": "tracker",
+            "params": {
+              "smoothing_seconds": {
+                "type": "Float",
+                "value": 0.06
+              },
+              "retention_seconds": {
+                "type": "Float",
+                "value": 0.15
+              }
+            },
+            "title": "Track Regions"
+          },
+          {
+            "id": 16,
+            "nodeId": "frame_size",
+            "typeId": "node.texture_size",
+            "handle": "frame_size",
+            "title": "Analysis Frame Size"
+          },
+          {
+            "id": 1,
+            "nodeId": "optical_flow",
+            "typeId": "node.optical_flow",
+            "handle": "optical_flow",
+            "params": {
+              "analysis_max_dim": {
+                "type": "Int",
+                "value": 192
+              },
+              "update_interval": {
+                "type": "Int",
+                "value": 1
+              },
+              "fixed_lag": {
+                "type": "Bool",
+                "value": true
+              }
+            },
+            "title": "Fixed Lag Optical Flow"
+          },
+          {
+            "id": 2,
+            "nodeId": "flow_channels",
+            "typeId": "node.channel_mixer",
+            "handle": "flow_channels",
+            "params": {
+              "row0": {
+                "type": "Vec4",
+                "value": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row1": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              "row2": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row3": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              }
+            },
+            "title": "Flow XY"
+          },
+          {
+            "id": 3,
+            "nodeId": "flow_length",
+            "typeId": "node.vector_length",
+            "handle": "flow_length",
+            "title": "Flow Magnitude"
+          },
+          {
+            "id": 4,
+            "nodeId": "threshold_value",
+            "typeId": "node.value",
+            "handle": "threshold_value",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.005
+              }
+            },
+            "title": "Motion Threshold"
+          },
+          {
+            "id": 5,
+            "nodeId": "threshold_floor",
+            "typeId": "node.math",
+            "handle": "threshold_floor",
+            "params": {
+              "b": {
+                "type": "Float",
+                "value": 1e-05
+              },
+              "op": {
+                "type": "Enum",
+                "value": 5
+              }
+            },
+            "title": "Threshold Floor"
+          },
+          {
+            "id": 6,
+            "nodeId": "threshold_inverse",
+            "typeId": "node.math",
+            "handle": "threshold_inverse",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 9
+              }
+            },
+            "title": "Threshold Inverse"
+          },
+          {
+            "id": 7,
+            "nodeId": "normalize",
+            "typeId": "node.exposure",
+            "handle": "normalize",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Normalize Magnitude"
+          },
+          {
+            "id": 8,
+            "nodeId": "flow_valid",
+            "typeId": "node.channel_mixer",
+            "handle": "flow_valid",
+            "params": {
+              "row0": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              },
+              "row1": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row2": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row3": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            },
+            "title": "Flow Validity"
+          },
+          {
+            "id": 9,
+            "nodeId": "zero_field",
+            "typeId": "node.channel_mixer",
+            "handle": "zero_field",
+            "params": {
+              "row0": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row1": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row2": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row3": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            },
+            "title": "Zero Before Valid Flow"
+          },
+          {
+            "id": 10,
+            "nodeId": "valid_mask",
+            "typeId": "node.masked_mix",
+            "handle": "valid_mask",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Gate Invalid Flow"
+          },
+          {
+            "id": 11,
+            "nodeId": "resize",
+            "typeId": "node.resize_limit",
+            "handle": "resize",
+            "params": {
+              "max_dim": {
+                "type": "Int",
+                "value": 320
+              }
+            },
+            "title": "Motion Analysis Size"
+          },
+          {
+            "id": 12,
+            "nodeId": "blur_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_h",
+            "params": {
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "radius": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "address_mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Denoise Horizontal"
+          },
+          {
+            "id": 13,
+            "nodeId": "blur_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_v",
+            "params": {
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "radius": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "address_mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Denoise Vertical"
+          },
+          {
+            "id": 17,
+            "nodeId": "cut_minus_threshold",
+            "typeId": "node.math",
+            "handle": "cut_minus_threshold",
+            "params": {
+              "b": {
+                "type": "Float",
+                "value": 0.28
+              },
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Hard Cut Threshold"
+          },
+          {
+            "id": 18,
+            "nodeId": "cut_trigger",
+            "typeId": "node.math",
+            "handle": "cut_trigger",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Hard Cut Reset"
+          },
+          {
+            "id": 20,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 21,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 20,
+            "fromPort": "source",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "gain"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "mask"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "mask"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "regions",
+            "toNode": 15,
+            "toPort": "regions"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "updated",
+            "toNode": 15,
+            "toPort": "updated"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "sample_dt",
+            "toNode": 15,
+            "toPort": "sample_dt"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "valid",
+            "toNode": 15,
+            "toPort": "valid"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "aspect",
+            "toNode": 15,
+            "toPort": "frame_aspect"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cut_score",
+            "toNode": 17,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "reset"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "reset"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "boxes",
+            "toNode": 21,
+            "toPort": "boxes"
+          }
+        ],
+        "tint": [
+          0.2,
+          0.6,
+          0.9,
+          0.3
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "HUD Overlay",
+      "typeId": "group",
+      "handle": "HUD Overlay",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "alpha",
+              "portType": ""
+            },
+            {
+              "name": "detections",
+              "portType": ""
+            },
+            {
+              "name": "frame",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "alpha_2",
+              "portType": ""
+            },
+            {
+              "name": "detections_2",
+              "portType": ""
+            },
+            {
+              "name": "alpha_3",
+              "portType": ""
+            },
+            {
+              "name": "detections_3",
+              "portType": ""
+            },
+            {
+              "name": "alpha_4",
+              "portType": ""
+            },
+            {
+              "name": "detections_4",
+              "portType": ""
+            },
+            {
+              "name": "alpha_5",
+              "portType": ""
+            },
+            {
+              "name": "detections_5",
+              "portType": ""
+            },
+            {
+              "name": "alpha_6",
+              "portType": ""
+            },
+            {
+              "name": "detections_6",
+              "portType": ""
+            },
+            {
+              "name": "edges",
+              "portType": ""
+            },
+            {
+              "name": "alpha_7",
+              "portType": ""
+            },
+            {
+              "name": "positions",
+              "portType": ""
+            },
+            {
+              "name": "alpha_8",
+              "portType": ""
+            },
+            {
+              "name": "positions_2",
+              "portType": ""
+            },
+            {
+              "name": "alpha_9",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "overlaid",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 7,
+            "nodeId": "brackets",
+            "typeId": "node.draw_markers",
+            "handle": "brackets",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "size_fraction": {
+                "type": "Float",
+                "value": 0.4
+              },
+              "symbol": {
+                "type": "Enum",
+                "value": 0
+              },
+              "thickness_px": {
+                "type": "Float",
+                "value": 2.0
+              }
+            },
+            "title": "Corner Brackets"
+          },
+          {
+            "id": 8,
+            "nodeId": "crosshair",
+            "typeId": "node.draw_markers",
+            "handle": "crosshair",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "size_fraction": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "symbol": {
+                "type": "Enum",
+                "value": 1
+              },
+              "thickness_px": {
+                "type": "Float",
+                "value": 1.5
+              }
+            },
+            "title": "Crosshair"
+          },
+          {
+            "id": 9,
+            "nodeId": "center_dot",
+            "typeId": "node.draw_dots",
+            "handle": "center_dot",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "radius_px": {
+                "type": "Float",
+                "value": 4.0
+              }
+            },
+            "title": "Center Dot"
+          },
+          {
+            "id": 10,
+            "nodeId": "size_gauge",
+            "typeId": "node.draw_gauge",
+            "handle": "size_gauge",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "bar_height_px": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "bottom_offset_px": {
+                "type": "Float",
+                "value": 50.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "fill_scale": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "min_bar_width_px": {
+                "type": "Float",
+                "value": 80.0
+              },
+              "thickness_px": {
+                "type": "Float",
+                "value": 1.5
+              }
+            },
+            "title": "Size Gauge"
+          },
+          {
+            "id": 11,
+            "nodeId": "tick_marks",
+            "typeId": "node.draw_ticks",
+            "handle": "tick_marks",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "long_tick_px": {
+                "type": "Float",
+                "value": 12.0
+              },
+              "right_offset_px": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "short_tick_px": {
+                "type": "Float",
+                "value": 6.0
+              },
+              "thickness_px": {
+                "type": "Float",
+                "value": 1.5
+              }
+            },
+            "title": "Tick Marks"
+          },
+          {
+            "id": 12,
+            "nodeId": "dashed_connections",
+            "typeId": "node.draw_connections",
+            "handle": "dashed_connections",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "dash_fill": {
+                "type": "Float",
+                "value": 0.4
+              },
+              "dash_period_px": {
+                "type": "Float",
+                "value": 12.0
+              },
+              "midpoint_radius_px": {
+                "type": "Float",
+                "value": 5.0
+              },
+              "thickness_px": {
+                "type": "Float",
+                "value": 1.5
+              }
+            },
+            "title": "Connection Lines"
+          },
+          {
+            "id": 14,
+            "nodeId": "hex_label",
+            "typeId": "node.value_overlay",
+            "handle": "hex_label",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "anchor": {
+                "type": "Enum",
+                "value": 0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "font_scale": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "format": {
+                "type": "Enum",
+                "value": 1
+              },
+              "label_count": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "offset_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset_y": {
+                "type": "Float",
+                "value": -0.02
+              }
+            },
+            "title": "ID Label"
+          },
+          {
+            "id": 15,
+            "nodeId": "coord_label",
+            "typeId": "node.value_overlay",
+            "handle": "coord_label",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "anchor": {
+                "type": "Enum",
+                "value": 2
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "font_scale": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "format": {
+                "type": "Enum",
+                "value": 2
+              },
+              "label_count": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "offset_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset_y": {
+                "type": "Float",
+                "value": 0.01
+              }
+            },
+            "title": "Coordinate Label"
+          },
+          {
+            "id": 16,
+            "nodeId": "scanline",
+            "typeId": "node.draw_scanlines",
+            "handle": "scanline",
+            "params": {
+              "alpha": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color": {
+                "type": "Color",
+                "value": [
+                  0.85,
+                  0.92,
+                  1.0,
+                  1.0
+                ]
+              },
+              "intensity": {
+                "type": "Float",
+                "value": 0.04
+              },
+              "period_px": {
+                "type": "Float",
+                "value": 2.0
+              }
+            },
+            "title": "Scanline"
+          },
+          {
+            "id": 21,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 22,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha",
+            "toNode": 7,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "detections",
+            "toNode": 7,
+            "toPort": "detections"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "frame",
+            "toNode": 7,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_2",
+            "toNode": 8,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "detections_2",
+            "toNode": 8,
+            "toPort": "detections"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_3",
+            "toNode": 9,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "detections_3",
+            "toNode": 9,
+            "toPort": "detections"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_4",
+            "toNode": 10,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "detections_4",
+            "toNode": 10,
+            "toPort": "detections"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_5",
+            "toNode": 11,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "detections_5",
+            "toNode": 11,
+            "toPort": "detections"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_6",
+            "toNode": 12,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "detections_6",
+            "toNode": 12,
+            "toPort": "detections"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "edges",
+            "toNode": 12,
+            "toPort": "edges"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_7",
+            "toNode": 14,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "positions",
+            "toNode": 14,
+            "toPort": "positions"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_8",
+            "toNode": 15,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "positions_2",
+            "toNode": 15,
+            "toPort": "positions"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "alpha_9",
+            "toNode": 16,
+            "toPort": "alpha"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "overlaid"
+          }
+        ],
+        "tint": [
+          0.9,
+          0.6,
+          0.2,
+          0.3
+        ]
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 5,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "detections"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "detections_2"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "detections_3"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "detections_4"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "detections_5"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "detections_6"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "positions"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "boxes",
+      "toNode": 20,
+      "toPort": "positions_2"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "edges",
+      "toNode": 20,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "frame"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_2"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_3"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_4"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_5"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_6"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_7"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_8"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "alpha_9"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "overlaid",
+      "toNode": 17,
+      "toPort": "in"
+    }
+  ]
+}

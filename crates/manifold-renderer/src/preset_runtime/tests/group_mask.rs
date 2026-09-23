@@ -194,3 +194,138 @@ fn group_mask_circle_moves_over_infrared_without_rebuild() {
     }
     proof.save(std::env::temp_dir().join("manifold-mask-scan.png")).unwrap();
 }
+
+#[test]
+fn blob_v2_group_mask_ring_and_dry_input() {
+    // The native detector/tracker publishes labels and tracks asynchronously,
+    // so this focused seam test does not claim a rendered ring before a real
+    // detector sample has arrived. It proves the production group graph uses
+    // the V2 region mask output and the pre-group source for its dry input.
+    let device = crate::test_device();
+    let primitives = PrimitiveRegistry::with_builtin();
+    let mut group = EffectGroup::new("Blob Mask Ring".into());
+    group.wet_dry = 0.5;
+
+    let mut mask =
+        manifold_core::preset_definition_registry::create_default(&PresetTypeId::new("MaskBlob"));
+    let mut wet =
+        manifold_core::preset_definition_registry::create_default(&PresetTypeId::INVERT_COLORS);
+    mask.group_id = Some(group.id.clone());
+    wet.group_id = Some(group.id.clone());
+    group.mask_effect_id = Some(mask.id.clone());
+    let effects = vec![mask, wet];
+
+    let runtime = PresetRuntime::try_build(
+        ChainBuildInputs {
+            effects: &effects,
+            groups: std::slice::from_ref(&group),
+            primitives: &primitives,
+            device: &device,
+            pool: None,
+            width: 16,
+            height: 16,
+            preview_effect: None,
+        },
+        None,
+    )
+    .expect("Blob Mask V2 group builds");
+
+    let (_, mix_id) = runtime
+        .group_mix_nodes
+        .first()
+        .expect("masked group has a mix node");
+    let mix = runtime.graph.get_node(*mix_id).expect("group mix node");
+    assert_eq!(mix.node.type_id().as_str(), "node.masked_mix");
+    assert!(matches!(
+        mix.params.get("amount"),
+        Some(ParamValue::Float(value)) if (*value - 0.5).abs() < f32::EPSILON
+    ));
+
+    let dry_wire = runtime
+        .graph
+        .wires_into(*mix_id)
+        .find(|wire| wire.to.1 == "a")
+        .expect("masked group must have a dry input");
+    let dry = runtime
+        .graph
+        .get_node(dry_wire.from.0)
+        .expect("dry producer");
+    assert_eq!(dry.node.type_id().as_str(), "system.source");
+
+    let mask_wire = runtime
+        .graph
+        .wires_into(*mix_id)
+        .find(|wire| wire.to.1 == "mask")
+        .expect("masked group must receive the mask output");
+    let mask_output = runtime
+        .graph
+        .get_node(mask_wire.from.0)
+        .expect("mask producer");
+    assert_ne!(mask_output.node.type_id().as_str(), "system.source");
+
+    let mask_view = loaded_preset_view_by_id(&PresetTypeId::new("MaskBlob"))
+        .expect("MaskBlob preset is registered");
+    let mut types = std::collections::BTreeSet::new();
+    fn collect_types(
+        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+        types: &mut std::collections::BTreeSet<String>,
+    ) {
+        for node in nodes {
+            types.insert(node.type_id.clone());
+            if let Some(group) = &node.group {
+                collect_types(&group.nodes, types);
+            }
+        }
+    }
+    collect_types(&mask_view.canonical_def.nodes, &mut types);
+    assert!(types.contains("node.region_mask"));
+    assert!(types.contains("node.mask_extrema"));
+}
+
+#[test]
+fn blob_v2_invalid_inverted_mask_is_zero() {
+    let view = loaded_preset_view_by_id(&PresetTypeId::new("MaskBlob"))
+        .expect("MaskBlob preset is registered");
+    let def = &view.canonical_def;
+    let node = |name: &str| {
+        def.nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == name)
+            .unwrap_or_else(|| panic!("MaskBlob missing {name}"))
+    };
+    let invert = node("invert");
+    let valid_gate = node("valid_gate");
+    let final_output = node("final_output");
+    let reachable = |start: u32, target: u32| {
+        let mut pending = vec![start];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(current) = pending.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+            if current == target {
+                return true;
+            }
+            pending.extend(
+                def.wires
+                    .iter()
+                    .filter(|wire| wire.from_node == current)
+                    .map(|wire| wire.to_node),
+            );
+        }
+        false
+    };
+    assert!(
+        reachable(invert.id, valid_gate.id),
+        "validity must be applied after inversion"
+    );
+    assert!(
+        reachable(valid_gate.id, final_output.id),
+        "validity gate must feed the final mask output"
+    );
+    assert!(matches!(
+        valid_gate.params.get("scale"),
+        Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value })
+            if value.abs() < f32::EPSILON
+    ));
+}

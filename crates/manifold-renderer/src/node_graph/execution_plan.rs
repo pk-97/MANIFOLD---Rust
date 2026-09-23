@@ -122,6 +122,10 @@ pub struct ExecutionPlan {
     /// at compile time. Indexed by `ResourceId`, parallel to
     /// `resource_types` / `resource_formats` / `resource_dims`.
     resource_canvas_scales: Vec<Option<(u32, u32)>>,
+    /// Canvas-relative input scale plus a longest-side cap. This preserves
+    /// aspect ratio for `node.resize_limit` when a group source is unresolved
+    /// until the runtime knows the actual canvas dimensions.
+    resource_canvas_max_dims: Vec<Option<(u32, u32, u32)>>,
     /// Union of every node's [`NodeRequires`] declaration. The
     /// executor's entry point checks this against what it can
     /// provide (encoder, state store) and panics with a clean
@@ -256,6 +260,13 @@ impl ExecutionPlan {
     /// field docs for the full resolution order.
     pub fn resource_canvas_scale(&self, id: ResourceId) -> Option<(u32, u32)> {
         self.resource_canvas_scales
+            .get(id.0 as usize)
+            .copied()
+            .flatten()
+    }
+
+    pub fn resource_canvas_max_dim(&self, id: ResourceId) -> Option<(u32, u32, u32)> {
+        self.resource_canvas_max_dims
             .get(id.0 as usize)
             .copied()
             .flatten()
@@ -458,6 +469,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // see the field doc on `ExecutionPlan::resource_canvas_scales`.
     // Non-Texture2D resources always get `None`.
     let mut resource_canvas_scales: Vec<Option<(u32, u32)>> = Vec::new();
+    let mut resource_canvas_max_dims: Vec<Option<(u32, u32, u32)>> = Vec::new();
     for &node_id in &order {
         let inst = graph
             .get_node(node_id)
@@ -496,6 +508,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         // landed at quarter-res.
         let mut any_canvas_input = false;
         let mut input_canvas_scales: Vec<(u32, u32)> = Vec::new();
+        let mut input_canvas_max_dims: Vec<(u32, u32, u32)> = Vec::new();
         for input_port in inst.node.inputs() {
             if !matches!(
                 input_port.ty,
@@ -518,10 +531,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             };
             let dims = resource_dims.get(src_res.0 as usize).copied().flatten();
             let scale = resource_canvas_scales.get(src_res.0 as usize).copied().flatten();
-            match (dims, scale) {
-                (Some(d), _) => input_dims_scratch.push((input_port.name.as_ref(), d)),
-                (None, Some(s)) => input_canvas_scales.push(s),
-                (None, None) => any_canvas_input = true,
+            let cap = resource_canvas_max_dims.get(src_res.0 as usize).copied().flatten();
+            match (dims, cap, scale) {
+                (Some(d), _, _) => input_dims_scratch.push((input_port.name.as_ref(), d)),
+                (None, Some(c), _) => input_canvas_max_dims.push(c),
+                (None, None, Some(s)) => input_canvas_scales.push(s),
+                (None, None, None) => any_canvas_input = true,
             }
         }
 
@@ -603,6 +618,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             } else {
                 None
             };
+            let declared_cap = if output_port.ty.is_texture_2d() {
+                inst.node
+                    .output_canvas_max_dim(output_port.name.as_ref(), &inst.params)
+            } else {
+                None
+            };
             let dims = if output_port.ty.is_texture_2d() {
                 // CANVAS dims aren't known at compile time. We pass
                 // a sentinel (0, 0) here — primitives that need the
@@ -649,6 +670,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             //      `dims` above has already been set).
             let canvas_scale = if output_port.ty.is_texture_2d()
                 && dims.is_none()
+                && declared_cap.is_none()
             {
                 declared_scale
                     .or_else(|| {
@@ -660,6 +682,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                         if any_canvas_input
                             || input_canvas_scales.is_empty()
                             || !input_dims_scratch.is_empty()
+                            || !input_canvas_max_dims.is_empty()
                         {
                             None
                         } else {
@@ -676,8 +699,43 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             } else {
                 None
             };
+            let canvas_max_dim = if output_port.ty.is_texture_2d() && dims.is_none() {
+                if let Some(cap) = declared_cap {
+                    let input = if input_dims_scratch.is_empty()
+                        && !any_canvas_input
+                        && input_canvas_scales.len() == 1
+                        && input_canvas_max_dims.is_empty()
+                    {
+                        let (num, den) = input_canvas_scales[0];
+                        (num, den, cap)
+                    } else if input_dims_scratch.is_empty()
+                        && !any_canvas_input
+                        && input_canvas_max_dims.len() == 1
+                        && input_canvas_scales.is_empty()
+                    {
+                        let (num, den, prior_cap) = input_canvas_max_dims[0];
+                        (num, den, cap.min(prior_cap))
+                    } else {
+                        (1, 1, cap)
+                    };
+                    Some(input)
+                } else if declared_scale.is_none()
+                    && !any_canvas_input
+                    && input_dims_scratch.is_empty()
+                    && input_canvas_scales.is_empty()
+                    && !input_canvas_max_dims.is_empty()
+                    && input_canvas_max_dims.iter().all(|hint| *hint == input_canvas_max_dims[0])
+                {
+                    Some(input_canvas_max_dims[0])
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             resource_dims.push(dims);
             resource_canvas_scales.push(canvas_scale);
+            resource_canvas_max_dims.push(canvas_max_dim);
         }
     }
 
@@ -1007,6 +1065,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         mipmapped_resources,
         resource_dims,
         resource_canvas_scales,
+        resource_canvas_max_dims,
         requires,
         persistent_resources: persistent,
         held_resources: held,
@@ -1709,6 +1768,91 @@ mod tests {
              The old max-of-Some-only fallback silently picked quarter, \
              which caused oily-fluid's feedback blit to fault on dim mismatch."
         );
+    }
+
+    #[test]
+    fn blob_v2_canvas_max_dim_survives_group_source_and_blur() {
+        struct CapNode {
+            type_id: EffectNodeType,
+        }
+        impl crate::node_graph::EffectNode for CapNode {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                crate::node_graph::depth_rule::DepthRule::Inherit
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodePort] {
+                static INPUTS: [NodePort; 1] = [NodePort {
+                    name: std::borrow::Cow::Borrowed("in"),
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: true,
+                }];
+                &INPUTS
+            }
+            fn outputs(&self) -> &[NodePort] {
+                static OUTPUTS: [NodePort; 1] = [NodePort {
+                    name: std::borrow::Cow::Borrowed("out"),
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Output,
+                    required: false,
+                }];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+            fn output_canvas_max_dim(
+                &self,
+                port: &str,
+                _: &crate::node_graph::effect_node::ParamValues,
+            ) -> Option<u32> {
+                (port == "out").then_some(320)
+            }
+        }
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(TestNode::new(
+            "canvas",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let cap = graph.add_node(Box::new(CapNode {
+            type_id: EffectNodeType::new("cap"),
+        }));
+        let blur = graph.add_node(Box::new(TestNode::new(
+            "blur",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let sink = graph.add_node(Box::new(TestNode::new(
+            "sink",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        graph.connect((source, "out"), (cap, "in")).unwrap();
+        graph.connect((cap, "out"), (blur, "in")).unwrap();
+        graph.connect((blur, "out"), (sink, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        for node in [cap, blur] {
+            let resource = plan
+                .steps()
+                .iter()
+                .find(|step| step.node == node)
+                .unwrap()
+                .outputs[0]
+                .1;
+            assert_eq!(plan.resource_canvas_max_dim(resource), Some((1, 1, 320)));
+            assert_eq!(
+                crate::node_graph::execution::resolve_dims(&plan, resource, (1920, 1080)),
+                (320, 180)
+            );
+            assert_eq!(
+                crate::node_graph::execution::resolve_dims(&plan, resource, (160, 90)),
+                (160, 90)
+            );
+        }
     }
 
     /// `node.downsample`-style producer declares a canvas-relative

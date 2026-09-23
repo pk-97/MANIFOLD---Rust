@@ -38,9 +38,9 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 297 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 303 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
-### Color & Tone (16)
+### Color & Tone (17)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -58,6 +58,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | Levels | `node.levels` | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | Posterize | `node.posterize` | Filter | Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result. |
 | Reinhard Tone Map | `node.reinhard_tone_map` | Filter | A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node. |
+| RGB Distance | `node.rgb_distance` | Filter | Measures each pixel's Euclidean RGB distance from a scalar-bindable target colour. |
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
@@ -136,7 +137,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | — | `node.simplex_noise_2d` | Source | Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
-### Mask (8)
+### Mask (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -145,7 +146,9 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | CoC Dilate | `node.coc_dilate` | Map | Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a h… |
 | CoC From Depth | `node.coc_from_depth` | Map | Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens. |
 | Heightfield Shadow | `node.heightfield_shadow` | Map | Casts a soft screen-space shadow across a height map toward a light direction. Multiply it into a Lambert term for relief-lit terrain. |
+| Mask Extrema | `node.mask_extrema` | Filter | Expands or erodes a coverage mask along one image axis. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
+| Region Mask | `node.region_mask` | Filter | Turns observed tracked region labels into a pixel-accurate mask that preserves holes. |
 | SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
@@ -335,7 +338,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | Trigger Gate | `node.trigger_gate` | Control | Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off. |
 | Value | `node.value` | Source | Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside. |
 
-### Detection & Sampling (15)
+### Detection & Sampling (17)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -344,6 +347,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | Blob Tracker | `node.blob_tracker` | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
 | Color Sample | `node.color_sample` | Control | Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from. |
 | Depth Map | `node.depth_map` | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
+| Detect Regions | `node.detect_regions` | Filter | Finds filled regions and keeps their real pixel shapes for blob masks and tracking. |
 | Draw Connections | `node.draw_connections` | Filter | Draws dashed lines linking tracked objects that are near each other, with an optional dot at the middle of each link. |
 | Draw Dots | `node.draw_dots` | Filter | Draws a small glowing dot at the centre of every tracked object. |
 | Draw Gauge | `node.draw_gauge` | Filter | Draws a small readout bar under every tracked object that fills up as the object gets bigger. |
@@ -354,6 +358,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | Peak | `node.peak` | Control | Measures the brightest point in the image and outputs it as a single number. Reacts to the highlights rather than the overall brightness. |
 | Person Mask | `node.person_mask` | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
+| Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
 ### Math & Convert (20)
 
@@ -380,12 +385,13 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | Vector Length | `node.vector_length` | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
 | Wrap | `node.wrap` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 
-### Routing (9)
+### Routing (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Block Sample | `node.block_sample` | Filter | Pixelates an image at full resolution by repeating each block's centre sample. |
 | Downsample | `node.downsample` | Filter | Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look. |
+| Resize Limit | `node.resize_limit` | Filter | Bounds an image's longest side while preserving its proportions. |
 | Switch (array) | `node.switch_array` | Filter | Picks one of several incoming lists and passes it through, chosen by a selector number. |
 | Switch (texture) | `node.switch_texture` | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
 | Switch (value) | `node.switch_value` | Filter | Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live. |
@@ -427,7 +433,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (90)
+### Effect & generator presets (96)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -436,6 +442,9 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Stylize | 5 |
+| `BlobTrackingV2` | Blob Track V2 | effect | Stylize | 9 |
+| `BlobTrackingV2Colour` | Blob Track V2 — Colour | effect | Stylize | 12 |
+| `BlobTrackingV2Motion` | Blob Track V2 — Motion | effect | Stylize | 9 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
 | `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
@@ -484,6 +493,9 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
+| `MaskBlob` | Blob Mask | effect | Spatial | 12 |
+| `MaskBlobColour` | Blob Mask — Colour | effect | Spatial | 15 |
+| `MaskBlobMotion` | Blob Mask — Motion | effect | Spatial | 12 |
 | `MaskCircle` | Mask Circle | effect | Spatial | 8 |
 | `MaskGradient` | Mask Gradient | effect | Spatial | 6 |
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
@@ -620,6 +632,7 @@ Compose these for arbitrary procedural fields.
 | HDR Retention Mix | `node.hdr_retention_mix` | Preserve a reference texture's above-1.0 highlight energy through a compressed texture's gain adjustment |
 | Color LUT | `node.color_lut` | 1D LUT remap via luminance index |
 | Chroma Key | `node.chroma_key` | Per-pixel RGB-distance mask to a target colour |
+| RGB Distance | `node.rgb_distance` | Reuses the Chroma Key RGB-distance calculation with separate scalar red, green and blue controls, so preset bindings and modulation can drive the target without changing Chroma Key's Vec3 parameter ABI; compose with Smoothstep and Invert for a colour-selection mask. |
 | Chromatic Displace | `node.chromatic_displace` | Per-channel UV displacement by a vector field |
 | Tone Map | `node.tone_map` | HDR → SDR/PQ/EDR with ACES / AgX / Khronos Neutral curves |
 | Reinhard Tone Map | `node.reinhard_tone_map` | Extended Reinhard, SDR-only; bit-matches FluidSim display |

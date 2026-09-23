@@ -29,7 +29,10 @@ D1. A mask is an ordinary `PresetInstance` in the existing effect list. Add
 D2. Cmd+G wraps one or several selected effects in a **Modifier Group** using
    the existing EffectGroup model. Without a modifier, effects run normally.
    The header's **Add Modifier** picker offers Mask — Circle, Rectangle, Gradient,
-   Image and Layer; the ordinary mask card holds its controls inside the group.
+   Image, Layer, Blob, Blob Colour and Blob Motion; the ordinary mask card holds
+   its controls inside the group. The three Blob masks share the V2 region
+   detector/tracker, preserve connected-component pixels and holes, and expose
+   source-specific brightness, colour or motion controls.
    The picker anchors below its button. Layer sources include their timeline row
    number so duplicate names remain distinguishable.
    A bordered container surrounds each group, with a distinct header and inset
@@ -78,6 +81,11 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
   tests and layer clone tests enforce this.
 - Zero/full/partial coverage, group wet/dry and preserved alpha have GPU numerical
   proofs. Shape motion updates values without changing topology.
+- Blob mask coverage uses observed categorical labels; a retained unobserved
+  track never paints a box. Validity is applied after inversion, so a failed or
+  reset detector cannot turn an inverted mask fully on. `blob_v2_mask_pixels`,
+  `blob_v2_group_mask_ring_and_dry_input` and `blob_v2_invalid_inverted_mask_is_zero`
+  cover these paths. `inspector-blob-mask.json` covers picker and undo/redo routing.
 - Cross-layer reads use owned snapshots, published after master effects. Grouped
   children remain addressable. GPU tests cover target reuse and stale sources.
 - Snapshot storage is reused, and narrow dependency tracking is landed: only
