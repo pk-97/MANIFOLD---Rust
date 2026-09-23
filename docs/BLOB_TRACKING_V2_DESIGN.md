@@ -2,13 +2,13 @@
 
 <!-- index: Implementation contract for a new shape-preserving blob tracker and effect-group masks, retaining the original Blob Track. -->
 
-**Status:** PROPOSED · 2026-09-23 · Codex · Implementation has not started under this contract.
+**Status:** APPROVED · 2026-09-23 · Codex · Peter authorized overnight end-to-end implementation; implementation has not started under this contract.
 **Prerequisites:** existing effect-group masks, native BlobDetector bundle, and optical-flow primitive; recheck the audit before implementation.
-**Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 and current `AGENTS.md`; execute one phase per session. Current AGENTS rules take precedence over older workflow prose.
+**Execution contract:** Sol at Extra High owns one continuous overnight run through P1–P4, using native Luna lanes. Phases are bounded implementation/review/landing checkpoints, not reasons to end the task or await another prompt. Peter's end-to-end instruction overrides the earlier one-phase-per-session handoff and the design standard's fresh-session default. Read `DESIGN_DOC_STANDARD.md` sections 5–6 and current `AGENTS.md`; preserve their engineering and landing gates.
 
 Build a new Blob Track V2 effect and an organic Blob Mask modifier from the same region detector. Preserve the original Blob Track: Peter explicitly said, “it must be available please that was wrong.” This is a new effect, not a replacement or project migration. Peter's mask request was “a blob tracking mask modifier that you can feed effects into.” In the existing product this means adding a mask to an effect group, then putting effects inside that group.
 
-The constraints are frame-time cost, reusable buffers, predictable temporal state, and composable graphs. OpenCV stays. Rust owns scheduling and tracking; a new API in the existing native bundle will perform connected-component detection. This document is an implementation proposal, not evidence of measured speed or improved footage. Motion Mosh and Data Mosh belong to their separate workstream.
+The constraints are frame-time cost, reusable buffers, predictable temporal state, and composable graphs. OpenCV stays. Rust owns scheduling and tracking; a new API in the existing native bundle will perform connected-component detection. This document is an implementation contract, not evidence of measured speed or improved footage. Motion Mosh and Data Mosh belong to their separate workstream.
 
 Companions: [effect masks](EFFECT_MASKS_DESIGN.md) owns group routing and editing; [decomposition](DECOMPOSING_GENERATORS.md) and [adding primitives](ADDING_PRIMITIVES.md) own graph composition; [mosh](MOSH_EFFECTS_DESIGN.md) provides the shipped asynchronous-analysis precedent.
 
@@ -187,7 +187,7 @@ The following are **new test names to implement**, not existing passing checks. 
 
 Numerical assertions are the image oracle. Save representative source/mask/HUD/composite PNGs for human review; do not make a model's visual judgement the correctness oracle. Track quality claims require those fixtures and an observed render, not compilation alone.
 
-## 7. Phasing — four implementation sessions
+## 7. Phasing — four checkpoints in one overnight run
 
 Before each phase: `git status --short`, re-read its source anchors, inspect existing beads for this work, acquire a verified application slot using `scripts/agent-worktree.py` per `.claude/GIT_TREE_DISCIPLINE.md`, and read `.codex/README.md`. A moved anchor requires a short conflict report, not implementation from memory. Read back the binding decisions in a few sentences. No duplicate planning report is required.
 
@@ -227,7 +227,7 @@ Performance acceptance: one bounded warm run of 600 frames after 60 warmup frame
 
 Gesture/demo: choose Colour to isolate the coloured region, then Motion to isolate moving pixels; adjust relevant threshold live. Confirm all six presets resolve, every new mask menu item works and legacy stays available. Review one representative render per changed behaviour; do not repeat passed renders/checks without new evidence. Update this header and the existing effect-mask contract when implemented; record unresolved engineering/verification work in beads.
 
-Delegation: Sol owns design compliance, native/GPU seams, review and landing. Use at most two native Luna mechanical lanes after contracts are stable: fixture/test work and preset/menu wiring in disjoint files. Prepare briefs with `scripts/codex_prepare.py`; name ownership, exact checks and reuse targets. Do not assign detector and mask implementation concurrently before the label/track ABI lands. Workers neither delegate nor land.
+Delegation: Sol at Extra High is the orchestration agent and owns diagnosis, contracts, integration, review, validation and landing. Use native `gpt-5.6-luna` workers at high effort for bounded mechanical implementation after Sol fixes the shape. Keep two Luna lanes active when independent work exists; use a third only for a genuinely independent scope within the available slot limit. Parallelism is not a quota. Prepare briefs with `scripts/codex_prepare.py`; name exact file ownership, established findings, reuse targets, acceptance criteria and commands selected through `scripts/codex_checks.py`. Workers neither delegate nor land. Sol leaves owned lane files alone until return, reviews the edits, and integrates them. Do not parallelize dependent detector and mask work before the label/track ABI lands.
 
 ## 8. Decided — do not reopen
 
@@ -253,4 +253,29 @@ Delegation: Sol owns design compliance, native/GPU seams, review and landing. Us
 | Cross-layer/source-only detection UI and visibility rules | The existing effect-mask workstream lands that contract; reuse it then. |
 | Global detector deduplication or native-Rust replacement | Measurements establish a material bottleneck and a separately reviewed design beats the current pipeline. |
 
-Start prompt for Sol: “Read `docs/BLOB_TRACKING_V2_DESIGN.md` and the current repository instructions. Implement P1 only, verify its native and packaging contract, then land and release the slot. Keep the original Blob Track untouched. Report the exact checks, measured limits and any blocked acceptance criterion. Later sessions continue with the next uncompleted phase.”
+## 10. Overnight orchestration handoff
+
+Peter's instruction: “I want Sol to run this overnight end to end so I can use it tomorrow morning. Sol should use Luna lanes and Sol will be set to Extra High. Sol acts as the orchestration agent.”
+
+Execute P1 → P2 → P3 → P4 without asking permission between checkpoints. Keep the original task active across compaction; re-read this contract and actual landed state rather than restarting. A worker finishing is an integration checkpoint, not task completion. Do not stop after producing a plan, dispatching workers, compiling, landing P1, or leaving the feature solely in a worktree.
+
+Sol may resolve routine implementation details, stale symbol locations and source-backed contract corrections within the approved product scope; update this document and the corresponding assertions when correcting it. Preserve the legacy effect, composability, ownership, buffer discipline and acceptance requirements. Do not add deferred features, change the backend, introduce shared locks, or weaken failed checks to finish overnight. Respect the repository's failure/attempt budget: return a failing lane's evidence to Sol, stop speculative retries and continue any independent authorized work. A genuine blocker must be reported precisely, with verified work preserved under the slot lifecycle; never report an incomplete feature as ready.
+
+Suggested lane allocation after the relevant interfaces are fixed:
+
+| Checkpoint | Luna lane A | Luna lane B | Sol |
+|---|---|---|---|
+| P1 | Native component implementation | Rust wrapper and ABI/error fixtures | Define ABI; inspect native costs; packaging, review and landing |
+| P2 | Bounded tracker and CPU fixtures | Resize helper and its GPU proof | Analysis lifecycle, shared registration, V2 graph integration and observed render |
+| P3 | Mask raster/morphology under pinned ABI | Preset/menu/undo wiring | Group routing review, integration and mask acceptance |
+| P4 | RGB-distance primitive and fusion proof | Colour/motion preset data after helper contract is fixed | Motion lifecycle, performance evidence and final app delivery |
+
+Treat this table as ownership guidance, not permission to edit shared registration/test-module files concurrently. Sol owns shared files and merges the workers' required registrations. Assign fixture work within the lane owning the behaviour, and have Sol independently review the assertions. Workers use the same workstream slot with disjoint paths; they do not each acquire a slot or run simultaneous builds against the shared build lock.
+
+Completion means all six new presets are reachable in their intended surfaces, the original Blob Track remains usable, native packaging is current, the required behavioural/GPU/UI and focused Rust checks pass, performance evidence is recorded, and verified app changes are committed, landed and pushed. Finish the repository's normal build/delivery path for the runnable app Peter will launch; verify its revision and provide the exact launch command/path. A worktree-only binary or an old installed app is not completion. Release landed slots and properly retire unfinished inactive slots if blocked.
+
+Morning response: briefly state what is usable and where to find it, provide the exact launch command, link the observed demo artifacts and landed revision, and state any remaining limitation or failed gate plainly. Do not promise a completion time that has not been achieved.
+
+Copyable start prompt:
+
+> You are Sol, set to Extra High, acting as the orchestration agent. Read `docs/BLOB_TRACKING_V2_DESIGN.md` and current `AGENTS.md`. Implement the entire approved P1–P4 contract overnight, using native `gpt-5.6-luna` lanes at high effort for bounded work. You own design compliance, dependency ordering, integration, review, testing and landing. Continue automatically between phases and across compaction. Preserve original Blob Track and keep Motion/Data Mosh changes out of scope. Complete the required native packaging, GPU/UI/behavioural checks, performance measurements, app delivery and slot cleanup. Do not stop at a plan, a worker handoff or a partial implementation. Follow the failure budget and report genuine blockers accurately. Finish with the usable app's exact launch command, where to find the effects/masks, the landed revision and any remaining limitations.
