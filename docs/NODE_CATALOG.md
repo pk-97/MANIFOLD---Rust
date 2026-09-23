@@ -120,7 +120,7 @@ _Generated from the node registry. Do not hand-edit. 297 nodes registered, group
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
 | Render Glyph Grid | `node.render_glyph_grid` | Filter | Turns terminal cell codes into a full-resolution grayscale glyph mask. |
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
-| Terminal Stream | `node.terminal_stream` | Source | Contour-shaped shell, code and logs with source-driven typing and optional tmux panes. |
+| Terminal Stream | `node.terminal_stream` | Source | Image-reactive shell, code and logs with source-driven typing and optional tmux panes. |
 | Value Overlay | `node.value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 
 ### Noise (8)

@@ -279,7 +279,7 @@ mod gpu {
         .to_vec()
     }
 
-    // Demo-only curved silhouette: observe whether row contours shape text
+    // Demo-only curved silhouette: observe source-driven terminal updates
     // naturally while existing rectangular fixtures retain their proof scope.
     fn curved_source_frame(center: f32) -> Vec<u8> {
         let mut bytes = Vec::with_capacity((W * H * 8) as usize);
@@ -734,6 +734,111 @@ mod gpu {
         settled.unwrap_or_else(|| panic!("{label} did not settle within 64 quarter-beat frames"))
     }
 
+    /// Optional, bounded proof using externally supplied source frames. No
+    /// stock media is bundled or accessed by the normal test suite.
+    #[test]
+    fn code_terminal_stock_footage_reconstruction() {
+        let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_FOOTAGE_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let device = std::sync::Arc::new(GpuDevice::new());
+        let def = preset();
+        for clip in 1..=3 {
+            let (input, _) = fixture(&device);
+            let mut harness = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);
+            for frame in 0..24 {
+                let path = dir.join(format!("clip{clip}-{frame:02}.png"));
+                let image = image::open(&path).expect("supplied stock frame").to_rgba8();
+                assert_eq!(image.dimensions(), (W, H));
+                let mut source = Vec::with_capacity((W * H * 8) as usize);
+                for pixel in image.pixels() {
+                    let alpha = f32::from(pixel[3]) / 255.0;
+                    for &value in &pixel.0[..3] {
+                        let srgb = f32::from(value) / 255.0;
+                        let linear = if srgb <= 0.04045 {
+                            srgb / 12.92
+                        } else {
+                            ((srgb + 0.055) / 1.055).powf(2.4)
+                        };
+                        source.extend_from_slice(
+                            &f16::from_f32(linear * alpha).to_bits().to_ne_bytes(),
+                        );
+                    }
+                    source.extend_from_slice(&f16::from_f32(alpha).to_bits().to_ne_bytes());
+                }
+                let controls = Controls {
+                    text_size: 16.0,
+                    colour: 0.0,
+                    layout: if clip == 2 { 3.0 } else { 0.0 },
+                    detail_reactivity: 0.55,
+                    ..Controls::defaults()
+                };
+                let (full, _, _, _) = harness.render_with_source(
+                    &source,
+                    &def,
+                    controls,
+                    f64::from(frame) / 6.0,
+                    i64::from(frame),
+                );
+                harness.write_png(&dir.join(format!("full{clip}-{frame:02}.png")));
+                if frame == 0 {
+                    // Coarse image tones must survive independently of individual
+                    // glyph strokes. Compare mean luminance in 32px squares.
+                    let original = f32_pixels(&source);
+                    let reconstructed = f32_pixels(&full);
+                    let mut error = 0.0;
+                    let mut blocks = 0;
+                    for y in (0..H as usize - 32).step_by(32) {
+                        for x in (0..W as usize - 32).step_by(32) {
+                            let mut sums = [0.0; 2];
+                            for yy in y..y + 32 {
+                                for xx in x..x + 32 {
+                                    let index = yy * W as usize + xx;
+                                    for (sum, pixels) in
+                                        sums.iter_mut().zip([&original, &reconstructed])
+                                    {
+                                        let p = pixels[index];
+                                        *sum += p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722;
+                                    }
+                                }
+                            }
+                            error += (sums[0] - sums[1]).abs() / 1024.0;
+                            blocks += 1;
+                        }
+                    }
+                    assert!(
+                        error / (blocks as f32) < 0.045,
+                        "clip {clip} lost image tones: {}",
+                        error / blocks as f32
+                    );
+                    harness.render(
+                        &def,
+                        Controls {
+                            erosion: 0.5,
+                            ..controls
+                        },
+                        0.0,
+                        0,
+                    );
+                    harness.write_png(&dir.join(format!("half{clip}.png")));
+                    if clip == 1 {
+                        harness.render(
+                            &def,
+                            Controls {
+                                colour: 1.0,
+                                ..controls
+                            },
+                            0.0,
+                            0,
+                        );
+                        harness.write_png(&dir.join("green1.png"));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn code_terminal_bounded_acceptance_and_fusion_proof() {
         let device = std::sync::Arc::new(GpuDevice::new());
@@ -764,8 +869,8 @@ mod gpu {
         let dark = full_pixels.iter().filter(|p| p[1] < 0.002).count();
         let lit = full_pixels.iter().filter(|p| p[1] > 0.08).count();
         assert!(
-            dark > full_pixels.len() / 3 && lit > full_pixels.len() / 100,
-            "terminal must contain both black cell backgrounds and visible glyph ink"
+            dark > full_pixels.len() / 100 && lit > full_pixels.len() / 3,
+            "code dithering must retain dark marks and broad image illumination"
         );
         assert!(
             max_alpha_error(&source_raw, &full) < 0.001,
@@ -785,6 +890,27 @@ mod gpu {
         assert!(
             (0.02..0.98).contains(&mid_changed),
             "intermediate erosion keeps both source and terminal regions: {mid_changed:.3}"
+        );
+
+        // At partial erosion the choice is made once per character cell.
+        // Almost every pixel is wholly source or wholly reconstructed code;
+        // no cloudy feathering across the image is allowed.
+        let source_pixels = f32_pixels(&source_raw);
+        let mid_pixels = f32_pixels(&mid);
+        let mixed = mid_pixels
+            .iter()
+            .zip(&source_pixels)
+            .zip(&full_pixels)
+            .filter(|((m, a), b)| {
+                let difference = |p: &[f32; 4], q: &[f32; 4]| {
+                    (0..3).map(|c| (p[c] - q[c]).abs()).fold(0.0_f32, f32::max)
+                };
+                difference(m, a) > 0.002 && difference(m, b) > 0.002
+            })
+            .count();
+        assert!(
+            mixed < mid_pixels.len() / 50,
+            "erosion must replace crisp cells"
         );
 
         let frozen_a = unfused.render(
