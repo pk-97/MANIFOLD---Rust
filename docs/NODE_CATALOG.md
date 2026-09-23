@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 294 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 297 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -100,7 +100,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 
-### Generate (15)
+### Generate (18)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -111,13 +111,16 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | Draw Rectangles | `node.draw_rectangles` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
 | glTF Texture | `node.gltf_texture_source` | Source | Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other text… |
+| Glyph Atlas | `node.glyph_atlas` | Source | Provides the fixed ASCII coverage atlas used by terminal glyph rendering. |
 | Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | HDRI Source | `node.hdri_source` | Source | Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture… |
 | Image Folder | `node.image_folder` | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
 | Layer Source | `node.layer_source` | Source | Skins a scene object with another layer's output — wire it into emissive_map or base_color_map and pick the source layer; the model wears whatever that layer i… |
 | Lightning Bolt | `node.lightning_bolt` | Source | Grows a jagged lightning bolt with branches each time it is struck — thick at the trunk, hairline at the tips. Feed its points and edges into Draw Lines. |
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
+| Render Glyph Grid | `node.render_glyph_grid` | Filter | Turns terminal cell codes into a full-resolution grayscale glyph mask. |
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
+| Terminal Stream | `node.terminal_stream` | Source | Produces a beat-driven terminal feed with readable commands, logs, panes, and scrolling history. |
 | Value Overlay | `node.value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 
 ### Noise (8)
@@ -424,7 +427,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (89)
+### Effect & generator presets (90)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -437,6 +440,7 @@ _Generated from the node registry. Do not hand-edit. 294 nodes registered, group
 | `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
+| `CodeTerminal` | Code Terminal | effect | Stylize | 5 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
 | `ColorGrade` | Color Grade | effect | Color | 9 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
@@ -839,6 +843,9 @@ These wrap native plugins, CPU work, or background workers as primitives.
 | Render Value Overlay | `node.render_value_overlay` | Bitmap-font numeric labels at multiple positions (5×7 atlas; Index/Hex/Coord/Float3 format) — diagnostic HUDs |
 | Image Folder | `node.image_folder` | Scrub through a folder of images via a position scalar |
 | Render Text | `node.render_text` | CoreText glyph rasterizer wrapped as a primitive — composite a text string into the output with position / scale / aspect / alignment |
+| Terminal Stream | `node.terminal_stream` | Beat-driven shell commands and log output in a bounded character buffer; emits printable character codes plus grid dimensions. Activity zero holds the screen; rewind/reset restarts deterministically. |
+| Glyph Atlas | `node.glyph_atlas` | Cached Menlo character coverage atlas, built once with the existing CoreText rasterizer; no per-frame string rasterization. |
+| Render Glyph Grid | `node.render_glyph_grid` | Fusable character-buffer lookup into an atlas, producing a full-canvas coverage mask. Image shading, colour and compositing stay in downstream graph nodes. |
 | Auto Gain Apply | `node.auto_gain_apply` | GPU side of AutoGain — pairs with the CPU envelope follower |
 
 ### 3.19 WGSL escape hatch
@@ -872,6 +879,7 @@ The effect presets are listed in section 5.
 | ChromaticAberration | `radial_offset_field` + `math` → `chromatic_displace` → `mix` |
 | ColorCompass | 4× `color_sample` → `math` → `smoothing` → `affine_transform` — texture-to-scalar bridge closing the loop into image transform |
 | ColorGrade | `contrast` → `saturation` → `hue_saturation` → `colorize` → `gain` → `clamp_texture` → `mix` |
+| CodeTerminal | `terminal_stream` + `glyph_atlas` → `render_glyph_grid`; source/green/amber palette × glyph coverage, then luminance/noise-ordered erosion via `smoothstep` → `masked_mix`. |
 | DepthOfField | `depth_estimate_midas` / `box_mask` / `ellipse_mask` + CoC math → `gaussian_blur_variable_width` ×2 → `masked_mix` |
 | Dither | `dither_pattern` → `dither` |
 | EdgeGlow | `edge_detect` standalone |

@@ -1,0 +1,621 @@
+{
+  "version": 2,
+  "name": "CodeTerminal",
+  "description": "Coherent shell commands and logs type, pause and scroll in beat time. Footage illuminates the code; Erosion replaces image regions, Tonal Bias chooses shadows (-1) or highlights (+1) first, and Activity zero holds the terminal.",
+  "presetMetadata": {
+    "id": "CodeTerminal",
+    "displayName": "Code Terminal",
+    "category": "Stylize",
+    "oscPrefix": "code_terminal",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "erosion",
+        "name": "Erosion",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "text_size",
+        "name": "Text Size",
+        "min": 8.0,
+        "max": 48.0,
+        "defaultValue": 24.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "activity",
+        "name": "Activity",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "tonal_bias",
+        "name": "Tonal Bias",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "colour",
+        "name": "Colour",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "valueLabels": [
+          "Source",
+          "Green",
+          "Amber"
+        ]
+      }
+    ],
+    "bindings": [
+      {
+        "id": "erosion",
+        "label": "Erosion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "erosion_low",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "text_size",
+        "label": "Text Size",
+        "defaultValue": 24.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "terminal",
+          "param": "text_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "activity",
+        "label": "Activity",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "terminal",
+          "param": "activity"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tonal_bias",
+        "label": "Tonal Bias",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bias",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colour",
+        "label": "Colour",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "palette",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Source"
+    },
+    {
+      "id": 1,
+      "nodeId": "terminal",
+      "typeId": "node.terminal_stream",
+      "handle": "terminal",
+      "title": "Living Terminal",
+      "params": {
+        "text_size": {
+          "type": "Float",
+          "value": 24.0
+        },
+        "activity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "atlas",
+      "typeId": "node.glyph_atlas",
+      "handle": "atlas",
+      "title": "Monospace Glyphs"
+    },
+    {
+      "id": 3,
+      "nodeId": "glyphs",
+      "typeId": "node.render_glyph_grid",
+      "handle": "glyphs",
+      "title": "Terminal Screen"
+    },
+    {
+      "id": 4,
+      "nodeId": "green",
+      "typeId": "node.gradient_map",
+      "handle": "green",
+      "title": "Green Phosphor",
+      "params": {
+        "color_a": {
+          "type": "Color",
+          "value": [
+            0.001,
+            0.008,
+            0.002,
+            1.0
+          ]
+        },
+        "color_b": {
+          "type": "Color",
+          "value": [
+            0.24,
+            1.0,
+            0.48,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "amber",
+      "typeId": "node.gradient_map",
+      "handle": "amber",
+      "title": "Amber Phosphor",
+      "params": {
+        "color_a": {
+          "type": "Color",
+          "value": [
+            0.008,
+            0.003,
+            0.001,
+            1.0
+          ]
+        },
+        "color_b": {
+          "type": "Color",
+          "value": [
+            1.0,
+            0.55,
+            0.13,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "palette",
+      "typeId": "node.switch_texture",
+      "handle": "palette",
+      "title": "Colour",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "num_inputs": {
+          "type": "Int",
+          "value": 3
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "ink",
+      "typeId": "node.mix",
+      "handle": "ink",
+      "title": "Image Through Code",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 4
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "luma",
+      "typeId": "node.brightness",
+      "handle": "luma",
+      "title": "Image Brightness"
+    },
+    {
+      "id": 9,
+      "nodeId": "bounded_luma",
+      "typeId": "node.clamp",
+      "handle": "bounded_luma",
+      "title": "Bound Brightness"
+    },
+    {
+      "id": 10,
+      "nodeId": "inverse",
+      "typeId": "node.invert",
+      "handle": "inverse",
+      "title": "Shadows",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "bias",
+      "typeId": "node.scale_offset_value",
+      "handle": "bias",
+      "title": "Tonal Bias",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 12,
+      "nodeId": "tones",
+      "typeId": "node.mix",
+      "handle": "tones",
+      "title": "Erosion Order",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 13,
+      "nodeId": "noise",
+      "typeId": "node.noise",
+      "handle": "noise",
+      "title": "Erosion Patches",
+      "params": {
+        "type": {
+          "type": "Enum",
+          "value": 1
+        },
+        "scale": {
+          "type": "Float",
+          "value": 14.0
+        },
+        "octaves": {
+          "type": "Int",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 14,
+      "nodeId": "field",
+      "typeId": "node.mix",
+      "handle": "field",
+      "title": "Break Up Tones",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 15,
+      "nodeId": "bounded_field",
+      "typeId": "node.clamp",
+      "handle": "bounded_field",
+      "title": "Bound Erosion"
+    },
+    {
+      "id": 16,
+      "nodeId": "erosion_low",
+      "typeId": "node.scale_offset_value",
+      "handle": "erosion_low",
+      "title": "Erosion",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": -1.08
+        },
+        "offset": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 17,
+      "nodeId": "erosion_high",
+      "typeId": "node.scale_offset_value",
+      "handle": "erosion_high",
+      "title": "Erosion Edge",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.08
+        }
+      }
+    },
+    {
+      "id": 18,
+      "nodeId": "mask",
+      "typeId": "node.smoothstep",
+      "handle": "mask",
+      "title": "Code Erosion"
+    },
+    {
+      "id": 19,
+      "nodeId": "reveal",
+      "typeId": "node.masked_mix",
+      "handle": "reveal",
+      "title": "Replace With Terminal",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "canvas"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "cells",
+      "toNode": 3,
+      "toPort": "cells"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "columns",
+      "toNode": 3,
+      "toPort": "columns"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "rows",
+      "toNode": 3,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in_2"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "low"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "high"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "in"
+    }
+  ]
+}
