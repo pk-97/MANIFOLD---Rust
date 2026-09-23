@@ -1227,23 +1227,24 @@ fn element_to_array_type(
     // align=4 not naga's vec3-padded alignment of 16 — matches the
     // Rust-side layout convention every other primitive uses.
     //
-    // Bare scalar element (`array<f32>` — a per-vertex weights plane, the
-    // stock mesh deformers' `weights` port shape): a single-channel Array
-    // with f32's KnownItem signature, byte-identical to `ArrayType::
-    // of_known::<f32>()` so the introspected port wires against the typed
-    // producers/consumers. Only f32 is admitted — anything else falls to
-    // the unsupported-shape error below.
+    // Scalar channel planes use the same KnownItem signatures as their
+    // producers: floating-point weights and unsigned indices/character codes.
+    // Preserve the scalar kind; reinterpreting u32 codes as floats would make
+    // fused glyph rendering incompatible with the terminal stream buffer.
     if let naga::TypeInner::Scalar(scalar) = &element.inner {
-        if scalar.kind == naga::ScalarKind::Float && scalar.width == 4 {
-            return Ok(ArrayType {
-                item_size: 4,
-                item_align: 4,
-                specs: <f32 as crate::node_graph::ports::KnownItem>::SPECS,
-                match_mode: crate::node_graph::ports::MatchMode::Exact,
-            });
-        }
-        return Err("storage array scalar element is not f32".into());
+        let specs = match (scalar.kind, scalar.width) {
+            (naga::ScalarKind::Float, 4) => <f32 as crate::node_graph::ports::KnownItem>::SPECS,
+            (naga::ScalarKind::Uint, 4) => <u32 as crate::node_graph::ports::KnownItem>::SPECS,
+            _ => return Err("storage array scalar element is not f32 or u32".into()),
+        };
+        return Ok(ArrayType {
+            item_size: 4,
+            item_align: 4,
+            specs,
+            match_mode: crate::node_graph::ports::MatchMode::Exact,
+        });
     }
+
     let naga::TypeInner::Struct { span, members } = &element.inner else {
         return Err("storage array element is not a struct".into());
     };
@@ -3373,6 +3374,20 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             _ => panic!("expected Array port"),
         }
+    }
+
+    #[test]
+    fn unsigned_channel_buffer_preserves_uniforms_and_wire_signature() {
+        let parsed = introspect(r#"
+struct Params { columns: f32, _pad0: f32, _pad1: f32, _pad2: f32 };
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> codes: array<u32>;
+@compute @workgroup_size(64)
+fn cs_main() { _ = codes[0] + u32(params.columns); }
+"#).expect("unsigned character buffers introspect");
+        assert!(parsed.params.iter().any(|param| param.name == "columns"));
+        let codes = parsed.inputs.iter().find(|port| port.name == "codes").unwrap();
+        assert_eq!(codes.ty, PortType::Array(ArrayType::of_known::<u32>()));
     }
 
     #[test]

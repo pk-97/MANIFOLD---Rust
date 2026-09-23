@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "Code-shaped dithering reconstructs the source image in terminal text. Erosion replaces crisp character cells; Tonal Bias chooses highlights or shadows first. Source changes trigger local typing and brief data-character edits; still content settles. Layout selects Single or tmux-style panes. Activity zero holds the characters.",
+  "description": "The source image is drawn entirely with terminal glyphs on black. Source brightness controls character illumination and stroke weight; gaps and spaces never fill. Erosion replaces crisp character cells. Source changes trigger local typing and data-character edits, while still content settles. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -310,13 +310,17 @@
     {
       "id": 7,
       "nodeId": "ink",
-      "typeId": "node.dither",
+      "typeId": "node.mix",
       "handle": "ink",
-      "title": "Code Dither",
+      "title": "Text Only",
       "params": {
         "amount": {
           "type": "Float",
           "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 4
         }
       }
     },
@@ -499,6 +503,71 @@
           "value": 1.0
         }
       }
+    },
+    {
+      "id": 22,
+      "nodeId": "cell_light",
+      "typeId": "node.block_sample",
+      "handle": "cell_light",
+      "title": "Character Light",
+      "params": {
+        "block_size": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 23,
+      "nodeId": "weight_light",
+      "typeId": "node.power",
+      "handle": "weight_light",
+      "title": "Stroke Response",
+      "params": {
+        "exponent": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 24,
+      "nodeId": "bold_glyphs",
+      "typeId": "node.power",
+      "handle": "bold_glyphs",
+      "title": "Full Strokes",
+      "params": {
+        "exponent": {
+          "type": "Float",
+          "value": 0.35
+        }
+      }
+    },
+    {
+      "id": 25,
+      "nodeId": "weighted_glyphs",
+      "typeId": "node.masked_mix",
+      "handle": "weighted_glyphs",
+      "title": "Source Stroke Weight",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 26,
+      "nodeId": "text_light",
+      "typeId": "node.exposure",
+      "handle": "text_light",
+      "title": "Text Illumination",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 2.5
+        }
+      }
     }
   ],
   "wires": [
@@ -516,7 +585,7 @@
     },
     {
       "fromNode": 2,
-      "fromPort": "threshold",
+      "fromPort": "out",
       "toNode": 3,
       "toPort": "atlas"
     },
@@ -539,19 +608,19 @@
       "toPort": "rows"
     },
     {
-      "fromNode": 7,
+      "fromNode": 26,
       "fromPort": "out",
       "toNode": 4,
       "toPort": "source"
     },
     {
-      "fromNode": 7,
+      "fromNode": 26,
       "fromPort": "out",
       "toNode": 5,
       "toPort": "source"
     },
     {
-      "fromNode": 7,
+      "fromNode": 26,
       "fromPort": "out",
       "toNode": 6,
       "toPort": "in_0"
@@ -569,16 +638,16 @@
       "toPort": "in_2"
     },
     {
-      "fromNode": 0,
+      "fromNode": 6,
       "fromPort": "out",
       "toNode": 7,
-      "toPort": "in"
+      "toPort": "a"
     },
     {
-      "fromNode": 3,
+      "fromNode": 25,
       "fromPort": "out",
       "toNode": 7,
-      "toPort": "pattern"
+      "toPort": "b"
     },
     {
       "fromNode": 0,
@@ -665,7 +734,7 @@
       "toPort": "a"
     },
     {
-      "fromNode": 6,
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 19,
       "toPort": "b"
@@ -699,6 +768,60 @@
       "fromPort": "rows",
       "toNode": 21,
       "toPort": "rows"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "columns",
+      "toNode": 22,
+      "toPort": "columns"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "rows",
+      "toNode": 22,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 24,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 24,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 23,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "mask"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 26,
+      "toPort": "in"
     }
   ]
 }

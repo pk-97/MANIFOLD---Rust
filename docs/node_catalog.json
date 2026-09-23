@@ -5612,7 +5612,6 @@
       ],
       "category": "Color & Tone",
       "examples": [
-        "CodeTerminal",
         "Dither"
       ],
       "fusion": "multi_input_coincident",
@@ -7579,6 +7578,7 @@
       "examples": [
         "AutoGain",
         "BlobTrackingV2Motion",
+        "CodeTerminal",
         "ColorGrade",
         "Glitch",
         "HighlightBoost",
@@ -18471,6 +18471,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "CodeTerminal",
         "LED Shaped Pulse",
         "LED Strip Fire",
         "StarField"
