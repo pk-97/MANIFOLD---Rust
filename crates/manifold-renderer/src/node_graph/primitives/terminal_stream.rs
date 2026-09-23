@@ -9,6 +9,7 @@ use manifold_core::Beats;
 use std::borrow::Cow;
 
 use super::terminal_analysis::TerminalAnalysis;
+use super::terminal_detail::{DetailFrame, TerminalDetail};
 use super::terminal_reaction::ReactiveTerminal;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -52,13 +53,14 @@ fn grid_dimensions(width: u32, height: u32, text_size: f32) -> GridDimensions {
 crate::primitive! {
     name: TerminalStream,
     type_id: "node.terminal_stream",
-    purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+    purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Zero detail bypasses these edits; still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
     inputs: {
         canvas: Texture2D required,
         reaction: Texture2D optional,
         text_size: ScalarF32 optional,
         activity: ScalarF32 optional,
         layout: ScalarF32 optional,
+        detail_reactivity: ScalarF32 optional,
     },
     outputs: {
         cells: Channels[VALUE: U32],
@@ -66,6 +68,14 @@ crate::primitive! {
         rows: ScalarF32,
     },
     params: [
+        ParamDef {
+            name: Cow::Borrowed("detail_reactivity"),
+            label: "Detail Reactivity",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.55),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("text_size"),
             label: "Text Size",
@@ -92,7 +102,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "canvas supplies dimensions; optional reaction supplies the image. Layout selects Single (0), Vertical Split (1), Horizontal Split (2), or Four Panes (3). Single alternates eight-row vocabulary blocks; panes use shell, code, logs and inspection roles. Bright and dark contours shape line starts and word-boundary endings. Completed lines hold until their source profile changes; only changed spans are typed, prioritized by image change and bounded to three concurrent edits. No independent clock animation. A fixed 64×36 image analysis is read only after its GPU fence completes, normally one frame later. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
+    composition_notes: "canvas supplies dimensions; optional reaction supplies the image. Layout selects Single (0), Vertical Split (1), Horizontal Split (2), or Four Panes (3). Single alternates eight-row vocabulary blocks; panes use shell, code, logs and inspection roles. Bright and dark contours shape line starts and word-boundary endings. Completed lines hold until their source profile changes; only changed spans are typed, prioritized by image change and bounded to three concurrent edits. No independent clock animation. A single analysis dispatch produces 64×36 line measurements and 256×144 fine measurements, read only after its GPU fence completes, normally one frame later. Detail Reactivity (0..1, default 0.55) controls character density and change sensitivity. Digits, hex payloads and numeric punctuation cycle for at most 0.45 active beats after a local change, with a noise deadband; words, whitespace and pane borders remain intact. Activity zero freezes both layers. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
     examples: [],
     picker: { label: "Terminal Stream", category: Atom },
     summary: "Contour-shaped shell, code and logs with source-driven typing and optional tmux panes.",
@@ -103,6 +113,7 @@ crate::primitive! {
     extra_fields: {
         reactive: ReactiveTerminal = ReactiveTerminal::new(),
         analysis: TerminalAnalysis = TerminalAnalysis::new(),
+        detail: TerminalDetail = TerminalDetail::new(),
         reaction_connected: bool = false,
         reaction_ready: bool = false,
         reaction_beat: Option<Beats> = None,
@@ -125,6 +136,7 @@ impl Primitive for TerminalStream {
         };
         let text_size = ctx.scalar_or_param("text_size", DEFAULT_TEXT_SIZE);
         let activity = ctx.scalar_or_param("activity", 1.0);
+        let detail_reactivity = ctx.scalar_or_param("detail_reactivity", 0.55);
         let layout_default = match ctx.params.get("layout") {
             Some(ParamValue::Enum(value)) => *value as f32,
             _ => 0.0,
@@ -140,6 +152,7 @@ impl Primitive for TerminalStream {
             || self.reaction_beat.is_some_and(|previous| beat < previous)
         {
             self.reactive.reset();
+            self.detail.reset();
             self.analysis.reset();
             self.reaction_ready = false;
         }
@@ -152,6 +165,7 @@ impl Primitive for TerminalStream {
             // Activity zero must still hold the already visible cells.
             if !self.reaction_ready && self.analysis.has_samples() && activity > 0.0 {
                 self.reactive.reset();
+                self.detail.reset();
                 self.reaction_ready = true;
             }
             self.reactive.update(
@@ -172,7 +186,18 @@ impl Primitive for TerminalStream {
                 &super::terminal_reaction::EMPTY_SAMPLES,
             );
         }
-        let cells = self.reactive.cells();
+        let cells = self.detail.update(
+            self.reactive.cells(),
+            self.analysis.latest_detail_samples(),
+            DetailFrame {
+                columns: dimensions.columns as usize,
+                rows: dimensions.rows as usize,
+                layout,
+                beat,
+                activity,
+                amount: detail_reactivity,
+            },
+        );
 
         ctx.outputs
             .set_scalar("columns", ParamValue::Float(dimensions.columns as f32));
@@ -195,6 +220,7 @@ impl Primitive for TerminalStream {
     fn clear_state(&mut self) {
         self.reaction_ready = false;
         self.reactive.reset();
+        self.detail.reset();
         self.analysis.reset();
         self.reaction_beat = None;
     }
@@ -224,7 +250,7 @@ mod tests {
     fn declares_canvas_and_typed_cells_contract() {
         use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(TerminalStream::TYPE_ID, "node.terminal_stream");
-        assert_eq!(TerminalStream::INPUTS.len(), 5);
+        assert_eq!(TerminalStream::INPUTS.len(), 6);
         assert_eq!(TerminalStream::INPUTS[0].name, "canvas");
         assert!(TerminalStream::INPUTS[0].required);
         assert_eq!(TerminalStream::INPUTS[0].ty, PortType::Texture2D);
@@ -241,8 +267,8 @@ mod tests {
             PortType::Scalar(ScalarType::F32)
         );
         assert_eq!(TERMINAL_STREAM_CAPACITY, 86400);
-        assert_eq!(TerminalStream::PARAMS[2].default, ParamValue::Enum(0));
-        assert_eq!(TerminalStream::PARAMS[2].enum_values.len(), 4);
+        assert_eq!(TerminalStream::PARAMS[3].default, ParamValue::Enum(0));
+        assert_eq!(TerminalStream::PARAMS[3].enum_values.len(), 4);
     }
 
     #[test]

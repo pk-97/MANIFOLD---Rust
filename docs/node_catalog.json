@@ -25003,6 +25003,11 @@
           "name": "layout",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "detail_reactivity",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Terminal Stream",
@@ -25021,6 +25026,16 @@
         }
       ],
       "params": [
+        {
+          "default": "0.55",
+          "label": "Detail Reactivity",
+          "name": "detail_reactivity",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
         {
           "default": "18",
           "label": "Text Size",
@@ -25058,7 +25073,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Zero detail bypasses these edits; still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Contour-shaped shell, code and logs with source-driven typing and optional tmux panes.",
@@ -30267,6 +30282,13 @@
           "max": "3",
           "min": "0",
           "name": "Layout"
+        },
+        {
+          "default": "0.55",
+          "id": "detail_reactivity",
+          "max": "1",
+          "min": "0",
+          "name": "Detail Reactivity"
         }
       ]
     },

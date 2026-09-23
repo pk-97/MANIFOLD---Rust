@@ -103,17 +103,19 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
             ("erosion", 0.47),
             ("text_size", 31.0),
             ("activity", 2.0),
+            ("detail_reactivity", 0.73),
             ("tonal_bias", -0.35),
             ("colour", 2.0),
             ("layout", 2.0),
         ],
     );
     bound.apply(&mut graph, &values);
-    assert_eq!(bound.bindings.len(), 6, "every card control has a route");
+    assert_eq!(bound.bindings.len(), 7, "every card control has a route");
     for (node_id, param, expected) in [
         ("erosion_low", "a", 0.47),
         ("terminal", "text_size", 31.0),
         ("terminal", "activity", 2.0),
+        ("terminal", "detail_reactivity", 0.73),
         ("bias", "a", -0.35),
         ("palette", "selector", 2.0),
     ] {
@@ -227,6 +229,7 @@ mod gpu {
         tonal_bias: f32,
         colour: f32,
         layout: f32,
+        detail_reactivity: f32,
     }
 
     impl Controls {
@@ -238,10 +241,11 @@ mod gpu {
                 tonal_bias: 0.0,
                 colour: 1.0,
                 layout: 0.0,
+                detail_reactivity: 0.0, // Isolate existing line-scheduler proofs.
             }
         }
 
-        fn pairs(self) -> [(&'static str, f32); 6] {
+        fn pairs(self) -> [(&'static str, f32); 7] {
             [
                 ("erosion", self.erosion),
                 ("text_size", self.text_size),
@@ -249,6 +253,7 @@ mod gpu {
                 ("tonal_bias", self.tonal_bias),
                 ("colour", self.colour),
                 ("layout", self.layout),
+                ("detail_reactivity", self.detail_reactivity),
             ]
         }
     }
@@ -711,7 +716,7 @@ mod gpu {
                 harness.render_with_source(source, def, controls, frame as f64 * 0.25, frame);
             assert_terminal_cells(&cells, columns);
             if let Some(previous) = previous.as_ref() {
-                if frame >= 8 {
+                if frame >= 8 && controls.detail_reactivity == 0.0 {
                     assert_most_rows_stable(previous, &cells, columns, rows);
                 }
                 if previous == &cells {
@@ -904,7 +909,12 @@ mod gpu {
             }
             assert_meaningful_long_line(&cells, columns);
             if layout == 3.0 {
-                for label in [b"0: shell".as_slice(), b"1: code", b"2: logs", b"3: inspect"] {
+                for label in [
+                    b"0: shell".as_slice(),
+                    b"1: code",
+                    b"2: logs",
+                    b"3: inspect",
+                ] {
                     assert!(
                         cells.windows(label.len()).any(|window| window
                             .iter()
@@ -1085,14 +1095,18 @@ mod gpu {
         let mut fused = Harness::new(std::sync::Arc::clone(&device), &def, &input, true);
         let mut unfused_warm = Vec::new();
         let mut fused_warm = Vec::new();
+        let fine_controls = Controls {
+            detail_reactivity: 0.55,
+            ..Controls::defaults()
+        };
         for (frame, beat) in [(0_i64, 0.0), (1, 0.25), (2, 0.5)] {
             let source = source_frame(32 + frame as u32 * 96, H / 5);
             // Both harnesses point at the same source texture. Upload once
             // before the frame so their fenced analysis sees the same image
             // and beat timeline.
             fusion_unfused.upload_source(&source);
-            unfused_warm = fusion_unfused.render(&def, Controls::defaults(), beat, frame);
-            fused_warm = fused.render(&def, Controls::defaults(), beat, frame);
+            unfused_warm = fusion_unfused.render(&def, fine_controls, beat, frame);
+            fused_warm = fused.render(&def, fine_controls, beat, frame);
         }
         assert!(
             mean_abs(&unfused_warm, &fused_warm) < 0.001,
@@ -1110,6 +1124,100 @@ mod gpu {
             "fused and unfused terminal cells agree on the same source timeline"
         );
 
+        // Small changes below the line-profile threshold must still affect
+        // individual data characters, and zero detail must retain old cells.
+        let (fine_input, _) = fixture(&device);
+        let mut fine = Harness::new(std::sync::Arc::clone(&device), &def, &fine_input, false);
+        let mut bypass = Harness::new(std::sync::Arc::clone(&device), &def, &fine_input, false);
+        let plain: Vec<u8> = (0..W * H)
+            .flat_map(|_| {
+                [0.2, 0.2, 0.2, 1.0]
+                    .into_iter()
+                    .flat_map(|c| f16::from_f32(c).to_le_bytes())
+            })
+            .collect();
+        let fine_controls = Controls {
+            detail_reactivity: 1.0,
+            ..Controls::defaults()
+        };
+        let (initial, columns, _) =
+            settle_source(&mut fine, &plain, &def, fine_controls, "fine baseline");
+        settle_source(
+            &mut bypass,
+            &plain,
+            &def,
+            Controls::defaults(),
+            "bypass baseline",
+        );
+        let mut detail_source = plain.clone();
+        let numeric: Vec<_> = initial
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| (48..=57).contains(*c))
+            .take(24)
+            .map(|(i, _)| i)
+            .collect();
+        for index in numeric {
+            let cx = (index % columns) as u32 * W / columns as u32 + W / columns as u32 / 2;
+            let cy = (index / columns) as u32 * H / rows_a as u32 + H / rows_a as u32 / 2;
+            for y in cy.saturating_sub(3)..(cy + 4).min(H) {
+                for x in cx.saturating_sub(3)..(cx + 4).min(W) {
+                    for channel in 0..3 {
+                        let offset = ((y * W + x) * 8) as usize + channel * 2;
+                        detail_source[offset..offset + 2]
+                            .copy_from_slice(&f16::from_f32(0.27).to_le_bytes());
+                    }
+                }
+            }
+        }
+        let mut saw_detail = false;
+        let mut previous = initial.clone();
+        for frame in 32_i64..56 {
+            let (_, edited, _, _) = fine.render_with_source(
+                &detail_source,
+                &def,
+                fine_controls,
+                frame as f64 / 8.0,
+                frame,
+            );
+            let (_, unchanged, _, _) = bypass.render_with_source(
+                &detail_source,
+                &def,
+                Controls::defaults(),
+                frame as f64 / 8.0,
+                frame,
+            );
+            assert_eq!(
+                unchanged, initial,
+                "fine fixture does not trigger line typing"
+            );
+            saw_detail |= edited != unchanged;
+            for (&before, &after) in initial.iter().zip(&edited) {
+                if (before as u8).is_ascii_alphabetic() && !(97..=102).contains(&before) {
+                    assert_eq!(before, after, "command words remain intact");
+                }
+            }
+            if frame >= 48 {
+                assert_eq!(edited, previous, "fine edits settle on still source");
+            }
+            previous = edited;
+        }
+        assert!(
+            saw_detail,
+            "fine source detail changes actual terminal cells"
+        );
+        let (_, frozen, _, _) = fine.render_with_source(
+            &plain,
+            &def,
+            Controls {
+                activity: 0.0,
+                ..fine_controls
+            },
+            8.0,
+            64,
+        );
+        assert_eq!(frozen, previous, "Activity zero holds fine edits too");
+
         if let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_DEMO_DIR") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create terminal demo dir");
@@ -1121,6 +1229,7 @@ mod gpu {
                     Harness::new(std::sync::Arc::clone(&device), &def, &demo_input, false);
                 let controls = Controls {
                     text_size: 32.0,
+                    detail_reactivity: 0.55,
                     layout,
                     ..Controls::defaults()
                 };
