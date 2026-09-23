@@ -6,60 +6,7 @@ use super::groups::splice_card_with_canonical_fallback;
 use super::*;
 use crate::node_graph::{Backend, PortType};
 
-/// The retained CPU ancestry of every physics world. Historical sampling
-/// evaluates this closure only; GPU nodes and stateful upstream nodes cannot
-/// be replayed safely at a past transport time.
-pub(super) fn physics_sample_steps(
-    graph: &Graph,
-    plan: &ExecutionPlan,
-) -> Result<Option<Vec<bool>>, String> {
-    use std::collections::HashSet;
-
-    let mut pending: Vec<_> = graph
-        .nodes()
-        .filter(|node| node.node.type_id().as_str() == "node.physics_world")
-        .map(|node| node.id)
-        .collect();
-    if pending.is_empty() {
-        return Ok(None);
-    }
-    let mut ancestry = HashSet::new();
-    while let Some(node_id) = pending.pop() {
-        if !ancestry.insert(node_id) {
-            continue;
-        }
-        pending.extend(graph.wires_into(node_id).map(|wire| wire.from.0));
-    }
-    for node_id in &ancestry {
-        let node = graph.get_node(*node_id).expect("ancestry node exists");
-        let kind = node.node.type_id();
-        let type_id = kind.as_str();
-        let stateless_cpu = matches!(
-            type_id,
-            "node.physics_world"
-                | "node.rigid_body"
-                | "node.transform_3d"
-                | "node.lfo"
-                | "node.beat_ramp"
-                | "system.generator_input"
-                | "node.value"
-                | "node.math"
-                | "node.affine_scalar"
-        ) || node.node.is_pure();
-        let requires = node.node.requires();
-        if !stateless_cpu || requires.gpu_encoder || requires.state_store {
-            return Err(format!(
-                "Physics World cannot sample historical Animated motion through `{type_id}`; use stateless CPU controls before the rigid body"
-            ));
-        }
-    }
-    Ok(Some(
-        plan.steps()
-            .iter()
-            .map(|step| ancestry.contains(&step.node))
-            .collect(),
-    ))
-}
+pub(super) use super::physics_sampling::physics_sample_steps;
 
 pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
@@ -2070,71 +2017,6 @@ impl PresetRuntime {
             self.errors
                 .retain(|error| !matches!(error, ChainError::PreparedParameterChanged { .. }));
             false
-        }
-    }
-
-    /// Re-evaluate only stateless CPU producers feeding Physics World at a
-    /// stable 240 Hz wall-clock grid. Four authored samples per solver tick
-    /// preserve supported nonlinear LFO/beat motion independently of render
-    /// frame partitioning, including when preview still owes native ticks.
-    fn sample_physics_history(
-        &mut self,
-        current: FrameTime,
-        frame_context: Option<FrameContextInputs>,
-    ) {
-        let (Some(previous), Some(_)) = (
-            self.last_physics_frame_time,
-            self.physics_sample_steps.as_ref(),
-        ) else {
-            return;
-        };
-        let gap = current.seconds.0 - previous.seconds.0;
-        if gap <= 0.0 {
-            return;
-        }
-        // A long forward transport jump is a seek, not a physical sweep
-        // through minutes of omitted playback. Reset only the physics worlds;
-        // the rest of the graph keeps its own lifecycle.
-        if gap > 4.0 {
-            for node in self.graph.nodes_mut() {
-                if node.node.type_id().as_str() == "node.physics_world" {
-                    node.node.clear_state();
-                }
-            }
-            return;
-        }
-        const SAMPLE_RATE: f64 = 240.0;
-        let mut grid = (previous.seconds.0 * SAMPLE_RATE).floor() + 1.0;
-        let mut last_time = previous.seconds.0;
-        let _scope = crate::node_graph::physics::PhysicsAuthoredSampleScope::new();
-        while grid / SAMPLE_RATE < current.seconds.0 - 1.0e-9 {
-            let time = grid / SAMPLE_RATE;
-            let alpha = (time - previous.seconds.0) / gap;
-            let beat = previous.beats.0 + (current.beats.0 - previous.beats.0) * alpha;
-            let sample = FrameTime {
-                beats: Beats(beat),
-                seconds: Seconds(time),
-                delta: Seconds(time - last_time),
-                frame_count: current.frame_count,
-            };
-            if let Some(context) = frame_context {
-                self.set_frame_context(FrameContextInputs {
-                    time: time as f32,
-                    beat: beat as f32,
-                    ..context
-                });
-            }
-            self.executor.execute_physics_sample_frame(
-                &mut self.graph,
-                &self.plan,
-                sample,
-                self.physics_sample_steps.as_ref().expect("checked above"),
-            );
-            last_time = time;
-            grid += 1.0;
-        }
-        if let Some(context) = frame_context {
-            self.set_frame_context(context);
         }
     }
 

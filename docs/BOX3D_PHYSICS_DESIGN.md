@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: Physics Solids and Physics Boxes demos implemented and integration follow-ups verified, 2026-09-23. Original broader design approved 2026-07-09; general multi-set authoring, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and focused checks pass in the unlanded Box3D worktree, 2026-09-23; the required full GPU landing gate is blocked by the existing 4K cinematic-tail failure (BUG-8a3c). General multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -75,10 +75,10 @@ Physics Solids demo. The original larger design remains a roadmap.
   preview catch-up and export use the same authored path. GPU and stateful
   upstream dependencies reject generator loading with a named sampling error.
   Position and raw Euler angles interpolate between these fixed samples.
-  A forward time discontinuity over four seconds clears the physics world
-  rather than sweeping through the omitted interval; backward time and Reset
-  also rebuild. Paused Animated position/rotation edits and undo teleport only
-  the edited body (or copies) immediately, while owed historical ticks retain
+  Long forward frame gaps retain their full tick debt; a transport seek calls
+  the runtime state-reset path explicitly rather than guessing from gap size.
+  Backward time and Reset also rebuild. Paused Animated position/rotation edits
+  and undo teleport only the edited body (or copies) immediately, while owed historical ticks retain
   their prior trajectory. Arbitrary-time seek replay is not provided.
 - The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
@@ -110,8 +110,9 @@ Physics Solids demo. The original larger design remains a roadmap.
   the shared world and other bodies. Duplicate rejects that collection because
   the world has only one copies input and output. Nested physics ownership and
   malformed custom wiring reject visibly and atomically; nested nonphysical
-  scene objects remain editable. A scene without a physics world creates
-  intentional nonphysical objects through the ordinary Add Object path.
+  scene objects remain editable. The graph editor can wire an intentional
+  nonphysical Scene Object beside the shared Physics World; ordinary Add
+  Object creates a nonphysical object when the scene has no physics world.
   Duplicated auto scene bindings receive independent live controls immediately
   and carry inline parameter descriptors through save/load.
 
@@ -155,6 +156,7 @@ measured 256 copies at mean 0.052 ms, p95 0.064 ms; 4,000 copies at mean
 left no lag at 256 and 0.650 seconds at 4,000; physics CPU for the catch-up
 call was 2.968 ms and 17.392 ms respectively. This is a synthetic solver
 benchmark, excluding graph evaluation, GPU rendering, and other project work.
+Repeat with `cargo run --release -p manifold-renderer --example physics_benchmark`.
 Native solver allocations, multi-world contention and full show throughput
 remain unqualified. Do not infer a 16K-body capability from these demos.
 

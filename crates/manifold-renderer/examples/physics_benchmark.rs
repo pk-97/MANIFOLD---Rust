@@ -1,7 +1,8 @@
 //! Bounded CPU and preview backlog measurements for the bundled PhysicsBoxes scene.
 //!
-//! Run explicitly in release mode with `--ignored --nocapture`; this is not a
-//! correctness test and is intentionally excluded from the normal test suite.
+//! Run explicitly in release mode with
+//! `cargo run --release -p manifold-renderer --example physics_benchmark`.
+//! This measures solver cost rather than asserting a hardware-dependent bound.
 
 use std::collections::BTreeMap;
 
@@ -174,9 +175,7 @@ fn hitch_lag(count: usize) {
     );
 }
 
-#[test]
-#[ignore = "bounded local benchmark; run explicitly in release mode"]
-fn physics_boxes_cpu_and_preview_lag() {
+fn main() {
     eprintln!("PhysicsBoxes benchmark: 8 warmup + 8 measured ticks; hitch budget=16.667 ms");
     for count in [256, 4_000] {
         steady_samples(count);

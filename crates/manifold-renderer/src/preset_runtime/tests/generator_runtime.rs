@@ -176,47 +176,6 @@
         );
     }
 
-    #[test]
-    fn physics_history_mask_includes_nonlinear_lfo_and_excludes_rendering() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../assets/generator-presets/PhysicsSolids.json"
-        ))
-        .unwrap();
-        def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
-            "id": 500,
-            "nodeId": "animated_x",
-            "typeId": "node.lfo",
-            "params": {
-                "rate_mode": { "type": "Enum", "value": 1 },
-                "angular_rate": { "type": "Float", "value": 12.0 },
-                "min": { "type": "Float", "value": -2.0 },
-                "max": { "type": "Float", "value": 2.0 }
-            }
-        }));
-        def["wires"].as_array_mut().unwrap().push(serde_json::json!({
-            "fromNode": 500, "fromPort": "out", "toNode": 100, "toPort": "pos_x"
-        }));
-        let runtime = PresetRuntime::from_json_str(
-            &serde_json::to_string(&def).unwrap(),
-            &PrimitiveRegistry::with_builtin(),
-        )
-        .expect("PhysicsSolids with an LFO-authored body loads");
-        let mask = runtime.physics_sample_steps.as_ref().expect("physics ancestry");
-        let sampled: Vec<_> = runtime
-            .plan
-            .steps()
-            .iter()
-            .zip(mask)
-            .filter(|(_, enabled)| **enabled)
-            .map(|(step, _)| {
-                runtime.graph.get_node(step.node).unwrap().node.type_id().as_str().to_owned()
-            })
-            .collect();
-        assert!(sampled.iter().any(|kind| kind == "node.lfo"));
-        assert!(sampled.iter().any(|kind| kind == "node.physics_world"));
-        assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
-    }
-
     /// BUG-104 Part 5(b) — same synthetic pre-fix shape as
     /// `trigger_shadow_class_guard.rs`'s regression test, but exercised
     /// through the REAL build path (`PresetRuntime::from_def` via
