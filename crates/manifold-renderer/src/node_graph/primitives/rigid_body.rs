@@ -18,7 +18,7 @@ ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Fl
 ParamDef { name: Cow::Borrowed("bounce"), label: "Bounce", ty: ParamType::Float, default: ParamValue::Float(0.15), range: Some((0.0, 1.0)), enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Starting transform changes reposition that body; scale or shape changes rebuild the world. Dynamic bodies respond to gravity, Fixed bodies are static, Animated bodies follow the authored transform. Mesh radius must be 1; transform scale applies equally to visible mesh and collision hull.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Mesh radius must be 1; transform scale applies equally to visible mesh and collision hull.",
  examples: ["PhysicsSolids"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object mass, friction and bounce, then connect it to a Physics World.",

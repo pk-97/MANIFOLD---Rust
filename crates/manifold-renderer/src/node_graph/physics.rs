@@ -395,22 +395,30 @@ impl RigidSimulation {
         };
         let world = self.world.as_mut().expect("world constructed above");
         world.set_gravity(gravity).map_err(|e| e.to_string())?;
+        let target_time = Seconds(due_steps as f64 * TICK);
         for (i, body) in bodies.iter().enumerate() {
             let (Some(body), Some(handle)) = (body, self.handles[i]) else {
                 continue;
             };
             let old = self.descriptions[i];
             if old != Some(*body) {
-                let move_pose = old.is_none_or(|old| old.transform != body.transform);
+                let move_pose =
+                    body.kind != 2 && old.is_none_or(|old| old.transform != body.transform);
                 world
                     .update_body(handle, body.config(), move_pose)
+                    .map_err(|e| e.to_string())?;
+            }
+            if body.kind == 2 && steps > 0 {
+                world
+                    .set_animated_target(handle, body.config(), target_time)
                     .map_err(|e| e.to_string())?;
             }
         }
         if let Some(prototype) = prototype {
             let old = self.copy_description;
-            if old != Some(prototype) {
-                let move_pose = old.is_some_and(|old| old.transform != prototype.transform);
+            if old != Some(prototype) || (prototype.kind == 2 && steps > 0) {
+                let move_pose = prototype.kind != 2
+                    && old.is_some_and(|old| old.transform != prototype.transform);
                 for index in 0..self.active_copy_count {
                     let Some(handle) = self.copy_handles[index] else {
                         continue;
@@ -425,9 +433,16 @@ impl RigidSimulation {
                         self.latched_copy_spacing,
                         self.latched_copy_layout,
                     );
-                    world
-                        .update_body(handle, copy.config(), move_pose)
-                        .map_err(|e| e.to_string())?;
+                    if old != Some(prototype) {
+                        world
+                            .update_body(handle, copy.config(), move_pose)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    if prototype.kind == 2 && steps > 0 {
+                        world
+                            .set_animated_target(handle, copy.config(), target_time)
+                            .map_err(|e| e.to_string())?;
+                    }
                 }
             }
         }
@@ -694,6 +709,70 @@ mod tests {
             .advance(bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
             .unwrap();
         assert!(simulation.poses[0].pos[1] < authored[1] - 0.1);
+    }
+
+    #[test]
+    fn animated_body_pushes_a_dynamic_body_instead_of_teleporting_through_it() {
+        let mut bodies = [None; MAX_BODIES];
+        bodies[0] = Some(RigidBody {
+            kind: 2,
+            transform: Transform {
+                pos: [-1.3, 0.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[1] = Some(body([0.4, 0.0, 0.0]));
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+
+        for frame in 1..=30 {
+            bodies[0].as_mut().unwrap().transform.pos[0] = -1.3 + frame as f32 * 0.05;
+            simulation
+                .advance(bodies, [0.0; 3], Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .unwrap();
+        }
+
+        assert!(
+            simulation.poses[1].pos[0] > 0.6,
+            "moving collider failed to push body: {:?}",
+            simulation.poses[1].pos
+        );
+    }
+
+    #[test]
+    fn rotating_animated_body_contacts_a_dynamic_body() {
+        let mut bodies = [None; MAX_BODIES];
+        bodies[0] = Some(RigidBody {
+            kind: 2,
+            transform: Transform {
+                scale: [3.0, 0.3, 0.3],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let start = [1.0, 0.0, -1.0];
+        bodies[1] = Some(body(start));
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+
+        for frame in 1..=60 {
+            bodies[0].as_mut().unwrap().transform.rot_euler[1] =
+                frame as f32 * std::f32::consts::FRAC_PI_2 / 60.0;
+            simulation
+                .advance(bodies, [0.0; 3], Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .unwrap();
+        }
+
+        let result = simulation.poses[1].pos;
+        assert!(
+            (result[0] - start[0]).abs() + (result[2] - start[2]).abs() > 0.1,
+            "rotating collider missed body: {result:?}"
+        );
     }
 
     #[test]

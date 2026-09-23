@@ -73,8 +73,17 @@ Physics Solids demo. The original larger design remains a roadmap.
   simulation speed and Reset belong to World. Graph editing is optional wiring.
   Demo objects are root-scope; physics discovery through arbitrary nested groups
   and transform modifiers is deferred. The physics chain is not a splicable
-  transform-modifier stack. Animated motion currently sets authored kinematic poses;
-  velocity-driven moving-platform interaction is not part of this demo.
+  transform-modifier stack. Animated motion targets authored kinematic poses
+  through Box3D velocity over due fixed ticks, so moving bodies can impart
+  linear and angular motion through contact. Fixed and Dynamic starting-pose
+  edits still teleport. This does not guarantee contact with fast moving bodies;
+  the demo does not expose Box3D's per-body bullet option.
+  For the shipped root-level single-body chain, Duplicate and Remove Object
+  edit the authored transform, rigid body, mesh, material and render object as
+  one undoable unit, keeping the body slot and pose wire paired. Incoming
+  parameter modulation remains connected on duplicates. The Physics Boxes
+  instanced copies path uses a singleton world output; Duplicate and Remove
+  reject that object rather than making a partial edit.
 
 ### Physics Boxes demo
 
@@ -120,7 +129,7 @@ frame partition equivalence, pause/reset/property preservation, Metal upload par
 and a complete two-second graph render with initial/final images. The scene-panel
 flow covers body/world controls, speed edit/undo, and the Reset button. Physics-aware
 object duplication/removal remains tracked as `BUG-g3c3`; existing scene authoring
-commands do not yet own the shared solver body/pose relationship.
+  commands do not yet own the shared solver body/pose relationship.
 
 ## 1. Audit — what exists (verified 2026-07-07)
 
