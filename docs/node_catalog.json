@@ -24977,11 +24977,16 @@
       "examples": [
         "CodeTerminal"
       ],
-      "fusion": "boundary:non_gpu",
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "canvas",
           "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "reaction",
+          "required": false,
           "type": "Texture2D"
         },
         {
@@ -25032,10 +25037,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Emit a live terminal pane source as a bounded CPU-written Channels[VALUE: U32] array. The canvas dimensions determine a responsive grid (row height = text_size at reference 1080p, column width = 0.6 × row height); multiple roughly 60-column panes fill the width. A beat-delta accumulator drives coherent shell commands and logs with pauses, bursts, and upward scrolling. Activity 0 freezes the existing text, repeated beat values are idempotent, and rewinds reset the stream deterministically.",
+      "purpose": "Emit coherent terminal character codes. With reaction wired, local image brightness, contrast and change drive distributed typing, erasing, line growth and code rewrites. Without reaction, emit the original scrolling shell. Text Size controls the 1080p-reference grid; Activity zero freezes cells, repeated beats hold, and rewinds reset deterministically.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Produces a beat-driven terminal feed with readable commands, logs, panes, and scrolling history.",
+      "summary": "Types and rewrites readable code across the image, responding to local brightness and motion.",
       "type_id": "node.terminal_stream"
     },
     {

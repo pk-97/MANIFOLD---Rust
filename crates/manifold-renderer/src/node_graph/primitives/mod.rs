@@ -9,6 +9,8 @@
 mod abs_texture;
 mod glyph_atlas;
 mod render_glyph_grid;
+pub(crate) mod terminal_analysis;
+mod terminal_reaction;
 mod terminal_stream;
 mod audio_waveform;
 mod affine_transform;

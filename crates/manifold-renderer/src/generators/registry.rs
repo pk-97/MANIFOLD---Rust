@@ -93,6 +93,7 @@ impl GeneratorRegistry {
         // `wgsl_body`), so the atom sweep skips it.
         GltfTextureSource::prewarm_pipeline(device);
         crate::node_graph::primitives::physics_world::PhysicsWorldNode::prewarm_pipeline(device);
+        crate::node_graph::primitives::terminal_analysis::prewarm_pipeline(device);
         // `node.scatter_on_mesh` is a barriered three-pass scan/reduce; exempt
         // from the codegen path.
         ScatterOnMesh::prewarm_pipelines(device);

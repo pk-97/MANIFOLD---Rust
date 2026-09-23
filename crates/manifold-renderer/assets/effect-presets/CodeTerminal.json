@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "Coherent shell commands and logs type, pause and scroll in beat time. Footage illuminates the code; Erosion replaces image regions, Tonal Bias chooses shadows (-1) or highlights (+1) first, and Activity zero holds the terminal.",
+  "description": "The image drives living code: local brightness and motion grow, indent, erase and rewrite short terminal lines throughout the screen. Activity controls typing; zero holds the characters. Erosion controls replacement, with Source, Green or Amber ink.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -188,9 +188,9 @@
         "color_a": {
           "type": "Color",
           "value": [
-            0.001,
-            0.008,
-            0.002,
+            0.025,
+            0.2,
+            0.065,
             1.0
           ]
         },
@@ -215,9 +215,9 @@
         "color_a": {
           "type": "Color",
           "value": [
-            0.008,
-            0.003,
-            0.001,
+            0.2,
+            0.08,
+            0.015,
             1.0
           ]
         },
@@ -440,6 +440,23 @@
       "typeId": "system.final_output",
       "handle": "final_output",
       "title": "Output"
+    },
+    {
+      "id": 21,
+      "nodeId": "readable_source",
+      "typeId": "node.clamp",
+      "handle": "readable_source",
+      "title": "Readable Source Ink",
+      "params": {
+        "min": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "max": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
     }
   ],
   "wires": [
@@ -448,6 +465,12 @@
       "fromPort": "out",
       "toNode": 1,
       "toPort": "canvas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "reaction"
     },
     {
       "fromNode": 2,
@@ -486,7 +509,7 @@
       "toPort": "source"
     },
     {
-      "fromNode": 0,
+      "fromNode": 21,
       "fromPort": "out",
       "toNode": 6,
       "toPort": "in_0"
@@ -615,6 +638,12 @@
       "fromNode": 19,
       "fromPort": "out",
       "toNode": 20,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 21,
       "toPort": "in"
     }
   ]
