@@ -1,6 +1,7 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
 use manifold_core::Seconds;
 use manifold_physics::{BodyConfig, BodyHandle, BodyKind, PhysicsWorld};
+use std::collections::VecDeque;
 
 use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
@@ -78,6 +79,17 @@ pub struct RigidBody {
     pub bounce: f32,
 }
 
+/// An authored graph sample retained until all fixed ticks that can use it
+/// have been replayed. Between rendered samples, position and the raw Euler
+/// angles are interpolated linearly. This does not reconstruct nonlinear
+/// upstream animation between rendered samples.
+#[derive(Clone, Copy)]
+struct AuthoredPoseSample {
+    time: f64,
+    bodies: [Option<RigidBody>; MAX_BODIES],
+    prototype: Option<RigidBody>,
+}
+
 impl Default for RigidBody {
     fn default() -> Self {
         Self {
@@ -122,14 +134,19 @@ pub struct RigidSimulation {
     world: Option<PhysicsWorld>,
     handles: [Option<BodyHandle>; MAX_BODIES],
     descriptions: [Option<RigidBody>; MAX_BODIES],
+    bullet_enabled: [bool; MAX_BODIES],
     copy_handles: Vec<Option<BodyHandle>>,
     copy_description: Option<RigidBody>,
+    copy_bullet_enabled: Vec<bool>,
     latched_copy_count: usize,
     latched_copy_spacing: f32,
     latched_copy_columns: usize,
     latched_copy_layout: CopyLayout,
     last_time: Option<Seconds>,
     accumulator: f64,
+    authored_time: f64,
+    physics_time: f64,
+    authored_samples: VecDeque<AuthoredPoseSample>,
     reset_count: Option<f32>,
     pub poses: [Transform; MAX_BODIES],
     pub copy_poses: Vec<Transform>,
@@ -146,14 +163,19 @@ impl Default for RigidSimulation {
             world: None,
             handles: [None; MAX_BODIES],
             descriptions: [None; MAX_BODIES],
+            bullet_enabled: [false; MAX_BODIES],
             copy_handles: vec![None; MAX_COPIES],
             copy_description: None,
+            copy_bullet_enabled: vec![false; MAX_COPIES],
             latched_copy_count: 0,
             latched_copy_spacing: 1.25,
             latched_copy_columns: 16,
             latched_copy_layout: CopyLayout::Grid,
             last_time: None,
             accumulator: 0.0,
+            authored_time: 0.0,
+            physics_time: 0.0,
+            authored_samples: VecDeque::with_capacity(256),
             reset_count: None,
             poses: [Transform::default(); MAX_BODIES],
             copy_poses: vec![Transform::default(); MAX_COPIES],
@@ -370,7 +392,9 @@ impl RigidSimulation {
             }
             self.world = Some(world);
             self.handles = handles;
+            self.bullet_enabled.fill(false);
             self.copy_handles.fill(None);
+            self.copy_bullet_enabled.fill(false);
             self.copy_handles[..active_copy_count].copy_from_slice(&copy_handles);
             self.descriptions = bodies;
             self.copy_description = prototype;
@@ -381,10 +405,21 @@ impl RigidSimulation {
             self.latched_copy_layout = active_copy_layout;
             self.last_time = Some(now);
             self.accumulator = 0.0;
+            self.authored_time = 0.0;
+            self.physics_time = 0.0;
+            self.authored_samples.clear();
+            self.authored_samples.push_back(AuthoredPoseSample {
+                time: 0.0,
+                bodies,
+                prototype,
+            });
         }
         let elapsed = now.0 - self.last_time.unwrap_or(now).0;
         // Preserve all elapsed time. Preview can yield with ticks still queued.
-        let accumulated = self.accumulator + elapsed * f64::from(speed);
+        let elapsed_simulation = elapsed * f64::from(speed);
+        self.authored_time += elapsed_simulation;
+        self.record_authored_sample(self.authored_time, bodies, prototype);
+        let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = 1.0 / 60.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
         let preview_budget = PREVIEW_STEP_BUDGET.with(std::cell::Cell::get);
@@ -393,55 +428,51 @@ impl RigidSimulation {
         } else {
             due_steps
         };
-        let world = self.world.as_mut().expect("world constructed above");
-        world.set_gravity(gravity).map_err(|e| e.to_string())?;
-        let target_time = Seconds(due_steps as f64 * TICK);
-        for (i, body) in bodies.iter().enumerate() {
-            let (Some(body), Some(handle)) = (body, self.handles[i]) else {
-                continue;
-            };
-            let old = self.descriptions[i];
-            if old != Some(*body) {
-                let move_pose =
-                    body.kind != 2 && old.is_none_or(|old| old.transform != body.transform);
-                world
-                    .update_body(handle, body.config(), move_pose)
-                    .map_err(|e| e.to_string())?;
+        {
+            let world = self.world.as_mut().expect("world constructed above");
+            world.set_gravity(gravity).map_err(|e| e.to_string())?;
+            for (i, body) in bodies.iter().enumerate() {
+                let (Some(body), Some(handle)) = (body, self.handles[i]) else {
+                    continue;
+                };
+                let old = self.descriptions[i];
+                if old != Some(*body) {
+                    let move_pose =
+                        body.kind != 2 && old.is_none_or(|old| old.transform != body.transform);
+                    world
+                        .update_body(handle, body.config(), move_pose)
+                        .map_err(|e| e.to_string())?;
+                    if body.kind == 1 && old.is_some_and(|old| old.kind != 1) {
+                        world.set_bullet(handle, false).map_err(|e| e.to_string())?;
+                        self.bullet_enabled[i] = false;
+                    }
+                }
             }
-            if body.kind == 2 && steps > 0 {
-                world
-                    .set_animated_target(handle, body.config(), target_time)
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-        if let Some(prototype) = prototype {
-            let old = self.copy_description;
-            if old != Some(prototype) || (prototype.kind == 2 && steps > 0) {
-                let move_pose = prototype.kind != 2
-                    && old.is_some_and(|old| old.transform != prototype.transform);
-                for index in 0..self.active_copy_count {
-                    let Some(handle) = self.copy_handles[index] else {
-                        continue;
-                    };
-                    let mut copy = prototype;
-                    copy = copy_transform_for_layout(
-                        copy,
-                        prototype.transform.pos,
-                        index,
-                        self.active_copy_count,
-                        self.latched_copy_columns,
-                        self.latched_copy_spacing,
-                        self.latched_copy_layout,
-                    );
-                    if old != Some(prototype) {
+            if let Some(prototype) = prototype {
+                let old = self.copy_description;
+                if old != Some(prototype) {
+                    let move_pose = prototype.kind != 2
+                        && old.is_some_and(|old| old.transform != prototype.transform);
+                    for index in 0..self.active_copy_count {
+                        let Some(handle) = self.copy_handles[index] else {
+                            continue;
+                        };
+                        let copy = copy_transform_for_layout(
+                            prototype,
+                            prototype.transform.pos,
+                            index,
+                            self.active_copy_count,
+                            self.latched_copy_columns,
+                            self.latched_copy_spacing,
+                            self.latched_copy_layout,
+                        );
                         world
                             .update_body(handle, copy.config(), move_pose)
                             .map_err(|e| e.to_string())?;
-                    }
-                    if prototype.kind == 2 && steps > 0 {
-                        world
-                            .set_animated_target(handle, copy.config(), target_time)
-                            .map_err(|e| e.to_string())?;
+                        if prototype.kind == 1 && old.is_some_and(|old| old.kind != 1) {
+                            world.set_bullet(handle, false).map_err(|e| e.to_string())?;
+                            self.copy_bullet_enabled[index] = false;
+                        }
                     }
                 }
             }
@@ -449,14 +480,71 @@ impl RigidSimulation {
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for _ in 0..steps {
-            world.step(Seconds(TICK), 4).map_err(|e| e.to_string())?;
+            self.configure_fast_bodies(bodies, prototype, gravity, TICK)?;
+            let microsteps = self.animated_microsteps(bodies, prototype, TICK);
+            let microstep_time = TICK / microsteps as f64;
+            let solver_substeps = 4_u32.div_ceil(microsteps as u32);
+            for microstep in 1..=microsteps {
+                let target_time = self.physics_time + microstep_time * microstep as f64;
+                let mut targets = [None; MAX_BODIES];
+                for (i, body) in bodies.iter().enumerate() {
+                    let Some(body) = body else { continue };
+                    if body.kind == 2 {
+                        targets[i] = Some(
+                            self.interpolated_body(i, target_time, *body)
+                                .unwrap_or(*body),
+                        );
+                    }
+                }
+                let copy_target =
+                    prototype
+                        .filter(|prototype| prototype.kind == 2)
+                        .map(|prototype| {
+                            self.interpolated_prototype(target_time, prototype)
+                                .unwrap_or(prototype)
+                        });
+                let world = self.world.as_mut().expect("world constructed above");
+                for (i, target) in targets.into_iter().enumerate() {
+                    let Some(target) = target else { continue };
+                    let Some(handle) = self.handles[i] else {
+                        continue;
+                    };
+                    world
+                        .set_animated_target(handle, target.config(), Seconds(microstep_time))
+                        .map_err(|e| e.to_string())?;
+                }
+                if let Some(prototype) = copy_target {
+                    for index in 0..self.active_copy_count {
+                        let Some(handle) = self.copy_handles[index] else {
+                            continue;
+                        };
+                        let target = copy_transform_for_layout(
+                            prototype,
+                            prototype.transform.pos,
+                            index,
+                            self.active_copy_count,
+                            self.latched_copy_columns,
+                            self.latched_copy_spacing,
+                            self.latched_copy_layout,
+                        );
+                        world
+                            .set_animated_target(handle, target.config(), Seconds(microstep_time))
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                world
+                    .step(Seconds(microstep_time), solver_substeps)
+                    .map_err(|e| e.to_string())?;
+            }
             completed += 1;
+            self.physics_time += TICK;
             // A native tick cannot be preempted. Yield before starting another.
             if preview_budget.is_some_and(|budget| physics_start.elapsed() >= budget) {
                 break;
             }
         }
         self.pending_time = Seconds((due_steps - completed) as f64 * TICK);
+        self.prune_authored_samples();
         if self.pending_time.0 > 0.0
             && speed > 0.0
             && self
@@ -479,7 +567,12 @@ impl RigidSimulation {
                 self.poses[i] = Transform::default();
                 continue;
             };
-            let pose = world.pose(handle).map_err(|e| e.to_string())?;
+            let pose = self
+                .world
+                .as_ref()
+                .expect("world constructed above")
+                .pose(handle)
+                .map_err(|e| e.to_string())?;
             let rot_euler = super::primitives::quat_to_render_scene_euler(pose.rotation);
             self.poses[i] = Transform {
                 pos: pose.position,
@@ -493,7 +586,12 @@ impl RigidSimulation {
                 let Some(handle) = self.copy_handles[index] else {
                     continue;
                 };
-                let pose = world.pose(handle).map_err(|e| e.to_string())?;
+                let pose = self
+                    .world
+                    .as_ref()
+                    .expect("world constructed above")
+                    .pose(handle)
+                    .map_err(|e| e.to_string())?;
                 self.copy_poses[index] = Transform {
                     pos: pose.position,
                     rot_euler: super::primitives::quat_to_render_scene_euler(pose.rotation),
@@ -506,6 +604,253 @@ impl RigidSimulation {
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
         Ok(())
     }
+
+    fn record_authored_sample(
+        &mut self,
+        time: f64,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+    ) {
+        const EPSILON: f64 = 1.0e-12;
+        let same_time = self
+            .authored_samples
+            .back()
+            .is_some_and(|last| (last.time - time).abs() <= EPSILON);
+        if same_time {
+            if self
+                .authored_samples
+                .back()
+                .is_some_and(|last| last.bodies == bodies && last.prototype == prototype)
+            {
+                return;
+            }
+            let preserve_owed_endpoint = self.physics_time + EPSILON < time
+                && self.authored_samples.len() >= 2
+                && self
+                    .authored_samples
+                    .get(self.authored_samples.len() - 2)
+                    .is_some_and(|sample| sample.time < time - EPSILON);
+            if !preserve_owed_endpoint {
+                *self.authored_samples.back_mut().expect("sample exists") = AuthoredPoseSample {
+                    time,
+                    bodies,
+                    prototype,
+                };
+                return;
+            }
+        }
+        self.authored_samples.push_back(AuthoredPoseSample {
+            time,
+            bodies,
+            prototype,
+        });
+    }
+
+    fn configure_fast_bodies(
+        &mut self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        gravity: [f32; 3],
+        tick: f64,
+    ) -> Result<(), String> {
+        // Box3D skips bullet targets during the bullet pass. Keep slow bodies
+        // non-bullet so a fast body can still sweep against them.
+        let world = self.world.as_mut().expect("world constructed above");
+        for (index, body) in bodies.iter().enumerate() {
+            let (Some(body), Some(handle)) = (body, self.handles[index]) else {
+                continue;
+            };
+            if body.kind != 1 {
+                self.bullet_enabled[index] = false;
+                continue;
+            }
+            let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
+            let enabled = needs_bullet(*body, velocity, gravity, tick);
+            if self.bullet_enabled[index] != enabled {
+                world
+                    .set_bullet(handle, enabled)
+                    .map_err(|e| e.to_string())?;
+                self.bullet_enabled[index] = enabled;
+            }
+        }
+        if let Some(prototype) = prototype.filter(|body| body.kind == 1) {
+            for index in 0..self.active_copy_count {
+                let Some(handle) = self.copy_handles[index] else {
+                    continue;
+                };
+                let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
+                let enabled = needs_bullet(prototype, velocity, gravity, tick);
+                if self.copy_bullet_enabled[index] != enabled {
+                    world
+                        .set_bullet(handle, enabled)
+                        .map_err(|e| e.to_string())?;
+                    self.copy_bullet_enabled[index] = enabled;
+                }
+            }
+        } else {
+            self.copy_bullet_enabled[..self.active_copy_count].fill(false);
+        }
+        Ok(())
+    }
+
+    fn animated_microsteps(
+        &self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        tick: f64,
+    ) -> usize {
+        // Box3D bullet CCD does not sweep Animated motion. Smaller outer
+        // steps put fast moving/rotating colliders into contact with Dynamics.
+        const MAX_MICROSTEPS: usize = 8;
+        let dynamic_extent = bodies
+            .iter()
+            .flatten()
+            .filter(|body| body.kind == 1)
+            .map(|body| {
+                body.transform
+                    .scale
+                    .into_iter()
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .chain(
+                prototype
+                    .filter(|body| body.kind == 1 && self.active_copy_count > 0)
+                    .map(|body| {
+                        body.transform
+                            .scale
+                            .into_iter()
+                            .fold(f32::INFINITY, f32::min)
+                    }),
+            )
+            .fold(f32::INFINITY, f32::min);
+        if !dynamic_extent.is_finite() {
+            return 1;
+        }
+        let start_time = self.physics_time;
+        let end_time = start_time + tick;
+        let mut travel: f32 = 0.0;
+        for (index, body) in bodies.iter().enumerate() {
+            let Some(body) = *body else { continue };
+            if body.kind != 2 {
+                continue;
+            }
+            let start = self
+                .interpolated_body(index, start_time, body)
+                .unwrap_or(body);
+            let end = self
+                .interpolated_body(index, end_time, body)
+                .unwrap_or(body);
+            travel = travel.max(animated_sweep_distance(start, end));
+        }
+        if let Some(body) = prototype.filter(|body| body.kind == 2 && self.active_copy_count > 0) {
+            let start = self
+                .interpolated_prototype(start_time, body)
+                .unwrap_or(body);
+            let end = self.interpolated_prototype(end_time, body).unwrap_or(body);
+            travel = travel.max(animated_sweep_distance(start, end));
+        }
+        let safe_step = (dynamic_extent * 0.5).max(0.001);
+        (travel / safe_step)
+            .ceil()
+            .clamp(1.0, MAX_MICROSTEPS as f32) as usize
+    }
+
+    fn interpolated_body(
+        &self,
+        index: usize,
+        time: f64,
+        mut current: RigidBody,
+    ) -> Option<RigidBody> {
+        let mut previous = self.authored_samples.front()?.bodies[index]?;
+        let mut previous_time = self.authored_samples.front()?.time;
+        for sample in self.authored_samples.iter().skip(1) {
+            let next = sample.bodies[index]?;
+            if sample.time >= time {
+                let alpha = interpolation_alpha(previous_time, sample.time, time);
+                let pose = interpolate_body(previous, next, alpha).transform;
+                current.transform.pos = pose.pos;
+                current.transform.rot_euler = pose.rot_euler;
+                return Some(current);
+            }
+            previous = next;
+            previous_time = sample.time;
+        }
+        current.transform.pos = previous.transform.pos;
+        current.transform.rot_euler = previous.transform.rot_euler;
+        Some(current)
+    }
+
+    fn interpolated_prototype(&self, time: f64, mut current: RigidBody) -> Option<RigidBody> {
+        let first = self.authored_samples.front()?.prototype?;
+        let mut previous = first;
+        let mut previous_time = self.authored_samples.front()?.time;
+        for sample in self.authored_samples.iter().skip(1) {
+            let next = sample.prototype?;
+            if sample.time >= time {
+                let alpha = interpolation_alpha(previous_time, sample.time, time);
+                let pose = interpolate_body(previous, next, alpha).transform;
+                current.transform.pos = pose.pos;
+                current.transform.rot_euler = pose.rot_euler;
+                return Some(current);
+            }
+            previous = next;
+            previous_time = sample.time;
+        }
+        current.transform.pos = previous.transform.pos;
+        current.transform.rot_euler = previous.transform.rot_euler;
+        Some(current)
+    }
+
+    fn prune_authored_samples(&mut self) {
+        while self.authored_samples.len() > 1
+            && self.authored_samples[1].time <= self.physics_time + 1.0e-12
+        {
+            self.authored_samples.pop_front();
+        }
+    }
+}
+
+fn interpolation_alpha(previous_time: f64, next_time: f64, time: f64) -> f32 {
+    if next_time <= previous_time {
+        1.0
+    } else {
+        ((time - previous_time) / (next_time - previous_time)).clamp(0.0, 1.0) as f32
+    }
+}
+
+fn interpolate_body(mut previous: RigidBody, next: RigidBody, alpha: f32) -> RigidBody {
+    for axis in 0..3 {
+        previous.transform.pos[axis] = previous.transform.pos[axis]
+            + (next.transform.pos[axis] - previous.transform.pos[axis]) * alpha;
+        previous.transform.rot_euler[axis] = previous.transform.rot_euler[axis]
+            + (next.transform.rot_euler[axis] - previous.transform.rot_euler[axis]) * alpha;
+    }
+    previous
+}
+
+fn animated_sweep_distance(start: RigidBody, end: RigidBody) -> f32 {
+    let mut linear_squared = 0.0;
+    let mut angular = 0.0;
+    for axis in 0..3 {
+        let delta = end.transform.pos[axis] - start.transform.pos[axis];
+        linear_squared += delta * delta;
+        angular += (end.transform.rot_euler[axis] - start.transform.rot_euler[axis]).abs();
+    }
+    let radius = start.transform.scale.into_iter().fold(0.0, f32::max);
+    linear_squared.sqrt() + angular * radius
+}
+
+fn needs_bullet(body: RigidBody, velocity: [f32; 3], gravity: [f32; 3], tick: f64) -> bool {
+    let speed = velocity.into_iter().map(|v| v * v).sum::<f32>().sqrt();
+    let acceleration = gravity.into_iter().map(|v| v * v).sum::<f32>().sqrt();
+    let tick = tick as f32;
+    let predicted_travel = speed * tick + 0.5 * acceleration * tick * tick;
+    let extent = body
+        .transform
+        .scale
+        .into_iter()
+        .fold(f32::INFINITY, f32::min);
+    predicted_travel > extent * 0.5
 }
 
 fn validate_copy_prototype(prototype: RigidBody) -> Result<(), String> {
@@ -942,6 +1287,172 @@ mod tests {
         preview.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
         export.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
         assert_eq!(preview.poses, export.poses);
+    }
+
+    #[test]
+    fn animated_pose_timeline_matches_export_for_moving_and_rotating_contacts() {
+        let _preview_scope =
+            PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+
+        let mut moving = [None; MAX_BODIES];
+        moving[0] = Some(RigidBody {
+            kind: 2,
+            transform: Transform {
+                pos: [-1.3, 0.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        moving[1] = Some(body([0.4, 0.0, 0.0]));
+        let mut moving_preview = RigidSimulation::default();
+        let mut moving_export = RigidSimulation::default();
+        moving_preview
+            .advance(moving, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        moving_export
+            .advance(moving, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        moving[0].as_mut().unwrap().transform.pos[0] = -0.55;
+        moving_preview
+            .advance(moving, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        {
+            let _export_scope = PhysicsStepScope::for_render(true);
+            moving_export
+                .advance(moving, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+                .unwrap();
+        }
+        moving[0].as_mut().unwrap().transform.pos[0] = 0.2;
+        moving_preview
+            .advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+        {
+            let _export_scope = PhysicsStepScope::for_render(true);
+            moving_export
+                .advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .unwrap();
+        }
+        while moving_preview.pending_time.0 > 0.0 {
+            moving_preview
+                .advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .unwrap();
+        }
+        assert_eq!(moving_preview.poses, moving_export.poses);
+
+        let mut rotating = [None; MAX_BODIES];
+        rotating[0] = Some(RigidBody {
+            kind: 2,
+            transform: Transform {
+                scale: [3.0, 0.3, 0.3],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        rotating[1] = Some(body([1.0, 0.0, -1.0]));
+        let mut rotating_preview = RigidSimulation::default();
+        let mut rotating_export = RigidSimulation::default();
+        rotating_preview
+            .advance(rotating, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        rotating_export
+            .advance(rotating, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_4;
+        rotating_preview
+            .advance(rotating, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        {
+            let _export_scope = PhysicsStepScope::for_render(true);
+            rotating_export
+                .advance(rotating, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+                .unwrap();
+        }
+        rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_2;
+        rotating_preview
+            .advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+        {
+            let _export_scope = PhysicsStepScope::for_render(true);
+            rotating_export
+                .advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .unwrap();
+        }
+        while rotating_preview.pending_time.0 > 0.0 {
+            rotating_preview
+                .advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .unwrap();
+        }
+        assert_eq!(rotating_preview.poses, rotating_export.poses);
+    }
+
+    #[test]
+    fn paused_authored_edit_keeps_pose_sample_needed_by_preview_backlog() {
+        let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+        let mut bodies = [None; MAX_BODIES];
+        let mut animated = body([-2.0, 0.0, 0.0]);
+        animated.kind = 2;
+        bodies[0] = Some(animated);
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        bodies[0].as_mut().unwrap().transform.pos[0] = -0.5;
+        simulation
+            .advance(bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        bodies[0].as_mut().unwrap().transform.pos[0] = 2.0;
+        simulation
+            .advance(bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        let owed_pose = simulation
+            .interpolated_body(0, 0.25, bodies[0].unwrap())
+            .unwrap();
+        assert!((owed_pose.transform.pos[0] + 1.25).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn fast_animated_sweep_uses_outer_steps_to_reach_dynamic_body() {
+        let mut bodies = [None; MAX_BODIES];
+        let mut animated = body([-2.0, 0.0, 0.0]);
+        animated.kind = 2;
+        bodies[0] = Some(animated);
+        bodies[1] = Some(body([0.0, 0.0, 0.0]));
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        bodies[0].as_mut().unwrap().transform.pos[0] = 2.0;
+        simulation
+            .advance(bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+            .unwrap();
+        assert!(
+            simulation.poses[1]
+                .pos
+                .iter()
+                .any(|value| value.abs() > 0.01),
+            "fast animated body passed through the dynamic body"
+        );
+    }
+
+    #[test]
+    fn fast_dynamic_body_uses_bullet_collision_against_animated_body() {
+        let mut bodies = [None; MAX_BODIES];
+        bodies[0] = Some(body([0.0, 3.0, 0.0]));
+        let mut animated = body([0.0, 0.0, 0.0]);
+        animated.kind = 2;
+        bodies[1] = Some(animated);
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies, [0.0, -20_000.0, 0.0], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies, [0.0, -20_000.0, 0.0], Seconds(FRAME), 1.0, 0.0)
+            .unwrap();
+        assert!(
+            simulation.poses[0].pos[1] > 0.9,
+            "fast dynamic body passed through the animated body: {:?}",
+            simulation.poses[0].pos
+        );
     }
 
     #[test]

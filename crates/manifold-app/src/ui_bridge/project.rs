@@ -535,6 +535,14 @@ pub(super) fn dispatch_project(
                         "node.scene_object",
                     ),
                     default,
+                )
+                .with_physics_world(
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.rigid_body",
+                    ),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                        "node.pbr_material",
+                    ),
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(project);

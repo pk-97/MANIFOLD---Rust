@@ -50,6 +50,8 @@ mod ffi {
             restitution: f32,
             move_pose: i32,
         ) -> i32;
+        pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
+        pub fn manifold_box3d_body_linear_velocity(body: u64, velocity_out: *mut f32) -> i32;
         pub fn manifold_box3d_body_set_target(
             body: u64,
             px: f32,
@@ -296,6 +298,32 @@ impl PhysicsWorld {
         }
     }
 
+    /// Enable or disable continuous collision detection for a dynamic body.
+    pub fn set_bullet(&mut self, handle: BodyHandle, enabled: bool) -> Result<(), PhysicsError> {
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe { ffi::manifold_box3d_body_set_bullet(native, i32::from(enabled)) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Read a body's current linear velocity in world units per second.
+    pub fn linear_velocity(&self, handle: BodyHandle) -> Result<[f32; 3], PhysicsError> {
+        let native = self.native_body(handle)?;
+        let mut velocity = [0.0; 3];
+        let _lock = native_lock();
+        let result =
+            unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) };
+        if result == 0 {
+            Ok(velocity)
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
     /// Move an animated body through the solver over the supplied simulation time.
     /// This gives contacts the body's linear and angular velocity; `update_body`
     /// with `move_pose = true` is a teleport for direct edits and resets.
@@ -526,6 +554,190 @@ mod tests {
             .unwrap();
         let after = world.pose(handle).unwrap();
         assert_eq!(before.position, after.position);
+    }
+
+    #[test]
+    fn bullet_toggle_requires_dynamic_body_and_valid_handle() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        world.set_bullet(dynamic, true).unwrap();
+        world.set_bullet(dynamic, false).unwrap();
+        assert_eq!(world.linear_velocity(dynamic).unwrap(), [0.0; 3]);
+
+        let fixed = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            world.set_bullet(fixed, true),
+            Err(PhysicsError::NativeFailure)
+        );
+
+        let mut other_world = PhysicsWorld::new([0.0; 3]).unwrap();
+        assert_eq!(
+            other_world.set_bullet(dynamic, true),
+            Err(PhysicsError::InvalidHandle)
+        );
+        assert_eq!(
+            other_world.linear_velocity(dynamic),
+            Err(PhysicsError::InvalidHandle)
+        );
+    }
+
+    #[test]
+    fn fast_animated_to_dynamic_sweep_does_not_move_stationary_dynamic() {
+        fn run(bullet: bool) -> ([f32; 3], [f32; 3]) {
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            let animated = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        position: [-2.0, 0.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+            if bullet {
+                world.set_bullet(dynamic, true).unwrap();
+            }
+            world
+                .set_animated_target(
+                    animated,
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        position: [2.0, 0.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                    Seconds(1.0 / 60.0),
+                )
+                .unwrap();
+            world.step(Seconds(1.0 / 60.0), 4).unwrap();
+            (
+                world.pose(animated).unwrap().position,
+                world.pose(dynamic).unwrap().position,
+            )
+        }
+
+        let (animated_normal, dynamic_normal) = run(false);
+        let (animated_bullet, dynamic_bullet) = run(true);
+        assert_eq!(animated_normal, [2.0, 0.0, 0.0]);
+        assert_eq!(animated_bullet, [2.0, 0.0, 0.0]);
+        assert_eq!(dynamic_normal, [0.0, 0.0, 0.0]);
+        assert_eq!(dynamic_bullet, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn animated_sweep_reaches_contact_after_two_outer_ticks() {
+        fn run(microsteps: usize, bullet: bool) -> ([f32; 3], [f32; 3]) {
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            let animated = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        position: [-2.0, 0.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+            if bullet {
+                world.set_bullet(dynamic, true).unwrap();
+            }
+            let dt = Seconds(1.0 / (60.0 * microsteps as f64));
+            for i in 1..=microsteps {
+                let x = -2.0 + 4.0 * (i as f32 / microsteps as f32);
+                world
+                    .set_animated_target(
+                        animated,
+                        BodyConfig {
+                            kind: BodyKind::Animated,
+                            position: [x, 0.0, 0.0],
+                            ..BodyConfig::default()
+                        },
+                        dt,
+                    )
+                    .unwrap();
+                world.step(dt, 4).unwrap();
+            }
+            (
+                world.pose(animated).unwrap().position,
+                world.pose(dynamic).unwrap().position,
+            )
+        }
+
+        let (animated_one, dynamic_one) = run(1, false);
+        let (animated_two, dynamic_two) = run(2, false);
+        let (animated_two_bullet, dynamic_two_bullet) = run(2, true);
+        assert_eq!(animated_one, [2.0, 0.0, 0.0]);
+        assert_eq!(animated_two, [2.0, 0.0, 0.0]);
+        assert_eq!(animated_two_bullet, [2.0, 0.0, 0.0]);
+        assert_eq!(dynamic_one, [0.0, 0.0, 0.0]);
+        assert!(
+            dynamic_two[1] < -0.01,
+            "two outer ticks should produce contact response: {dynamic_two:?}"
+        );
+        for (normal, bullet) in dynamic_two.iter().zip(dynamic_two_bullet) {
+            assert!(
+                (normal - bullet).abs() < 1.0e-4,
+                "bullet changed the animated sweep response: {normal} vs {bullet}"
+            );
+        }
+    }
+
+    #[test]
+    fn bullet_stops_fast_dynamic_before_animated_collider() {
+        fn run(bullet: bool) -> ([f32; 3], [f32; 3]) {
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            let dynamic = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        position: [0.0, 3.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            let animated = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        kind: BodyKind::Animated,
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            if bullet {
+                world.set_bullet(dynamic, true).unwrap();
+            }
+            world.set_gravity([0.0, -20_000.0, 0.0]).unwrap();
+            world.step(Seconds(1.0 / 60.0), 4).unwrap();
+            (
+                world.pose(dynamic).unwrap().position,
+                world.pose(animated).unwrap().position,
+            )
+        }
+
+        let (dynamic_normal, animated_normal) = run(false);
+        let (dynamic_bullet, animated_bullet) = run(true);
+        assert!(
+            dynamic_normal[1] < 0.9,
+            "without bullet the dynamic was not stopped at contact: {dynamic_normal:?}"
+        );
+        assert!(
+            (0.9..1.1).contains(&dynamic_bullet[1]),
+            "bullet stopped at {dynamic_bullet:?}"
+        );
+        assert_eq!(animated_normal, [0.0, 0.0, 0.0]);
+        assert_eq!(animated_bullet, [0.0, 0.0, 0.0]);
     }
 
     #[test]

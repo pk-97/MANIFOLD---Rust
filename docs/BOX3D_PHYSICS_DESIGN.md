@@ -67,7 +67,11 @@ Physics Solids demo. The original larger design remains a roadmap.
   Zero simulation speed holds the backlog; a stationary transport can finish work
   already owed to its paused position. Reset/backward time clears the old backlog.
   Export drains all owed ticks with the same timestep and solver settings. A native
-  tick cannot be preempted. Arbitrary-time seek replay is not provided.
+  tick cannot be preempted. Animated authored poses are retained by simulation
+  time and interpolated for each fixed tick, including ticks owed by preview.
+  Position and raw Euler angles interpolate linearly between graph samples;
+  nonlinear upstream animation is not reevaluated at historical tick times.
+  Arbitrary-time seek replay is not provided.
 - The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.
@@ -77,13 +81,21 @@ Physics Solids demo. The original larger design remains a roadmap.
   through Box3D velocity over due fixed ticks, so moving bodies can impart
   linear and angular motion through contact. Fixed and Dynamic starting-pose
   edits still teleport. This does not guarantee contact with fast moving bodies;
-  the demo does not expose Box3D's per-body bullet option.
+  the demo does not expose Box3D's per-body bullet option. The runtime enables
+  bullet handling automatically for Dynamic bodies whose current speed and
+  gravity predict movement over half their smallest scale in one fixed tick.
+  Fast Animated movement is split into up to eight equal outer Box3D steps
+  based on travel and angular sweep relative to Dynamic collider size. Extreme
+  sweeps beyond that cap and two fast bullet bodies can still miss each other.
   For the shipped root-level single-body chain, Duplicate and Remove Object
   edit the authored transform, rigid body, mesh, material and render object as
   one undoable unit, keeping the body slot and pose wire paired. Incoming
-  parameter modulation remains connected on duplicates. The Physics Boxes
-  instanced copies path uses a singleton world output; Duplicate and Remove
-  reject that object rather than making a partial edit.
+  parameter modulation remains connected on duplicates. Add Object in a root
+  scene with one Physics World creates the same linked chain as a loose Dynamic cube
+  starting at Y=2; a full world rejects the edit. Remove Object treats the
+  Physics Boxes instanced copies chain as one owned collection and preserves
+  the shared world and other bodies. Duplicate rejects that collection because
+  the world has only one copies input and output.
 
 ### Physics Boxes demo
 
@@ -128,8 +140,8 @@ Validation: native ownership/input tests, all five scaled hulls settling, fixed-
 frame partition equivalence, pause/reset/property preservation, Metal upload parity,
 and a complete two-second graph render with initial/final images. The scene-panel
 flow covers body/world controls, speed edit/undo, and the Reset button. Physics-aware
-object duplication/removal remains tracked as `BUG-g3c3`; existing scene authoring
-  commands do not yet own the shared solver body/pose relationship.
+object add, duplication and removal are covered for the shipped root-level chains;
+arbitrary graph shapes and nested scene-panel discovery remain outside that contract.
 
 ## 1. Audit — what exists (verified 2026-07-07)
 

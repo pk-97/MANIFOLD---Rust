@@ -184,6 +184,30 @@ int manifold_box3d_body_update(
 	return BOX3D_BRIDGE_OK;
 }
 
+int manifold_box3d_body_set_bullet( uint64_t body_value, int enabled )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( b3Body_GetType( body_id ) != b3_dynamicBody )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3Body_SetBullet( body_id, enabled != 0 );
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_linear_velocity( uint64_t body_value, float* velocity_out )
+{
+	if ( velocity_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3Vec3 velocity = b3Body_GetLinearVelocity( b3LoadBodyId( body_value ) );
+	velocity_out[0] = velocity.x;
+	velocity_out[1] = velocity.y;
+	velocity_out[2] = velocity.z;
+	return BOX3D_BRIDGE_OK;
+}
+
 int manifold_box3d_body_set_target(
 	uint64_t body_value,
 	float px,
