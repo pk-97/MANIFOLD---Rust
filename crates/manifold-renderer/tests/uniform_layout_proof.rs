@@ -489,6 +489,8 @@ const NON_STANDALONE: &[&str] = &[
     "node.range",
     "node.repeat_outline",
     "node.switch_array",
+    // CPU terminal cells are uploaded directly; there is no GPU uniform ABI.
+    "node.terminal_stream",
     "node.track_persist",
     // Custom GPU kernels, reduction/FFI or seed-stage layouts (not codegen Params).
     "node.blob_tracker",
