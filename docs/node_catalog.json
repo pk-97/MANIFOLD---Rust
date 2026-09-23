@@ -25058,10 +25058,10 @@
           "type": "enum"
         }
       ],
-      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Spatial image profiles and edges select changed passages for typing, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Long terminal lines with selective source-driven updates and optional tmux pane layouts.",
+      "summary": "Contour-shaped shell, code and logs with source-driven typing and optional tmux panes.",
       "type_id": "node.terminal_stream"
     },
     {

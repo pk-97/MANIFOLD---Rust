@@ -12,6 +12,7 @@ mod render_glyph_grid;
 pub(crate) mod terminal_analysis;
 mod terminal_reaction;
 mod terminal_stream;
+mod terminal_vocabulary;
 mod audio_waveform;
 mod affine_transform;
 mod atmosphere;

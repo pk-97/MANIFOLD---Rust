@@ -52,7 +52,7 @@ fn grid_dimensions(width: u32, height: u32, text_size: f32) -> GridDimensions {
 crate::primitive! {
     name: TerminalStream,
     type_id: "node.terminal_stream",
-    purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Spatial image profiles and edges select changed passages for typing, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+    purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image contours shape indentation and line endings; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
     inputs: {
         canvas: Texture2D required,
         reaction: Texture2D optional,
@@ -92,10 +92,10 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "canvas supplies dimensions; optional reaction supplies the image. Layout selects Single (0), Vertical Split (1), Horizontal Split (2), or Four Panes (3). Completed lines hold until their source profile changes; only changed spans are typed, prioritized by image change and bounded to three concurrent edits. No independent clock animation. A fixed 64×36 image analysis is read only after its GPU fence completes, normally one frame later. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
+    composition_notes: "canvas supplies dimensions; optional reaction supplies the image. Layout selects Single (0), Vertical Split (1), Horizontal Split (2), or Four Panes (3). Single alternates eight-row vocabulary blocks; panes use shell, code, logs and inspection roles. Bright and dark contours shape line starts and word-boundary endings. Completed lines hold until their source profile changes; only changed spans are typed, prioritized by image change and bounded to three concurrent edits. No independent clock animation. A fixed 64×36 image analysis is read only after its GPU fence completes, normally one frame later. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
     examples: [],
     picker: { label: "Terminal Stream", category: Atom },
-    summary: "Long terminal lines with selective source-driven updates and optional tmux pane layouts.",
+    summary: "Contour-shaped shell, code and logs with source-driven typing and optional tmux panes.",
     category: Generate,
     role: Source,
     aliases: ["terminal", "live terminal", "shell stream", "console source"],

@@ -2,6 +2,8 @@
 //! scheduler types only changed spans when the image's spatial profile changes.
 use manifold_core::Beats;
 
+use super::terminal_vocabulary::{Context, Role, write_line};
+
 pub(super) const SAMPLE_COLS: usize = 64;
 pub(super) const SAMPLE_ROWS: usize = 36;
 pub(super) const SAMPLE_COUNT: usize = SAMPLE_COLS * SAMPLE_ROWS;
@@ -26,8 +28,9 @@ struct Region {
 struct Features {
     light: f32,
     edge: f32,
-    center: f32,
-    span: f32,
+    left: f32,
+    right: f32,
+    signature: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -133,7 +136,12 @@ impl ReactiveTerminal {
             for line in &mut self.lines[..self.line_count] {
                 observe(line, columns, rows, samples);
                 line.reference = line.latest;
-                make_line(&mut line.shown, line.region, line.features);
+                make_line(
+                    &mut line.shown,
+                    line.region,
+                    line.features,
+                    role_for(self.layout, line.region),
+                );
             }
             self.render();
             return;
@@ -156,7 +164,8 @@ impl ReactiveTerminal {
             if line.active {
                 // Only the changed span advances. Existing text outside it
                 // remains intact, including completed neighbouring lines.
-                let exact = line.phase + delta * activity * 64.0;
+                let (chars_per_beat, cooldown) = rhythm(role_for(self.layout, line.region));
+                let exact = line.phase + delta * activity * chars_per_beat;
                 let steps = (exact.floor() as usize).min(MAX_COLS);
                 line.phase = exact.fract();
                 let end = (line.cursor + steps).min(line.end);
@@ -165,7 +174,7 @@ impl ReactiveTerminal {
                 if end == line.end {
                     line.active = false;
                     line.phase = 0.0;
-                    line.eligible_at = self.clock + 0.5 / activity;
+                    line.eligible_at = self.clock + cooldown / activity;
                 } else {
                     active += 1;
                 }
@@ -174,21 +183,34 @@ impl ReactiveTerminal {
         // Source salience wins; aging prevents a quieter changed line from
         // starving behind a continuously moving foreground. No idle jobs.
         if active < MAX_ACTIVE && self.clock >= self.next_start {
-            let candidate = self.lines[..self.line_count]
-                .iter()
-                .enumerate()
-                .filter(|(_, line)| {
-                    !line.active && line.score >= CHANGE_THRESHOLD && self.clock >= line.eligible_at
-                })
-                .max_by(|(_, a), (_, b)| {
-                    let priority =
-                        |line: &Line| line.score + ((self.clock - line.changed_at) * 0.002) as f32;
-                    priority(a).total_cmp(&priority(b))
-                })
-                .map(|(index, _)| index);
-            if let Some(index) = candidate {
+            // Skip changed measurements whose visible statement is unchanged,
+            // so static commands/braces cannot stall useful queued edits.
+            for _ in 0..self.line_count {
+                let candidate = self.lines[..self.line_count]
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| {
+                        !line.active
+                            && line.score >= CHANGE_THRESHOLD
+                            && self.clock >= line.eligible_at
+                    })
+                    .max_by(|(_, a), (_, b)| {
+                        let priority = |line: &Line| {
+                            line.score + ((self.clock - line.changed_at) * 0.002) as f32
+                        };
+                        priority(a).total_cmp(&priority(b))
+                    })
+                    .map(|(index, _)| index);
+                let Some(index) = candidate else {
+                    break;
+                };
                 let line = &mut self.lines[index];
-                make_line(&mut line.target, line.region, line.features);
+                make_line(
+                    &mut line.target,
+                    line.region,
+                    line.features,
+                    role_for(self.layout, line.region),
+                );
                 let width = line.region.width;
                 let first = (0..width).find(|&x| line.shown[x] != line.target[x]);
                 line.reference = line.latest;
@@ -202,6 +224,7 @@ impl ReactiveTerminal {
                     line.active = true;
                     line.phase = 0.0;
                     self.next_start = self.clock + 0.18 / activity;
+                    break;
                 }
             }
         }
@@ -289,7 +312,7 @@ impl ReactiveTerminal {
                     });
                 }
             }
-            let headers: [&[u8]; 4] = [b" 0: shell ", b" 1: trace ", b" 2: edges ", b" 3: source "];
+            let headers: [&[u8]; 4] = [b" 0: shell ", b" 1: code ", b" 2: logs ", b" 3: inspect "];
             for line in &self.lines[..self.line_count] {
                 if line.region.row == 0 {
                     let region = line.region;
@@ -347,34 +370,64 @@ fn luma(sample: [f32; 4]) -> f32 {
 }
 
 fn features(profile: &Profile) -> Features {
+    // Use the more widely supported border colour as background. Averaging
+    // opposite borders invents a midtone when a silhouette touches one edge,
+    // causing both background and foreground to be classified as structure.
+    let border_mean = |samples: &[[f32; 4]]| {
+        samples.iter().map(|&sample| luma(sample)).sum::<f32>() / samples.len() as f32
+    };
+    let left_background = border_mean(&profile[..4]);
+    let right_background = border_mean(&profile[SAMPLE_COLS - 4..]);
+    let support = |candidate: f32| {
+        profile
+            .iter()
+            .filter(|&&sample| (luma(sample) - candidate).abs() < 0.06)
+            .count()
+    };
+    let background = if (left_background - right_background).abs() < 0.04 {
+        (left_background + right_background) * 0.5
+    } else if support(right_background) > support(left_background) {
+        right_background
+    } else {
+        left_background
+    };
     let mut light = 0.0_f32;
     let mut edge = 0.0_f32;
-    let mut weight = 0.0_f32;
-    let mut moment = 0.0_f32;
     let mut peak = 0.0_f32;
+    let mut signal = [0.0_f32; SAMPLE_COLS];
+    let mut signature = 2_166_136_261_u32;
     for (i, &sample) in profile.iter().enumerate() {
         let value = luma(sample);
         let gradient = (value - luma(profile[i.saturating_sub(1)])).abs();
-        let structure = gradient + sample[3];
         light += value;
-        edge = edge.max(structure);
-        peak = peak.max(value);
-        let mass = value + structure * 2.0;
-        weight += mass;
-        moment += mass * (i as f32 + 0.5) / SAMPLE_COLS as f32;
+        edge = edge.max(gradient + sample[3]);
+        signal[i] = (value - background)
+            .abs()
+            .max(sample[3])
+            .max(gradient * 0.5);
+        peak = peak.max(signal[i]);
+        for component in sample {
+            let quantized = (component * 32.0).round() as u32;
+            signature = signature.wrapping_mul(16_777_619) ^ quantized;
+        }
     }
-    let threshold = (peak * 0.45).max(0.025);
-    let first = profile.iter().position(|&s| luma(s) >= threshold);
-    let last = profile.iter().rposition(|&s| luma(s) >= threshold);
-    let span = match (first, last) {
-        (Some(first), Some(last)) => (last - first + 1) as f32 / SAMPLE_COLS as f32,
-        _ => 0.0,
+    let threshold = (peak * 0.35).max(0.04);
+    let first = signal.iter().position(|&value| value >= threshold);
+    let last = signal.iter().rposition(|&value| value >= threshold);
+    let (left, right) = match (first, last) {
+        (Some(first), Some(last)) => (
+            first as f32 / SAMPLE_COLS as f32,
+            (last + 1) as f32 / SAMPLE_COLS as f32,
+        ),
+        // A flat field has no contour to follow. Keep the full terminal width.
+        _ => (0.0, 1.0),
     };
     Features {
         light: light / SAMPLE_COLS as f32,
         edge: edge.min(1.0),
-        center: if weight > 0.001 { moment / weight } else { 0.5 },
-        span,
+        left,
+        right,
+        signature,
     }
 }
 
@@ -388,77 +441,74 @@ fn profile_change(a: &Profile, b: &Profile) -> f32 {
     (sum / (SAMPLE_COLS * 4) as f32).sqrt()
 }
 
-fn make_line(dst: &mut [u8; MAX_COLS], region: Region, features: Features) {
-    dst.fill(b' ');
-    let mut text = Text { dst, at: 0 };
-    // Follow the source's left contour in two-column code indentation steps.
-    // Leave most of the row available for a single long statement.
-    let left = (features.center - features.span * 0.5).max(0.0);
-    let indent = (left * (region.width / 4).min(16) as f32 / 2.0).round() as usize * 2;
-    for _ in 0..indent {
-        text.bytes(b" ");
-    }
-    let kind = (region.row + region.pane * 3) % 6;
-    text.bytes(match kind {
-        0 => b"$ trace --row=",
-        1 => b"const region_",
-        2 => b"  patch[",
-        3 => b"  scan_row(",
-        4 => b"$ decode --row=",
-        _ => b"  resolve(row=",
-    });
-    text.number(region.row as u32, 3);
-    text.bytes(match kind {
-        1 => b" = sample(",
-        2 => b"] = rebuild(",
-        3 => b", ",
-        5 => b", ",
-        _ => b" ",
-    });
-    text.bytes(b"x=");
-    text.value(features.center);
-    text.bytes(b", span=");
-    text.value(features.span);
-    text.bytes(b", luma=");
-    text.value(features.light);
-    text.bytes(b", edge=");
-    text.value(features.edge);
-    text.bytes(match kind {
-        0 | 4 => b" /dev/video0 --follow",
-        _ => b"); // source geometry",
-    });
-    if features.edge > 0.12 {
-        text.bytes(b" [edge-lock]");
+fn role_for(layout: u8, region: Region) -> Role {
+    let role = if layout == 0 {
+        (region.row / 8) % 4
+    } else {
+        region.pane
+    };
+    match role {
+        0 => Role::Shell,
+        1 => Role::Code,
+        2 => Role::Logs,
+        _ => Role::Inspect,
     }
 }
 
-struct Text<'a> {
-    dst: &'a mut [u8],
-    at: usize,
+fn rhythm(role: Role) -> (f64, f64) {
+    match role {
+        Role::Shell => (46.0, 0.7),
+        Role::Code => (72.0, 0.45),
+        Role::Logs => (140.0, 0.9),
+        Role::Inspect => (96.0, 0.35),
+    }
 }
-impl Text<'_> {
-    fn bytes(&mut self, bytes: &[u8]) {
-        let n = bytes.len().min(self.dst.len().saturating_sub(self.at));
-        self.dst[self.at..self.at + n].copy_from_slice(&bytes[..n]);
-        self.at += n;
-    }
-    fn number(&mut self, mut value: u32, digits: usize) {
-        let mut buffer = [b'0'; 10];
-        for byte in buffer[..digits].iter_mut().rev() {
-            *byte += (value % 10) as u8;
-            value /= 10;
+
+fn make_line(dst: &mut [u8; MAX_COLS], region: Region, features: Features, role: Role) {
+    dst.fill(b' ');
+    let mut scratch = [b' '; MAX_COLS];
+    let length = write_line(
+        &mut scratch,
+        role,
+        Context {
+            row: region.row,
+            left: features.left,
+            right: features.right,
+            light: features.light,
+            edge: features.edge,
+            signature: features.signature,
+        },
+    );
+    let (indent, budget) = contour_window(region.width, features);
+    let mut end = length.min(budget);
+    if length > budget {
+        // Keep natural word/token endings instead of cutting every line at
+        // the same arbitrary character. Intrinsic code indentation survives.
+        if let Some(boundary) = scratch[budget / 2..budget]
+            .iter()
+            .rposition(|&c| c == b' ' || matches!(c, b';' | b',' | b')' | b'}' | b']'))
+        {
+            end = budget / 2 + boundary;
+            if scratch[end] != b' ' {
+                end += 1;
+            }
         }
-        self.bytes(&buffer[..digits]);
     }
-    fn value(&mut self, value: f32) {
-        // Quantized fields suppress tiny measurement jitter. The profile
-        // threshold separately prevents typing in response to sensor noise.
-        let quantized = (unit(value) * 64.0).round() / 64.0;
-        let thousand = (quantized * 1000.0).round() as u32;
-        self.number(thousand / 1000, 1);
-        self.bytes(b".");
-        self.number(thousand % 1000, 3);
-    }
+    dst[indent..indent + end].copy_from_slice(&scratch[..end]);
+}
+
+fn contour_window(width: usize, features: Features) -> (usize, usize) {
+    // Preserve a useful statement even over narrow image features. The left
+    // edge sets indentation; contour width opens/closes the available line.
+    let minimum = width.min(48);
+    let indent = ((features.left * width.saturating_sub(minimum) as f32 / 2.0).round() as usize
+        * 2)
+    .min(width.saturating_sub(minimum));
+    let span = (features.right - features.left).clamp(0.0, 1.0);
+    let budget = (((0.25 + span * 0.75) * width as f32).round() as usize)
+        .max(minimum)
+        .min(width - indent);
+    (indent, budget)
 }
 
 #[cfg(test)]
@@ -491,6 +541,76 @@ mod tests {
         }
     }
     #[test]
+    fn contours_follow_bright_and_dark_objects() {
+        let mut bright = [[0.1, 0.1, 0.1, 0.0]; SAMPLE_COLS];
+        let mut dark = [[0.9, 0.9, 0.9, 0.0]; SAMPLE_COLS];
+        for i in 16..32 {
+            bright[i] = [0.9, 0.9, 0.9, 0.0];
+            dark[i] = [0.1, 0.1, 0.1, 0.0];
+        }
+        let a = features(&bright);
+        let b = features(&dark);
+        assert!((a.left - 0.25).abs() < 0.02 && (a.right - 0.5).abs() < 0.04);
+        assert!((a.left - b.left).abs() < 0.02 && (a.right - b.right).abs() < 0.02);
+        let flat = features(&[[0.2, 0.2, 0.2, 0.0]; SAMPLE_COLS]);
+        assert_eq!(contour_window(128, flat), (0, 128));
+        let (indent, width) = contour_window(128, a);
+        assert!(indent > 0 && width >= 48 && indent + width < 128);
+        let shifted = Features {
+            left: 0.65,
+            right: 0.9,
+            ..a
+        };
+        assert!(contour_window(128, shifted).0 > indent);
+        for inverted in [false, true] {
+            for touches_left in [false, true] {
+                let background = if inverted { 0.9 } else { 0.1 };
+                let foreground = 1.0 - background;
+                let mut profile = [[background, background, background, 0.0]; SAMPLE_COLS];
+                let range = if touches_left { 0..24 } else { 40..64 };
+                for sample in &mut profile[range] {
+                    *sample = [foreground, foreground, foreground, 0.0];
+                }
+                let contour = features(&profile);
+                assert!(
+                    contour.right - contour.left < 0.42,
+                    "edge-touching contour stays bounded"
+                );
+                assert_eq!(contour.left == 0.0, touches_left);
+            }
+        }
+    }
+
+    #[test]
+    fn pane_roles_and_source_triggered_rhythms_are_distinct() {
+        let roles = [Role::Shell, Role::Code, Role::Logs, Role::Inspect];
+        for (pane, role) in roles.into_iter().enumerate() {
+            assert_eq!(
+                role_for(
+                    3,
+                    Region {
+                        pane,
+                        ..Region::default()
+                    }
+                ),
+                role
+            );
+            assert_eq!(
+                role_for(
+                    0,
+                    Region {
+                        row: pane * 8,
+                        ..Region::default()
+                    }
+                ),
+                role
+            );
+        }
+        assert!(rhythm(Role::Logs).0 > rhythm(Role::Code).0);
+        assert!(rhythm(Role::Code).0 > rhythm(Role::Shell).0);
+    }
+
+    #[test]
     fn stationary_source_has_no_idle_animation() {
         let samples = source(8);
         let mut terminal = ReactiveTerminal::new();
@@ -499,11 +619,18 @@ mod tests {
         settle(&mut terminal, 0, &samples, 0.0);
         assert_eq!(before, terminal.cells());
         assert!(!terminal.cells().contains(&127));
+        let lengths: Vec<_> = terminal
+            .cells()
+            .chunks(128)
+            .map(|row| row.iter().filter(|&&c| (33..=126).contains(&c)).count())
+            .collect();
         assert!(
-            terminal
-                .cells()
-                .chunks(128)
-                .all(|row| row[64..96].iter().any(|&c| c > 32))
+            lengths.iter().any(|&n| n >= 64),
+            "retain some long statements"
+        );
+        assert!(
+            lengths.iter().any(|&n| n <= 24),
+            "short commands and code structure remain short"
         );
     }
     #[test]
