@@ -1,6 +1,6 @@
 # Effect masks — spatial wet/dry for effect groups
 
-**Status:** IN PROGRESS · 2026-09-15 · Codex. Masks, Modifier Groups landed; snapshot publish narrowed to read layer sources. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
+**Status:** IN PROGRESS · 2026-09-24 · Codex. Masks, Modifier Groups and final-coverage preview implemented; snapshot publish narrowed to read layer sources. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
 
 Peter selected all three sources: shapes, the group's incoming image, and another
 layer/generator. "This gives us some very cool sidechain options too."
@@ -38,7 +38,14 @@ D2. Cmd+G wraps one or several selected effects in a **Modifier Group** using
    A bordered container surrounds each group, with a distinct header and inset
    member cards. The header shows the effect count, or `Mask → N effects` when
    masked, to make the modifier scope explicit. Ungrouped effects sit outside it.
-   One mask is supported per group, so the add button disappears until it is removed.
+   One mask is supported per group. Once masked, the header replaces Add Modifier
+   with **Preview Mask**. It opens the existing graph editor on the final coverage
+   producer, with preview normalization off: black selects nothing, white selects
+   fully, and grey selects partially. The ordinary mask card remains the tuning
+   surface; the master monitor still shows the live result. This previews coverage
+   before the group wet/dry multiplier; disabled masks/groups are bypassed in the
+   live result. Previewing does not edit the project. The request uses the stable
+   mask EffectId and waits for its own snapshot before focusing the coverage node.
    The picker captures the group ID; membership resolves on the content thread.
    Existing generic Group/Masked Group labels display as Modifier Group; custom
    names and serialized group data remain intact. Cmd+Shift+G ungroups as before.

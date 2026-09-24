@@ -266,6 +266,9 @@ pub struct ContentState {
     /// has run yet, or when the editor window isn't open. Wrapped in
     /// `Arc` so cloning the `ContentState` per snapshot is cheap.
     pub active_graph_snapshot: Option<Arc<manifold_renderer::node_graph::GraphSnapshot>>,
+    /// Identity captured with the snapshot; UI requests may already target a
+    /// different graph while this content-thread response is in flight.
+    pub active_graph_target: Option<Arc<manifold_core::GraphTarget>>,
 
     /// Live node-output preview state for the editor's value inspector. `None`
     /// when no node is being previewed. See [`NodePreviewInfo`].
@@ -556,6 +559,7 @@ impl Default for ContentState {
             project_snapshot: None,
             modulation_snapshot: None,
             active_graph_snapshot: None,
+            active_graph_target: None,
             node_preview_info: None,
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),

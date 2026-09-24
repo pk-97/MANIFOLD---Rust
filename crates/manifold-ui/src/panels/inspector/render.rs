@@ -9,19 +9,23 @@ fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
     crate::param_surface::stable_key(&format!("inspector.effect_group.add_modifier:{group_id}"))
 }
 
+fn rack_group_preview_mask_key(group_id: &EffectGroupId) -> u64 {
+    crate::param_surface::stable_key(&format!("inspector.effect_group.preview_mask:{group_id}"))
+}
+
 const GROUP_CONTAINER_NAME: &str = "inspector.effect_group.container";
 
 fn rack_group_scope_text(group: &RackGroupConfig) -> String {
     let effect_count = group
         .member_ids
         .len()
-        .saturating_sub(group.has_mask as usize);
+        .saturating_sub(if group.mask_effect_id.is_some() { 1 } else { 0 });
     let noun = if effect_count == 1 {
         "effect"
     } else {
         "effects"
     };
-    if group.has_mask {
+    if group.mask_effect_id.is_some() {
         format!("Mask → {effect_count} {noun}")
     } else {
         format!("{effect_count} {noun}")
@@ -54,7 +58,7 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
                 .text_color(color::TEXT_DIMMED_C32)
                 .inert(),
         );
-    if !group.has_mask {
+    if group.mask_effect_id.is_none() {
         view = view.child(
             View::button("+ Add Modifier")
                 .w(Sizing::Fixed(104.0))
@@ -65,6 +69,18 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
                 )))
                 .name(super::GROUP_ADD_MODIFIER_NAME)
                 .key(rack_group_add_modifier_key(&group.id)),
+        );
+    } else if let Some(mask_effect_id) = group.mask_effect_id.as_ref() {
+        view = view.child(
+            View::button("Preview Mask")
+                .w(Sizing::Fixed(104.0))
+                .fill_h()
+                .style(crate::chrome::components::button_secondary_style())
+                .on_click(PanelAction::Root(RootAction::PreviewEffectMask(
+                    mask_effect_id.clone(),
+                )))
+                .name(super::GROUP_PREVIEW_MASK_NAME)
+                .key(rack_group_preview_mask_key(&group.id)),
         );
     }
     view
@@ -126,6 +142,7 @@ fn build_rack_group_frame(
     width: f32,
     height: f32,
     group_add_modifier_btns: &mut Vec<(NodeId, EffectGroupId)>,
+    group_preview_mask_btns: &mut Vec<(NodeId, EffectId)>,
 ) {
     chrome::materialize(
         tree,
@@ -137,12 +154,20 @@ fn build_rack_group_frame(
         &rack_group_header_view(group),
         Rect::new(x, y, width, InspectorCompositePanel::RACK_HEADER_H),
     );
-    if !group.has_mask
+    if group.mask_effect_id.is_none()
         && let Some((_, button_id)) = header_ids
-            .into_iter()
+            .iter()
             .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
     {
-        group_add_modifier_btns.push((button_id, group.id.clone()));
+        group_add_modifier_btns.push((*button_id, group.id.clone()));
+    }
+    if group.mask_effect_id.is_some()
+        && let Some((_, button_id)) = header_ids
+            .iter()
+            .find(|(key, _)| *key == rack_group_preview_mask_key(&group.id))
+        && let Some(mask_effect_id) = group.mask_effect_id.as_ref()
+    {
+        group_preview_mask_btns.push((*button_id, mask_effect_id.clone()));
     }
 }
 
@@ -638,6 +663,7 @@ impl InspectorCompositePanel {
         self.add_layer_effect_btn = None;
         self.add_modifier_btn = None;
         self.group_add_modifier_btns.clear();
+        self.group_preview_mask_btns.clear();
 
         // Range truthfulness (the single invariant the rest of this panel leans
         // on): a sub-panel's (first_node, node_count) must describe what it built
@@ -795,6 +821,7 @@ impl InspectorCompositePanel {
                                 inner_w,
                                 group_height,
                                 &mut self.group_add_modifier_btns,
+                                &mut self.group_preview_mask_btns,
                             );
                             cy += Self::RACK_HEADER_H;
                             while card_idx < group_end {
@@ -927,6 +954,7 @@ impl InspectorCompositePanel {
                                 inner_w,
                                 group_height,
                                 &mut self.group_add_modifier_btns,
+                                &mut self.group_preview_mask_btns,
                             );
                             cy += Self::RACK_HEADER_H;
                             while card_idx < group_end {
@@ -1026,5 +1054,65 @@ impl InspectorCompositePanel {
         self.update_scrollbar(tree);
 
         self.cache_node_count = tree.count() - self.cache_first_node;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(mask_effect_id: Option<EffectId>) -> RackGroupConfig {
+        RackGroupConfig {
+            id: EffectGroupId::new("group"),
+            name: "Modifier Group".to_string(),
+            member_ids: vec![EffectId::new("mask"), EffectId::new("effect")],
+            mask_effect_id,
+        }
+    }
+
+    #[test]
+    fn rack_group_scope_text_derives_mask_presence_from_id() {
+        assert_eq!(rack_group_scope_text(&group(None)), "2 effects");
+        assert_eq!(
+            rack_group_scope_text(&group(Some(EffectId::new("mask")))),
+            "Mask → 1 effect"
+        );
+    }
+
+    #[test]
+    fn rack_group_preview_mask_key_is_distinct() {
+        let id = EffectGroupId::new("group");
+        assert_ne!(
+            rack_group_add_modifier_key(&id),
+            rack_group_preview_mask_key(&id)
+        );
+    }
+
+    #[test]
+    fn masked_header_preview_routes_exact_mask_effect() {
+        let mask_effect_id = EffectId::new("mask-effect");
+        let group = group(Some(mask_effect_id.clone()));
+        let mut tree = UITree::new();
+        let mut host = crate::chrome::ChromeHost::new();
+        host.build(
+            &mut tree,
+            &rack_group_header_view(&group),
+            Rect::new(0.0, 0.0, 400.0, InspectorCompositePanel::RACK_HEADER_H),
+        );
+        let preview_button = host
+            .node_id_for_key(rack_group_preview_mask_key(&group.id))
+            .expect("masked header must expose a preview button");
+        assert_eq!(
+            tree.name_of(preview_button),
+            Some("inspector.effect_group.preview_mask")
+        );
+
+        let mut intents = crate::intent::IntentRegistry::new();
+        host.register_intents(&mut intents);
+        assert!(matches!(
+            intents.resolve(&tree, Some(preview_button), crate::intent::Gesture::Click),
+            Some(PanelAction::Root(RootAction::PreviewEffectMask(effect_id)))
+                if effect_id == mask_effect_id
+        ));
     }
 }

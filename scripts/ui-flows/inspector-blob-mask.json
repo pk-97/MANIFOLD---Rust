@@ -73,6 +73,12 @@
       "check": "Exists"
     }
   },
+  {
+    "Assert": {
+      "selector": {"Query": {"name": "inspector.effect_group.preview_mask"}},
+      "check": "Exists"
+    }
+  },
   "Snapshot",
   "Dump",
   {

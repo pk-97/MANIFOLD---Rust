@@ -1218,6 +1218,10 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
+                PanelAction::Root(RootAction::PreviewEffectMask(effect_id)) => {
+                    self.preview_effect_mask(effect_id);
+                    continue;
+                }
                 PanelAction::Root(RootAction::OpenGraphEditor(ei)) => {
                     // Resolve `ei` (effect index in the active inspector tab) to
                     // the effect's stable `EffectId`, then start snapshotting
