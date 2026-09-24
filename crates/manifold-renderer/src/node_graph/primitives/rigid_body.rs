@@ -10,7 +10,7 @@ crate::primitive! {
  name: RigidBodyNode,
  type_id: "node.rigid_body",
  purpose: "Describe a rigid body's shape, starting transform, motion type, mass and contact properties. Wire body into a shared Physics World. An optional imported mesh source is prepared once as fitted convex hulls using standard Box3D.",
- inputs: { transform: Transform required, mass: ScalarF32 optional, friction: ScalarF32 optional, bounce: ScalarF32 optional, },
+ inputs: { transform: Transform required, mass: ScalarF32 optional, friction: ScalarF32 optional, bounce: ScalarF32 optional, release_count: ScalarF32 optional, },
  outputs: { body: RigidBody, shape: ScalarF32, },
 params: [
 ParamDef { name: Cow::Borrowed("enabled"), label: "Physics", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -19,6 +19,7 @@ ParamDef { name: Cow::Borrowed("motion"), label: "Motion", ty: ParamType::Enum, 
 ParamDef { name: Cow::Borrowed("mass"), label: "Mass (kg)", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.01, 100.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.5), range: Some((0.0, 1.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("bounce"), label: "Bounce", ty: ParamType::Float, default: ParamValue::Float(0.15), range: Some((0.0, 1.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("release_count"), label: "Release", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1_000_000.0)), enum_values: &[] },
 
 ParamDef { name: Cow::Borrowed("path"), label: "Mesh File", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("mesh_index"), label: "Mesh Index", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0,1024.0)), enum_values: &[] },
@@ -31,6 +32,7 @@ ParamDef { name: Cow::Borrowed("translate_y"), label: "Source Offset Y", ty: Par
 ParamDef { name: Cow::Borrowed("translate_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0,64.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0,63.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0,63.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("collider_parts"), label: "Collider Detail", ty: ParamType::Int, default: ParamValue::Float(32.0), range: Some((1.0,64.0)), enum_values: &[] },
  ],
  depth_rule: Terminal,
@@ -60,6 +62,13 @@ impl Primitive for RigidBodyNode {
             return;
         };
         let enabled = !matches!(ctx.params.get("enabled"), Some(ParamValue::Bool(false)));
+        let release_count = ctx.scalar_or_param("release_count", 0.0);
+        let fragment_parent = match ctx.params.get("fragment_parent") {
+            Some(ParamValue::Float(value)) if value.is_finite() && *value >= 0.0 => {
+                Some(value.round() as usize)
+            }
+            _ => None,
+        };
         let selector = |name: &str| match ctx.params.get(name) {
             Some(ParamValue::Enum(v)) => *v,
             Some(ParamValue::Float(v)) => v.round() as u32,
@@ -76,6 +85,8 @@ impl Primitive for RigidBodyNode {
             let body = RigidBody {
                 transform,
                 enabled,
+                release_count,
+                fragment_parent,
                 shape: selector("shape"),
                 kind: selector("motion"),
                 mass: ctx.scalar_or_param("mass", 1.0),
@@ -146,6 +157,8 @@ impl Primitive for RigidBodyNode {
         let body = RigidBody {
             transform,
             enabled,
+            release_count,
+            fragment_parent,
             shape: selector("shape"),
             kind: selector("motion"),
             mass: ctx.scalar_or_param("mass", 1.0),

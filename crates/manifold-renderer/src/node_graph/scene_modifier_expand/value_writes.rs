@@ -73,7 +73,22 @@ impl PreparedGraphValueWrites {
                 host_index
                     .by_ref
                     .keys()
-                    .map(|reference| (reference.clone(), vec![reference.node.clone()]))
+                    .map(|reference| {
+                        let mut copies = vec![reference.node.clone()];
+                        // Internal Shatter draws retain the authored object's
+                        // visibility and other properties under live edits.
+                        for modifier in &owner.scene_modifiers {
+                            if modifier.graph.preset_metadata.as_ref()
+                                .and_then(|m| m.scene_modifier.as_ref())
+                                .is_none_or(|r| r.shatter.is_none()) { continue; }
+                            for piece in 0..32 {
+                                let copy = super::compiler::shatter::copy_id(&modifier.id, &reference.node, "object", piece);
+                                if graph.instance_by_node_id(&copy).is_none() { break; }
+                                copies.push(copy);
+                            }
+                        }
+                        (reference.clone(), copies)
+                    })
                     .collect()
             };
             let mut leaf_params = BTreeMap::new();

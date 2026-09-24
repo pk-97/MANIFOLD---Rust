@@ -161,6 +161,42 @@ fn imported_group_scene_graph() -> EffectGraphDef {
     def
 }
 
+fn compound_imported_group_scene_graph() -> EffectGraphDef {
+    let mut def = imported_group_scene_graph();
+    let render = def.nodes.iter_mut().find(|node| node.id == 0).unwrap();
+    render.params.insert(
+        "objects".into(),
+        SerializedParamValue::Float { value: 2.0 },
+    );
+    let group_node = def.nodes.iter_mut().find(|node| node.id == 10).unwrap();
+    let group = group_node.group.as_mut().unwrap();
+    let mut second = group.nodes.iter().find(|node| node.id == 14).unwrap().clone();
+    second.id = 16;
+    second.node_id = NodeId::new("import_object_1");
+    second.handle = Some("Imported Part 2".into());
+    group.nodes.push(second);
+    group.interface.outputs.push(InterfacePortDef {
+        name: "object_1".into(),
+        port_type: "Object".into(),
+    });
+    let output_id = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .unwrap()
+        .id;
+    group.wires.extend([
+        EffectGraphWire { from_node: 11, from_port: "transform".into(), to_node: 16, to_port: "transform".into() },
+        EffectGraphWire { from_node: 12, from_port: "vertices".into(), to_node: 16, to_port: "vertices".into() },
+        EffectGraphWire { from_node: 13, from_port: "out".into(), to_node: 16, to_port: "material".into() },
+        EffectGraphWire { from_node: 16, from_port: "object".into(), to_node: output_id, to_port: "object_1".into() },
+    ]);
+    def.wires.extend([
+        EffectGraphWire { from_node: 10, from_port: "object_1".into(), to_node: 0, to_port: "object_1".into() },
+    ]);
+    def
+}
+
 fn body_params() -> Vec<SceneParamMetadata> {
     vec![scene_param_meta("mass", "Mass"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
 }
@@ -259,7 +295,7 @@ fn imported_group_physics_duplicate_remove_uses_fresh_world_slot() {
     let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
     duplicate.execute(&mut project);
     assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
-    let duplicated = graph_of(&project, &fx);
+    let duplicated = graph_of(&project, &fx).clone();
     let world = duplicated.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
     assert_eq!(duplicated.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 2);
     let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 1, graph);
@@ -268,6 +304,56 @@ fn imported_group_physics_duplicate_remove_uses_fresh_world_slot() {
     let removed = graph_of(&project, &fx);
     assert_eq!(removed.nodes.iter().filter(|node| node.type_id == GROUP_TYPE_ID).count(), 1);
     assert!(removed.nodes.iter().any(|node| node.type_id == "node.physics_world"));
+}
+
+#[test]
+fn compound_group_duplicate_and_remove_compacts_all_material_outputs() {
+    let graph = compound_imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
+    let duplicated = graph_of(&project, &fx).clone();
+    assert_eq!(duplicated.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 4.0 }));
+    assert!(duplicated.wires.iter().any(|wire| wire.from_port == "object" && wire.to_port == "object_2"));
+    assert!(duplicated.wires.iter().any(|wire| wire.from_port == "object_1" && wire.to_port == "object_3"));
+    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 0, graph);
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
+    let removed = graph_of(&project, &fx);
+    assert_eq!(removed.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 2.0 }));
+    assert!(removed.wires.iter().any(|wire| wire.to_port == "object_0"));
+    assert!(removed.wires.iter().any(|wire| wire.to_port == "object_1"));
+    assert!(!removed.wires.iter().any(|wire| wire.to_port == "object_2"));
+    remove.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &duplicated);
+}
+
+#[test]
+fn compound_group_physics_duplicate_and_remove_keeps_one_body_per_group() {
+    let graph = compound_imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(target.clone(), 0, 0, body_params(), graph.clone());
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "enable rejected: {:?}", enable.rejection_reason());
+    let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
+    let duplicated = graph_of(&project, &fx).clone();
+    let world = duplicated.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+    assert_eq!(duplicated.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 2);
+    assert!(duplicated.wires.iter().any(|wire| wire.to_port == "object_2"));
+    assert!(duplicated.wires.iter().any(|wire| wire.to_port == "object_3"));
+    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 2, graph);
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
+    let removed = graph_of(&project, &fx);
+    assert_eq!(removed.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 2.0 }));
+    assert_eq!(removed.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 1);
+    remove.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &duplicated);
 }
 
 #[test]

@@ -971,7 +971,6 @@ pub struct ScenePanel {
     object_frame_ids: Vec<(NodeId, usize)>,
     object_enable_physics_ids: Vec<(NodeId, usize)>,
     object_disable_physics_ids: Vec<(NodeId, usize)>,
-    object_split_ids: Vec<(NodeId, usize)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -1067,7 +1066,6 @@ impl Default for ScenePanel {
             object_frame_ids: Vec::new(),
             object_enable_physics_ids: Vec::new(),
             object_disable_physics_ids: Vec::new(),
-            object_split_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
             modifier_remove_ids: Vec::new(),
@@ -1317,7 +1315,6 @@ impl ScenePanel {
         self.object_duplicate_ids.clear();
         self.object_enable_physics_ids.clear();
         self.object_disable_physics_ids.clear();
-        self.object_split_ids.clear();
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.add_modifier_button_id = None;
@@ -2449,10 +2446,6 @@ impl ScenePanel {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
                             vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
                         )));
-                    } else if let Some((_, index)) = self.object_split_ids.iter().find(|(id, _)| *id == *node_id) {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupSplitObject(
-                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
-                        )));
                     } else if let Some((light_node_id, _, current_name)) =
                         self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -3093,6 +3086,23 @@ mod tests {
             [PanelAction::Project(ProjectAction::SceneSetupParamChanged(_, _, _, param, value))]
                 if param == "visible" && *value == 1.0
         ), "hidden eye click must flip back to 1.0, got {actions_2:?}");
+    }
+
+    #[test]
+    fn imported_physics_property_has_no_legacy_split_action() {
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.physics_available = true;
+
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        assert!(texts.contains(&"Physics"), "imported object should expose the Physics property");
+        assert!(!texts.iter().any(|text| text.contains("Split into 8")), "legacy split action must stay out of the Physics property");
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary

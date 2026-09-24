@@ -341,6 +341,7 @@ fn adopt_fog(owner: &mut EffectGraphDef, owned: &[EffectGraphNode]) -> Result<()
         preparation_params: Vec::new(),
         initializers: Vec::new(),
         calibrations: Vec::new(),
+        shatter: None,
         stages: vec![SceneModifierStageDef {
             group: stage.node_id.clone(),
             scope: SceneStageScope::Scene,
@@ -532,6 +533,7 @@ fn adopt_loop(owner: &mut EffectGraphDef, owned: &[EffectGraphNode]) -> Result<(
         preparation_params: Vec::new(),
         initializers: Vec::new(),
         calibrations: Vec::new(),
+        shatter: None,
         stages: vec![
             SceneModifierStageDef {
                 group: stage.node_id.clone(),

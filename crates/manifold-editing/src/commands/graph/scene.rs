@@ -1054,14 +1054,23 @@ impl Command for RemoveSceneObjectCommand {
                 };
 
                 let producer = nodes.iter().find(|node| node.id == producer_id)?;
+                let removed_indices = match physics_match.as_ref() {
+                    Some(PhysicsSceneObjectMatch::Valid(physics)) => physics.render_indices.clone(),
+                    _ if producer.type_id == GROUP_TYPE_ID => {
+                        group_render_indices(wires, render_id, producer_id)
+                    }
+                    _ => vec![k],
+                };
+                if removed_indices.is_empty() {
+                    return None;
+                }
                 let mut removed_ids = Vec::new();
                 if let Some(PhysicsSceneObjectMatch::Valid(physics)) = &physics_match {
-                    removed_ids.extend(physics.owned_ids.iter().copied().filter_map(|id| {
-                        nodes
-                            .iter()
-                            .find(|node| node.id == id)
-                            .map(|node| node.node_id.clone())
-                    }));
+                    for id in &physics.owned_ids {
+                        if let Some(node) = nodes.iter().find(|node| node.id == *id) {
+                            collect_node_ids(std::slice::from_ref(node), &mut removed_ids);
+                        }
+                    }
                     let owned = physics
                         .owned_ids
                         .iter()
@@ -1074,15 +1083,27 @@ impl Command for RemoveSceneObjectCommand {
                 } else {
                     collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
                     nodes.retain(|n| n.id != producer_id);
-                    wires.retain(|w| !(w.to_node == render_id && w.to_port == object_port));
+                    wires.retain(|w| {
+                        w.from_node != producer_id
+                            && w.to_node != producer_id
+                            && !(w.to_node == render_id
+                                && removed_indices.iter().any(|index| {
+                                    w.to_port == format!("object_{index}")
+                                }))
+                    });
                 }
 
-                shift_indexed_ports_down(wires, render_id, "object", k);
+                // Compact in reverse order so each removal is applied to the
+                // original slot numbering without shifting a later target
+                // before it is removed.
+                for index in removed_indices.iter().rev() {
+                    shift_indexed_ports_down(wires, render_id, "object", *index);
+                }
 
                 nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
                     "objects".to_string(),
                     SerializedParamValue::Float {
-                        value: (current_objects - 1.0).max(0.0),
+                        value: (current_objects - removed_indices.len() as f32).max(0.0),
                     },
                 );
 
@@ -1420,6 +1441,9 @@ struct PhysicsSceneObject {
     object_id: u32,
     owned_ids: Vec<u32>,
     grouped: bool,
+    /// Every render slot fed by this producer, including compound material
+    /// outputs from one imported group.
+    render_indices: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -1678,6 +1702,7 @@ fn physics_scene_object_match(
         object_id: object.id,
         owned_ids,
         grouped: false,
+        render_indices: vec![object_index],
     })
 }
 
@@ -1805,7 +1830,29 @@ fn grouped_physics_scene_object_match(
         object_id: group_node.id,
         owned_ids: vec![group_node.id],
         grouped: true,
+        render_indices: group_render_indices(wires, render_id, group_node.id),
     })
+}
+
+fn group_render_indices(
+    wires: &[EffectGraphWire],
+    render_id: u32,
+    group_id: u32,
+) -> Vec<u32> {
+    let mut indices: Vec<u32> = wires
+        .iter()
+        .filter_map(|wire| {
+            if wire.from_node != group_id || wire.to_node != render_id {
+                return None;
+            }
+            wire.to_port
+                .strip_prefix("object_")
+                .and_then(|value| value.parse::<u32>().ok())
+        })
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    indices
 }
 
 /// Detect the shipped Physics Boxes `copies` shape before ordinary pose-slot
@@ -2119,6 +2166,7 @@ fn physics_copies_scene_object_match(
         object_id: object.id,
         owned_ids,
         grouped: false,
+        render_indices: vec![object_index],
     })
 }
 
@@ -2152,6 +2200,7 @@ struct ImportedObjectParts {
     authored_transform_id: u32,
     source: ImportedPhysicsSource,
     object_handle: String,
+    render_indices: Vec<u32>,
 }
 
 const IMPORTED_SOURCE_PARAMS: &[&str] = &[
@@ -2344,6 +2393,12 @@ fn imported_object_parts(
             authored_transform_in_level(&group.nodes, &group.wires, object_id)?;
         let mut source = imported_source_in_level(&group.nodes, &group.wires, object_id)?;
         source.scope_is_group = true;
+        if group.interface.outputs.iter().filter(|port| port.port_type == "Object").count() > 1 {
+            // All static material parts share the same source frame and body.
+            source.params.insert("material_index".into(), SerializedParamValue::Int { value: -1 });
+            source.params.insert("mesh_index".into(), SerializedParamValue::Int { value: -1 });
+            source.params.insert("primitive_index".into(), SerializedParamValue::Int { value: -1 });
+        }
         let object = group
             .nodes
             .iter()
@@ -2360,6 +2415,7 @@ fn imported_object_parts(
                 .clone()
                 .or_else(|| producer.handle.clone())
                 .unwrap_or_else(|| format!("Object {object_index}")),
+            render_indices: group_render_indices(&def.wires, render_id, producer_id),
         });
     }
     if producer.type_id != "node.scene_object" {
@@ -2377,6 +2433,7 @@ fn imported_object_parts(
             .handle
             .clone()
             .unwrap_or_else(|| format!("Object {object_index}")),
+        render_indices: vec![object_index],
     })
 }
 
@@ -2511,8 +2568,16 @@ fn add_group_physics(
         name: "body".to_string(),
         port_type: "RigidBody".to_string(),
     });
-    group.wires[object_transform_wire].from_node = input_id;
-    group.wires[object_transform_wire].from_port = "pose".to_string();
+    let object_ids: std::collections::HashSet<_> = group.nodes.iter()
+        .filter(|node| node.type_id == "node.scene_object").map(|node| node.id).collect();
+    for wire in &mut group.wires {
+        if object_ids.contains(&wire.to_node) && wire.to_port == "transform"
+            && wire.from_node == authored_transform_id
+        {
+            wire.from_node = input_id;
+            wire.from_port = "pose".into();
+        }
+    }
     group.wires.push(scene_build_wire(
         authored_transform_id,
         "transform",
@@ -2561,17 +2626,16 @@ fn remove_group_physics(
     }) {
         return Err("Physics group body output is malformed");
     }
+    for wire in &mut group.wires {
+        if wire.from_node == input_id && wire.from_port == "pose" && wire.to_port == "transform" {
+            wire.from_node = authored_transform_id;
+            wire.from_port = "transform".into();
+        }
+    }
     group.wires.retain(|wire| {
-        !((wire.from_node == input_id && wire.to_node == object_id)
-            || (wire.from_node == body_id && wire.to_node == output_id)
+        !((wire.from_node == body_id && wire.to_node == output_id)
             || (wire.from_node == authored_transform_id && wire.to_node == body_id))
     });
-    group.wires.push(scene_build_wire(
-        authored_transform_id,
-        "transform",
-        object_id,
-        "transform",
-    ));
     group
         .nodes
         .retain(|node| node.id != body_id && node.id != input_id);
@@ -2815,6 +2879,10 @@ impl Command for EnableSceneObjectPhysicsCommand {
                 Some("Enable Physics supports imported rigid glTF objects only".into());
             return;
         };
+        if parts.render_indices.is_empty() {
+            self.rejection = Some("Selected scene object has no render outputs".into());
+            return;
+        }
         if imported_physics_binding(def, &parts).is_ok() {
             self.rejection = Some("Selected object already has standard physics enabled".into());
             return;
@@ -3797,7 +3865,7 @@ fn remap_physics_wire(
     old_slot: u32,
     new_slot: u32,
     render_id: u32,
-    old_object_index: u32,
+    old_object_indices: &[u32],
     new_object_index: u32,
 ) -> EffectGraphWire {
     let map_node = |id: u32| node_map.get(&id).copied().unwrap_or(id);
@@ -3809,8 +3877,14 @@ fn remap_physics_wire(
     if wire.to_node == world_id && wire.to_port == format!("body_{old_slot}") {
         to_port = format!("body_{new_slot}");
     }
-    if wire.to_node == render_id && wire.to_port == format!("object_{old_object_index}") {
-        to_port = format!("object_{new_object_index}");
+    if wire.to_node == render_id
+        && let Some(old_index) = wire
+            .to_port
+            .strip_prefix("object_")
+            .and_then(|value| value.parse::<u32>().ok())
+        && let Some(part) = old_object_indices.iter().position(|index| *index == old_index)
+    {
+        to_port = format!("object_{}", new_object_index + part as u32);
     }
     EffectGraphWire {
         from_node: map_node(wire.from_node),
@@ -3825,7 +3899,7 @@ fn append_physics_duplicate(
     wires: &mut Vec<EffectGraphWire>,
     physics: &PhysicsSceneObject,
     render_id: u32,
-    source_index: u32,
+    source_indices: &[u32],
     new_index: u32,
     new_slot: u32,
     node_id_map: &mut Vec<(NodeId, NodeId)>,
@@ -3908,7 +3982,7 @@ fn append_physics_duplicate(
                 physics.body_slot,
                 new_slot,
                 render_id,
-                source_index,
+                source_indices,
                 new_index,
             ));
         }
@@ -4229,14 +4303,40 @@ impl Command for DuplicateSceneObjectCommand {
                         wires,
                         physics,
                         render_id,
-                        src_k,
+                        &physics.render_indices,
                         new_k,
                         new_slot,
                         &mut node_id_map,
                     )?;
+                    let part_count = physics.render_indices.len() as f32;
+                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                        "objects".to_string(),
+                        SerializedParamValue::Float {
+                            value: current_objects + part_count,
+                        },
+                    );
                 } else {
                     let source_id = object_producer_id(wires, render_id, src_k)?;
                     let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
+                    let mut source_outputs: Vec<(u32, String)> = wires
+                        .iter()
+                        .filter_map(|wire| {
+                            if wire.from_node != source_id
+                                || wire.to_node != render_id
+                            {
+                                return None;
+                            }
+                            wire.to_port
+                                .strip_prefix("object_")
+                                .and_then(|value| value.parse::<u32>().ok())
+                                .map(|index| (index, wire.from_port.clone()))
+                        })
+                        .collect();
+                    source_outputs.sort_unstable();
+                    source_outputs.dedup_by_key(|(index, _)| *index);
+                    if source_outputs.is_empty() {
+                        return None;
+                    }
 
                     let mut clone = deep_clone_with_fresh_ids(
                         &source_node,
@@ -4278,20 +4378,22 @@ impl Command for DuplicateSceneObjectCommand {
                     }
                     let clone_id = clone.id;
                     nodes.push(clone);
-                    wires.push(scene_build_wire(
-                        clone_id,
-                        "object",
-                        render_id,
-                        &format!("object_{new_k}"),
-                    ));
+                    for (part, _) in source_outputs.iter().enumerate() {
+                        wires.push(scene_build_wire(
+                            clone_id,
+                            &source_outputs[part].1,
+                            render_id,
+                            &format!("object_{}", new_k + part as u32),
+                        ));
+                    }
+                    let part_count = source_outputs.len() as f32;
+                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                        "objects".to_string(),
+                        SerializedParamValue::Float {
+                            value: current_objects + part_count,
+                        },
+                    );
                 }
-
-                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                    "objects".to_string(),
-                    SerializedParamValue::Float {
-                        value: current_objects + 1.0,
-                    },
-                );
 
                 Some(prev)
             });

@@ -95,6 +95,8 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),
         collider: None,
+        fragment_parent: None,
+        release_count: 0.0,
     };
     let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {

@@ -663,10 +663,11 @@ fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
 /// `Custom`, never errors).
 fn find_scene_object_in_group<'a>(
     group: &'a manifold_core::effect_graph_def::GroupDef,
+    output_port: &str,
 ) -> Option<(&'a EffectGraphNode, Level<'a>)> {
     let inner = Level { nodes: &group.nodes, wires: &group.wires };
-    let out_node = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
-    let (producer_id, _) = inner.producer(out_node.id, "object")?;
+    let (producer_id, _) = inner.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+        .find_map(|out| inner.producer(out.id, output_port))?;
     let node = inner.node(producer_id)?;
     (node.type_id == SCENE_OBJECT_TYPE_ID).then_some((node, inner))
 }
@@ -783,10 +784,11 @@ fn trace_objects(
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
     let mut out = Vec::with_capacity(objects);
+    let mut seen_groups = HashSet::new();
     for k in 0..objects {
         let port = format!("object_{k}");
         let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
-            Some((producer_id, _)) => match level.node(producer_id) {
+            Some((producer_id, output_port)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
                     trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set)
                 }
@@ -794,7 +796,7 @@ fn trace_objects(
                     match producer_node
                         .group
                         .as_deref()
-                        .and_then(find_scene_object_in_group)
+                        .and_then(|group| find_scene_object_in_group(group, output_port))
                     {
                         Some((inner_node, inner_level)) => trace_scene_object(
                             &inner_level,
@@ -815,7 +817,12 @@ fn trace_objects(
             Some(v) => vertex_count += v as u64,
             None => vertex_count_exact = false,
         }
-        out.push(row);
+        // Several material draws from one group are one authored object.
+        let already_listed = match &row {
+            SceneObjectVm::Known(row) => row.group_node_id.is_some_and(|id| !seen_groups.insert(id)),
+            _ => false,
+        };
+        if !already_listed { out.push(row); }
     }
     assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)

@@ -411,6 +411,19 @@ int manifold_box3d_body_set_bullet( uint64_t body_value, int enabled )
 	return BOX3D_BRIDGE_OK;
 }
 
+int manifold_box3d_body_set_enabled( uint64_t body_value, int enabled )
+{
+	if ( enabled != 0 )
+	{
+		b3Body_Enable( b3LoadBodyId( body_value ) );
+	}
+	else
+	{
+		b3Body_Disable( b3LoadBodyId( body_value ) );
+	}
+	return BOX3D_BRIDGE_OK;
+}
+
 int manifold_box3d_body_set_hit_events( uint64_t body_value, int enabled )
 {
 	b3Body_EnableHitEvents( b3LoadBodyId( body_value ), enabled != 0 );
@@ -493,6 +506,19 @@ int manifold_box3d_body_local_point_velocity(
 	velocity_out[0] = velocity.x;
 	velocity_out[1] = velocity.y;
 	velocity_out[2] = velocity.z;
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_local_center_of_mass( uint64_t body_value, float* center_out )
+{
+	if ( center_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3Vec3 center = b3Body_GetLocalCenterOfMass( b3LoadBodyId( body_value ) );
+	center_out[0] = center.x;
+	center_out[1] = center.y;
+	center_out[2] = center.z;
 	return BOX3D_BRIDGE_OK;
 }
 

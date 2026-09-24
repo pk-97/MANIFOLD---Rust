@@ -1815,8 +1815,9 @@ impl RenderScene {
     /// caller (evaluate) returns immediately, exactly as the inline code did.
     /// BUG-trh7 stage 2, pass 1: validate every object's required inputs,
     /// compose its model matrix + uniforms, and get-or-compile its pipeline.
-    /// None = abort frame — the three structured-error magenta-clear returns
-    /// and the empty-draws return of the inline code, unchanged.
+    /// None = abort frame — the three structured-error magenta-clear returns.
+    /// An empty draw list is returned for the caller to clear all connected
+    /// outputs and invalidate temporal history.
     fn collect_object_draws<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -2222,11 +2223,52 @@ impl RenderScene {
             });
         }
 
-        if draws.is_empty() {
-            return None;
-        }
-
         Some((draws, has_transmission))
+    }
+
+    /// A frame with no visible scene objects still owns every graph output.
+    /// Clear those outputs so a previous frame cannot remain on screen, and
+    /// discard temporal history so the first visible frame starts cold.
+    fn clear_empty_frame<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        self.invalidate_temporal_history();
+
+        // Keep these values aligned with the normal MSAA pass: transparent
+        // color, reversed-Z depth, zero motion/denoiser feeds, and full AO
+        // owed for the background.
+        const OUTPUTS: [(&str, [f64; 4]); 10] = [
+            ("color", [0.0, 0.0, 0.0, 0.0]),
+            ("depth", [0.0, 0.0, 0.0, 0.0]),
+            ("velocity", [0.0, 0.0, 0.0, 0.0]),
+            ("ao_mask", [1.0, 1.0, 1.0, 1.0]),
+            ("normals", [0.0, 0.0, 0.0, 0.0]),
+            ("roughness", [0.0, 0.0, 0.0, 0.0]),
+            ("diffuse_albedo", [0.0, 0.0, 0.0, 0.0]),
+            ("specular_albedo", [0.0, 0.0, 0.0, 0.0]),
+            ("specular_hit_distance", [0.0, 0.0, 0.0, 0.0]),
+            ("reactive_mask", [0.0, 0.0, 0.0, 0.0]),
+        ];
+        for (port, clear) in OUTPUTS {
+            if let Some(target) = ctx.outputs.texture_2d(port) {
+                ctx.gpu_encoder()
+                    .native_enc
+                    .clear_texture(target, clear[0], clear[1], clear[2], clear[3]);
+            }
+        }
+    }
+
+    /// Drop all history that can feed a future visible frame. Resources stay
+    /// cached; this is the same invalidation used by `clear_state`, without
+    /// restarting the jitter sequence during a transient empty scene.
+    fn invalidate_temporal_history(&mut self) {
+        self.rt_history_ping = 0;
+        self.rt_irr_needs_reset = true;
+        self.rt_moments_valid = false;
+        self.rt_prev_accumulating = false;
+        self.prev_temporal_upscale = false;
+        self.prev_model.fill(None);
+        self.prev_view_proj = None;
+        self.prev_cam_state = None;
+        self.prev_jitter_ndc = None;
     }
     /// BUG-trh7 stage 2, pass 3: the ensure-cached-GPU-resources block —
     /// every later pass's immutable self-borrow is ensured here first
@@ -8334,13 +8376,7 @@ impl EffectNode for RenderScene {
         // temporal consumers through the existing first-frame reset decision.
         self.jitter_frame_index = 0;
         self.rt_reset_detector = TemporalResetDetector::new();
-        self.rt_history_ping = 0;
-        self.rt_irr_needs_reset = true;
-        self.rt_moments_valid = false;
-        self.prev_model.fill(None);
-        self.prev_view_proj = None;
-        self.prev_cam_state = None;
-        self.prev_jitter_ndc = None;
+        self.invalidate_temporal_history();
     }
 
     fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
@@ -8564,13 +8600,17 @@ impl EffectNode for RenderScene {
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
         // its pipeline (BUG-trh7 stage 2, `collect_object_draws`). None =
-        // abort frame: structured error + magenta clear, or no visible
-        // objects — the inline code's exact early returns.
+        // abort frame: structured error + magenta clear. An empty draw list
+        // is handled below so every connected output is cleared.
         let Some((mut draws, has_transmission)) =
             self.collect_object_draws(ctx, &pre, &port_index)
         else {
             return;
         };
+        if draws.is_empty() {
+            self.clear_empty_frame(ctx);
+            return;
+        }
 
         let prepare_rt = rt_enabled || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_objects = Self::collect_rt_objects(&draws, prepare_rt);

@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. Imported rigid objects and edit-time splitting now use the same standard Box3D world in the local flower worktree; general multi-set authoring, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. Imported compound objects and the internal Shatter modifier now use the same standard Box3D world in the local flower worktree; general multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -147,7 +147,7 @@ buffer capacity. Unwired instance count preserves existing behavior.
 
 Physics timing covers CPU stepping and pose extraction, excludes rebuilding and
 GPU rendering, and sums worlds evaluated during the live content render. It is
-not the total frame cost. The imported-object extension below adds bounded edit-time splitting; sand simulation remains outside this contract.
+not the total frame cost. The imported-object extension below adds bounded internal Shatter fragments; sand simulation remains outside this contract.
 
 Steady-state Rust stepping and pose reads use retained storage. A bounded
 release-mode CPU comparison on Apple arm64 (8 warmup and 8 measured ticks)
@@ -189,12 +189,25 @@ its settings and graph wiring. Turning it on restores participation; changing bo
 membership resets the shared simulation. Existing projects default to ON.
 Shared gravity, simulation speed and reset remain under World → Physics.
 
-The separate Split into 8 action creates independently rendered physical pieces.
-Splitting is an undoable authoring
-edit, not an impact trigger. It partitions original triangles without remeshing
-or adding cut caps. Each piece gets one standard hull and joins the same world.
-Skinned, deformed and unsupported graph sources reject the action. Enable/disable supports bare objects and importer object groups. Splitting supports
-importer groups and rejects already-split pieces; arbitrary graph topologies are not.
+Static imports group their material meshes into one scene object with one shared
+asset-center transform, visibility control and physics body. Geometry and textures
+remain separate internally. Animated/skinned imports retain their existing layout.
+Duplicate and Remove operate on every material draw as one undoable edit.
+
+Shatter is a modifier added through the existing picker after enabling Physics.
+Its Pieces preparation control selects 2–32 internal fragments, subject to the
+world's 64 body slots and at least one piece per material part. Pieces are
+distributed across material parts by triangle count. Preparation preserves original
+triangles and attributes; it does not remesh or add cut caps. Source settings stay
+locked while the modifier captures them. Deformed/skinned sources are unsupported.
+The saved scene and object list retain the original object. Modifier expansion
+creates ordinary mesh sources, scene draws and Box3D bodies in the derived graph.
+Fragments follow the intact body's pose until the Shatter button or enabled Clip
+Trigger fires. The world then disables the intact collider, enables the prepared
+fragments and transfers its pose, angular velocity and velocity at each fragment's
+center of mass. Other bodies keep their state. Each fragment uses one standard
+convex hull. Reset restores the intact body; another trigger releases it again.
+The old Split into 8 scene-panel action is removed.
 Existing Fixed/Moving/Animated, mass, friction, bounce, World controls and
 transport reset remain the project workflow.
 
@@ -205,10 +218,14 @@ Asset preparation was separate: 0.688 seconds intact and 7.251 seconds for the
 benchmark's sequential 32-piece preparation. These numbers exclude rendering
 and do not establish thousands-of-pieces or whole-project frame budgets.
 
-The focused Metal proof exercises production import, enable/split commands,
-save/reload, asynchronous preparation, visible motion and backward-time reset.
-CPU regressions cover original triangle/attribute preservation and the shared
-runtime's fixed-tick behaviour. The supported scale is a bounded creative scene,
+Focused Metal proofs exercise production import, asynchronous preparation,
+manual Shatter release on a warmed runtime, visible motion, backward-time reset,
+all-hidden/restored rendering and the retained Physics OFF body definition.
+The original tiger lily is used throughout. CPU regressions cover original
+triangle/attribute preservation, compound editing and fixed-tick behaviour.
+The UI snapshot confirms one object row and retained Physics controls; full
+Shatter picker interaction remains unverified after the scripted flow stopped
+on ambiguous selectors. The supported scale is a bounded creative scene,
 not a separate offline mesh simulation engine.
 
 ## 1. Audit — what exists (verified 2026-07-07)

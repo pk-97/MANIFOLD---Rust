@@ -127,6 +127,12 @@ pub struct ColliderGeometry {
 pub struct RigidBody {
     pub transform: Transform,
     pub enabled: bool,
+    /// Release event count for an intact body. Fragment children carry their
+    /// parent index and use this count as the shared activation trigger.
+    pub release_count: f32,
+    /// Parent body index for a prepared fragment, or `None` for an ordinary
+    /// body. This metadata never changes collider topology.
+    pub fragment_parent: Option<usize>,
     pub shape: u32,
     pub kind: u32,
     pub mass: f32,
@@ -157,6 +163,8 @@ impl Default for RigidBody {
         Self {
             transform: Transform::default(),
             enabled: true,
+            release_count: 0.0,
+            fragment_parent: None,
             shape: 1,
             kind: 1,
             mass: 1.0,
@@ -211,6 +219,12 @@ fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
         && left.friction == right.friction
         && left.bounce == right.bounce
         && same_collider(left, right)
+}
+
+fn same_authored_body(left: &RigidBody, right: &RigidBody) -> bool {
+    same_body(left, right)
+        && left.release_count == right.release_count
+        && left.fragment_parent == right.fragment_parent
 }
 
 fn scale_platonic_points(points: &[[f32; 3]], scale: [f32; 3]) -> [[f32; 3]; 20] {
@@ -273,6 +287,9 @@ pub struct RigidSimulation {
     latched_copy_spacing: f32,
     latched_copy_columns: usize,
     latched_copy_layout: CopyLayout,
+    fragment_active: [bool; MAX_BODIES],
+    fragment_release_latched: [f32; MAX_BODIES],
+    fragment_parent_released: [bool; MAX_BODIES],
     last_time: Option<Seconds>,
     accumulator: f64,
     authored_time: f64,
@@ -304,6 +321,9 @@ impl Default for RigidSimulation {
             latched_copy_spacing: 1.25,
             latched_copy_columns: 16,
             latched_copy_layout: CopyLayout::Grid,
+            fragment_active: [false; MAX_BODIES],
+            fragment_release_latched: [0.0; MAX_BODIES],
+            fragment_parent_released: [false; MAX_BODIES],
             last_time: None,
             accumulator: 0.0,
             authored_time: 0.0,
@@ -417,6 +437,7 @@ impl RigidSimulation {
         {
             return Err("Physics: copy count, spacing, columns, and layout must be finite; spacing must be positive".into());
         }
+        validate_fragments(&bodies)?;
         let requested_copy_count = if prototype.as_ref().is_some_and(|body| body.enabled) {
             copy_count.round().clamp(0.0, MAX_COPIES as f32) as usize
         } else {
@@ -523,7 +544,11 @@ impl RigidSimulation {
             let mut handles = std::array::from_fn(|_| None);
             for (i, body) in bodies.iter().enumerate() {
                 let Some(body) = body.as_ref().filter(|body| body.enabled) else { continue };
-                handles[i] = Some(add_body_geometry(&mut world, body)?);
+                let handle = add_body_geometry(&mut world, body)?;
+                if body.fragment_parent.is_some() {
+                    world.set_enabled(handle, false).map_err(|e| e.to_string())?;
+                }
+                handles[i] = Some(handle);
             }
             let mut copy_handles = vec![None; active_copy_count];
             if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
@@ -562,6 +587,14 @@ impl RigidSimulation {
             self.copy_handles.fill(None);
             self.copy_bullet_enabled.fill(false);
             self.deferred_copy_animated_edit = None;
+            self.fragment_active.fill(false);
+            self.fragment_release_latched.fill(0.0);
+            self.fragment_parent_released.fill(false);
+            for (index, body) in bodies.iter().enumerate() {
+                self.fragment_active[index] = body
+                    .as_ref()
+                    .is_some_and(|body| body.enabled && body.fragment_parent.is_none());
+            }
             self.copy_handles[..active_copy_count].copy_from_slice(&copy_handles);
             self.descriptions = bodies.clone();
             self.copy_description = prototype.clone();
@@ -580,6 +613,14 @@ impl RigidSimulation {
                 bodies: bodies.clone(),
                 prototype: prototype.clone(),
             });
+            for (index, body) in bodies.iter().enumerate() {
+                let Some(body) = body.as_ref().filter(|body| {
+                    body.enabled && body.fragment_parent.is_none() && body.release_count > 0.0
+                }) else {
+                    continue;
+                };
+                self.release_fragments(index, body, body.release_count)?;
+            }
         }
         let elapsed = now.0 - self.last_time.unwrap_or(now).0;
         // Preserve all elapsed time. Preview can yield with ticks still queued.
@@ -661,6 +702,7 @@ impl RigidSimulation {
                 }
             }
         }
+        self.sync_released_fragment_properties(&bodies)?;
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for _ in 0..steps {
@@ -681,6 +723,11 @@ impl RigidSimulation {
                 let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
                 for (i, body) in bodies.iter().enumerate() {
                     let Some(body) = body else { continue };
+                    if (body.fragment_parent.is_some() && !self.fragment_active[i])
+                        || self.fragment_parent_released[i]
+                    {
+                        continue;
+                    }
                     if body.enabled && body.kind == 2 {
                         targets[i] = Some(
                             self.interpolated_body(i, target_time, body.clone())
@@ -731,6 +778,7 @@ impl RigidSimulation {
             completed += 1;
             self.physics_time += TICK;
             self.apply_due_authored_edits()?;
+            self.process_fragment_releases(self.physics_time, &bodies)?;
             // A native tick cannot be preempted. Yield before starting another.
             if preview_budget.is_some_and(|budget| physics_start.elapsed() >= budget) {
                 break;
@@ -738,6 +786,9 @@ impl RigidSimulation {
         }
         self.pending_time = Seconds((due_steps - completed) as f64 * TICK);
         self.apply_due_authored_edits()?;
+        if completed == 0 {
+            self.process_fragment_releases(self.physics_time, &bodies)?;
+        }
         self.prune_authored_samples();
         if self.pending_time.0 > 0.0
             && speed > 0.0
@@ -756,7 +807,13 @@ impl RigidSimulation {
         self.last_time = Some(now);
         self.reset_count = Some(reset_count);
         self.descriptions = bodies.clone();
-        for (i, body) in bodies.iter().enumerate() {
+        // Resolve ordinary and released body poses first; inactive fragments
+        // inherit their parent's current native pose below.
+        for (i, body) in bodies.iter().enumerate().filter(|(i, body)| {
+            body.as_ref().is_none_or(|body| {
+                body.fragment_parent.is_none() || self.fragment_active[*i]
+            })
+        }) {
             let Some(body) = body else {
                 self.poses[i] = Transform::default();
                 continue;
@@ -782,6 +839,23 @@ impl RigidSimulation {
                 self.poses[i].pos = body.transform.pos;
                 self.poses[i].rot_euler = body.transform.rot_euler;
             }
+        }
+        for (i, body) in bodies.iter().enumerate() {
+            let Some(body) = body else {
+                continue;
+            };
+            let Some(parent_index) = body.fragment_parent else {
+                continue;
+            };
+            if self.fragment_active[i] {
+                continue;
+            }
+            self.poses[i] = Transform {
+                pos: self.poses[parent_index].pos,
+                rot_euler: self.poses[parent_index].rot_euler,
+                scale: body.transform.scale,
+                billboard: false,
+            };
         }
         if let Some(prototype) = prototype.as_ref() {
             for index in 0..self.active_copy_count {
@@ -817,6 +891,172 @@ impl RigidSimulation {
         }
         self.copy_description = prototype.clone();
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
+        Ok(())
+    }
+
+    fn release_fragments(
+        &mut self,
+        parent_index: usize,
+        parent: &RigidBody,
+        release_count: f32,
+    ) -> Result<(), String> {
+        if self.fragment_parent_released[parent_index] {
+            self.fragment_release_latched[parent_index] = release_count;
+            return Ok(());
+        }
+        if !parent.enabled {
+            return Ok(());
+        }
+        let Some(parent_handle) = self.handles[parent_index] else {
+            return Ok(());
+        };
+        let child_count = self
+            .descriptions
+            .iter()
+            .flatten()
+            .filter(|body| body.fragment_parent == Some(parent_index))
+            .count();
+        if child_count == 0 {
+            self.fragment_release_latched[parent_index] = release_count;
+            return Ok(());
+        }
+
+        let (parent_pose, parent_angular, child_velocities) = {
+            let world = self.world.as_ref().expect("world constructed above");
+            let pose = world.pose(parent_handle).map_err(|e| e.to_string())?;
+            let angular = world.angular_velocity(parent_handle).map_err(|e| e.to_string())?;
+            let mut velocities = [[0.0; 3]; MAX_BODIES];
+            for (index, body) in self.descriptions.iter().enumerate() {
+                if body.as_ref().is_some_and(|body| body.fragment_parent == Some(parent_index)) {
+                    let Some(handle) = self.handles[index] else { continue };
+                    let center = world.local_center_of_mass(handle).map_err(|e| e.to_string())?;
+                    velocities[index] = world
+                        .velocity_at_local_point(parent_handle, center)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            (pose, angular, velocities)
+        };
+
+        // Remove the intact collider before enabling any prepared fragment.
+        let world = self.world.as_mut().expect("world constructed above");
+        world
+            .set_enabled(parent_handle, false)
+            .map_err(|e| e.to_string())?;
+        self.fragment_parent_released[parent_index] = true;
+        self.fragment_release_latched[parent_index] = release_count;
+        let child_mass = parent.mass / child_count as f32;
+        for (index, body) in self.descriptions.iter().enumerate() {
+            if body.as_ref().is_none_or(|body| body.fragment_parent != Some(parent_index)) {
+                continue;
+            }
+            let Some(handle) = self.handles[index] else { continue };
+            let body = body.as_ref().expect("fragment description exists");
+            let mut config = body.config();
+            config.position = parent_pose.position;
+            config.rotation = parent_pose.rotation;
+            config.mass = child_mass;
+            config.friction = parent.friction;
+            config.restitution = parent.bounce;
+            world
+                .update_body(handle, config, true)
+                .map_err(|e| e.to_string())?;
+            world.set_enabled(handle, true).map_err(|e| e.to_string())?;
+            world
+                .set_velocity(handle, child_velocities[index], parent_angular)
+                .map_err(|e| e.to_string())?;
+            self.fragment_active[index] = true;
+        }
+        Ok(())
+    }
+
+    fn sync_released_fragment_properties(
+        &mut self,
+        bodies: &[Option<RigidBody>; MAX_BODIES],
+    ) -> Result<(), String> {
+        for (parent_index, released) in self.fragment_parent_released.iter().copied().enumerate() {
+            if !released {
+                continue;
+            }
+            let Some(parent) = bodies[parent_index].as_ref() else {
+                continue;
+            };
+            let parent_properties_changed = self.descriptions[parent_index]
+                .as_ref()
+                .is_none_or(|previous| {
+                    previous.mass != parent.mass
+                        || previous.friction != parent.friction
+                        || previous.bounce != parent.bounce
+                });
+            if !parent_properties_changed {
+                continue;
+            }
+            let child_count = bodies
+                .iter()
+                .flatten()
+                .filter(|body| body.fragment_parent == Some(parent_index))
+                .count();
+            if child_count == 0 {
+                continue;
+            }
+            let child_mass = parent.mass / child_count as f32;
+            for (index, body) in bodies.iter().enumerate() {
+                let Some(body) = body.as_ref() else {
+                    continue;
+                };
+                if body.fragment_parent != Some(parent_index) || !self.fragment_active[index] {
+                    continue;
+                }
+                let Some(handle) = self.handles[index] else {
+                    continue;
+                };
+                let mut config = body.config();
+                config.mass = child_mass;
+                config.friction = parent.friction;
+                config.restitution = parent.bounce;
+                self.world
+                    .as_mut()
+                    .expect("world constructed above")
+                    .update_body(handle, config, false)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn authored_release_count(&self, index: usize, time: f64) -> Option<f32> {
+        let first = self.authored_samples.front()?.bodies[index].as_ref()?;
+        let mut count = first.release_count;
+        for sample in self.authored_samples.iter().skip(1) {
+            if sample.time > time + 1.0e-12 {
+                break;
+            }
+            if let Some(body) = sample.bodies[index].as_ref() {
+                count = body.release_count;
+            }
+        }
+        Some(count)
+    }
+
+    fn process_fragment_releases(
+        &mut self,
+        time: f64,
+        bodies: &[Option<RigidBody>; MAX_BODIES],
+    ) -> Result<(), String> {
+        for (index, body) in bodies.iter().enumerate() {
+            let Some(body) = body.as_ref() else { continue };
+            if !body.enabled
+                || body.fragment_parent.is_some()
+                || self.fragment_parent_released[index]
+                || body.release_count <= self.fragment_release_latched[index]
+            {
+                continue;
+            }
+            let count = self.authored_release_count(index, time).unwrap_or(body.release_count);
+            if count > self.fragment_release_latched[index] {
+                self.release_fragments(index, body, count)?;
+            }
+        }
         Ok(())
     }
 
@@ -923,6 +1163,11 @@ impl RigidSimulation {
                 let (Some(body), Some(handle)) = (body, self.handles[index]) else {
                     continue;
                 };
+                if (body.fragment_parent.is_some() && !self.fragment_active[index])
+                    || self.fragment_parent_released[index]
+                {
+                    continue;
+                }
                 if !body.enabled || body.kind != 1 {
                     continue;
                 }
@@ -942,6 +1187,11 @@ impl RigidSimulation {
             let (Some(body), Some(handle)) = (body, self.handles[index]) else {
                 continue;
             };
+            if (body.fragment_parent.is_some() && !self.fragment_active[index])
+                || self.fragment_parent_released[index]
+            {
+                continue;
+            }
             if !body.enabled || body.kind != 1 {
                 self.bullet_enabled[index] = false;
                 continue;
@@ -986,8 +1236,15 @@ impl RigidSimulation {
         const MAX_MICROSTEPS: usize = 512;
         let dynamic_extent = bodies
             .iter()
-            .flatten()
-            .filter(|body| body.enabled && body.kind == 1)
+            .enumerate()
+            .filter_map(|(index, body)| {
+                body.as_ref().filter(|body| {
+                    body.enabled
+                        && body.kind == 1
+                        && (body.fragment_parent.is_none() || self.fragment_active[index])
+                        && !self.fragment_parent_released[index]
+                })
+            })
             .map(body_min_extent)
             .chain(
                 prototype
@@ -1004,7 +1261,11 @@ impl RigidSimulation {
         let mut required_speed: f32 = 400.0;
         for (index, body) in bodies.iter().enumerate() {
             let Some(body) = body.as_ref() else { continue };
-            if !body.enabled || body.kind != 2 {
+            if !body.enabled
+                || body.kind != 2
+                || (body.fragment_parent.is_some() && !self.fragment_active[index])
+                || self.fragment_parent_released[index]
+            {
                 continue;
             }
             let start = self
@@ -1143,7 +1404,7 @@ impl RigidSimulation {
 fn same_optional_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
     match (left, right) {
         (None, None) => true,
-        (Some(left), Some(right)) => same_body(left, right),
+        (Some(left), Some(right)) => same_authored_body(left, right),
         _ => false,
     }
 }
@@ -1257,6 +1518,28 @@ fn predicted_dynamic_travel(velocity: [f32; 3], gravity: [f32; 3], tick: f64) ->
     let acceleration = gravity.into_iter().map(|v| v * v).sum::<f32>().sqrt();
     let tick = tick as f32;
     speed * tick + 0.5 * acceleration * tick * tick
+}
+
+fn validate_fragments(bodies: &[Option<RigidBody>; MAX_BODIES]) -> Result<(), String> {
+    for (index, body) in bodies.iter().enumerate() {
+        let Some(body) = body else { continue };
+        if !body.release_count.is_finite() || body.release_count < 0.0 {
+            return Err(format!("Physics: body {index} release count must be finite and non-negative"));
+        }
+        let Some(parent) = body.fragment_parent else {
+            continue;
+        };
+        if parent >= MAX_BODIES || parent == index {
+            return Err(format!("Physics: body {index} has an invalid fragment parent"));
+        }
+        let Some(parent_body) = bodies[parent].as_ref() else {
+            return Err(format!("Physics: body {index} references a missing fragment parent"));
+        };
+        if parent_body.fragment_parent.is_some() {
+            return Err(format!("Physics: fragment parent chains are not supported (body {index})"));
+        }
+    }
+    Ok(())
 }
 
 fn validate_copy_prototype(prototype: &RigidBody) -> Result<(), String> {
@@ -1501,6 +1784,262 @@ mod tests {
             .unwrap();
         assert!(simulation.poses[0].pos[1].abs() < 1.0e-5);
         assert!(simulation.poses[1].pos[1] > 0.5);
+    }
+
+    #[test]
+    fn prepared_fragments_follow_parent_then_inherit_motion_on_release() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[1] = Some(RigidBody {
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                scale: [0.7, 0.7, 0.7],
+                ..Transform::default()
+            },
+            fragment_parent: Some(0),
+            ..RigidBody::default()
+        });
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        assert!(!simulation.fragment_parent_released[0]);
+        assert_eq!(simulation.fragment_active[1], false);
+        assert!((simulation.poses[1].pos[1] - simulation.poses[0].pos[1]).abs() < 1.0e-5);
+        let parent_before_release = simulation.poses[0].pos;
+
+        bodies[0].as_mut().unwrap().release_count = 1.0;
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies, GRAVITY, Seconds(1.5), 1.0, 0.0)
+            .unwrap();
+        assert!(simulation.fragment_parent_released[0]);
+        assert!(simulation.fragment_active[1]);
+        assert!((simulation.poses[1].pos[1] - parent_before_release[1]).abs() > 0.02);
+        assert!(simulation.poses[1].pos[1] < parent_before_release[1]);
+    }
+
+    #[test]
+    fn disabled_parent_does_not_release_prepared_fragments() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            enabled: false,
+            release_count: 1.0,
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[1] = Some(RigidBody {
+            fragment_parent: Some(0),
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                scale: [0.7, 0.7, 0.7],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+        assert!(!simulation.fragment_parent_released[0]);
+        assert!(!simulation.fragment_active[1]);
+        assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
+        assert_eq!(simulation.poses[1].pos, [0.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn fragment_release_reset_restores_intact_state_and_allows_retrigger() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[1] = Some(RigidBody {
+            fragment_parent: Some(0),
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        bodies[0].as_mut().unwrap().release_count = 1.0;
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        assert!(simulation.fragment_parent_released[0]);
+
+        bodies[0].as_mut().unwrap().release_count = 0.0;
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 1.0)
+            .unwrap();
+        assert!(!simulation.fragment_parent_released[0]);
+        assert!(!simulation.fragment_active[1]);
+        assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
+        assert_eq!(simulation.poses[1].pos, [0.0, 4.0, 0.0]);
+
+        bodies[0].as_mut().unwrap().release_count = 1.0;
+        simulation
+            .advance(bodies, GRAVITY, Seconds(0.5), 1.0, 1.0)
+            .unwrap();
+        assert!(simulation.fragment_parent_released[0]);
+        assert!(simulation.fragment_active[1]);
+    }
+
+    #[test]
+    fn fragment_release_inherits_spinning_parent_pose_and_point_velocity() {
+        let child_geometry = Arc::new(ColliderGeometry {
+            hulls: vec![vec![
+                [0.35, -0.2, -0.2],
+                [0.85, -0.2, -0.2],
+                [0.35, 0.2, -0.2],
+                [0.35, -0.2, 0.2],
+            ]],
+        });
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[1] = Some(RigidBody {
+            fragment_parent: Some(0),
+            collider: Some(child_geometry),
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[2] = Some(body([5.0, 4.0, 0.0]));
+
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        let parent_handle = simulation.handles[0].unwrap();
+        let child_handle = simulation.handles[1].unwrap();
+        let unrelated_handle = simulation.handles[2].unwrap();
+        let parent_linear = [1.0, 0.5, 0.0];
+        let parent_angular = [0.0, 2.0, 0.0];
+        simulation
+            .world
+            .as_mut()
+            .unwrap()
+            .set_velocity(parent_handle, parent_linear, parent_angular)
+            .unwrap();
+        let (parent_pose, expected_angular, expected_child_velocity, unrelated_pose, unrelated_velocity) = {
+            let world = simulation.world.as_ref().unwrap();
+            let child_center = world.local_center_of_mass(child_handle).unwrap();
+            (
+                world.pose(parent_handle).unwrap(),
+                world.angular_velocity(parent_handle).unwrap(),
+                world
+                    .velocity_at_local_point(parent_handle, child_center)
+                    .unwrap(),
+                world.pose(unrelated_handle).unwrap(),
+                world.linear_velocity(unrelated_handle).unwrap(),
+            )
+        };
+        assert!(expected_child_velocity[2].abs() > 0.5);
+
+        bodies[0].as_mut().unwrap().release_count = 1.0;
+        simulation
+            .advance(bodies, [0.0; 3], Seconds::ZERO, 0.0, 0.0)
+            .unwrap();
+
+        let world = simulation.world.as_ref().unwrap();
+        let child_pose = world.pose(child_handle).unwrap();
+        let child_velocity = world.linear_velocity(child_handle).unwrap();
+        let child_angular = world.angular_velocity(child_handle).unwrap();
+        let after_unrelated_pose = world.pose(unrelated_handle).unwrap();
+        let after_unrelated_velocity = world.linear_velocity(unrelated_handle).unwrap();
+        for (actual, expected) in child_pose.position.iter().zip(parent_pose.position) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+        for (actual, expected) in child_pose.rotation.iter().zip(parent_pose.rotation) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+        for (actual, expected) in child_velocity.iter().zip(expected_child_velocity) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+        for (actual, expected) in child_angular.iter().zip(expected_angular) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+        for (actual, expected) in after_unrelated_pose.position.iter().zip(unrelated_pose.position) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+        for (actual, expected) in after_unrelated_velocity.iter().zip(unrelated_velocity) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn queued_preview_does_not_release_fragments_before_authored_event_tick() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(body([0.0, 4.0, 0.0]));
+        bodies[1] = Some(RigidBody {
+            fragment_parent: Some(0),
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let mut regular = RigidSimulation::default();
+        regular
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        let mut released = bodies.clone();
+        released[0].as_mut().unwrap().release_count = 1.0;
+        regular
+            .advance(released.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        assert!(regular.fragment_parent_released[0]);
+
+        let mut queued = RigidSimulation::default();
+        queued
+            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        {
+            let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+            queued
+                .advance(released.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+                .unwrap();
+            assert!(!queued.fragment_parent_released[0]);
+            while queued.pending_time.0 > 0.0 {
+                queued
+                    .advance(released.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+                    .unwrap();
+            }
+        }
+        assert!(queued.fragment_parent_released[0]);
+        assert_eq!(queued.poses, regular.poses);
     }
 
     #[test]

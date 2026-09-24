@@ -101,6 +101,7 @@ fn control_modifier(id: &str) -> EffectGraphDef {
         preparation_params: vec![],
         initializers: vec![],
         calibrations: vec![],
+        shatter: None,
         stages: vec![SceneModifierStageDef {
             group: NodeId::new("event_stage"),
             scope: SceneStageScope::Scene,

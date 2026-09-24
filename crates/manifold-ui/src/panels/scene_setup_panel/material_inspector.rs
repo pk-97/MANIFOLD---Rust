@@ -1019,17 +1019,6 @@ impl ScenePanel {
             }
             next_cy += ROW_H;
         }
-        if row.physics_imported {
-            let split_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x, next_cy, inner_w, ROW_H,
-                btn_style(),
-                "Split into 8",
-                obj_key(row.index, OBJ_OFF_PHYSICS + 1),
-            );
-            self.object_split_ids.push((split_id, row.index));
-            next_cy += ROW_H;
-        }
         next_cy + ROW_GAP
     }
 

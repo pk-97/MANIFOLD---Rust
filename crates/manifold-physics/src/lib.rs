@@ -92,6 +92,7 @@ mod ffi {
             move_pose: i32,
         ) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
+        pub fn manifold_box3d_body_set_enabled(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_set_hit_events(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_hit_speed(world: u32, body: u64, speed_out: *mut f32) -> i32;
         pub fn manifold_box3d_body_linear_velocity(body: u64, velocity_out: *mut f32) -> i32;
@@ -102,6 +103,10 @@ mod ffi {
             py: f32,
             pz: f32,
             velocity_out: *mut f32,
+        ) -> i32;
+        pub fn manifold_box3d_body_local_center_of_mass(
+            body: u64,
+            center_out: *mut f32,
         ) -> i32;
         pub fn manifold_box3d_body_set_velocity(
             body: u64,
@@ -622,6 +627,20 @@ impl PhysicsWorld {
         }
     }
 
+    /// Enable or disable a body while retaining its native handle and shape.
+    /// Disabled bodies stay available for a later activation without forcing
+    /// a world rebuild.
+    pub fn set_enabled(&mut self, handle: BodyHandle, enabled: bool) -> Result<(), PhysicsError> {
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe { ffi::manifold_box3d_body_set_enabled(native, i32::from(enabled)) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
     /// Enable or disable Box3D hit events for a body.
     ///
     /// Hit events use the native world's default 1 m/s approach-speed threshold.
@@ -702,6 +721,21 @@ impl PhysicsWorld {
         };
         if result == 0 {
             Ok(velocity)
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Read the body's center of mass in local coordinates.
+    pub fn local_center_of_mass(&self, handle: BodyHandle) -> Result<[f32; 3], PhysicsError> {
+        let native = self.native_body(handle)?;
+        let mut center = [0.0; 3];
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_local_center_of_mass(native, center.as_mut_ptr())
+        };
+        if result == 0 {
+            Ok(center)
         } else {
             Err(PhysicsError::NativeFailure)
         }

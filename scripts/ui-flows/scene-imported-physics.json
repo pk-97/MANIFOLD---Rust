@@ -82,10 +82,45 @@
   },
   "Snapshot",
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Split into 8"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Modifier",
+          "nth": 0
+        }
+      }
+    }
+  },
+  {
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Split into 8"
+          "text": "+ Add Modifier",
+          "nth": 0
         }
       },
       "gesture": {
@@ -99,11 +134,66 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.properties.physics",
-          "text": "ON"
+          "text": "Shatter"
         }
       },
       "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Shatter"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Pieces"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Clip Trigger"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Shatter"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
     }
   },
   "Snapshot",
@@ -119,10 +209,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Split into 8"
+          "text": "Pieces"
         }
       },
-      "check": "Exists"
+      "check": {
+        "Count": 0
+      }
     }
   },
   {

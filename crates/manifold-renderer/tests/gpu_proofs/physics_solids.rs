@@ -8,6 +8,7 @@
 //! runtime's initialization difference.
 
 use half::f16;
+use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::PrimitiveRegistry;
@@ -19,20 +20,436 @@ use crate::harness;
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../../assets/generator-presets/PhysicsSolids.json");
 const FRAME_COUNT: u32 = 120;
 
-/// Production import, scene commands, saved graph and native physics together.
+/// Compound scan proof for the scene-modifier path.  The importer keeps the
+/// tiger lily as one authored object with all material sources intact; Shatter
+/// expands that row into internal pieces that follow the parent until the manual release control is raised.
 #[test]
-fn physics_imported_flower_enable_split_render_and_reset() {
+fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials() {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
-    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
+    use manifold_core::project::Project;
+    use manifold_core::scene_modifier_edit::insert_scene_modifier;
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_core::types::LayerType;
+    use manifold_core::{Beats, GraphTarget, NodeId};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand;
+    use manifold_renderer::node_graph::PrimitiveRegistry;
+    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+    use manifold_renderer::node_graph::scene_modifier_authoring::{
+        prepare_new_scene_modifier, scene_modifier_objects,
+    };
+    use manifold_renderer::node_graph::scene_modifier_expand::expand_scene_modifiers;
+    use manifold_renderer::node_graph::scene_vm::SceneVm;
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let (imported, _report) = assemble_import_graph(&fixture).expect("original flower imports");
+    let render = imported
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_scene")
+        .expect("render scene");
+    let render_ref = SceneNodeRef {
+        scope: Vec::new(),
+        node: render.node_id.clone(),
+    };
+    let mut project = Project::default();
+    let preset_id = imported.preset_metadata.as_ref().unwrap().id.clone();
+    let layer_index = project
+        .timeline
+        .add_layer("Flower Shatter", LayerType::Generator, preset_id);
+    project.timeline.layers[layer_index]
+        .gen_params_or_init()
+        .graph = Some(imported.clone());
+    project.timeline.layers[layer_index].clips.push(
+        manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0)),
+    );
+    let target = GraphTarget::Generator(project.timeline.layers[layer_index].layer_id.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(
+        target.clone(),
+        render.id,
+        0,
+        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+        imported.clone(),
+    )
+    .with_world_metadata(
+        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
+    );
+    enable.execute(&mut project);
+    assert!(
+        enable.was_applied(),
+        "enable rejected: {:?}",
+        enable.rejection_reason()
+    );
+    let mut enabled = project.timeline.layers[layer_index]
+        .generator_graph()
+        .unwrap()
+        .clone();
+    // A fixed intact parent makes post-trigger falling evidence of release,
+    // rather than merely the intact flower continuing its existing fall.
+    for group in enabled.nodes.iter_mut().filter_map(|n| n.group.as_mut()) {
+        for body in group
+            .nodes
+            .iter_mut()
+            .filter(|n| n.type_id == "node.rigid_body")
+        {
+            body.params
+                .insert("motion".into(), SerializedParamValue::Enum { value: 0 });
+        }
+    }
+    let authored_objects =
+        scene_modifier_objects(&enabled, &render_ref).expect("scene objects resolve");
+    assert!(
+        authored_objects.len() >= 2,
+        "compound scan preserves each material scene object"
+    );
+    let primary_object = authored_objects[0].clone();
+    let authored_vm = SceneVm::from_def(&enabled).expect("authored scene resolves");
+    assert_eq!(authored_vm.objects.len(), 1);
+    assert!(
+        authored_vm.header.vertex_count > 0,
+        "imported material triangle totals remain visible"
+    );
+    assert!(
+        authored_vm.header.vertex_count_exact,
+        "imported source totals remain exact"
+    );
+    let recipe: EffectGraphDef = serde_json::from_str(include_str!(
+        "../../assets/scene-modifier-presets/Shatter.json"
+    ))
+    .expect("Shatter recipe parses");
+    let instance = prepare_new_scene_modifier(
+        &enabled,
+        &recipe,
+        NodeId::new("flower_shatter"),
+        render_ref,
+        SceneTargetSelection::Explicit {
+            objects: vec![primary_object],
+        },
+    )
+    .expect("Shatter captures imported source frames");
+    assert!(
+        !instance.mesh_frames.is_empty(),
+        "Shatter captures source mesh frames"
+    );
+    let attached = insert_scene_modifier(&enabled, enabled.scene_modifiers.len(), instance)
+        .expect("attach Shatter")
+        .graph;
+    let registry = PrimitiveRegistry::with_builtin();
+    let expanded = expand_scene_modifiers(&attached, &registry).expect("Shatter expands");
+    assert!(
+        expanded
+            .nodes
+            .iter()
+            .any(|node| node.type_id == "node.rigid_body")
+    );
+    let object_count = expanded
+        .nodes
+        .iter()
+        .find(|node| node.node_id == render.node_id)
+        .and_then(|node| node.params.get("objects"));
+    assert_eq!(
+        object_count,
+        Some(&SerializedParamValue::Float { value: 16.0 })
+    );
+    assert_eq!(
+        expanded
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.rigid_body")
+            .filter(|node| node.params.contains_key("fragment_parent"))
+            .count(),
+        16,
+        "Shatter creates sixteen dormant child bodies"
+    );
+
+    let metadata = attached
+        .preset_metadata
+        .as_ref()
+        .expect("authored metadata")
+        .clone();
+    let h = harness::shared();
+    let mut runtime = PresetRuntime::from_def_with_device(
+        attached,
+        &registry,
+        h.device.clone(),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("Shatter runtime");
+    let target = h.make_target("imported-flower-shatter");
+    let idle_params = ParamManifest::from_params(
+        metadata
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
+    );
+    let mut released_params = idle_params.clone();
+    let shatter_binding = metadata
+        .bindings
+        .iter()
+        .find(|binding| {
+            matches!(
+                &binding.target,
+                manifold_core::effect_graph_def::BindingTarget::SceneModifier {
+                    modifier_id,
+                    param_id
+                } if *modifier_id == NodeId::new("flower_shatter") && param_id == "shatter"
+            )
+        })
+        .expect("Shatter trigger binding");
+    let trigger = released_params
+        .get_mut(&shatter_binding.id)
+        .expect("Shatter trigger manifest slot");
+    trigger.value = 1.0;
+    trigger.base = 1.0;
+
+    // Warm the imported convex hull on the same runtime that will receive the
+    // release. A fresh released runtime would bypass the baseline latch.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut frame = 0;
+    loop {
+        render_frame_with_params(
+            &mut runtime,
+            &target,
+            frame,
+            h.width,
+            h.height,
+            &h.device,
+            &idle_params,
+        );
+        assert!(
+            runtime.errors().is_empty(),
+            "Shatter errors: {:?}",
+            runtime.errors()
+        );
+        if !runtime.warmup_pending() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "collider warmup timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let idle_image = h.readback(&target.texture);
+    assert!(
+        pixel_stats(&idle_image).0 > 1.0,
+        "the intact flower must remain visible before release"
+    );
+
+    for hold_frame in 1..=12 {
+        render_frame_with_params(
+            &mut runtime,
+            &target,
+            hold_frame,
+            h.width,
+            h.height,
+            &h.device,
+            &idle_params,
+        );
+    }
+    assert!(
+        mean_abs_diff(&idle_image, &h.readback(&target.texture)) < 0.002,
+        "prepared fragments must stay with the fixed intact parent"
+    );
+    frame = 12;
+    // Raise the authored Shatter trigger through its normal binding on the
+    // warmed runtime, then advance that same instance.
+    frame += 1;
+    render_frame_with_params(
+        &mut runtime,
+        &target,
+        frame,
+        h.width,
+        h.height,
+        &h.device,
+        &released_params,
+    );
+    assert!(
+        runtime.errors().is_empty(),
+        "released Shatter errors: {:?}",
+        runtime.errors()
+    );
+    let released_initial = h.readback(&target.texture);
+    assert!(
+        pixel_stats(&released_initial).0 > 1.0,
+        "released fragments must render"
+    );
+    for _step in 1..=24 {
+        frame += 1;
+        render_frame_with_params(
+            &mut runtime,
+            &target,
+            frame,
+            h.width,
+            h.height,
+            &h.device,
+            &released_params,
+        );
+    }
+    assert!(
+        runtime.errors().is_empty(),
+        "simulation errors: {:?}",
+        runtime.errors()
+    );
+    std::fs::write(
+        "/tmp/standard-box3d-shatter-released.png",
+        manifold_renderer::headless_readback::readback_to_srgb_png(
+            &h.device,
+            &target.texture,
+            h.width,
+            h.height,
+        ),
+    )
+    .unwrap();
+    let released_settled = h.readback(&target.texture);
+    assert!(
+        mean_abs_diff(&released_initial, &released_settled) > 0.0005,
+        "released pieces must move after trigger"
+    );
+    render_frame_with_params(
+        &mut runtime,
+        &target,
+        0,
+        h.width,
+        h.height,
+        &h.device,
+        &idle_params,
+    );
+    assert!(
+        mean_abs_diff(&idle_image, &h.readback(&target.texture)) < 0.002,
+        "reset must restore the intact flower"
+    );
+    std::fs::write(
+        "/tmp/standard-box3d-shatter-intact.png",
+        manifold_renderer::headless_readback::readback_to_srgb_png(
+            &h.device,
+            &target.texture,
+            h.width,
+            h.height,
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn imported_flower_empty_scene_clears_and_restores() {
+    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let (imported, _) = assemble_import_graph(&fixture).expect("original flower imports");
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut visible = PresetRuntime::from_def_with_device(
+        imported.clone(),
+        &registry,
+        h.device.clone(),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("visible flower graph builds");
+    let metadata = imported.preset_metadata.as_ref().unwrap();
+    let shown_params = ParamManifest::from_params(
+        metadata
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
+    );
+    let mut hidden_params = shown_params.clone();
+    let mut visibility_bindings = 0;
+    for binding in &metadata.bindings {
+        if matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "visible")
+        {
+            let value = hidden_params
+                .get_mut(&binding.id)
+                .expect("visibility control");
+            value.base = 0.0;
+            value.value = 0.0;
+            visibility_bindings += 1;
+        }
+    }
+    assert!(
+        visibility_bindings >= 2,
+        "compound visibility fans out across materials"
+    );
+    let target = h.make_target("imported-flower-empty-scene");
+
+    warm_imported_runtime(&mut visible, &target, &shown_params);
+    assert!(
+        visible.errors().is_empty(),
+        "visible flower errors: {:?}",
+        visible.errors()
+    );
+    let normal = h.readback(&target.texture);
+    assert!(
+        pixel_stats(&normal).0 > 1.0,
+        "flower must render before hiding"
+    );
+
+    render_frame_with_params(
+        &mut visible,
+        &target,
+        1,
+        h.width,
+        h.height,
+        &h.device,
+        &hidden_params,
+    );
+    assert!(
+        visible.errors().is_empty(),
+        "hidden flower errors: {:?}",
+        visible.errors()
+    );
+    let empty = h.readback(&target.texture);
+    assert!(
+        max_abs_pixel(&empty) < 1e-4,
+        "all-hidden flower frame must clear the prior image, max_abs={:.6}",
+        max_abs_pixel(&empty)
+    );
+
+    render_frame_with_params(
+        &mut visible,
+        &target,
+        2,
+        h.width,
+        h.height,
+        &h.device,
+        &shown_params,
+    );
+    assert!(
+        visible.errors().is_empty(),
+        "restored flower errors: {:?}",
+        visible.errors()
+    );
+    let restored = h.readback(&target.texture);
+    assert!(
+        pixel_stats(&restored).0 > 1.0,
+        "flower must render after restoring visibility"
+    );
+}
+
+#[test]
+fn imported_flower_physics_off_renders_authored_transform() {
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::project::Project;
     use manifold_core::types::LayerType;
     use manifold_core::{Beats, GraphTarget};
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::{
-        EnableSceneObjectPhysicsCommand, SplitSceneObjectCommand,
+        EnableSceneObjectPhysicsCommand, SetGraphNodeParamCommand,
     };
-    use manifold_renderer::node_graph::{
-        gltf_import::assemble_import_graph, scene_exposure::metadata_for_node_type,
-    };
+    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+    use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
@@ -41,217 +458,127 @@ fn physics_imported_flower_enable_split_render_and_reset() {
         .nodes
         .iter()
         .find(|n| n.type_id == "node.render_scene")
-        .unwrap()
+        .expect("render scene")
         .id;
-    let registry = PrimitiveRegistry::with_builtin();
+    let mut project = Project::default();
+    let preset_id = imported.preset_metadata.as_ref().unwrap().id.clone();
+    let layer_index =
+        project
+            .timeline
+            .add_layer("Flower Physics Off", LayerType::Generator, preset_id);
+    let layer = &mut project.timeline.layers[layer_index];
+    layer.gen_params_or_init().graph = Some(imported.clone());
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            Beats(0.0),
+            Beats(16.0),
+        ));
+    let target = GraphTarget::Generator(layer.layer_id.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(
+        target.clone(),
+        render_id,
+        0,
+        metadata_for_node_type("node.rigid_body"),
+        imported.clone(),
+    )
+    .with_world_metadata(metadata_for_node_type("node.physics_world"));
+    enable.execute(&mut project);
+    assert!(
+        enable.was_applied(),
+        "enable rejected: {:?}",
+        enable.rejection_reason()
+    );
+    let enabled_graph = project.timeline.layers[layer_index]
+        .generator_graph()
+        .expect("enabled graph");
+    let group = enabled_graph
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "group")
+        .expect("imported object group");
+    let body_id = group
+        .group
+        .as_ref()
+        .and_then(|group| {
+            group
+                .nodes
+                .iter()
+                .find(|node| node.type_id == "node.rigid_body")
+        })
+        .expect("enabled rigid body")
+        .id;
+    let mut disable = SetGraphNodeParamCommand::new(
+        target.clone(),
+        body_id,
+        "enabled".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false },
+        imported.clone(),
+    )
+    .with_scope(vec![group.id]);
+    disable.execute(&mut project);
+    assert!(disable.was_applied(), "Physics OFF bool write was rejected");
+    let def: EffectGraphDef = project.timeline.layers[layer_index]
+        .generator_graph()
+        .expect("disabled graph")
+        .clone();
+    let body = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "group")
+        .and_then(|group| group.group.as_ref())
+        .and_then(|group| {
+            group
+                .nodes
+                .iter()
+                .find(|node| node.type_id == "node.rigid_body")
+        })
+        .expect("Physics OFF keeps the body definition");
+    assert_eq!(
+        body.params.get("enabled"),
+        Some(&manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false }),
+        "Physics OFF must disable the authored body through its bool parameter"
+    );
+
     let h = harness::shared();
-    for split in [false, true] {
-        let mut project = Project::default();
-        let preset_id = imported.preset_metadata.as_ref().unwrap().id.clone();
-        let layer_index =
-            project
-                .timeline
-                .add_layer("Flower Physics", LayerType::Generator, preset_id);
-        let layer = &mut project.timeline.layers[layer_index];
-        layer.gen_params_or_init().graph = Some(imported.clone());
-        layer
-            .clips
-            .push(manifold_core::clip::TimelineClip::new_generator(
-                Beats(0.0),
-                Beats(16.0),
-            ));
-        let target = GraphTarget::Generator(layer.layer_id.clone());
-        let mut enable = EnableSceneObjectPhysicsCommand::new(
-            target.clone(),
-            render_id,
-            0,
-            metadata_for_node_type("node.rigid_body"),
-            imported.clone(),
-        )
-        .with_world_metadata(metadata_for_node_type("node.physics_world"));
-        enable.execute(&mut project);
-        assert!(
-            enable.was_applied(),
-            "enable rejected: {:?}",
-            enable.rejection_reason()
-        );
-        if split {
-            let mut command = SplitSceneObjectCommand::new(
-                target,
-                render_id,
-                0,
-                metadata_for_node_type("node.rigid_body"),
-                imported.clone(),
-            );
-            command.execute(&mut project);
-            assert!(
-                command.was_applied(),
-                "split rejected: {:?}",
-                command.rejection_reason()
-            );
-        }
-        let mut def = project.timeline.layers[layer_index]
-            .generator_graph()
-            .unwrap()
-            .clone();
-        let world = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.physics_world")
-            .unwrap()
-            .id;
-        // Same floor mesh and collider mapping as the shipped Physics Solids.
-        let ground: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS_JSON).unwrap();
-        let object_index = def
-            .wires
-            .iter()
-            .filter(|w| w.to_node == render_id && w.to_port.starts_with("object_"))
-            .count();
-        for mut node in ground
-            .nodes
-            .into_iter()
-            .filter(|n| (100..105).contains(&n.id))
-        {
-            node.id += 100_000;
-            if node.type_id == "node.transform_3d" {
-                node.params
-                    .insert("pos_y".into(), SerializedParamValue::Float { value: -1.5 });
-                node.params.insert(
-                    "scale_x".into(),
-                    SerializedParamValue::Float { value: 20.0 },
-                );
-                node.params.insert(
-                    "scale_z".into(),
-                    SerializedParamValue::Float { value: 20.0 },
-                );
-            }
-            def.nodes.push(node);
-        }
-        for mut wire in ground
-            .wires
-            .into_iter()
-            .filter(|w| (100..105).contains(&w.from_node) || (100..105).contains(&w.to_node))
-        {
-            if (100..105).contains(&wire.from_node) {
-                wire.from_node += 100_000;
-            }
-            if (100..105).contains(&wire.to_node) {
-                wire.to_node += 100_000;
-            }
-            if wire.to_node == 40 {
-                wire.to_node = world;
-                wire.to_port = "body_63".into();
-            }
-            if wire.from_node == 40 {
-                wire.from_node = world;
-                wire.from_port = "pose_63".into();
-            }
-            if wire.to_node == 30 {
-                wire.to_node = render_id;
-                wire.to_port = format!("object_{object_index}");
-            }
-            def.wires.push(wire);
-        }
-        def.nodes
-            .iter_mut()
-            .find(|n| n.id == render_id)
-            .unwrap()
-            .params
-            .insert(
-                "objects".into(),
-                SerializedParamValue::Float {
-                    value: (object_index + 1) as f32,
-                },
-            );
-        project.timeline.layers[layer_index]
-            .gen_params_or_init()
-            .graph = Some(def.clone());
-        project.embedded_presets.push(EmbeddedPreset {
-            kind: manifold_core::preset_def::PresetKind::Generator,
-            def: def.clone(),
-            origin: EmbeddedOrigin::Saved,
-        });
-        let label = if split { "split" } else { "intact" };
-        let output = std::env::temp_dir().join(format!("manifold-standard-box3d-{label}.manifold"));
-        manifold_io::saver::save_project_v1(&project, &output).unwrap();
-        let reloaded = manifold_io::loader::load_project(&output).unwrap();
-        let def = reloaded.timeline.layers[layer_index]
-            .generator_graph()
-            .unwrap()
-            .clone();
-        let mut runtime = PresetRuntime::from_def_with_device(
-            def,
-            &registry,
-            h.device.clone(),
-            h.width,
-            h.height,
-            GpuTextureFormat::Rgba16Float,
-            None,
-        )
-        .expect("edited and saved graph builds");
-        let target = h.make_target("imported-physics");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
-            assert!(
-                runtime.errors().is_empty(),
-                "imported physics errors: {:?}",
-                runtime.errors()
-            );
-            if !runtime.warmup_pending() {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "collider warmup timed out"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
-        let initial = h.readback(&target.texture);
-        assert!(
-            pixel_stats(&initial).0 > 1.0,
-            "flower must render before simulation"
-        );
-        std::fs::write(
-            format!("/tmp/standard-box3d-{label}-initial.png"),
-            manifold_renderer::headless_readback::readback_to_srgb_png(
-                &h.device,
-                &target.texture,
-                h.width,
-                h.height,
-            ),
-        )
-        .unwrap();
-        for frame in 1..=120 {
-            render_frame(&mut runtime, &target, frame, h.width, h.height, &h.device);
-        }
-        assert!(
-            runtime.errors().is_empty(),
-            "simulation errors: {:?}",
-            runtime.errors()
-        );
-        let settled = h.readback(&target.texture);
-        assert!(
-            mean_abs_diff(&initial, &settled) > 0.001,
-            "imported physics must move visible geometry"
-        );
-        std::fs::write(
-            format!("/tmp/standard-box3d-{label}-settled.png"),
-            manifold_renderer::headless_readback::readback_to_srgb_png(
-                &h.device,
-                &target.texture,
-                h.width,
-                h.height,
-            ),
-        )
-        .unwrap();
-        render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
-        let reset = h.readback(&target.texture);
-        assert!(
-            mean_abs_diff(&initial, &reset) < 0.002,
-            "transport reset must restore imported poses"
-        );
+    let runtime = PresetRuntime::from_def_with_device(
+        def,
+        &PrimitiveRegistry::with_builtin(),
+        h.device.clone(),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("physics-off flower graph builds");
+    let target = h.make_target("imported-flower-physics-off");
+    let mut runtime = runtime;
+    warm_imported_runtime(&mut runtime, &target, &ParamManifest::default());
+    assert!(
+        runtime.errors().is_empty(),
+        "Physics Off errors: {:?}",
+        runtime.errors()
+    );
+    let output = h.readback(&target.texture);
+    assert!(
+        pixel_stats(&output).0 > 1.0,
+        "Physics Off flower must render"
+    );
+}
+
+fn warm_imported_runtime(
+    runtime: &mut PresetRuntime,
+    target: &manifold_renderer::render_target::RenderTarget,
+    params: &ParamManifest,
+) {
+    let h = harness::shared();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        render_frame_with_params(runtime, target, 0, h.width, h.height, &h.device, params);
+        assert!(runtime.errors().is_empty(), "import errors: {:?}", runtime.errors());
+        if !runtime.warmup_pending() { break; }
+        assert!(std::time::Instant::now() < deadline, "import warmup timed out");
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
@@ -262,6 +589,26 @@ fn render_frame(
     width: u32,
     height: u32,
     device: &manifold_gpu::GpuDevice,
+) {
+    render_frame_with_params(
+        runtime,
+        target,
+        frame,
+        width,
+        height,
+        device,
+        &ParamManifest::default(),
+    );
+}
+
+fn render_frame_with_params(
+    runtime: &mut PresetRuntime,
+    target: &manifold_renderer::render_target::RenderTarget,
+    frame: u32,
+    width: u32,
+    height: u32,
+    device: &manifold_gpu::GpuDevice,
+    params: &ParamManifest,
 ) {
     let seconds = frame as f64 / 60.0;
     let context = PresetContext {
@@ -283,12 +630,7 @@ fn render_frame(
     let mut encoder = device.create_encoder("physics-solids-render");
     {
         let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
-        runtime.render(
-            &mut gpu,
-            &target.texture,
-            &context,
-            &manifold_core::params::ParamManifest::default(),
-        );
+        runtime.render(&mut gpu, &target.texture, &context, params);
     }
     encoder.commit_and_wait_completed();
 }
@@ -309,6 +651,13 @@ fn pixel_stats(bytes: &[u8]) -> (f64, f32) {
         peak = peak.max(r.max(g).max(b));
     }
     (luma_sum, peak)
+}
+
+fn max_abs_pixel(bytes: &[u8]) -> f32 {
+    bytes
+        .chunks_exact(2)
+        .map(|pixel| f16::from_le_bytes([pixel[0], pixel[1]]).to_f32().abs())
+        .fold(0.0, f32::max)
 }
 
 fn mean_abs_diff(before: &[u8], after: &[u8]) -> f64 {
@@ -416,19 +765,25 @@ fn physics_nonlinear_animated_graph_matches_irregular_frame_delivery() {
             _ => {}
         }
     }
-    def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
-        "id": 500, "nodeId": "nonlinear_animated_x", "typeId": "node.lfo",
-        "params": {
-            "rate_mode": { "type": "Enum", "value": 1 },
-            "angular_rate": { "type": "Float", "value": 188.49556 },
-            "phase": { "type": "Float", "value": 0.75 },
-            "min": { "type": "Float", "value": -2.0 },
-            "max": { "type": "Float", "value": 2.0 }
-        }
-    }));
-    def["wires"].as_array_mut().unwrap().push(serde_json::json!({
-        "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
-    }));
+    def["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": 500, "nodeId": "nonlinear_animated_x", "typeId": "node.lfo",
+            "params": {
+                "rate_mode": { "type": "Enum", "value": 1 },
+                "angular_rate": { "type": "Float", "value": 188.49556 },
+                "phase": { "type": "Float", "value": 0.75 },
+                "min": { "type": "Float", "value": -2.0 },
+                "max": { "type": "Float", "value": 2.0 }
+            }
+        }));
+    def["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
+        }));
     let json = serde_json::to_string(&def).unwrap();
     let build = || {
         PresetRuntime::from_json_str_with_device(
@@ -447,13 +802,30 @@ fn physics_nonlinear_animated_graph_matches_irregular_frame_delivery() {
     let regular_target = harness.make_target("physics-nonlinear-regular");
     let irregular_target = harness.make_target("physics-nonlinear-irregular");
     for frame in 0..=8 {
-        render_frame(&mut regular, &regular_target, frame, harness.width, harness.height, &harness.device);
+        render_frame(
+            &mut regular,
+            &regular_target,
+            frame,
+            harness.width,
+            harness.height,
+            &harness.device,
+        );
         if frame % 4 == 0 {
-            render_frame(&mut irregular, &irregular_target, frame, harness.width, harness.height, &harness.device);
+            render_frame(
+                &mut irregular,
+                &irregular_target,
+                frame,
+                harness.width,
+                harness.height,
+                &harness.device,
+            );
         }
     }
     let regular_image = harness.readback(&regular_target.texture);
     let irregular_image = harness.readback(&irregular_target.texture);
     let diff = mean_abs_diff(&regular_image, &irregular_image);
-    assert!(diff < 0.002, "nonlinear Animated contact/render diverged under irregular delivery: mean_abs_diff={diff:.6}");
+    assert!(
+        diff < 0.002,
+        "nonlinear Animated contact/render diverged under irregular delivery: mean_abs_diff={diff:.6}"
+    );
 }

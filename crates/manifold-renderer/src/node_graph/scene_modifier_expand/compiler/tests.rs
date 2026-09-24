@@ -24,6 +24,7 @@ pub(super) fn fixture() -> EffectGraphDef {
         preparation_params: vec![],
         initializers: vec![],
         calibrations: vec![],
+        shatter: None,
         stages: vec![SceneModifierStageDef {
             group: NodeId::new("elastic_stage"),
             scope: SceneStageScope::EachObject,
