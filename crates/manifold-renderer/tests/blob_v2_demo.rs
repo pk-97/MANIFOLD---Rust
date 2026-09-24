@@ -277,6 +277,31 @@ fn moving_blob_scene(frame: u32, colour: [f32; 3]) -> Vec<[f32; 4]> {
     pixels
 }
 
+fn dim_contrast_scene() -> Vec<[f32; 4]> {
+    let mut pixels = blank();
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let large_ring = {
+                let dx = x as f32 - 78.0;
+                let dy = y as f32 - 80.0;
+                let radius = (dx * dx + dy * dy).sqrt();
+                (27.0..=37.0).contains(&radius)
+            };
+            let small_blob =
+                (x as f32 - 196.0).powi(2) + (y as f32 - 48.0).powi(2) < 8.0_f32.powi(2);
+            let value = if large_ring {
+                0.22
+            } else if small_blob {
+                0.09
+            } else {
+                0.02
+            };
+            pixels[(y * WIDTH + x) as usize] = [value, value, value, 1.0];
+        }
+    }
+    pixels
+}
+
 fn render_fixture(
     device: &Arc<GpuDevice>,
     runtime: &mut PresetRuntime,
@@ -775,5 +800,118 @@ fn blob_v2_source_variants_demo() {
             moving_delta,
             mean_abs_diff(&cut_output, &source_bytes(&hard_cut))
         ),
+    );
+}
+
+#[test]
+fn blob_v2_detection_mode() {
+    let device = Arc::new(GpuDevice::new());
+    let registry = PrimitiveRegistry::with_builtin();
+    let input = input_texture(&device, "blob-v2-detection-mode-input");
+
+    // The default selector and an explicit Brightness selector must agree,
+    // including their tracker warm-up behaviour.
+    let default_effect = effect("BlobTrackingV2");
+    let mut default_runtime = build(&device, &registry, &default_effect);
+    let mut brightness_effect = effect("BlobTrackingV2");
+    set_param(&mut brightness_effect, "detection_mode", 0.0);
+    let mut brightness_runtime = build(&device, &registry, &brightness_effect);
+    let bright_source = ring_scene(0, [0.1, 0.8, 0.1], true);
+    let mut default_output = Vec::new();
+    let mut brightness_output = Vec::new();
+    for frame in 0..6 {
+        default_output = render_fixture(
+            &device,
+            &mut default_runtime,
+            &default_effect,
+            &input,
+            frame,
+            &bright_source,
+        );
+        brightness_output = render_fixture(
+            &device,
+            &mut brightness_runtime,
+            &brightness_effect,
+            &input,
+            frame,
+            &bright_source,
+        );
+    }
+    assert_finite_and_bounded("detection-default", &default_output);
+    assert_finite_and_bounded("detection-brightness", &brightness_output);
+    assert!(
+        mean_abs_diff(&default_output, &brightness_output) < 0.0001,
+        "default detection mode must remain Brightness-compatible"
+    );
+
+    // Both shapes are below the brightness threshold, while their local
+    // contrast remains visible to the edge path. The different contrasts
+    // make the detector's threshold binding observable as a density change.
+    let dim_source = dim_contrast_scene();
+    let mut edge_effect = effect("BlobTrackingV2");
+    set_param(&mut edge_effect, "detection_mode", 1.0);
+    set_param(&mut edge_effect, "threshold", 0.15);
+    let mut edge_runtime = build(&device, &registry, &edge_effect);
+    let mut low_threshold_output = Vec::new();
+    for frame in 0..6 {
+        low_threshold_output = render_fixture(
+            &device,
+            &mut edge_runtime,
+            &edge_effect,
+            &input,
+            frame,
+            &dim_source,
+        );
+    }
+    assert_finite_and_bounded("detection-edges-low-threshold", &low_threshold_output);
+    let low_threshold_delta = mean_abs_diff(&low_threshold_output, &source_bytes(&dim_source));
+    assert!(
+        low_threshold_delta > 0.0001,
+        "edge detections must produce visible output"
+    );
+
+    let mut dim_brightness_effect = effect("BlobTrackingV2");
+    set_param(&mut dim_brightness_effect, "threshold", 0.5);
+    let mut dim_brightness_runtime = build(&device, &registry, &dim_brightness_effect);
+    let mut dim_brightness_output = Vec::new();
+    for frame in 0..6 {
+        dim_brightness_output = render_fixture(
+            &device,
+            &mut dim_brightness_runtime,
+            &dim_brightness_effect,
+            &input,
+            frame,
+            &dim_source,
+        );
+    }
+    assert_finite_and_bounded("detection-brightness-dim", &dim_brightness_output);
+    let dim_brightness_delta = mean_abs_diff(&dim_brightness_output, &source_bytes(&dim_source));
+    assert!(
+        dim_brightness_delta < 0.0001,
+        "Brightness mode must exclude the dim fixture: delta={dim_brightness_delta:.5}"
+    );
+    assert!(
+        low_threshold_delta > dim_brightness_delta + 0.0001,
+        "Edges must add detections that Brightness excludes: edges={low_threshold_delta:.5}, brightness={dim_brightness_delta:.5}"
+    );
+
+    set_param(&mut edge_effect, "threshold", 0.65);
+    edge_runtime.reset_state(&device);
+    let mut high_threshold_output = Vec::new();
+    for frame in 0..6 {
+        high_threshold_output = render_fixture(
+            &device,
+            &mut edge_runtime,
+            &edge_effect,
+            &input,
+            frame,
+            &dim_source,
+        );
+    }
+    assert_finite_and_bounded("detection-edges-high-threshold", &high_threshold_output);
+    let high_threshold_delta = mean_abs_diff(&high_threshold_output, &source_bytes(&dim_source));
+    assert!(
+        low_threshold_delta > high_threshold_delta + 0.0001,
+        "raising the edge threshold must reduce detected density: low={low_threshold_delta:.5}, high={high_threshold_delta:.5}"
     );
 }

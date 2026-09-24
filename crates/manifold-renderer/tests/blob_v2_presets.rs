@@ -22,6 +22,7 @@ const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
         "BlobTrackingV2",
         &[
             "amount",
+            "detection_mode",
             "threshold",
             "denoise",
             "min_area",
