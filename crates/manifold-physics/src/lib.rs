@@ -73,6 +73,8 @@ mod ffi {
             move_pose: i32,
         ) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
+        pub fn manifold_box3d_body_set_hit_events(body: u64, enabled: i32) -> i32;
+        pub fn manifold_box3d_body_hit_speed(world: u32, body: u64, speed_out: *mut f32) -> i32;
         pub fn manifold_box3d_body_linear_velocity(body: u64, velocity_out: *mut f32) -> i32;
         pub fn manifold_box3d_body_set_target(
             body: u64,
@@ -445,6 +447,37 @@ impl PhysicsWorld {
             Ok(())
         } else {
             Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Enable or disable Box3D hit events for a body.
+    ///
+    /// Hit events use the native world's default 1 m/s approach-speed threshold.
+    pub fn set_hit_events(
+        &mut self,
+        handle: BodyHandle,
+        enabled: bool,
+    ) -> Result<(), PhysicsError> {
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe { ffi::manifold_box3d_body_set_hit_events(native, i32::from(enabled)) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Return the maximum confirmed hit approach speed for a body in the latest outer step.
+    pub fn hit_speed(&self, handle: BodyHandle) -> Result<Option<f32>, PhysicsError> {
+        let native = self.native_body(handle)?;
+        let mut speed = 0.0;
+        let _lock = native_lock();
+        let result = unsafe { ffi::manifold_box3d_body_hit_speed(self.native, native, &mut speed) };
+        match result {
+            0 => Ok(Some(speed)),
+            3 => Ok(None),
+            _ => Err(PhysicsError::NativeFailure),
         }
     }
 
@@ -1106,6 +1139,70 @@ mod tests {
         );
         assert_eq!(
             other_world.linear_velocity(dynamic),
+            Err(PhysicsError::InvalidHandle)
+        );
+    }
+
+    #[test]
+    fn hit_events_report_confirmed_speed_for_only_the_requested_body() {
+        let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
+        world
+            .add_hull(
+                &cube(0.1),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [0.0, -0.1, 0.0],
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let falling = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [0.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let unrelated = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        world.set_hit_events(falling, true).unwrap();
+        assert_eq!(world.hit_speed(falling).unwrap(), None);
+
+        let mut speed = None;
+        for _ in 0..180 {
+            world.step(Seconds(1.0 / 60.0), 4).unwrap();
+            if let Some(hit_speed) = world.hit_speed(falling).unwrap() {
+                speed = Some(hit_speed);
+                break;
+            }
+        }
+        let speed = speed.expect("falling body should produce a confirmed hit event");
+        assert!(
+            speed > 1.0,
+            "hit speed should exceed the native threshold: {speed}"
+        );
+        assert_eq!(world.hit_speed(unrelated).unwrap(), None);
+
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        assert_eq!(world.hit_speed(falling).unwrap(), None);
+
+        let mut other_world = PhysicsWorld::new([0.0; 3]).unwrap();
+        assert_eq!(
+            other_world.hit_speed(falling),
+            Err(PhysicsError::InvalidHandle)
+        );
+        assert_eq!(
+            other_world.set_hit_events(falling, true),
             Err(PhysicsError::InvalidHandle)
         );
     }

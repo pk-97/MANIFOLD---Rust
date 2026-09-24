@@ -1,9 +1,11 @@
 //! One exact-mesh Box3D drop, saved as a GLB replay for MANIFOLD's existing importer.
-//! Usage: cargo run -p manifold-renderer --example flower_mesh_drop -- input.glb output.glb
+//! Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset]
+//! Beat offsets start at zero; `120 4` places impact at two seconds.
 //! Original geometry/materials are preserved. No scan collider proxies or mesh reduction.
 
 use std::{borrow::Cow, error::Error, fs, path::Path};
 
+use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
 use serde_json::{Value, json};
 
@@ -14,6 +16,61 @@ const IDENTITY: Mat4 = [
     [0.0, 0.0, 1.0, 0.0],
     [0.0, 0.0, 0.0, 1.0],
 ];
+
+const CONTACT_HZ: u32 = 240;
+
+#[derive(Clone, Copy)]
+struct MusicalTiming {
+    bpm: Bpm,
+    impact: Beats,
+}
+
+impl MusicalTiming {
+    fn new(bpm: Bpm, impact: Beats) -> Result<Self, Box<dyn Error>> {
+        if !bpm.is_valid() || !impact.is_finite() || impact < Beats::ZERO {
+            return Err("Use 20–300 BPM and a finite, nonnegative impact beat offset".into());
+        }
+        Ok(Self { bpm, impact })
+    }
+
+    fn impact_time(self) -> Seconds {
+        Seconds(self.impact.0 * 60.0 / f64::from(self.bpm.0))
+    }
+
+    fn release_time(self, flight: Seconds) -> Result<Seconds, Box<dyn Error>> {
+        let release = self.impact_time() - flight;
+        if !release.is_finite() || release < Seconds::ZERO {
+            return Err(
+                "Impact beat is too early for this drop; choose a later beat offset".into(),
+            );
+        }
+        Ok(release)
+    }
+}
+
+fn delay_replay(
+    times: &mut Vec<[f32; 1]>,
+    positions: &mut Vec<[f32; 3]>,
+    rotations: &mut Vec<[f32; 4]>,
+    release: Seconds,
+) -> Result<(), Box<dyn Error>> {
+    for time in times.iter_mut() {
+        time[0] = (f64::from(time[0]) + release.0) as f32;
+    }
+    if times.iter().any(|t| !t[0].is_finite())
+        || times.windows(2).any(|pair| pair[0][0] >= pair[1][0])
+    {
+        return Err("Beat offset is too large to preserve glTF animation time precision".into());
+    }
+    if release > Seconds::ZERO {
+        // Hold the original release pose until its scheduled time. All later
+        // keyframe intervals stay unchanged: no speed or gravity adjustment.
+        times.insert(0, [0.0]);
+        positions.insert(0, positions[0]);
+        rotations.insert(0, rotations[0]);
+    }
+    Ok(())
+}
 
 fn multiply(a: Mat4, b: Mat4) -> Mat4 {
     std::array::from_fn(|c| std::array::from_fn(|r| (0..4).map(|k| a[k][r] * b[c][k]).sum()))
@@ -171,7 +228,7 @@ fn slab() -> [[f32; 3]; 8] {
     })
 }
 
-fn run(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
+fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(), Box<dyn Error>> {
     if input == output || (output.exists() && fs::canonicalize(input)? == fs::canonicalize(output)?)
     {
         return Err("Choose a separate output file; the source scan must remain intact".into());
@@ -246,6 +303,7 @@ fn run(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
         },
     )?;
     let body = world.add_triangle_mesh(&vertices, &triangles, config)?;
+    world.set_hit_events(body, true)?;
     eprintln!(
         "Exact scan collider: {} vertices, {} triangles; longest dimension 2.2 m; 1 m drop. Uniform surface mass, no collider approximation.",
         vertices.len(),
@@ -257,14 +315,25 @@ fn run(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
     let mut lowest = f32::INFINITY;
     let mut final_clearance = 0.0;
     let start = std::time::Instant::now();
-    const REPLAY_FRAMES: u32 = 360;
-    for frame in 0..=REPLAY_FRAMES {
-        if frame > 0 {
+    const REPLAY_SECONDS: u32 = 6;
+    let mut first_hit = None;
+    for tick in 0..=REPLAY_SECONDS * CONTACT_HZ {
+        let mut impact_sample = false;
+        if tick > 0 {
             // Mesh CCD is unsupported. Refresh contacts at 240 Hz so this
             // one-metre drop advances less than the speculative contact margin.
-            for _ in 0..4 {
-                world.step(Seconds(1.0 / 240.0), 4)?;
+            world.step(Seconds(1.0 / f64::from(CONTACT_HZ)), 4)?;
+            if first_hit.is_none()
+                && let Some(speed) = world.hit_speed(body)?
+            {
+                first_hit = Some((Seconds(f64::from(tick) / f64::from(CONTACT_HZ)), speed));
+                impact_sample = true;
             }
+        }
+        // Keep the exact detected impact pose even when it falls between the
+        // usual 60 Hz replay samples. Event timing is bounded by a 240 Hz tick.
+        if tick % 4 != 0 && !impact_sample {
+            continue;
         }
         let pose = world.pose(body)?;
         if !pose
@@ -280,16 +349,41 @@ fn run(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
             .map(|&p| rotate(pose.rotation, p)[1] + pose.position[1])
             .fold(f32::INFINITY, f32::min);
         lowest = lowest.min(final_clearance);
-        times.push([frame as f32 / 60.0]);
+        times.push([tick as f32 / CONTACT_HZ as f32]);
         positions.push(pose.position);
         rotations.push(pose.rotation);
     }
     eprintln!(
         "{} s simulation in {:.2} s: lowest vertex y={lowest:.5} m, final clearance={final_clearance:.5} m, final velocity={:?}",
-        REPLAY_FRAMES / 60,
+        REPLAY_SECONDS,
         start.elapsed().as_secs_f64(),
         world.linear_velocity(body)?
     );
+    if let Some(timing) = timing {
+        let (flight, speed) = first_hit.ok_or("No impact event was detected for beat alignment")?;
+        let release = timing.release_time(flight)?;
+        delay_replay(&mut times, &mut positions, &mut rotations, release)?;
+        // Private experiment metadata; the importer needs only the standard
+        // animation keys. Beat offsets are measured from playback time zero.
+        doc["extras"]["flowerDropTiming"] = json!({
+            "bpm": timing.bpm.0,
+            "impactBeatOffset": timing.impact.0,
+            "impactSeconds": timing.impact_time().0,
+            "releaseSeconds": release.0,
+            "flightSeconds": flight.0,
+            "approachSpeed": speed,
+            "resolutionSeconds": 1.0 / f64::from(CONTACT_HZ),
+        });
+        eprintln!(
+            "{}: release at {:.6} s; first solver hit after {:.6} s ({speed:.3} m/s); impact at beat offset {} / {:.6} s. Event resolution {:.3} ms.",
+            timing.bpm,
+            release.0,
+            flight.0,
+            timing.impact.0,
+            timing.impact_time().0,
+            1000.0 / f64::from(CONTACT_HZ)
+        );
+    }
     let normalized = append(
         &mut doc,
         "nodes",
@@ -344,8 +438,56 @@ fn run(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 {
-        return Err("Usage: flower_mesh_drop input.glb output.glb".into());
+    if args.len() != 2 && args.len() != 4 {
+        return Err("Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset] (120 4 = impact at 2 seconds)".into());
     }
-    run(Path::new(&args[0]), Path::new(&args[1]))
+    let timing = if args.len() == 4 {
+        Some(MusicalTiming::new(
+            Bpm(args[2].to_str().ok_or("Invalid BPM text")?.parse()?),
+            Beats(args[3].to_str().ok_or("Invalid beat text")?.parse()?),
+        )?)
+    } else {
+        None
+    };
+    run(Path::new(&args[0]), Path::new(&args[1]), timing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn musical_timing_preserves_flight_and_holds_until_release() {
+        for bpm in [90.0, 120.0, 173.0] {
+            let timing = MusicalTiming::new(Bpm(bpm), Beats(4.0)).unwrap();
+            let flight = Seconds(107.0 / 240.0);
+            let release = timing.release_time(flight).unwrap();
+            let mut times = vec![[0.0], [flight.as_f32()], [6.0]];
+            let mut positions = vec![[1.0; 3], [2.0; 3], [3.0; 3]];
+            let mut rotations = vec![[0.0, 0.0, 0.0, 1.0]; 3];
+            delay_replay(&mut times, &mut positions, &mut rotations, release).unwrap();
+            assert_eq!(positions[0], positions[1]);
+            assert_eq!(times[0], [0.0]);
+            assert!((f64::from(times[2][0]) - timing.impact_time().0).abs() < 1e-6);
+            assert!((f64::from(times[2][0] - times[1][0]) - flight.0).abs() < 1e-6);
+            assert_eq!(positions[2], [2.0; 3]);
+        }
+    }
+
+    #[test]
+    fn musical_timing_rejects_impossible_or_unrepresentable_schedules() {
+        assert!(MusicalTiming::new(Bpm(0.0), Beats(4.0)).is_err());
+        assert!(MusicalTiming::new(Bpm(120.0), Beats(f64::NAN)).is_err());
+        let early = MusicalTiming::new(Bpm(120.0), Beats(0.5)).unwrap();
+        assert!(early.release_time(Seconds(0.45)).is_err());
+        assert!(
+            delay_replay(
+                &mut vec![[0.0], [1.0 / 240.0]],
+                &mut vec![[0.0; 3]; 2],
+                &mut vec![[0.0, 0.0, 0.0, 1.0]; 2],
+                Seconds(1e10),
+            )
+            .is_err()
+        );
+    }
 }

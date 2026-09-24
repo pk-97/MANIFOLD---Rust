@@ -11,6 +11,7 @@ enum
 	BOX3D_BRIDGE_OK = 0,
 	BOX3D_BRIDGE_ERROR = 1,
 	BOX3D_BRIDGE_NO_SHAPE = 2,
+	BOX3D_BRIDGE_NO_HIT = 3,
 };
 
 static b3BodyType box3d_body_type( int kind )
@@ -293,6 +294,46 @@ int manifold_box3d_body_set_bullet( uint64_t body_value, int enabled )
 		return BOX3D_BRIDGE_ERROR;
 	}
 	b3Body_SetBullet( body_id, enabled != 0 );
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_set_hit_events( uint64_t body_value, int enabled )
+{
+	b3Body_EnableHitEvents( b3LoadBodyId( body_value ), enabled != 0 );
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_hit_speed( uint32_t world_value, uint64_t body_value, float* speed_out )
+{
+	if ( speed_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	b3ContactEvents events = b3World_GetContactEvents( b3LoadWorldId( world_value ) );
+	float max_speed = 0.0f;
+	bool found = false;
+	for ( int i = 0; i < events.hitCount; ++i )
+	{
+		b3ContactHitEvent event = events.hitEvents[i];
+		b3BodyId body_a = b3Shape_GetBody( event.shapeIdA );
+		b3BodyId body_b = b3Shape_GetBody( event.shapeIdB );
+		if ( B3_ID_EQUALS( body_a, body_id ) || B3_ID_EQUALS( body_b, body_id ) )
+		{
+			if ( !found || event.approachSpeed > max_speed )
+			{
+				max_speed = event.approachSpeed;
+				found = true;
+			}
+		}
+	}
+
+	if ( !found )
+	{
+		return BOX3D_BRIDGE_NO_HIT;
+	}
+	*speed_out = max_speed;
 	return BOX3D_BRIDGE_OK;
 }
 
