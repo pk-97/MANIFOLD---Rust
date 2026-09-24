@@ -76,6 +76,18 @@
         "formatString": "F1"
       },
       {
+        "id": "separation",
+        "name": "Separate",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "Separate"
+      },
+      {
         "id": "min_area",
         "name": "Min Area",
         "min": 0.0,
@@ -253,6 +265,60 @@
         "target": {
           "kind": "node",
           "nodeId": "blur_v",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "separation",
+        "label": "Separate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "separate_erode_x",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": -1.0
+      },
+      {
+        "id": "separation",
+        "label": "Separate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "separate_erode_y",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": -1.0
+      },
+      {
+        "id": "separation",
+        "label": "Separate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "separate_dilate_x",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "separation",
+        "label": "Separate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "separate_dilate_y",
           "param": "radius"
         },
         "convert": {
@@ -670,6 +736,74 @@
           {
             "id": 21,
             "typeId": "system.group_output"
+          },
+          {
+            "id": 23,
+            "nodeId": "separate_erode_x",
+            "typeId": "node.mask_extrema",
+            "handle": "separate_erode_x",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Separate Erode X"
+          },
+          {
+            "id": 24,
+            "nodeId": "separate_erode_y",
+            "typeId": "node.mask_extrema",
+            "handle": "separate_erode_y",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Separate Erode Y"
+          },
+          {
+            "id": 25,
+            "nodeId": "separate_dilate_x",
+            "typeId": "node.mask_extrema",
+            "handle": "separate_dilate_x",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Separate Dilate X"
+          },
+          {
+            "id": 26,
+            "nodeId": "separate_dilate_y",
+            "typeId": "node.mask_extrema",
+            "handle": "separate_dilate_y",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Separate Dilate Y"
           }
         ],
         "wires": [
@@ -710,7 +844,7 @@
             "toPort": "in"
           },
           {
-            "fromNode": 4,
+            "fromNode": 26,
             "fromPort": "out",
             "toNode": 5,
             "toPort": "mask"
@@ -768,6 +902,30 @@
             "fromPort": "out",
             "toNode": 10,
             "toPort": "high"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "in"
           }
         ],
         "tint": [

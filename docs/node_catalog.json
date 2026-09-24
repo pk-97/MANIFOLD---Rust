@@ -12873,6 +12873,9 @@
       ],
       "category": "Mask",
       "examples": [
+        "BlobTrackingV2",
+        "BlobTrackingV2Colour",
+        "BlobTrackingV2Motion",
         "MaskBlob",
         "MaskBlobColour",
         "MaskBlobMotion"
@@ -30665,6 +30668,13 @@
           "name": "Denoise"
         },
         {
+          "default": "0",
+          "id": "separation",
+          "max": "3",
+          "min": "0",
+          "name": "Separate"
+        },
+        {
           "default": "0.001",
           "id": "min_area",
           "max": "0.25",
@@ -30765,6 +30775,13 @@
           "name": "Denoise"
         },
         {
+          "default": "0",
+          "id": "separation",
+          "max": "3",
+          "min": "0",
+          "name": "Separate"
+        },
+        {
           "default": "0.001",
           "id": "min_area",
           "max": "0.25",
@@ -30842,6 +30859,13 @@
           "max": "3",
           "min": "0",
           "name": "Denoise"
+        },
+        {
+          "default": "0",
+          "id": "separation",
+          "max": "3",
+          "min": "0",
+          "name": "Separate"
         },
         {
           "default": "0.001",
@@ -35596,6 +35620,13 @@
           "name": "Denoise"
         },
         {
+          "default": "0",
+          "id": "separation",
+          "max": "3",
+          "min": "0",
+          "name": "Separate"
+        },
+        {
           "default": "0.001",
           "id": "min_area",
           "max": "0.25",
@@ -35717,6 +35748,13 @@
           "name": "Denoise"
         },
         {
+          "default": "0",
+          "id": "separation",
+          "max": "3",
+          "min": "0",
+          "name": "Separate"
+        },
+        {
           "default": "0.001",
           "id": "min_area",
           "max": "0.25",
@@ -35815,6 +35853,13 @@
           "max": "3",
           "min": "0",
           "name": "Denoise"
+        },
+        {
+          "default": "0",
+          "id": "separation",
+          "max": "3",
+          "min": "0",
+          "name": "Separate"
         },
         {
           "default": "0.001",

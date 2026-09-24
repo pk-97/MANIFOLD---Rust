@@ -290,6 +290,22 @@ fn latency_patch_scene(x: Option<u32>) -> Vec<[f32; 4]> {
     pixels
 }
 
+fn bridged_rectangles_scene() -> Vec<[f32; 4]> {
+    let mut pixels = blank();
+    for y in 48..112 {
+        for x in 32..80 {
+            pixels[(y * WIDTH + x) as usize] = [1.0, 1.0, 1.0, 1.0];
+        }
+        for x in 112..160 {
+            pixels[(y * WIDTH + x) as usize] = [1.0, 1.0, 1.0, 1.0];
+        }
+    }
+    for x in 80..112 {
+        pixels[(80 * WIDTH + x) as usize] = [1.0, 1.0, 1.0, 1.0];
+    }
+    pixels
+}
+
 fn dim_contrast_scene() -> Vec<[f32; 4]> {
     let mut pixels = blank();
     for y in 0..HEIGHT {
@@ -708,6 +724,104 @@ fn blob_v2_low_latency_mask_publication() {
     assert!(
         empty_mean(&outputs[7]) < 0.01,
         "successful empty sample must clear the mask on its next publication"
+    );
+}
+
+#[test]
+fn blob_v2_separation_mask() {
+    let device = Arc::new(GpuDevice::new());
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut effect = effect("MaskBlob");
+    set_param(&mut effect, "denoise", 0.0);
+    set_param(&mut effect, "feather", 0.0);
+    set_param(&mut effect, "smoothing", 0.0);
+    set_param(&mut effect, "retention", 0.0);
+    set_param(&mut effect, "min_area", 0.0);
+    set_param(&mut effect, "threshold", 0.5);
+    set_param(&mut effect, "selection", 0.0);
+    set_param(&mut effect, "expand", 0.0);
+    let mut runtime = build(&device, &registry, &effect);
+    runtime.set_dump(Some(&effect.id));
+    let input = input_texture(&device, "blob-v2-separation-input");
+    let source = bridged_rectangles_scene();
+
+    let mut connected = Vec::new();
+    for frame in 0..4 {
+        connected = render_fixture(&device, &mut runtime, &effect, &input, frame, &source);
+    }
+    let connected_tracks = observed_tracks(&runtime, &effect);
+    let connected_observed = connected_tracks
+        .iter()
+        .filter(|track| track.observed != 0)
+        .count();
+    let connected_bridge = region_mean(&connected, 84, 80, 108, 81);
+    assert_eq!(
+        connected_observed, 1,
+        "separation=0 must keep the bridged rectangles as one observed component"
+    );
+    assert!(
+        connected_bridge > 0.9,
+        "separation=0 must preserve the one-pixel bridge: {connected_bridge:.3}"
+    );
+
+    set_param(&mut effect, "separation", 1.0);
+    let mut separated = Vec::new();
+    for frame in 4..8 {
+        separated = render_fixture(&device, &mut runtime, &effect, &input, frame, &source);
+    }
+    let separated_tracks = observed_tracks(&runtime, &effect);
+    let separated_observed = separated_tracks
+        .iter()
+        .filter(|track| track.observed != 0)
+        .count();
+    let separated_bridge = region_mean(&separated, 84, 80, 108, 81);
+    let separated_left = region_mean(&separated, 42, 64, 70, 96);
+    let separated_right = region_mean(&separated, 122, 64, 150, 96);
+    assert_eq!(
+        separated_observed, 2,
+        "separation=1 must expose two observed components"
+    );
+    assert!(
+        separated_bridge < 0.05,
+        "separation=1 must remove the one-pixel bridge: {separated_bridge:.3}"
+    );
+    assert!(
+        separated_left > 0.9 && separated_right > 0.9,
+        "separation=1 must preserve solid rectangle interiors: left={separated_left:.3}, right={separated_right:.3}"
+    );
+
+    set_param(&mut effect, "separation", 0.0);
+    let mut restored = Vec::new();
+    for frame in 8..12 {
+        restored = render_fixture(&device, &mut runtime, &effect, &input, frame, &source);
+    }
+    let restored_tracks = observed_tracks(&runtime, &effect);
+    let restored_observed = restored_tracks
+        .iter()
+        .filter(|track| track.observed != 0)
+        .count();
+    let restored_bridge = region_mean(&restored, 84, 80, 108, 81);
+    assert_eq!(
+        restored_observed, 1,
+        "separation=0 must restore one observed component after a live toggle"
+    );
+    assert!(
+        restored_bridge > 0.9,
+        "separation=0 must restore connected coverage after a live toggle: {restored_bridge:.3}"
+    );
+
+    assert_finite_and_bounded("separation-connected", &connected);
+    assert_finite_and_bounded("separation-separated", &separated);
+    assert_finite_and_bounded("separation-restored", &restored);
+    write_png(&device, &input, "blob_v2_separation_input");
+    write_png_bytes(&device, &connected, "blob_v2_separation_connected");
+    write_png_bytes(&device, &separated, "blob_v2_separation_separated");
+    write_png_bytes(&device, &restored, "blob_v2_separation_restored");
+    write_sidecar(
+        "blob_v2_separation_mask",
+        &format!(
+            "  \"connected_observed\": {connected_observed},\n  \"separated_observed\": {separated_observed},\n  \"restored_observed\": {restored_observed},\n  \"connected_bridge_mean\": {connected_bridge:.6},\n  \"separated_bridge_mean\": {separated_bridge:.6},\n  \"restored_bridge_mean\": {restored_bridge:.6},\n  \"separated_left_mean\": {separated_left:.6},\n  \"separated_right_mean\": {separated_right:.6}"
+        ),
     );
 }
 

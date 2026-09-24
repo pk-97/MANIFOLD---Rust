@@ -25,6 +25,7 @@ const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
             "detection_mode",
             "threshold",
             "denoise",
+            "separation",
             "min_area",
             "max_area",
             "max_box_area",
@@ -43,6 +44,7 @@ const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
             "target_blue",
             "tolerance",
             "denoise",
+            "separation",
             "min_area",
             "max_area",
             "max_box_area",
@@ -58,6 +60,7 @@ const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
             "amount",
             "motion_threshold",
             "denoise",
+            "separation",
             "min_area",
             "max_area",
             "max_box_area",
@@ -75,6 +78,7 @@ const MASK_VARIANTS: &[(&str, &[&str])] = &[
         &[
             "threshold",
             "denoise",
+            "separation",
             "min_area",
             "max_area",
             "max_box_area",
@@ -96,6 +100,7 @@ const MASK_VARIANTS: &[(&str, &[&str])] = &[
             "target_blue",
             "tolerance",
             "denoise",
+            "separation",
             "min_area",
             "max_area",
             "max_box_area",
@@ -114,6 +119,7 @@ const MASK_VARIANTS: &[(&str, &[&str])] = &[
         &[
             "motion_threshold",
             "denoise",
+            "separation",
             "min_area",
             "max_area",
             "max_box_area",
@@ -287,6 +293,48 @@ fn blob_v2_preset_graphs_and_bindings() {
         assert_exact_params(id, &def, expected_params);
         assert_binding_targets_are_active(id, &def);
         assert_graph_loads_validates_and_compiles(id, &def);
+
+        let separation = metadata
+            .params
+            .iter()
+            .find(|p| p.id == "separation")
+            .unwrap();
+        assert_eq!(
+            separation.default_value, 0.0,
+            "{id}: saved looks start unchanged"
+        );
+        assert_eq!((separation.min, separation.max), (0.0, 3.0));
+        assert!(separation.whole_numbers);
+        let nodes = node_map(&def.nodes);
+        let bindings: Vec<_> = metadata
+            .bindings
+            .iter()
+            .filter(|b| b.id == "separation")
+            .collect();
+        assert_eq!(
+            bindings.len(),
+            4,
+            "{id}: both axes must shrink then restore"
+        );
+        for (binding, (node_id, scale)) in bindings.iter().zip([
+            ("separate_erode_x", -1.0),
+            ("separate_erode_y", -1.0),
+            ("separate_dilate_x", 1.0),
+            ("separate_dilate_y", 1.0),
+        ]) {
+            let BindingTarget::Node {
+                node_id: target,
+                param,
+            } = &binding.target
+            else {
+                panic!("{id}: separation must bind node radii");
+            };
+            assert_eq!(target.as_str(), node_id);
+            assert_eq!(param, "radius");
+            assert_eq!(binding.scale, scale);
+            assert_eq!(binding.offset, 0.0);
+            assert_eq!(float_param(nodes[node_id], "radius"), 0.0);
+        }
 
         if id.starts_with("BlobTrackingV2") {
             let amount = def
