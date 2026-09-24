@@ -12,6 +12,9 @@
 void b3CollideHullAndMovingTriangle( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1, b3Vec3 v2,
 									  b3Vec3 v3, b3SATCache* cache );
 
+// Reduce moving-mesh contact points while retaining the deepest point and projected spread.
+int b3ReduceMovingMeshPoints( b3LocalManifoldPoint* points, int count, b3Vec3 normal );
+
 typedef struct b3FaceQuery
 {
 	float separation;

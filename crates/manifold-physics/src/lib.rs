@@ -18,6 +18,12 @@ mod ffi {
         pub fn manifold_box3d_world_destroy(world: u32);
         pub fn manifold_box3d_world_set_gravity(world: u32, gx: f32, gy: f32, gz: f32);
         pub fn manifold_box3d_world_set_max_linear_speed(world: u32, speed: f32);
+        pub fn manifold_box3d_world_set_contact_tuning(
+            world: u32,
+            hertz: f32,
+            damping: f32,
+            speed: f32,
+        );
         pub fn manifold_box3d_world_step(world: u32, dt: f32, substeps: u32);
         pub fn manifold_box3d_body_create(
             world: u32,
@@ -298,8 +304,9 @@ impl PhysicsWorld {
     /// Mesh vertices and triangle indices are retained as supplied. Box3D's
     /// mesh builder rejects any triangle it considers degenerate, so this
     /// method rejects the whole input if that would discard geometry.
-    /// Moving meshes use two-sided surface contact against hulls. Mesh pairs
-    /// and continuous collision detection for meshes are not supported.
+    /// Moving meshes use two-sided surface contact against hulls and other meshes.
+    /// Continuous collision detection for meshes is not supported; bound motion
+    /// per outer step to stay within the native speculative contact margin.
     pub fn add_triangle_mesh(
         &mut self,
         vertices: &[[f32; 3]],
@@ -390,6 +397,30 @@ impl PhysicsWorld {
         }
         let _lock = native_lock();
         unsafe { ffi::manifold_box3d_world_set_max_linear_speed(self.native, speed) };
+        Ok(())
+    }
+
+    /// Tune contact stiffness (Hz), damping ratio and maximum overlap recovery speed.
+    /// Higher stiffness needs sufficiently small simulation steps; native defaults
+    /// remain unchanged unless explicitly configured.
+    pub fn set_contact_tuning(
+        &mut self,
+        hertz: f32,
+        damping: f32,
+        speed: f32,
+    ) -> Result<(), PhysicsError> {
+        if [hertz, damping, speed]
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(PhysicsError::InvalidInput(
+                "contact tuning must be finite and positive",
+            ));
+        }
+        let _lock = native_lock();
+        unsafe {
+            ffi::manifold_box3d_world_set_contact_tuning(self.native, hertz, damping, speed);
+        }
         Ok(())
     }
 
@@ -1931,3 +1962,6 @@ mod tests {
         assert_eq!(stream(), stream());
     }
 }
+
+#[cfg(test)]
+mod mesh_pair_tests;

@@ -80,6 +80,11 @@ void manifold_box3d_world_set_max_linear_speed( uint32_t world_id, float speed )
 	b3World_SetMaximumLinearSpeed( b3LoadWorldId( world_id ), speed );
 }
 
+void manifold_box3d_world_set_contact_tuning( uint32_t world_id, float hertz, float damping, float speed )
+{
+    b3World_SetContactTuning( b3LoadWorldId( world_id ), hertz, damping, speed );
+}
+
 void manifold_box3d_world_step( uint32_t world_id, float dt, uint32_t substeps )
 {
 	b3World_Step( b3LoadWorldId( world_id ), dt, (int)substeps );

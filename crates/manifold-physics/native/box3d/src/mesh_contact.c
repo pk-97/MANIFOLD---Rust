@@ -513,6 +513,129 @@ static int b3ReduceCluster( b3LocalManifoldPoint* points, int count1, b3Vec3 nor
 	return count2;
 }
 
+static inline b3Vec2 b3ProjectMovingMeshPoint( b3Vec3 point, b3Vec3 origin, b3Vec3 u, b3Vec3 v )
+{
+	b3Vec3 d = b3Sub( point, origin );
+	return (b3Vec2){ b3Dot( d, u ), b3Dot( d, v ) };
+}
+
+int b3ReduceMovingMeshPoints( b3LocalManifoldPoint* points, int count, b3Vec3 normal )
+{
+	if ( count <= 1 )
+	{
+		return count;
+	}
+
+	// Keep the selection deterministic and bounded. The selected projected points are
+	// also used to reject duplicate contacts, so this never needs an O(n) scratch array.
+	int selected[4];
+	b3Vec2 projected[4];
+	int selectedCount = 0;
+
+	b3Vec3 origin = points[0].point;
+	b3Vec3 u = b3Perp( normal );
+	b3Vec3 v = b3Cross( normal, u );
+
+	// First anchor: always retain the deepest contact. Strict comparisons preserve
+	// input order for ties.
+	int deepestIndex = 0;
+	for ( int i = 1; i < count; ++i )
+	{
+		if ( points[i].separation < points[deepestIndex].separation )
+		{
+			deepestIndex = i;
+		}
+	}
+
+	selected[0] = deepestIndex;
+	projected[0] = b3ProjectMovingMeshPoint( points[deepestIndex].point, origin, u, v );
+	selectedCount = 1;
+
+	// Second anchor: choose the farthest projected point from the deepest point.
+	int bestIndex = B3_NULL_INDEX;
+	float bestScore = -1.0f;
+	for ( int i = 0; i < count; ++i )
+	{
+		b3Vec2 p = b3ProjectMovingMeshPoint( points[i].point, origin, u, v );
+		float score = b3DistanceSquared2( p, projected[0] );
+		if ( score > bestScore )
+		{
+			bestScore = score;
+			bestIndex = i;
+		}
+	}
+
+	if ( bestIndex != B3_NULL_INDEX && bestScore > 0.0f )
+	{
+		selected[selectedCount] = bestIndex;
+		projected[selectedCount] = b3ProjectMovingMeshPoint( points[bestIndex].point, origin, u, v );
+		selectedCount += 1;
+	}
+
+	if ( selectedCount == 2 )
+	{
+		// Third anchor: maximize the projected triangle area.
+		b3Vec2 edge = b3Sub2( projected[1], projected[0] );
+		bestIndex = B3_NULL_INDEX;
+		bestScore = -1.0f;
+		for ( int i = 0; i < count; ++i )
+		{
+			b3Vec2 p = b3ProjectMovingMeshPoint( points[i].point, origin, u, v );
+			float score = b3AbsFloat( b3Cross2( edge, b3Sub2( p, projected[0] ) ) );
+			if ( score > bestScore && b3DistanceSquared2( p, projected[0] ) > 0.0f &&
+				 b3DistanceSquared2( p, projected[1] ) > 0.0f )
+			{
+				bestScore = score;
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex != B3_NULL_INDEX )
+		{
+			selected[selectedCount] = bestIndex;
+			projected[selectedCount] = b3ProjectMovingMeshPoint( points[bestIndex].point, origin, u, v );
+			selectedCount += 1;
+		}
+	}
+
+	if ( selectedCount == 3 )
+	{
+		// Fourth anchor: maximize the minimum projected distance to the selected set.
+		bestIndex = B3_NULL_INDEX;
+		bestScore = -1.0f;
+		for ( int i = 0; i < count; ++i )
+		{
+			b3Vec2 p = b3ProjectMovingMeshPoint( points[i].point, origin, u, v );
+			float minimumDistance = FLT_MAX;
+			for ( int j = 0; j < selectedCount; ++j )
+			{
+				minimumDistance = b3MinFloat( minimumDistance, b3DistanceSquared2( p, projected[j] ) );
+			}
+
+			if ( minimumDistance > bestScore )
+			{
+				bestScore = minimumDistance;
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex != B3_NULL_INDEX && bestScore > 0.0f )
+		{
+			selected[selectedCount] = bestIndex;
+			projected[selectedCount] = b3ProjectMovingMeshPoint( points[bestIndex].point, origin, u, v );
+			selectedCount += 1;
+		}
+	}
+
+	b3LocalManifoldPoint finalPoints[4];
+	for ( int i = 0; i < selectedCount; ++i )
+	{
+		finalPoints[i] = points[selected[i]];
+	}
+	memcpy( points, finalPoints, selectedCount * sizeof( b3LocalManifoldPoint ) );
+	return selectedCount;
+}
+
 typedef struct b3Cluster
 {
 	b3Vec3 manifoldNormal;
@@ -868,7 +991,8 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		const b3LocalManifold* manifold = acceptedManifolds[i];
 		clusterPointCount += manifold->pointCount;
 
-		// Cluster based on the triangle normal and contact normal.
+		// Moving mesh contacts cluster by contact normal. Static terrain keeps the
+		// triangle-normal guard to avoid merging separate terrain surfaces.
 		// The first cluster found is accepted because the tolerance is tight.
 		// todo consider requiring the triangles to be connect by an edge.
 		// todo consider looking for the best cluster instead of the first one within tolerance
@@ -881,7 +1005,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		{
 			float cosManifoldAngle = b3Dot( clusters[j].manifoldNormal, manifoldNormal );
 			float cosTriangleAngle = b3Dot( clusters[j].triangleNormal, triangleNormal );
-			if ( cosManifoldAngle <= clusterThreshold || cosTriangleAngle <= clusterThreshold )
+			if ( cosManifoldAngle <= clusterThreshold || ( !movingMeshHull && cosTriangleAngle <= clusterThreshold ) )
 			{
 				continue;
 			}
@@ -983,7 +1107,15 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	{
 		b3Cluster* cm = clusters + i;
 		B3_ASSERT( cm->pointCount == cm->pointCapacity );
-		int reducedCount = b3ReduceCluster( cm->points, cm->pointCount, cm->triangleNormal, arena );
+		int reducedCount;
+		if ( movingMeshHull )
+		{
+			reducedCount = b3ReduceMovingMeshPoints( cm->points, cm->pointCount, cm->manifoldNormal );
+		}
+		else
+		{
+			reducedCount = b3ReduceCluster( cm->points, cm->pointCount, cm->triangleNormal, arena );
+		}
 		cm->pointCount = reducedCount;
 	}
 

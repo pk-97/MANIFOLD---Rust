@@ -34,6 +34,7 @@ fn main() {
         "math_functions.c",
         "mesh.c",
         "mesh_contact.c",
+        "mesh_pair_contact.c",
         "motor_joint.c",
         "mover.c",
         "parallel_for.c",
