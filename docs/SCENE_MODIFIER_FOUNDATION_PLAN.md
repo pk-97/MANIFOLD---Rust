@@ -127,7 +127,7 @@ impl RetargetSceneModifierCommand {
 
 Each phase begins by reading its entry files and restating binding decisions, forbidden shortcuts and inventory results. Acquire one slot through `scripts/agent-worktree.py`, verify its base, and follow existing build-lock/landing mechanics. No app builds are needed for this documentation delivery.
 
-Commands below run from the phase worktree with an explicit absolute `--manifest-path "$MODIFIER_WORKTREE/Cargo.toml"` on Cargo commands. `MODIFIER_WORKTREE` is the assigned slot path, never an assumed shared checkout. GPU tests use cargo test through `gpu_proofs_gate.py`. Use focused tests once after edits; at most two attempts per exact command. The landing script preserves required touched-crate gates. New tests and flows in these briefs must be created before their commands can pass; zero selected tests is a failed gate.
+Commands below run from the phase worktree with an explicit absolute `--manifest-path "$MODIFIER_WORKTREE/Cargo.toml"` on Cargo commands. `MODIFIER_WORKTREE` is the assigned slot path, never an assumed shared checkout. GPU tests use cargo test through `gpu_proofs_gate.py`. Use focused tests after edits; retries require changed code, new evidence, or explicit direction. The landing script preserves required touched-crate gates. New tests and flows in these briefs must be created before their commands can pass; zero selected tests is a failed gate.
 
 ## 4. F1 — core schema and lossless files
 
