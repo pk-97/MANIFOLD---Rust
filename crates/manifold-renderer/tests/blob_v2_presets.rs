@@ -76,6 +76,7 @@ const MASK_VARIANTS: &[(&str, &[&str])] = &[
     (
         "MaskBlob",
         &[
+            "detection_mode",
             "threshold",
             "denoise",
             "separation",

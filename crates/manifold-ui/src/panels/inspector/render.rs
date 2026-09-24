@@ -9,10 +9,6 @@ fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
     crate::param_surface::stable_key(&format!("inspector.effect_group.add_modifier:{group_id}"))
 }
 
-fn rack_group_preview_mask_key(group_id: &EffectGroupId) -> u64 {
-    crate::param_surface::stable_key(&format!("inspector.effect_group.preview_mask:{group_id}"))
-}
-
 const GROUP_CONTAINER_NAME: &str = "inspector.effect_group.container";
 
 fn rack_group_scope_text(group: &RackGroupConfig) -> String {
@@ -58,31 +54,22 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
                 .text_color(color::TEXT_DIMMED_C32)
                 .inert(),
         );
-    if group.mask_effect_id.is_none() {
-        view = view.child(
-            View::button("+ Add Modifier")
-                .w(Sizing::Fixed(104.0))
-                .fill_h()
-                .style(crate::chrome::components::button_secondary_style())
-                .on_click(PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(
-                    group.id.clone(),
-                )))
-                .name(super::GROUP_ADD_MODIFIER_NAME)
-                .key(rack_group_add_modifier_key(&group.id)),
-        );
-    } else if let Some(mask_effect_id) = group.mask_effect_id.as_ref() {
-        view = view.child(
-            View::button("Preview Mask")
-                .w(Sizing::Fixed(104.0))
-                .fill_h()
-                .style(crate::chrome::components::button_secondary_style())
-                .on_click(PanelAction::Root(RootAction::PreviewEffectMask(
-                    mask_effect_id.clone(),
-                )))
-                .name(super::GROUP_PREVIEW_MASK_NAME)
-                .key(rack_group_preview_mask_key(&group.id)),
-        );
-    }
+    let label = if group.mask_effect_id.is_some() {
+        "Change Mask"
+    } else {
+        "+ Add Modifier"
+    };
+    view = view.child(
+        View::button(label)
+            .w(Sizing::Fixed(104.0))
+            .fill_h()
+            .style(crate::chrome::components::button_secondary_style())
+            .on_click(PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(
+                group.id.clone(),
+            )))
+            .name(super::GROUP_ADD_MODIFIER_NAME)
+            .key(rack_group_add_modifier_key(&group.id)),
+    );
     view
 }
 
@@ -142,7 +129,6 @@ fn build_rack_group_frame(
     width: f32,
     height: f32,
     group_add_modifier_btns: &mut Vec<(NodeId, EffectGroupId)>,
-    group_preview_mask_btns: &mut Vec<(NodeId, EffectId)>,
 ) {
     chrome::materialize(
         tree,
@@ -154,20 +140,11 @@ fn build_rack_group_frame(
         &rack_group_header_view(group),
         Rect::new(x, y, width, InspectorCompositePanel::RACK_HEADER_H),
     );
-    if group.mask_effect_id.is_none()
-        && let Some((_, button_id)) = header_ids
-            .iter()
-            .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
+    if let Some((_, button_id)) = header_ids
+        .iter()
+        .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
     {
         group_add_modifier_btns.push((*button_id, group.id.clone()));
-    }
-    if group.mask_effect_id.is_some()
-        && let Some((_, button_id)) = header_ids
-            .iter()
-            .find(|(key, _)| *key == rack_group_preview_mask_key(&group.id))
-        && let Some(mask_effect_id) = group.mask_effect_id.as_ref()
-    {
-        group_preview_mask_btns.push((*button_id, mask_effect_id.clone()));
     }
 }
 
@@ -369,6 +346,15 @@ impl InspectorCompositePanel {
         self.rack_groups[scope].extend_from_slice(groups);
     }
 
+    /// Whether the projected group currently owns a composable mask. The app
+    /// uses this to add the destructive menu item only for masked groups.
+    pub fn rack_group_has_mask(&self, tab: InspectorTab, group_id: &EffectGroupId) -> bool {
+        let scope = Self::scope_idx(tab);
+        self.rack_groups[scope]
+            .iter()
+            .any(|group| &group.id == group_id && group.mask_effect_id.is_some())
+    }
+
     pub fn configure_layer_effects(&mut self, configs: &[ParamSurface], scope: Option<&LayerId>) {
         // A change of scope is navigation, not an edit of the current chain:
         // the previously-shown layer's effects weren't removed from the model,
@@ -543,6 +529,11 @@ impl InspectorCompositePanel {
         dying: &mut Vec<ParamCardPanel>,
         card_context: CardContext,
     ) -> Vec<ParamCardPanel> {
+        // An immediate undo can restore an exact card identity while its
+        // replacement is still in the exit-state list. Let the incoming live
+        // config own that identity again; otherwise both cards build the same
+        // stable widget ids in one tree. Unrelated exits keep animating.
+        dying.retain(|card| !configs.iter().any(|cfg| card.matches_effect_config(cfg)));
         let reconciled = configs
             .iter()
             .map(|cfg| match existing.iter().position(|c| c.matches_effect_config(cfg)) {
@@ -663,7 +654,6 @@ impl InspectorCompositePanel {
         self.add_layer_effect_btn = None;
         self.add_modifier_btn = None;
         self.group_add_modifier_btns.clear();
-        self.group_preview_mask_btns.clear();
 
         // Range truthfulness (the single invariant the rest of this panel leans
         // on): a sub-panel's (first_node, node_count) must describe what it built
@@ -821,7 +811,6 @@ impl InspectorCompositePanel {
                                 inner_w,
                                 group_height,
                                 &mut self.group_add_modifier_btns,
-                                &mut self.group_preview_mask_btns,
                             );
                             cy += Self::RACK_HEADER_H;
                             while card_idx < group_end {
@@ -954,7 +943,6 @@ impl InspectorCompositePanel {
                                 inner_w,
                                 group_height,
                                 &mut self.group_add_modifier_btns,
-                                &mut self.group_preview_mask_btns,
                             );
                             cy += Self::RACK_HEADER_H;
                             while card_idx < group_end {
@@ -1080,18 +1068,8 @@ mod tests {
     }
 
     #[test]
-    fn rack_group_preview_mask_key_is_distinct() {
-        let id = EffectGroupId::new("group");
-        assert_ne!(
-            rack_group_add_modifier_key(&id),
-            rack_group_preview_mask_key(&id)
-        );
-    }
-
-    #[test]
-    fn masked_header_preview_routes_exact_mask_effect() {
-        let mask_effect_id = EffectId::new("mask-effect");
-        let group = group(Some(mask_effect_id.clone()));
+    fn masked_header_routes_to_persistent_mask_selector() {
+        let group = group(Some(EffectId::new("mask-effect")));
         let mut tree = UITree::new();
         let mut host = crate::chrome::ChromeHost::new();
         host.build(
@@ -1099,20 +1077,85 @@ mod tests {
             &rack_group_header_view(&group),
             Rect::new(0.0, 0.0, 400.0, InspectorCompositePanel::RACK_HEADER_H),
         );
-        let preview_button = host
-            .node_id_for_key(rack_group_preview_mask_key(&group.id))
-            .expect("masked header must expose a preview button");
+        let mask_selector_button = host
+            .node_id_for_key(rack_group_add_modifier_key(&group.id))
+            .expect("masked header must expose a mask selector");
         assert_eq!(
-            tree.name_of(preview_button),
-            Some("inspector.effect_group.preview_mask")
+            tree.name_of(mask_selector_button),
+            Some("inspector.effect_group.add_modifier")
         );
 
         let mut intents = crate::intent::IntentRegistry::new();
         host.register_intents(&mut intents);
         assert!(matches!(
-            intents.resolve(&tree, Some(preview_button), crate::intent::Gesture::Click),
-            Some(PanelAction::Root(RootAction::PreviewEffectMask(effect_id)))
-                if effect_id == mask_effect_id
+            intents.resolve(&tree, Some(mask_selector_button), crate::intent::Gesture::Click),
+            Some(PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id)))
+                if group_id == group.id
         ));
+    }
+
+    #[test]
+    fn restoring_a_replaced_card_drops_only_its_dying_identity() {
+        use crate::panels::param_card::ParamCardKind;
+
+        fn config(name: &str) -> ParamSurface {
+            ParamSurface {
+                kind: ParamCardKind::Effect,
+                title: name.to_string(),
+                rows: Vec::new(),
+                string_params: Vec::new(),
+                collapsed: false,
+                effect_index: 0,
+                effect_id: EffectId::new(name),
+                enabled: true,
+                supports_envelopes: true,
+                has_graph_mod: false,
+                layer_id: None,
+                modifier: None,
+                audio_sends: Vec::new(),
+                relight: Default::default(),
+            }
+        }
+
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let a = config("Mask Circle");
+        let b = config("Unrelated Exit");
+        let c = config("Mask Rectangle");
+
+        panel.configure_master_effects(&[a.clone(), b.clone()]);
+        let mut tree = UITree::new();
+        panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        // Remove the unrelated card, then replace the mask card while that
+        // unrelated exit is still animating.
+        panel.configure_master_effects(std::slice::from_ref(&a));
+        panel.configure_master_effects(std::slice::from_ref(&c));
+        assert!(panel.master_dying.iter().any(|card| card.matches_effect_config(&a)));
+        assert!(panel.master_dying.iter().any(|card| card.matches_effect_config(&b)));
+
+        // Immediate undo restores A. Building this frame used to create a
+        // second A card beside the still-dying A and panic on duplicate ids.
+        panel.configure_master_effects(std::slice::from_ref(&a));
+        let mut tree = UITree::new();
+        panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(
+            panel
+                .master_dying
+                .iter()
+                .filter(|card| card.matches_effect_config(&a))
+                .count(),
+            0
+        );
+        assert_eq!(
+            panel
+                .master_dying
+                .iter()
+                .filter(|card| card.matches_effect_config(&b))
+                .count(),
+            1
+        );
+        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_MASTER].len(), 1);
+        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].effect_id(), &a.effect_id);
     }
 }

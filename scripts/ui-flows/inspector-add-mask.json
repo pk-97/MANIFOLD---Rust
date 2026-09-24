@@ -53,6 +53,16 @@
       "check": "Exists"
     }
   },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.add_modifier"
+        }
+      },
+      "check": "Exists"
+    }
+  },
   "Snapshot",
   "Dump",
   {

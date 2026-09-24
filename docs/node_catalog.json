@@ -7051,6 +7051,7 @@
         "BlobTrackingV2",
         "Cymatics",
         "FluidSim2D",
+        "MaskBlob",
         "OilyFluid",
         "ParticleText"
       ],
@@ -25106,6 +25107,7 @@
         "Infrared",
         "LED Strobe",
         "Lantern",
+        "MaskBlob",
         "MaskImage",
         "MaskLayer",
         "MriVolume",
@@ -27816,6 +27818,7 @@
       "examples": [
         "BlobTrackingV2",
         "BlobTrackingV2Motion",
+        "MaskBlob",
         "MaskBlobMotion",
         "MetallicGlass",
         "MotionMosh",
@@ -35603,8 +35606,15 @@
       "id": "MaskBlob",
       "is_line_based": false,
       "kind": "effect",
-      "name": "Blob Mask",
+      "name": "Mask Blob Detector",
       "params": [
+        {
+          "default": "0",
+          "id": "detection_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Detection"
+        },
         {
           "default": "0.5",
           "id": "threshold",

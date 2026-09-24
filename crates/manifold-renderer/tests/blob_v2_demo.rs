@@ -1132,6 +1132,107 @@ fn blob_v2_detection_mode() {
 }
 
 #[test]
+fn blob_v2_shared_mask_detection() {
+    let device = Arc::new(GpuDevice::new());
+    let registry = PrimitiveRegistry::with_builtin();
+    let input = input_texture(&device, "blob-v2-shared-mask-input");
+    let source = dim_contrast_scene();
+    let dry = source_bytes(&source);
+    // Seed the normal effect-view cache so the unwatched path really uses
+    // fusion, instead of merely testing the async worker's initial fallback.
+    let fused = manifold_renderer::node_graph::freeze::install::fused_view_by_id(
+        &PresetTypeId::new("MaskBlob"),
+    );
+    assert!(fused.is_some(), "the composed mask must remain fusable");
+    let mut outputs = Vec::new();
+    for watched in [true, false] {
+        let mut group = EffectGroup::new("Shared Blob Detector".into());
+        let mut mask = effect("MaskBlob");
+        set_param(&mut mask, "threshold", 0.5);
+        mask.group_id = Some(group.id.clone());
+        group.mask_effect_id = Some(mask.id.clone());
+        let mut wet = effect("Invert");
+        wet.group_id = Some(group.id.clone());
+        let mut effects = vec![mask, wet];
+        let groups = vec![group];
+        let preview = watched.then_some(&effects[0].id);
+        let mut runtime = PresetRuntime::try_build(
+            ChainBuildInputs {
+                effects: &effects,
+                groups: &groups,
+                primitives: &registry,
+                device: &device,
+                pool: None,
+                width: WIDTH,
+                height: HEIGHT,
+                preview_effect: preview,
+            },
+            None,
+        )
+        .expect("shared Blob mask group builds");
+        let mut output = Vec::new();
+        for frame in 0..6 {
+            output = render_group_fixture(
+                &device,
+                &mut runtime,
+                &effects,
+                &groups,
+                &input,
+                frame,
+                &source,
+            );
+        }
+        assert!(
+            mean_abs_diff(&output, &dry) < 0.0001,
+            "Brightness must leave the dim scene dry (watched={watched})"
+        );
+
+        // Change the same controls V2 exposes, on the existing runtime.
+        // Edges can detect these dim objects; Brightness cannot.
+        set_param(&mut effects[0], "detection_mode", 1.0);
+        set_param(&mut effects[0], "threshold", 0.15);
+        for frame in 6..14 {
+            output = render_group_fixture(
+                &device,
+                &mut runtime,
+                &effects,
+                &groups,
+                &input,
+                frame,
+                &source,
+            );
+        }
+        assert_finite_and_bounded("shared-blob-mask", &output);
+        assert!(
+            mean_abs_diff(&output, &dry) > 0.0001,
+            "Edges must reveal the wet effect (watched={watched})"
+        );
+        outputs.push(output);
+
+        set_param(&mut effects[0], "amount", 0.0);
+        let zero = render_group_fixture(
+            &device,
+            &mut runtime,
+            &effects,
+            &groups,
+            &input,
+            14,
+            &source,
+        );
+        assert!(
+            mean_abs_diff(&zero, &dry) < 0.0001,
+            "zero mask amount must restore dry output (watched={watched})"
+        );
+    }
+    assert!(
+        mean_abs_diff(&outputs[0], &outputs[1]) < 0.002,
+        "watched and fused mask outputs must agree"
+    );
+    write_png(&device, &input, "blob_v2_shared_mask_input");
+    write_png_bytes(&device, &outputs[1], "blob_v2_shared_mask_output");
+}
+
+#[test]
 fn blob_v2_box_area() {
     let device = Arc::new(GpuDevice::new());
     let registry = PrimitiveRegistry::with_builtin();

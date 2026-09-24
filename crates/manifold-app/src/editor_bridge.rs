@@ -321,31 +321,6 @@ fn resolve_preview_target(
     resolve_boundary_node(node, nodes, wires, snap, scope)
 }
 
-/// Follow the mask's actual final connection, including custom/grouped graphs.
-/// Never apply a delayed snapshot from another instance of the same preset.
-fn mask_preview_node(
-    effect_id: &manifold_core::EffectId,
-    snapshot_target: Option<&manifold_core::GraphTarget>,
-    snapshot: &manifold_ui::graph_view::GraphSnapshot,
-) -> Option<manifold_core::NodeId> {
-    if !matches!(snapshot_target, Some(manifold_core::GraphTarget::Effect(id)) if id == effect_id) {
-        return None;
-    }
-    let output = snapshot.nodes.iter().find(|node| node.type_id == "system.final_output")?;
-    resolve_preview_target(snapshot, &[], output.id)
-}
-
-fn is_group_mask(project: &manifold_core::project::Project, effect_id: &manifold_core::EffectId) -> bool {
-    let Some(effect) = project.find_effect_by_id(effect_id) else { return false; };
-    let Some(group_id) = effect.group_id.as_ref() else { return false; };
-    project.settings.master_effect_groups.iter().flatten()
-        .chain(project.timeline.layers.iter().flat_map(|layer| {
-            layer.effect_groups.iter().flatten()
-                .chain(layer.clips.iter().flat_map(|clip| clip.effect_groups.iter().flatten()))
-        }))
-        .any(|group| &group.id == group_id && group.mask_effect_id.as_ref() == Some(effect_id))
-}
-
 fn resolve_boundary_node(
     node: &manifold_ui::graph_view::NodeSnapshot,
     nodes: &[manifold_ui::graph_view::NodeSnapshot],
@@ -672,9 +647,6 @@ impl Application {
         use manifold_ui::panels::{PanelAction, RootAction};
         use crate::text_input::{AnchorRect, InspectorParamCtx, TextInputField};
         match action {
-            PanelAction::Root(RootAction::PreviewEffectMask(effect_id)) => {
-                self.preview_effect_mask(effect_id);
-            }
             PanelAction::Root(RootAction::BeginParamTextInput {
                 target, param_id, anchor, value, whole_numbers, degrees, ..
             }) => {
@@ -1182,24 +1154,12 @@ impl Application {
         self.watch_graph_target(manifold_core::GraphTarget::Effect(effect_id));
     }
 
-    pub(crate) fn preview_effect_mask(&mut self, effect_id: &manifold_core::EffectId) {
-        // A queued click can outlive mask removal/undo. Resolve stable membership
-        // rather than interpreting a now-shifted card index.
-        if !is_group_mask(&self.local_project, effect_id) { return; }
-        self.watch_effect_graph(effect_id.clone());
-        self.pending_mask_preview = Some(effect_id.clone());
-        self.node_preview_normalize = false;
-        self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(false));
-        self.pending_open_graph_editor = true;
-    }
-
     pub(crate) fn watch_generator_graph(&mut self, layer_id: manifold_core::LayerId) {
         self.watch_graph_target(manifold_core::GraphTarget::Generator(layer_id));
     }
 
     pub(crate) fn watch_graph_target(&mut self, target: manifold_core::GraphTarget) {
         if target.host_target().is_none() { return; }
-        self.pending_mask_preview = None;
         self.close_mapping_on_target_change(&target);
         if self.modifier_preview_object.as_ref().is_some_and(|(owner, _)| owner != &target) {
             self.modifier_preview_object = None;
@@ -1345,18 +1305,6 @@ impl Application {
         // (Phase 8). Translated once (cached by Arc identity); the renderer
         // snapshot stays the source for the binding/exposure helpers below.
         let editor_ui_snap = self.editor_ui_snapshot();
-        if let (Some(effect_id), Some(snapshot), Some(canvas)) = (
-            self.pending_mask_preview.as_ref(), editor_ui_snap.as_ref(), self.graph_canvas.as_mut(),
-        ) {
-            if let Some(node_id) = mask_preview_node(
-                effect_id, self.content_state.active_graph_target.as_deref(), snapshot,
-            ) {
-                canvas.focus_node(snapshot, &node_id);
-            } else {
-                log::warn!("Mask preview has no connected final coverage output: {effect_id}");
-            }
-            self.pending_mask_preview = None;
-        }
         let scene_modifier_watched = matches!(
             self.watched_graph_target.as_ref(),
             Some(manifold_core::GraphTarget::SceneModifier { .. })
@@ -2165,7 +2113,7 @@ impl Application {
 
 #[cfg(test)]
 mod preview_target_tests {
-    use super::{is_group_mask, mask_preview_node, modifier_preview_selection, resolve_preview_target, stable_scope_path};
+    use super::{modifier_preview_selection, resolve_preview_target, stable_scope_path};
     use manifold_core::NodeId;
     use manifold_ui::graph_view::{
         GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GraphSnapshot, GroupSnapshot,
@@ -2285,85 +2233,6 @@ mod preview_target_tests {
             vec![wire(0, "out", 1, "in"), wire(1, "out", 2, "in")],
         );
         assert_eq!(resolve_preview_target(&s, &[], 2), Some(NodeId::new("inv")));
-    }
-
-    #[test]
-    fn mask_preview_waits_for_exact_instance_and_focuses_final_coverage() {
-        use manifold_core::{EffectId, GraphTarget};
-        let mask = EffectId::new("mask-a");
-        let target = GraphTarget::Effect(mask.clone());
-        let other = GraphTarget::Effect(EffectId::new("mask-b"));
-        let s = snap(
-            vec![
-                node(0, "raw-labels", "node.region_mask", vec![], vec![tex("out")]),
-                node(1, "custom-soft-coverage", "node.blur", vec![tex("in")], vec![tex("out")]),
-                node(2, "", "system.final_output", vec![tex("in")], vec![]),
-            ],
-            vec![wire(0, "out", 1, "in"), wire(1, "out", 2, "in")],
-        );
-        assert_eq!(mask_preview_node(&mask, None, &s), None);
-        assert_eq!(mask_preview_node(&mask, Some(&other), &s), None);
-        let coverage = mask_preview_node(&mask, Some(&target), &s).unwrap();
-        assert_eq!(coverage, NodeId::new("custom-soft-coverage"));
-        let mut canvas = crate::graph_canvas::GraphCanvas::new();
-        canvas.set_snapshot(&s);
-        assert!(canvas.focus_node(&s, &coverage));
-        assert_eq!(canvas.selected_node_id(), Some(1));
-        assert_eq!(resolve_preview_target(&s, canvas.scope_path(), 1), Some(coverage));
-        assert_eq!(mask_preview_node(&mask, Some(&target), &snap(vec![], vec![])), None);
-    }
-
-    #[test]
-    fn mask_preview_rejects_removed_or_reassigned_mask_membership() {
-        use manifold_core::{effects::{EffectGroup, PresetInstance}, project::Project, PresetTypeId};
-        let mut project = Project::default();
-        let mut mask = PresetInstance::new(PresetTypeId::new("MaskBlob"));
-        let mut group = EffectGroup::new("Modifier Group".into());
-        group.mask_effect_id = Some(mask.id.clone());
-        mask.group_id = Some(group.id.clone());
-        let mask_id = mask.id.clone();
-        project.settings.master_effects.push(mask);
-        project.settings.master_effect_groups = Some(vec![group]);
-        assert!(is_group_mask(&project, &mask_id));
-        project.settings.master_effect_groups.as_mut().unwrap()[0].mask_effect_id = None;
-        assert!(!is_group_mask(&project, &mask_id));
-        project.settings.master_effect_groups.as_mut().unwrap()[0].mask_effect_id = Some(mask_id.clone());
-        project.settings.master_effects.clear();
-        assert!(!is_group_mask(&project, &mask_id));
-    }
-
-    #[test]
-    fn mask_preview_opens_without_project_edits_and_disables_normalization() {
-        use crate::{app::Application, content_command::ContentCommand};
-        use manifold_core::{effects::{EffectGroup, PresetInstance}, GraphTarget, PresetTypeId};
-        let mut app = Application::new();
-        app.user_prefs = crate::user_prefs::UserPrefs::for_test();
-        let mut mask = PresetInstance::new(PresetTypeId::new("MaskBlob"));
-        let mask_id = mask.id.clone();
-        let mut group = EffectGroup::new("Modifier Group".into());
-        group.mask_effect_id = Some(mask_id.clone());
-        mask.group_id = Some(group.id.clone());
-        app.local_project.settings.master_effects.push(mask);
-        app.local_project.settings.master_effect_groups = Some(vec![group]);
-        let before = serde_json::to_value(&app.local_project).unwrap();
-        let (tx, rx) = crossbeam_channel::unbounded();
-        app.content_tx = Some(tx);
-        app.node_preview_normalize = true;
-        assert!(app.dispatch_inspector_host_action(
-            &manifold_ui::PanelAction::Root(manifold_ui::RootAction::PreviewEffectMask(mask_id.clone())),
-            true,
-        ));
-        assert!(app.pending_open_graph_editor);
-        assert_eq!(app.pending_mask_preview.as_ref(), Some(&mask_id));
-        assert!(!app.node_preview_normalize);
-        assert!(matches!(rx.try_recv().unwrap(),
-            ContentCommand::WatchGraphTarget(Some(GraphTarget::Effect(id))) if id == mask_id));
-        assert!(matches!(rx.try_recv().unwrap(), ContentCommand::SetNodePreviewNormalize(false)));
-        assert!(rx.is_empty());
-        assert_eq!(serde_json::to_value(&app.local_project).unwrap(), before);
-        // A later editor navigation cancels the one-shot mask focus.
-        app.watch_effect_graph(manifold_core::EffectId::new("another-effect"));
-        assert!(app.pending_mask_preview.is_none());
     }
 
     #[test]
