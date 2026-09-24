@@ -191,7 +191,7 @@ Numerical assertions are the image oracle. Save representative source/mask/HUD/c
 
 Before each phase: `git status --short`, re-read its source anchors, inspect existing beads for this work, acquire a verified application slot using `scripts/agent-worktree.py` per `.claude/GIT_TREE_DISCIPLINE.md`, and read `.codex/README.md`. A moved anchor requires a short conflict report, not implementation from memory. Read back the binding decisions in a few sentences. No duplicate planning report is required.
 
-All phases use focused clippy/tests for changed crates and `scripts/codex_checks.py --base <verified-base>` for additional mapped checks. GPU phases run `python3 scripts/gpu_proofs_gate.py --filter blob_v2` plus required mapped proofs. These are test filters, not permission to skip mandatory landing checks. Finish through `scripts/land_branch.py` and release the slot. Do not run workspace-wide sweeps. Stop after two failed attempts under current AGENTS rules.
+All phases use focused clippy/tests for changed crates and `scripts/codex_checks.py --base <verified-base>` for additional mapped checks. GPU phases run `python3 scripts/gpu_proofs_gate.py --filter blob_v2` plus required mapped proofs. These are test filters, not permission to skip mandatory landing checks. Finish through `scripts/land_branch.py` and release the slot. Do not run workspace-wide sweeps. Continue failed checks only with changed code or new evidence; report precise evidence when no justified next step remains.
 
 ### P1 — Native region seam
 
@@ -259,7 +259,7 @@ Peter's instruction: “I want Sol to run this overnight end to end so I can use
 
 Execute P1 → P2 → P3 → P4 without asking permission between checkpoints. Keep the original task active across compaction; re-read this contract and actual landed state rather than restarting. A worker finishing is an integration checkpoint, not task completion. Do not stop after producing a plan, dispatching workers, compiling, landing P1, or leaving the feature solely in a worktree.
 
-Sol may resolve routine implementation details, stale symbol locations and source-backed contract corrections within the approved product scope; update this document and the corresponding assertions when correcting it. Preserve the legacy effect, composability, ownership, buffer discipline and acceptance requirements. Do not add deferred features, change the backend, introduce shared locks, or weaken failed checks to finish overnight. Respect the repository's failure/attempt budget: return a failing lane's evidence to Sol, stop speculative retries and continue any independent authorized work. A genuine blocker must be reported precisely, with verified work preserved under the slot lifecycle; never report an incomplete feature as ready.
+Sol may resolve routine implementation details, stale symbol locations and source-backed contract corrections within the approved product scope; update this document and the corresponding assertions when correcting it. Preserve the legacy effect, composability, ownership, buffer discipline and acceptance requirements. Do not add deferred features, change the backend, introduce shared locks, or weaken failed checks to finish overnight. Keep retries evidence-driven: return a failing lane's evidence to Sol, avoid speculative retries and continue any independent authorized work. A genuine blocker must be reported precisely, with verified work preserved under the slot lifecycle; never report an incomplete feature as ready.
 
 Suggested lane allocation after the relevant interfaces are fixed:
 

@@ -354,23 +354,11 @@ def consume_permit(command, cwd, allow_cwd_fallback=False):
 
 def check_budget(event, command, cwd, allow_cwd_fallback=False):
     kinds = list(expensive_checks(command))
-    if not kinds:
-        return None
-    path = state_path(event).with_suffix(".budget.json")
-    with path.with_suffix(".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        data = json.loads(path.read_text()) if path.exists() else {}
-        key = budget_key(command, cwd)
-        record = data.setdefault(key, {"attempts": 0})
-        if ("broad" in kinds or record["attempts"] >= 2) and not consume_permit(
-                command, cwd, allow_cwd_fallback):
-            return ("Execution budget stopped this check. Broad/visual probes need a named, bounded exception; "
-                    "focused commands get two attempts per session. Report evidence instead of looping. "
-                    "The lead may use guard.py permit-check with the exact command, workdir and reason; "
-                    "do not renew without changed code, new evidence, or explicit user direction. "
-                    "Required checks inside land_branch.py/landing_gate.py remain unchanged.")
-        record["attempts"] += 1
-        path.write_text(json.dumps(data))
+    if "broad" in kinds and not consume_permit(command, cwd, allow_cwd_fallback):
+        return ("Execution budget stopped this check. Broad/visual probes need a named, bounded exception. "
+                "Focused checks remain available while each retry has changed code, new evidence, or explicit "
+                "user direction. The lead may use guard.py permit-check with the exact command, workdir and "
+                "reason. Required checks inside land_branch.py/landing_gate.py remain unchanged.")
     return None
 
 

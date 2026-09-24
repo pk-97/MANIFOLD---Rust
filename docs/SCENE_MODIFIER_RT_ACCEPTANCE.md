@@ -108,7 +108,7 @@ Export uses shared acceleration policy; no content-settle loop, duplicate engine
 
 ## A8. Performer flow and project compatibility — P7b
 
-One registered existing UI flow, one reproduction and one verification after an evidenced fix: open tiny saved 3D scene; enable RT; add Surface Waves; animate phase; add cuts and echoes; reorder; undo/redo; save/reopen; export. Assert visible modifier cards and project state through existing UI/accessibility helpers; numerical GPU/export gates establish geometry correctness. Produce a short diagnostic recording/PNGs and the exact worktree launch command. Peter's visual/performance judgment is L4 and remains pending until he actually tests; do not label it passed from agent inspection.
+Use one registered existing UI flow; reproduce and verify after evidenced fixes as needed: open tiny saved 3D scene; enable RT; add Surface Waves; animate phase; add cuts and echoes; reorder; undo/redo; save/reopen; export. Assert visible modifier cards and project state through existing UI/accessibility helpers; numerical GPU/export gates establish geometry correctness. Produce a short diagnostic recording/PNGs and the exact worktree launch command. Peter's visual/performance judgment is L4 and remains pending until he actually tests; do not label it passed from agent inspection.
 
 Compatibility: existing project fixtures deserialize without migration changes; canonical recipe JSON contains no RT capability flags. No new renderer selector, RT setting per modifier, or per-recipe implementation is accepted. Existing AlphaMode::Blend RT boundary is retained and documented; it is not advertised as newly supported transparent transport.
 

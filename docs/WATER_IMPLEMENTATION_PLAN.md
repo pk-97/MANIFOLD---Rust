@@ -137,9 +137,10 @@ Use each phase's focused test first. Do not repeat passed checks without changed
 or new evidence. Required landing checks still run through `scripts/land_branch.py`,
 which invokes `landing_gate.py`; never nextest for GPU proofs. Substep runtime changes
 also require the existing feedback/freeze tests selected by the landing gate, not just
-new water tests. No optional full-workspace sweep or perf soak. At two failed attempts
-of a check, stop that lane and return evidence to Sol. An exact-command permit is only
-for a necessary bounded check, never to reset the retry count.
+new water tests. No optional full-workspace sweep or perf soak. Continue a failed
+check only when the next attempt changes code or adds evidence; return the evidence
+to Sol when no justified next step remains. An exact-command permit is only for a
+necessary bounded check.
 
 Negative review, over the changed files only: no new Arc<Mutex>/Arc<RwLock>, native
 Metal calls outside manifold-gpu, per-step heap allocation, runtime shader compilation,
@@ -373,9 +374,10 @@ click script. Do not claim L4 before Peter supplies the verdict.
 resume, then deliberately reset. Tests prove reset clears old momentum and reset's
 parameter binding still works after project reload.
 
-**Stop:** one reproduction and one verification for a named problem; two failed checks
-return evidence. No broad render sweep. A missed performance target or an unobserved
-visual verdict remains an open bead, never “prototype passed”.
+**Stop:** reproduce and verify a named problem as needed to establish evidence. When
+the result remains inconclusive or no justified next step remains, return the evidence.
+No broad render sweep. A missed performance target or an unobserved visual verdict
+remains an open bead, never “prototype passed”.
 
 ## 5. Handoff and completion
 

@@ -138,11 +138,10 @@ class Guards(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(self.shell_call(command, cwd=self.slot))
 
-    def test_focused_attempt_budget_and_read_only_calls(self):
+    def test_focused_checks_are_not_capped_and_read_only_calls_work(self):
         command = "cargo test -p manifold-ui mapping"
-        self.assertIsNone(self.shell_call(command))
-        self.assertIsNone(self.shell_call(command))
-        self.assertIn("Execution budget", self.shell_call(command))
+        for _ in range(4):
+            self.assertIsNone(self.shell_call(command))
         self.assertIsNone(self.shell_call("git status --short"))
         self.assertIsNone(self.shell_call(command, cwd=self.slot))
 
@@ -192,9 +191,8 @@ class Guards(unittest.TestCase):
                 self.assertTrue(self.shell_call(command))
         self.assertIn("Execution budget", self.shell_call("cargo build --features perf-soak"))
         wrapped = "env FOO=bar python3 -B scripts/gpu_proofs_gate.py"
-        self.assertIsNone(self.shell_call(wrapped))
-        self.assertIsNone(self.shell_call(wrapped))
-        self.assertTrue(self.shell_call(wrapped))
+        for _ in range(4):
+            self.assertIsNone(self.shell_call(wrapped))
         self.assertIsNone(self.shell_call("cargo run --features perf-soak"))
         self.assertTrue(self.shell_call("cargo xtask perf-soak"))
 
@@ -224,11 +222,10 @@ class Guards(unittest.TestCase):
         self.assertEqual(["focused"], list(guard.expensive_checks(
             "cargo build -p manifold-app --features perf-soak")))
 
-    def test_required_gpu_proof_gate_has_normal_bounded_attempts(self):
+    def test_required_gpu_proof_gate_has_no_attempt_cap(self):
         command = "python3 -B scripts/gpu_proofs_gate.py"
-        self.assertIsNone(self.shell_call(command))
-        self.assertIsNone(self.shell_call(command))
-        self.assertIn("Execution budget", self.shell_call(command))
+        for _ in range(4):
+            self.assertIsNone(self.shell_call(command))
 
     def test_exception_is_exact_bounded_and_expiring(self):
         command = "cargo test --workspace"

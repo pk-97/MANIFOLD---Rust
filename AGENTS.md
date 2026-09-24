@@ -35,14 +35,16 @@ Use source code to resolve stale documentation; read only the relevant subsystem
 
 ## Validation and delivery
 
-Keep execution usage bounded. Do not repeat passed checks without changed code
-or new evidence. After two failed attempts, stop and report evidence instead of
-continuing speculative fixes. No optional GPU exploration, broad test/render
-sweeps, or extra tasks without explicit scope. Computer use and rendering need
-a named behaviour that requires observation: at most one reproduction and one
-verification per fix; stop if inconclusive and report the gap. Preserve required
-landing checks. Use the Codex guard's short-lived, exact-command exceptions only
-for necessary checks with a concrete reason, never to evade its attempt budget.
+Keep broad and visual execution usage bounded. Do not repeat passed checks
+without changed code or new evidence. Failed checks need an evidence-driven next
+step; continue while the next attempt changes code or adds evidence, and report
+when no justified next step remains. No optional GPU exploration, broad
+test/render sweeps, or extra tasks without explicit scope. Computer use and
+rendering need a named behaviour that requires observation: reproduce and verify
+as needed to establish the behaviour; stop if the result is inconclusive and
+report the gap. Preserve required landing checks. Use the Codex guard's
+short-lived, exact-command exceptions only for necessary bounded checks with a
+concrete reason, never to bypass their bounds.
 
 Start diagnosis with the relevant seam. Runtime claims need logs/reproduction; visual claims need an observed render. Use bounded probes when static evidence is insufficient. A green compile does not establish behaviour.
 
