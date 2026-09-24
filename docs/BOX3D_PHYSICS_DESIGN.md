@@ -220,7 +220,9 @@ and do not establish thousands-of-pieces or whole-project frame budgets.
 
 Focused Metal proofs exercise production import, asynchronous preparation,
 manual Shatter release on a warmed runtime, visible motion, backward-time reset,
-all-hidden/restored rendering and the retained Physics OFF body definition.
+all-hidden/restored rendering and live Physics OFF edits through the production
+fused generator factory. These compare appearance before and after the edit;
+the earlier raw-runtime check missed the fused uniform conversion bug.
 The original tiger lily is used throughout. CPU regressions cover original
 triangle/attribute preservation, compound editing and fixed-tick behaviour.
 The UI snapshot confirms one object row and retained Physics controls; full

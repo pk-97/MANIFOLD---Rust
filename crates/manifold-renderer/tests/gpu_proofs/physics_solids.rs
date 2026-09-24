@@ -345,16 +345,9 @@ fn imported_flower_empty_scene_clears_and_restores() {
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
     let (imported, _) = assemble_import_graph(&fixture).expect("original flower imports");
     let h = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut visible = PresetRuntime::from_def_with_device(
-        imported.clone(),
-        &registry,
-        h.device.clone(),
-        h.width,
-        h.height,
-        GpuTextureFormat::Rgba16Float,
-        None,
-    )
+    let mut visible = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
+        .create_with_override(h.device.clone(), &imported.preset_metadata.as_ref().unwrap().id,
+            Some(&imported), h.width, h.height, false, None, None)
     .expect("visible flower graph builds");
     let metadata = imported.preset_metadata.as_ref().unwrap();
     let shown_params = ParamManifest::from_params(
@@ -396,6 +389,7 @@ fn imported_flower_empty_scene_clears_and_restores() {
         "flower must render before hiding"
     );
 
+    visible.apply_inner_param_overrides(&imported);
     render_frame_with_params(
         &mut visible,
         &target,
@@ -432,6 +426,7 @@ fn imported_flower_empty_scene_clears_and_restores() {
         visible.errors()
     );
     let restored = h.readback(&target.texture);
+    assert!(mean_abs_diff(&normal, &restored) < 0.002, "restoring visibility must preserve the original appearance");
     assert!(
         pixel_stats(&restored).0 > 1.0,
         "flower must render after restoring visibility"
@@ -491,7 +486,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
     );
     let enabled_graph = project.timeline.layers[layer_index]
         .generator_graph()
-        .expect("enabled graph");
+        .expect("enabled graph").clone();
     let group = enabled_graph
         .nodes
         .iter()
@@ -541,19 +536,20 @@ fn imported_flower_physics_off_renders_authored_transform() {
     );
 
     let h = harness::shared();
-    let runtime = PresetRuntime::from_def_with_device(
-        def,
-        &PrimitiveRegistry::with_builtin(),
-        h.device.clone(),
-        h.width,
-        h.height,
-        GpuTextureFormat::Rgba16Float,
-        None,
-    )
+    let runtime = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
+        .create_with_override(h.device.clone(), &enabled_graph.preset_metadata.as_ref().unwrap().id,
+            Some(&enabled_graph), h.width, h.height, false, None, None)
     .expect("physics-off flower graph builds");
     let target = h.make_target("imported-flower-physics-off");
     let mut runtime = runtime;
     warm_imported_runtime(&mut runtime, &target, &ParamManifest::default());
+    let before = h.readback(&target.texture);
+    runtime.apply_inner_param_overrides(&def);
+    render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
+    let after = h.readback(&target.texture);
+    std::fs::write("/tmp/flower-live-physics-off.png", manifold_renderer::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
+    assert!(mean_abs_diff(&before, &after) < 0.002,
+        "paused Physics OFF must preserve appearance: diff={}", mean_abs_diff(&before, &after));
     assert!(
         runtime.errors().is_empty(),
         "Physics Off errors: {:?}",

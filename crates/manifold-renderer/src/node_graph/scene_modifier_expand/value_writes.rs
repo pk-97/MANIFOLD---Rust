@@ -2,17 +2,17 @@
 
 use super::value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 use super::{SceneModifierExpandError, SceneModifierNodeRoute};
-use crate::node_graph::parameters::{ParamType, ParamValue};
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::{Graph, NodeInstanceId};
 use ahash::AHashMap;
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_core::effect_graph_def::EffectGraphDef;
 use std::collections::BTreeMap;
 
 struct Destination {
     node: NodeInstanceId,
     param: String,
-    enum_as_number: bool,
+    fused: bool,
     baseline: ParamValue,
 }
 
@@ -144,7 +144,7 @@ impl PreparedGraphValueWrites {
                                 .ok_or_else(|| invalid(format!("missing fused target {target}")))?;
                             (runtime_id, field.clone(), true)
                         };
-                    let parameter = graph
+                    graph
                         .get_node(runtime_id)
                         .and_then(|node| {
                             node.node
@@ -163,7 +163,7 @@ impl PreparedGraphValueWrites {
                     destinations.push(Destination {
                         node: runtime_id,
                         param,
-                        enum_as_number: fused && parameter.ty == ParamType::Int,
+                        fused,
                         baseline,
                     });
                     // A fragment's cutter shares only its partition controls.
@@ -199,7 +199,7 @@ impl PreparedGraphValueWrites {
                         destinations.push(Destination {
                             node: cutter,
                             param: source.param.clone(),
-                            enum_as_number: false,
+                            fused: false,
                             baseline,
                         });
                     }
@@ -250,10 +250,8 @@ impl PreparedGraphValueWrites {
             for write in &batch.writes {
                 let value = write.source.value(local)?;
                 for destination in &write.destinations {
-                    let value = match (destination.enum_as_number, value) {
-                        (true, Some(SerializedParamValue::Enum { value: index })) => {
-                            ParamValue::Float(*index as f32)
-                        }
+                    let value = match (destination.fused, value) {
+                        (true, Some(value)) => crate::node_graph::freeze::install::fused_param_value(value),
                         (_, Some(value)) => value.clone().into(),
                         (_, None) => destination.baseline.clone(),
                     };
