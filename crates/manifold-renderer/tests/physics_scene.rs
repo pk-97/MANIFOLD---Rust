@@ -88,6 +88,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(id - 1, p)),
             billboard: false,
         },
+        enabled: true,
         shape: scalar(id, "shape") as u32,
         kind: scalar(id, "motion") as u32,
         mass: scalar(id, "mass"),

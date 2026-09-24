@@ -6,7 +6,7 @@ The custom dynamic mesh collision experiment is removed. Vendored Box3D collisio
 
 The existing Rigid Body and Physics World nodes now support prepared imported geometry and 64 body slots. Hulls prepare during asset warmup; the shared world holds until inputs are ready. Existing Fixed/Dynamic/Animated motion, mass, friction, bounce, gravity, speed, reset and transport stepping remain authoritative.
 
-Scene actions enable/disable physics and split an imported rigid object into eight pieces. These are ordinary bodies in the shared world. Splitting is an authoring edit, not impact-triggered runtime fracture. It preserves source triangles/materials but adds no cut caps. Unsupported deformed or skinned sources reject the action.
+The scene panel now has an object Physics ON/OFF property. Off retains settings and wiring, removes contacts and restores the authored transform; on re-enables the body. Changing participation resets the shared simulation. Shared controls remain under World → Physics. The separate Split into 8 action splits an imported rigid object into eight pieces. These are ordinary bodies in the shared world. Splitting is an authoring edit, not impact-triggered runtime fracture. It preserves source triangles/materials but adds no cut caps. Unsupported deformed or skinned sources reject the action.
 
 Original tiger lily: 454,840 triangles. Optimized production-runtime CPU benchmark, six seconds at 60 Hz:
 
@@ -15,7 +15,7 @@ Original tiger lily: 454,840 triangles. Optimized production-runtime CPU benchma
 
 These measurements exclude rendering and do not qualify thousands of pieces. The original source binary remains unchanged. The earlier four-minute video is from the removed experiment and does not represent this implementation.
 
-Focused native/runtime tests and the imported-flower Metal proof exercise standard hulls, fixed-tick timing/reset, triangle preservation, production scene commands, save/reload, loading and rendered motion. The imported-object UI flow passes enable, split, disable, undo and shared World controls. Focused clippy passes; existing AVFoundation deprecation warnings remain. No main landing gate or whole-show performance qualification is claimed.
+Focused native/runtime tests and the imported-flower Metal proof exercise standard hulls, fixed-tick timing/reset, triangle preservation, production scene commands, save/reload, loading and rendered motion. The imported-object UI flow passes initial enable, split, off/on, hidden controls, undo and shared World controls. The retained-toggle dispatch test verifies settings, save/reload and undo; all 30 runtime physics and 59 scene-panel tests pass. Focused clippy passes; existing AVFoundation deprecation warnings remain. No main landing gate or whole-show performance qualification is claimed.
 
 Benchmark:
 
@@ -36,7 +36,7 @@ cd '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-0'
 ./target/debug/manifold
 ```
 
-Use Scene → select an imported rigid object → Enable Physics. Split into 8
+Use Scene → select an imported rigid object → Physics ON. Split into 8
 creates independently editable pieces. Source selection and materials stay
 with each piece. The two project files contain the original tiger lily and a
 large fixed floor. `cargo build --profile test -p manifold-app --bin manifold`

@@ -183,13 +183,19 @@ volume. These are approximate colliders; exact triangle contact is not promised.
 Runtime scale applies to both geometry and collider. Loading holds physics time;
 preparation failures are visible errors, never a fallback bounding box.
 
-Scene actions enable/disable physics and split a supported imported object into
-eight independently rendered physical pieces. Splitting is an undoable authoring
+The scene panel exposes Physics as an object ON/OFF property. Turning it off
+removes the body from simulation and displays its authored transform while retaining
+its settings and graph wiring. Turning it on restores participation; changing body
+membership resets the shared simulation. Existing projects default to ON.
+Shared gravity, simulation speed and reset remain under World → Physics.
+
+The separate Split into 8 action creates independently rendered physical pieces.
+Splitting is an undoable authoring
 edit, not an impact trigger. It partitions original triangles without remeshing
 or adding cut caps. Each piece gets one standard hull and joins the same world.
 Skinned, deformed and unsupported graph sources reject the action. Enable/disable supports bare objects and importer object groups. Splitting supports
 importer groups and rejects already-split pieces; arbitrary graph topologies are not.
-Existing Fixed/Dynamic/Animated, mass, friction, bounce, World controls and
+Existing Fixed/Moving/Animated, mass, friction, bounce, World controls and
 transport reset remain the project workflow.
 
 A bounded optimized CPU measurement with the original 454,840-triangle tiger lily

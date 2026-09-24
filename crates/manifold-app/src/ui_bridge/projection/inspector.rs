@@ -587,7 +587,7 @@ pub fn sync_inspector_data(
                                         // node kind).
                                         let mut object_doc_ids = vec![*object_node_id];
                                         if let Some(physics) = physics {
-                                            object_doc_ids.push(physics.body_node_id);
+                                            if physics.enabled { object_doc_ids.push(physics.body_node_id); }
                                         } else if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
                                             manifold_renderer::node_graph::scene_vm::physics_body_doc_id(def, *object_node_id)) {
                                             object_doc_ids.push(body);
@@ -669,7 +669,8 @@ pub fn sync_inspector_data(
                                                 modifiers_addable: *modifier_chain_parseable,
                                                 sections,
                                                 skin,
-                                                physics_enabled: physics.is_some(),
+                                                physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
+                                                physics_available: *physics_imported || physics.is_some(),
                                                 physics_imported: *physics_imported,
                                             },
                                         ))

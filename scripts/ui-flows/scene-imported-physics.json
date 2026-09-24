@@ -17,7 +17,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Enable Physics"
+          "name": "scene_setup.properties.physics",
+          "text": "OFF"
         }
       },
       "check": "Exists"
@@ -27,7 +28,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Enable Physics"
+          "name": "scene_setup.properties.physics",
+          "text": "OFF"
         }
       },
       "gesture": {
@@ -41,7 +43,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Disable Physics"
+          "name": "scene_setup.properties.physics",
+          "text": "ON"
         }
       },
       "check": "Exists"
@@ -96,7 +99,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Disable Physics"
+          "name": "scene_setup.properties.physics",
+          "text": "ON"
         }
       },
       "check": "Exists"
@@ -125,7 +129,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Disable Physics"
+          "name": "scene_setup.properties.physics",
+          "text": "ON"
         }
       },
       "gesture": {
@@ -139,7 +144,56 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Enable Physics"
+          "name": "scene_setup.properties.physics",
+          "text": "OFF"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mass (kg)"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mass (kg)"
         }
       },
       "check": "Exists"
@@ -157,7 +211,28 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Disable Physics"
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics",
+          "text": "ON"
         }
       },
       "check": "Exists"

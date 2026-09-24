@@ -999,19 +999,27 @@ impl ScenePanel {
         );
         self.object_remove_ids.push((remove_id, row.index));
         let mut next_cy = cy + ROW_H + ROW_GAP;
-        if row.physics_imported {
+        if row.physics_available {
+            let toggle_w = crate::slider::VALUE_BOX_W;
+            tree.add_label(
+                Some(self.content_parent), inner_x, next_cy,
+                inner_w - toggle_w - GAP, ROW_H, "Physics", label_style(),
+            );
             let physics_id = tree.add_button_keyed(
-                Some(self.content_parent), inner_x, next_cy, inner_w, ROW_H,
-                btn_style(),
-                if row.physics_enabled { "Disable Physics" } else { "Enable Physics" },
+                Some(self.content_parent), inner_x + inner_w - toggle_w, next_cy,
+                toggle_w, ROW_H, toggle_btn_style(row.physics_enabled),
+                if row.physics_enabled { "ON" } else { "OFF" },
                 obj_key(row.index, OBJ_OFF_PHYSICS),
             );
+            tree.set_name(physics_id, "scene_setup.properties.physics");
             if row.physics_enabled {
                 self.object_disable_physics_ids.push((physics_id, row.index));
             } else {
                 self.object_enable_physics_ids.push((physics_id, row.index));
             }
             next_cy += ROW_H;
+        }
+        if row.physics_imported {
             let split_id = tree.add_button_keyed(
                 Some(self.content_parent),
                 inner_x, next_cy, inner_w, ROW_H,

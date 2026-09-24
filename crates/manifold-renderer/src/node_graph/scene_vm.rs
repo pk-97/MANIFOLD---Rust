@@ -235,6 +235,7 @@ pub struct SceneObjectKnownRow {
 pub struct PhysicsVm {
     pub body_node_id: u32,
     pub body_scope_path: Vec<u32>,
+    pub enabled: bool,
     pub imported: bool,
 }
 
@@ -948,8 +949,18 @@ fn physics_vm(
     Some(PhysicsVm {
         body_node_id: body_id,
         body_scope_path: body_scope,
+        enabled: level
+            .node(body_id)
+            .is_none_or(|node| param_bool(node, "enabled", true)),
         imported,
     })
+}
+
+fn param_bool(node: &EffectGraphNode, name: &str, default: bool) -> bool {
+    match node.params.get(name) {
+        Some(SerializedParamValue::Bool { value }) => *value,
+        _ => default,
+    }
 }
 
 fn group_body_id(level: &Level<'_>) -> Option<u32> {

@@ -41,6 +41,7 @@ fn scene_inputs() -> (
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(&nodes, id - 1, p)),
             billboard: false,
         },
+        enabled: true,
         shape: scalar(&nodes, id, "shape") as u32,
         kind: scalar(&nodes, id, "motion") as u32,
         mass: scalar(&nodes, id, "mass"),

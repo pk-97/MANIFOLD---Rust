@@ -429,6 +429,7 @@ pub struct ObjectKnownRow {
     /// is wired into the object's material maps.
     pub skin: Option<SkinRowVm>,
     pub physics_enabled: bool,
+    pub physics_available: bool,
     pub physics_imported: bool,
 }
 
@@ -2962,6 +2963,7 @@ mod tests {
                     sections: Vec::new(),
                     skin: None,
                     physics_enabled: false,
+                    physics_available: false,
                     physics_imported: false,
                 })),
                 ObjectRowVm::Custom { index: 1 },

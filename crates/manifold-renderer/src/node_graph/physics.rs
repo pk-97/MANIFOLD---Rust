@@ -126,6 +126,7 @@ pub struct ColliderGeometry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RigidBody {
     pub transform: Transform,
+    pub enabled: bool,
     pub shape: u32,
     pub kind: u32,
     pub mass: f32,
@@ -155,6 +156,7 @@ impl Default for RigidBody {
     fn default() -> Self {
         Self {
             transform: Transform::default(),
+            enabled: true,
             shape: 1,
             kind: 1,
             mass: 1.0,
@@ -202,6 +204,7 @@ fn same_collider(left: &RigidBody, right: &RigidBody) -> bool {
 
 fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
     left.transform == right.transform
+        && left.enabled == right.enabled
         && left.shape == right.shape
         && left.kind == right.kind
         && left.mass == right.mass
@@ -414,17 +417,20 @@ impl RigidSimulation {
         {
             return Err("Physics: copy count, spacing, columns, and layout must be finite; spacing must be positive".into());
         }
-        let requested_copy_count = if prototype.is_some() {
+        let requested_copy_count = if prototype.as_ref().is_some_and(|body| body.enabled) {
             copy_count.round().clamp(0.0, MAX_COPIES as f32) as usize
         } else {
             0
         };
         let requested_copy_columns = copy_columns.round().clamp(1.0, 64.0) as usize;
         let requested_copy_layout = CopyLayout::from_scalar(layout);
-        if let Some(prototype) = prototype.as_ref() {
+        if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
             validate_copy_prototype(prototype)?;
         }
         for b in bodies.iter().flatten() {
+            if !b.enabled {
+                continue;
+            }
             if b.shape >= 5
                 || b.kind > 2
                 || b.transform.billboard
@@ -447,6 +453,7 @@ impl RigidSimulation {
                     (Some(a), Some(b)) => {
                         a.shape != b.shape
                             || a.transform.scale != b.transform.scale
+                            || a.enabled != b.enabled
                             || !same_collider(a, b)
                     }
                     (None, None) => false,
@@ -458,11 +465,14 @@ impl RigidSimulation {
             (Some(current), Some(previous)) => {
                 current.shape != previous.shape
                     || current.transform.scale != previous.transform.scale
+                    || current.enabled != previous.enabled
                     || !same_collider(current, previous)
             }
             (None, None) => false,
             _ => true,
         };
+        let prototype_activation_changed = prototype.as_ref().map(|body| body.enabled)
+            != self.copy_description.as_ref().map(|body| body.enabled);
         if SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get) {
             // A topology edit or seek rebuilds at the next full graph frame;
             // old trajectories cannot safely be spliced into a new world.
@@ -480,9 +490,13 @@ impl RigidSimulation {
         if rebuild {
             self.copy_poses.fill(Transform::default());
             let prototype_added = self.copy_description.is_none() && prototype.is_some();
-            let active_copy_count = if prototype.is_none() {
+            let active_copy_count = if prototype.as_ref().is_none_or(|body| !body.enabled) {
                 0
-            } else if self.world.is_none() || reset || prototype_added {
+            } else if self.world.is_none()
+                || reset
+                || prototype_added
+                || prototype_activation_changed
+            {
                 requested_copy_count
             } else {
                 self.latched_copy_count
@@ -502,17 +516,17 @@ impl RigidSimulation {
             } else {
                 self.latched_copy_layout
             };
-            if let Some(prototype) = prototype.as_ref() {
+            if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
                 validate_copy_prototype(prototype)?;
             }
             let mut world = PhysicsWorld::new(gravity).map_err(|e| e.to_string())?;
             let mut handles = std::array::from_fn(|_| None);
             for (i, body) in bodies.iter().enumerate() {
-                let Some(body) = body else { continue };
+                let Some(body) = body.as_ref().filter(|body| body.enabled) else { continue };
                 handles[i] = Some(add_body_geometry(&mut world, body)?);
             }
             let mut copy_handles = vec![None; active_copy_count];
-            if let Some(prototype) = prototype.as_ref() {
+            if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
                 let scaled_geometry = prototype
                     .collider
                     .as_ref()
@@ -667,7 +681,7 @@ impl RigidSimulation {
                 let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
                 for (i, body) in bodies.iter().enumerate() {
                     let Some(body) = body else { continue };
-                    if body.kind == 2 {
+                    if body.enabled && body.kind == 2 {
                         targets[i] = Some(
                             self.interpolated_body(i, target_time, body.clone())
                                 .unwrap_or_else(|| body.clone()),
@@ -676,7 +690,7 @@ impl RigidSimulation {
                 }
                 let copy_target = prototype
                     .as_ref()
-                    .filter(|prototype| prototype.kind == 2)
+                    .filter(|prototype| prototype.enabled && prototype.kind == 2)
                     .map(|prototype| {
                         self.interpolated_prototype(target_time, prototype.clone())
                             .unwrap_or_else(|| prototype.clone())
@@ -743,8 +757,12 @@ impl RigidSimulation {
         self.reset_count = Some(reset_count);
         self.descriptions = bodies.clone();
         for (i, body) in bodies.iter().enumerate() {
-            let (Some(body), Some(handle)) = (body, self.handles[i]) else {
+            let Some(body) = body else {
                 self.poses[i] = Transform::default();
+                continue;
+            };
+            let Some(handle) = self.handles[i] else {
+                self.poses[i] = body.transform;
                 continue;
             };
             let pose = self
@@ -905,7 +923,7 @@ impl RigidSimulation {
                 let (Some(body), Some(handle)) = (body, self.handles[index]) else {
                     continue;
                 };
-                if body.kind != 1 {
+                if !body.enabled || body.kind != 1 {
                     continue;
                 }
                 let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
@@ -924,7 +942,7 @@ impl RigidSimulation {
             let (Some(body), Some(handle)) = (body, self.handles[index]) else {
                 continue;
             };
-            if body.kind != 1 {
+            if !body.enabled || body.kind != 1 {
                 self.bullet_enabled[index] = false;
                 continue;
             }
@@ -937,7 +955,7 @@ impl RigidSimulation {
                 self.bullet_enabled[index] = enabled;
             }
         }
-        if let Some(prototype) = prototype.filter(|body| body.kind == 1) {
+        if let Some(prototype) = prototype.filter(|body| body.enabled && body.kind == 1) {
             for index in 0..self.active_copy_count {
                 let Some(handle) = self.copy_handles[index] else {
                     continue;
@@ -969,11 +987,11 @@ impl RigidSimulation {
         let dynamic_extent = bodies
             .iter()
             .flatten()
-            .filter(|body| body.kind == 1)
+            .filter(|body| body.enabled && body.kind == 1)
             .map(body_min_extent)
             .chain(
                 prototype
-                    .filter(|body| body.kind == 1 && self.active_copy_count > 0)
+                    .filter(|body| body.enabled && body.kind == 1 && self.active_copy_count > 0)
                     .map(body_min_extent),
             )
             .fold(f32::INFINITY, f32::min);
@@ -986,7 +1004,7 @@ impl RigidSimulation {
         let mut required_speed: f32 = 400.0;
         for (index, body) in bodies.iter().enumerate() {
             let Some(body) = body.as_ref() else { continue };
-            if body.kind != 2 {
+            if !body.enabled || body.kind != 2 {
                 continue;
             }
             let start = self
@@ -1023,7 +1041,7 @@ impl RigidSimulation {
             }
             travel = travel.max(path);
         }
-        if let Some(body) = prototype.filter(|body| body.kind == 2 && self.active_copy_count > 0) {
+        if let Some(body) = prototype.filter(|body| body.enabled && body.kind == 2 && self.active_copy_count > 0) {
             let start = self
                 .interpolated_prototype(start_time, body.clone())
                 .unwrap_or_else(|| body.clone());
@@ -1448,6 +1466,41 @@ mod tests {
             .advance(bodies.clone(), GRAVITY, Seconds(1.0), 1.0, 0.0)
             .unwrap();
         assert!(simulation.poses[0].pos[1] < authored[1] - 0.1);
+    }
+
+    #[test]
+    fn disabled_body_keeps_authored_pose_and_restores_contacts_when_enabled() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            enabled: false,
+            kind: 0,
+            transform: Transform {
+                pos: [0.0, 0.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        bodies[1] = Some(body([0.0, 1.5, 0.0]));
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+
+        assert_eq!(simulation.poses[0].pos, [0.0, 0.0, 0.0]);
+        assert!(simulation.poses[1].pos[1] < 0.0);
+
+        bodies[0].as_mut().unwrap().enabled = true;
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(2.0), 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies, GRAVITY, Seconds(3.0), 1.0, 0.0)
+            .unwrap();
+        assert!(simulation.poses[0].pos[1].abs() < 1.0e-5);
+        assert!(simulation.poses[1].pos[1] > 0.5);
     }
 
     #[test]
