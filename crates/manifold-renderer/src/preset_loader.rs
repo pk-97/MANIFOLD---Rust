@@ -45,6 +45,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arc_swap::ArcSwap;
 use manifold_core::project::EmbeddedOrigin;
 
+#[path = "preset_loader/blob_mask.rs"]
+mod blob_mask;
+
 /// Monotonic catalog generation counter. Starts at 0 and is bumped by the
 /// hot-reload watcher (after both the catalog snapshots and the core
 /// registry have been refreshed) so live consumers can detect that the
@@ -510,8 +513,11 @@ fn build_catalog(
     user_root: Option<&Path>,
 ) -> Result<Arc<PresetCatalog>, String> {
     build_catalog_with_overlays(
-        label, stock_root, user_root,
-        &project_snapshot_overlay_for(label), &project_saved_overlay_for(label),
+        label,
+        stock_root,
+        user_root,
+        &project_snapshot_overlay_for(label),
+        &project_saved_overlay_for(label),
     )
 }
 
@@ -556,6 +562,7 @@ fn build_catalog_with_overlays(
 
     // Stock overrides any Snapshot entry with the same id (disk wins).
     let mut disk_ids: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
+    let mut user_ids: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
     for f in stock {
         disk_ids.insert(f.type_id.clone());
         if let Some(slot) = merged.iter_mut().find(|(id, _)| *id == f.type_id) {
@@ -572,6 +579,7 @@ fn build_catalog_with_overlays(
         );
         for f in scan_dir(user_root) {
             disk_ids.insert(f.type_id.clone());
+            user_ids.insert(f.type_id.clone());
             if let Some(slot) = merged.iter_mut().find(|(id, _)| *id == f.type_id) {
                 log::info!(
                     "[presets] user {label} preset `{}` overrides the stock one",
@@ -616,6 +624,42 @@ fn build_catalog_with_overlays(
             } else {
                 merged.push((id.clone(), json.clone()));
             }
+        }
+    }
+
+    // MaskBlob is a view over BlobTrackingV2's detector, rather than a second
+    // authored detector graph. Derive it after every catalog merge so the
+    // current stock/user BlobTrackingV2 definition (including project overlays)
+    // is the one source of detector topology and controls. A deliberate user
+    // or Saved MaskBlob remains authoritative. A diskless Snapshot is used
+    // only when the shared source is itself unavailable.
+    let saved_mask = saved_overlay
+        .iter()
+        .any(|(id, _)| id.as_ref() == "MaskBlob");
+    let current_blob_source = disk_ids.contains("BlobTrackingV2")
+        || saved_overlay
+            .iter()
+            .any(|(id, _)| id.as_ref() == "BlobTrackingV2");
+    let snapshot_mask_fallback = snapshot_ids.contains("MaskBlob") && !current_blob_source;
+    if label == EFFECT_DIRS.label
+        && !user_ids.contains("MaskBlob")
+        && !saved_mask
+        && !snapshot_mask_fallback
+        && current_blob_source
+        && let Some(blob_tracking) = merged
+            .iter()
+            .find(|(id, _)| id.as_ref() == "BlobTrackingV2")
+    {
+        let derived = blob_mask::synthesize_mask_blob_json(blob_tracking.1.as_ref())
+            .map_err(|error| format!("cannot derive MaskBlob from BlobTrackingV2: {error}"))?;
+        let id: Arc<str> = Arc::from("MaskBlob");
+        if let Some(slot) = merged
+            .iter_mut()
+            .find(|(existing, _)| existing.as_ref() == "MaskBlob")
+        {
+            slot.1 = Arc::from(derived);
+        } else {
+            merged.push((id, Arc::from(derived)));
         }
     }
 
@@ -967,9 +1011,8 @@ mod tests {
             .map(|id| (Arc::from(id), Arc::from("saved project")))
             .collect();
         for kind in ["effect", "generator"] {
-            let cat = build_catalog_with_overlays(
-                kind, &stock, Some(&user), &snapshots, &saved,
-            ).expect("catalog loads");
+            let cat = build_catalog_with_overlays(kind, &stock, Some(&user), &snapshots, &saved)
+                .expect("catalog loads");
             let mut visible: Vec<_> = cat.browser_ids.iter().map(|id| id.as_ref()).collect();
             visible.sort_unstable();
             assert_eq!(visible, ["Shared", "Stock", "User"]);
@@ -977,7 +1020,10 @@ mod tests {
             assert!(cat.json("Shared").unwrap().contains("UserShared"));
             assert!(cat.json("User").unwrap().contains("UserDisk"));
             assert_eq!(cat.json("Missing").unwrap().as_ref(), "snapshot fallback");
-            assert_eq!(cat.json("SavedCollision").unwrap().as_ref(), "saved project");
+            assert_eq!(
+                cat.json("SavedCollision").unwrap().as_ref(),
+                "saved project"
+            );
             assert_eq!(cat.json("SavedOnly").unwrap().as_ref(), "saved project");
         }
         fs::remove_dir_all(stock).expect("clean stock fixture");
@@ -1111,5 +1157,199 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&stock);
+    }
+
+    #[test]
+    fn mask_blob_derives_detector_group_and_controls_from_v2() {
+        let source_json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/effect-presets/BlobTrackingV2.json"
+        ));
+        let source: serde_json::Value = serde_json::from_str(source_json).unwrap();
+        let derived: serde_json::Value =
+            serde_json::from_str(&blob_mask::synthesize_mask_blob_json(source_json).unwrap())
+                .unwrap();
+        let source_group = source["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["nodeId"] == "Blob Detection")
+            .unwrap();
+        let derived_group = derived["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["nodeId"] == "Blob Detection")
+            .unwrap();
+        for node in source_group["group"]["nodes"].as_array().unwrap() {
+            assert!(
+                derived_group["group"]["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .contains(node)
+            );
+        }
+        for wire in source_group["group"]["wires"].as_array().unwrap() {
+            assert!(
+                derived_group["group"]["wires"]
+                    .as_array()
+                    .unwrap()
+                    .contains(wire)
+            );
+        }
+        let output_names: std::collections::HashSet<&str> =
+            derived_group["group"]["interface"]["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|port| port["name"].as_str())
+                .collect();
+        assert!(output_names.is_superset(&std::collections::HashSet::from([
+            "boxes", "labels", "valid", "tracks",
+        ])));
+
+        let metadata = &derived["presetMetadata"];
+        assert_eq!(metadata["id"], "MaskBlob");
+        assert_eq!(metadata["displayName"], "Mask Blob Detector");
+        let params: std::collections::HashSet<&str> = metadata["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|param| param["id"].as_str())
+            .collect();
+        assert!(params.contains("detection_mode"));
+        assert!(params.contains("selection"));
+        assert!(params.contains("amount"));
+        assert!(!params.contains("connect"));
+        let bindings = metadata["bindings"].as_array().unwrap();
+        assert!(bindings.iter().any(|binding| {
+            binding["id"] == "detection_mode" && binding["target"]["nodeId"] == "detection_mode"
+        }));
+        assert!(!bindings.iter().any(|binding| binding["id"] == "connect"));
+    }
+
+    #[test]
+    fn mask_blob_follows_source_group_id_and_control_mutations() {
+        let source_json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/effect-presets/BlobTrackingV2.json"
+        ));
+        let mut source: serde_json::Value = serde_json::from_str(source_json).unwrap();
+        let group = source["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|node| node["nodeId"] == "Blob Detection")
+            .unwrap();
+        group["id"] = serde_json::json!(91);
+        group["group"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|node| node["nodeId"] == "detection_mode")
+            .unwrap()["params"]["selector"]["value"] = serde_json::json!(1);
+        source["presetMetadata"]["params"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|param| param["id"] == "detection_mode")
+            .unwrap()["max"] = serde_json::json!(2.0);
+        source["presetMetadata"]["bindings"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|binding| binding["id"] == "detection_mode")
+            .unwrap()["defaultValue"] = serde_json::json!(1.0);
+        let derived: serde_json::Value = serde_json::from_str(
+            &blob_mask::synthesize_mask_blob_json(&serde_json::to_string(&source).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(derived["wires"].as_array().unwrap().iter().any(|wire| {
+            wire["fromNode"] == 19 && wire["toNode"] == 7 && wire["toPort"] == "labels"
+        }));
+        assert!(
+            !derived["wires"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|wire| { wire["fromNode"] == 91 })
+        );
+        let mode_param = derived["presetMetadata"]["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|param| param["id"] == "detection_mode")
+            .unwrap();
+        assert_eq!(mode_param["max"], 2.0);
+        let mode_binding = derived["presetMetadata"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|binding| binding["id"] == "detection_mode")
+            .unwrap();
+        assert_eq!(mode_binding["defaultValue"], 1.0);
+        let mode_node = derived["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["nodeId"] == "Blob Detection")
+            .unwrap()["group"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["nodeId"] == "detection_mode")
+            .unwrap();
+        assert_eq!(mode_node["params"]["selector"]["value"], 1);
+    }
+
+    #[test]
+    fn mask_blob_snapshot_and_saved_overlays_keep_precedence() {
+        let stock = scratch("mask-derive-stock");
+        fs::write(
+            stock.join("BlobTrackingV2.json"),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/effect-presets/BlobTrackingV2.json"
+            )),
+        )
+        .unwrap();
+        let snapshot: OverlayEntries = vec![(Arc::from("MaskBlob"), Arc::from("snapshot"))];
+        let saved: OverlayEntries = vec![(Arc::from("MaskBlob"), Arc::from("saved"))];
+
+        let snapshot_catalog =
+            build_catalog_with_overlays("effect", &stock, None, &snapshot, &OverlayEntries::new())
+                .unwrap();
+        let derived_snapshot = snapshot_catalog.json("MaskBlob").unwrap();
+        assert!(derived_snapshot.contains("detection_mode"));
+        assert!(!derived_snapshot.contains("snapshot"));
+
+        let saved_catalog =
+            build_catalog_with_overlays("effect", &stock, None, &snapshot, &saved).unwrap();
+        assert_eq!(saved_catalog.json("MaskBlob").unwrap().as_ref(), "saved");
+        let _ = fs::remove_dir_all(stock);
+    }
+
+    #[test]
+    fn mask_blob_invalid_shared_source_returns_catalog_error() {
+        let stock = scratch("mask-invalid-source");
+        fs::write(
+            stock.join("BlobTrackingV2.json"),
+            r#"{"version":2,"nodes":[]}"#,
+        )
+        .unwrap();
+        let result = build_catalog_with_overlays(
+            "effect",
+            &stock,
+            None,
+            &OverlayEntries::new(),
+            &OverlayEntries::new(),
+        );
+        let error = match result {
+            Ok(_) => panic!("invalid shared source must fail catalog assembly"),
+            Err(error) => error,
+        };
+        assert!(error.contains("BlobTrackingV2 has no presetMetadata"));
+        let _ = fs::remove_dir_all(stock);
     }
 }

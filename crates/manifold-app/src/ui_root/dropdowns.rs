@@ -90,9 +90,7 @@ fn mask_menu_items(
         ("Rectangle", "MaskRectangle"),
         ("Gradient", "MaskGradient"),
         ("Image", "MaskImage"),
-        ("Blob", "MaskBlob"),
-        ("Blob Colour", "MaskBlobColour"),
-        ("Blob Motion", "MaskBlobMotion"),
+        ("Blob Detector", "MaskBlob"),
     ] {
         items.push(DropdownItem::new(&format!("{prefix} — {label}"))
             .with_action(PanelAction::Params(action(preset_id.to_string(), None))));
@@ -1429,9 +1427,17 @@ impl UIRoot {
                 true
             }
             PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id)) => {
-                let items = mask_menu_items("Mask", &self.clip_detect_layers, |preset_id, source_layer| {
+                let mut items = mask_menu_items("Mask", &self.clip_detect_layers, |preset_id, source_layer| {
                     ParamsAction::AddEffectGroupMask { group_id: group_id.clone(), preset_id, source_layer }
                 });
+                if self.inspector.rack_group_has_mask(self.inspector.last_effect_tab(), group_id) {
+                    if let Some(last) = items.last_mut() {
+                        last.separator_after = true;
+                    }
+                    items.push(DropdownItem::new("Remove Mask").with_action(
+                        PanelAction::Params(ParamsAction::RemoveEffectGroupMask(group_id.clone())),
+                    ));
+                }
                 self.open_dropdown_typed(items, trigger);
                 true
             }

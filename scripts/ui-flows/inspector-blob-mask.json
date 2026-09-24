@@ -13,27 +13,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Add Mask — Blob"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Add Mask — Blob Colour"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Add Mask — Blob Motion"
+          "text": "Add Mask — Blob Detector"
         }
       },
       "check": "Exists"
@@ -43,7 +23,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Add Mask — Blob"
+          "text": "Add Mask — Blob Detector"
         }
       },
       "gesture": {
@@ -57,7 +37,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Blob Mask"
+          "text": "Mask Blob Detector"
         }
       },
       "check": "Exists"
@@ -70,12 +50,6 @@
           "text": "▾ Modifier Group"
         }
       },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {"Query": {"name": "inspector.effect_group.preview_mask"}},
       "check": "Exists"
     }
   },
@@ -98,7 +72,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Blob Mask"
+          "text": "Mask Blob Detector"
         }
       },
       "check": {
@@ -134,7 +108,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Blob Mask"
+      "text": "Mask Blob Detector"
         }
       },
       "check": "Exists"
@@ -151,119 +125,6 @@
   {
     "Step": {
       "frames": 30
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "name": "param_card.drag_handle.Mirror"
-        }
-      },
-      "gesture": "RightClick"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Add Mask — Blob Colour"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "Add Mask — Blob Colour"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Blob Mask — Colour"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Key": {
-      "key": "Z",
-      "modifiers": {
-        "command": true
-      }
-    }
-  },
-  {
-    "Step": {
-      "frames": 30
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Blob Mask — Colour"
-        }
-      },
-      "check": {
-        "Count": 0
-      }
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "name": "param_card.drag_handle.Mirror"
-        }
-      },
-      "gesture": "RightClick"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Add Mask — Blob Motion"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "Add Mask — Blob Motion"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Blob Mask — Motion"
-        }
-      },
-      "check": "Exists"
     }
   },
   "Snapshot",

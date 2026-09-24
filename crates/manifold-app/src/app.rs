@@ -429,8 +429,6 @@ pub struct Application {
     /// dispatched from PanelAction handlers passes through this — one
     /// editor surface, one command set, two persistence destinations.
     pub(crate) watched_graph_target: Option<manifold_core::GraphTarget>,
-    /// One-shot final-coverage focus, consumed when this mask's snapshot arrives.
-    pub(crate) pending_mask_preview: Option<manifold_core::EffectId>,
     /// Catalog-default graph def for the watched target's type.
     /// Cached at editor-open time so the mutation commands have it
     /// available to lift `None` graphs on first edit. For effects this
@@ -701,7 +699,6 @@ impl Application {
                 atoms
             },
             watched_graph_target: None,
-            pending_mask_preview: None,
             watched_catalog_default: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.

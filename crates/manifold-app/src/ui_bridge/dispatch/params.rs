@@ -685,6 +685,26 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // — should not reach dispatch.
             DispatchResult::handled()
         }
+        ParamsAction::RemoveEffectGroupMask(group_id) => {
+            let target = if ctx.project.settings.master_effect_groups.as_ref()
+                .is_some_and(|groups| groups.iter().any(|group| group.id == *group_id))
+            {
+                EffectTarget::Master
+            } else if let Some(layer) = ctx.project.timeline.layers.iter().find(|layer| {
+                layer.effect_groups.as_ref()
+                    .is_some_and(|groups| groups.iter().any(|group| group.id == *group_id))
+            }) {
+                EffectTarget::Layer { layer_id: layer.layer_id.clone() }
+            } else {
+                return DispatchResult::handled();
+            };
+            let cmd = manifold_editing::commands::effect_groups::RemoveGroupMaskCommand::new(
+                target,
+                group_id.clone(),
+            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+            DispatchResult::structural()
+        }
         ParamsAction::AddMask { preset_id, source_layer, .. }
         | ParamsAction::AddEffectGroupMask { preset_id, source_layer, .. } => {
             let target = match action {

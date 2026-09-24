@@ -1,6 +1,6 @@
 # Effect masks — spatial wet/dry for effect groups
 
-**Status:** IN PROGRESS · 2026-09-24 · Codex. Masks, Modifier Groups and final-coverage preview implemented; snapshot publish narrowed to read layer sources. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
+**Status:** IN PROGRESS · 2026-09-24 · Codex. Masks and Modifier Groups implemented; snapshot publish narrowed to read layer sources. Oscilloscope and Spectrogram generators implemented; source-only routing, contour and audio-to-mask routing deferred.
 
 Peter selected all three sources: shapes, the group's incoming image, and another
 layer/generator. "This gives us some very cool sidechain options too."
@@ -29,28 +29,28 @@ D1. A mask is an ordinary `PresetInstance` in the existing effect list. Add
 D2. Cmd+G wraps one or several selected effects in a **Modifier Group** using
    the existing EffectGroup model. Without a modifier, effects run normally.
    The header's **Add Modifier** picker offers Mask — Circle, Rectangle, Gradient,
-   Image, Layer, Blob, Blob Colour and Blob Motion; the ordinary mask card holds
-   its controls inside the group. The three Blob masks share the V2 region
-   detector/tracker, preserve connected-component pixels and holes, and expose
-   source-specific brightness, colour or motion controls.
+   Image, Layer and Blob Detector; the ordinary mask card holds its controls
+   inside the group. At catalog load, Blob Detector reuses the resolved
+   BlobTrackingV2 detector group and its control bindings, with a mask-output
+   tail built from existing primitives. Changes to V2 detection and tracking
+   therefore also reach the mask; there is no separately authored detector.
+   Connected-component pixels and holes are preserved. Legacy Colour/Motion
+   mask IDs remain loadable for saved projects but are absent from the picker.
    The picker anchors below its button. Layer sources include their timeline row
    number so duplicate names remain distinguishable.
    A bordered container surrounds each group, with a distinct header and inset
    member cards. The header shows the effect count, or `Mask → N effects` when
    masked, to make the modifier scope explicit. Ungrouped effects sit outside it.
-   One mask is supported per group. Once masked, the header replaces Add Modifier
-   with **Preview Mask**. It opens the existing graph editor on the final coverage
-   producer, with preview normalization off: black selects nothing, white selects
-   fully, and grey selects partially. The ordinary mask card remains the tuning
-   surface; the master monitor still shows the live result. This previews coverage
-   before the group wet/dry multiplier; disabled masks/groups are bypassed in the
-   live result. Previewing does not edit the project. The request uses the stable
-   mask EffectId and waits for its own snapshot before focusing the coverage node.
-   Preview Mask works in either inspector window. Numeric value entry in the
-   editor belongs to that window and commits through the ordinary undoable
-   parameter scrub path, so typing a threshold does not invoke graph shortcuts.
-   Editor readouts receive live values after the inspector tree is rebuilt.
-   The picker captures the group ID; membership resolves on the content thread.
+   One mask is supported per group. The header keeps a persistent **Change Mask**
+   selector after a mask is assigned; it opens the same catalog to replace the
+   mask or remove it. Replacement and removal preserve the group and wet-effect
+   members and are undoable as one structural edit. The ordinary mask card
+   remains the tuning surface; the master monitor shows the live result.
+   Disabled masks/groups are bypassed in the live result. The picker captures
+   the group ID; membership resolves on the content thread. Numeric value entry
+   commits through the ordinary undoable parameter scrub path, so typing a
+   threshold does not invoke graph shortcuts. Editor readouts receive live
+   values after the inspector tree is rebuilt.
    Existing generic Group/Masked Group labels display as Modifier Group; custom
    names and serialized group data remain intact. Cmd+Shift+G ungroups as before.
    The mask card lives within its group.
@@ -96,7 +96,10 @@ No additional shared locks, threads, graph target kinds, or parameter identity m
   track never paints a box. Validity is applied after inversion, so a failed or
   reset detector cannot turn an inverted mask fully on. `blob_v2_mask_pixels`,
   `blob_v2_group_mask_ring_and_dry_input` and `blob_v2_invalid_inverted_mask_is_zero`
-  cover these paths. `inspector-blob-mask.json` covers picker and undo/redo routing.
+  cover these paths. `blob_v2_shared_mask_detection` covers live V2 detection
+  controls, zero amount and watched/fused output parity. Catalog tests enforce
+  shared graph/control updates and saved-project overlay precedence.
+  `inspector-blob-mask.json` covers picker and undo/redo routing.
 - Cross-layer reads use owned snapshots, published after master effects. Grouped
   children remain addressable. GPU tests cover target reuse and stale sources.
 - Snapshot storage is reused, and narrow dependency tracking is landed: only

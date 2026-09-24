@@ -1545,7 +1545,6 @@ impl Application {
         }
         self.graph_editor = None;
         self.graph_canvas = None;
-        self.pending_mask_preview = None;
         // Stop per-node thumbnail capture on the content thread now the editor
         // is gone, so a live show pays nothing for it. An empty visible set
         // turns the atlas dump off.
