@@ -277,6 +277,19 @@ fn moving_blob_scene(frame: u32, colour: [f32; 3]) -> Vec<[f32; 4]> {
     pixels
 }
 
+fn latency_patch_scene(x: Option<u32>) -> Vec<[f32; 4]> {
+    let mut pixels = blank();
+    let Some(x) = x else {
+        return pixels;
+    };
+    for y in 64..96 {
+        for column in x..x + 24 {
+            pixels[(y * WIDTH + column) as usize] = [1.0, 1.0, 1.0, 1.0];
+        }
+    }
+    pixels
+}
+
 fn dim_contrast_scene() -> Vec<[f32; 4]> {
     let mut pixels = blank();
     for y in 0..HEIGHT {
@@ -621,6 +634,80 @@ fn blob_v2_mask_demo() {
             "  \"raw_hole_mean\": {:.6},\n  \"expanded_hole_mean\": {:.6},\n  \"group_dry_hole_mean\": {:.6},\n  \"group_wet_ring_mean\": {:.6},\n  \"group_expanded_hole_mean\": {:.6},\n  \"group_half_wet_hole_mean\": {:.6},\n  \"raw_png\": \"blob_v2_mask_raw.png\",\n  \"expanded_png\": \"blob_v2_mask_expanded.png\",\n  \"group_raw_png\": \"blob_v2_group_raw.png\",\n  \"group_expanded_png\": \"blob_v2_group_expanded.png\"",
             raw_hole, expanded_hole, dry_hole, wet_ring, expanded_group_hole, half_wet_hole
         ),
+    );
+}
+
+#[test]
+fn blob_v2_low_latency_mask_publication() {
+    let device = Arc::new(GpuDevice::new());
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut effect = effect("MaskBlob");
+    set_param(&mut effect, "denoise", 0.0);
+    set_param(&mut effect, "feather", 0.0);
+    set_param(&mut effect, "smoothing", 0.0);
+    set_param(&mut effect, "min_area", 0.0);
+    set_param(&mut effect, "threshold", 0.5);
+    let mut runtime = build(&device, &registry, &effect);
+    let input = input_texture(&device, "blob-v2-low-latency-input");
+
+    // Detect Regions keeps its default two-frame cadence. Each capture is
+    // repeated once so the expected output can be attributed to the known
+    // preceding capture rather than to a moving CPU detector mirror.
+    let frames = [
+        Some(32),
+        Some(32),
+        Some(128),
+        Some(128),
+        Some(72),
+        Some(72),
+        None,
+        None,
+    ];
+    let mut outputs = Vec::with_capacity(frames.len());
+    for (frame, x) in frames.into_iter().enumerate() {
+        let source = latency_patch_scene(x);
+        let output = render_fixture(
+            &device,
+            &mut runtime,
+            &effect,
+            &input,
+            frame as i64,
+            &source,
+        );
+        assert_finite_and_bounded("low-latency-mask", &output);
+        outputs.push(output);
+    }
+
+    let patch_mean = |bytes: &[u8], x: u32| region_mean(bytes, x + 4, 68, x + 20, 92);
+    let empty_mean = |bytes: &[u8]| region_mean(bytes, 0, 0, WIDTH, HEIGHT);
+
+    // A capture submitted on frame 0 must be visible on frame 1. Before the
+    // latency fix, the first fresh labels arrive on frame 2.
+    assert!(
+        patch_mean(&outputs[1], 32) > 0.9,
+        "first fresh capture must be visible one graph update later"
+    );
+    assert!(
+        patch_mean(&outputs[1], 128) < 0.01,
+        "first publication must not contain a future patch position"
+    );
+
+    // The cadence samples frames 2 and 4; the publication one frame later
+    // must use those actual label masks, including the reverse move.
+    assert!(
+        patch_mean(&outputs[3], 128) > 0.9 && patch_mean(&outputs[3], 32) < 0.01,
+        "forward move must publish the captured mask without stale coverage"
+    );
+    assert!(
+        patch_mean(&outputs[5], 72) > 0.9 && patch_mean(&outputs[5], 128) < 0.01,
+        "reverse move must publish the captured mask without overshoot"
+    );
+
+    // The successful empty sample at frame 6 is consumed on frame 7. A stale
+    // tracked label must not linger after that publication.
+    assert!(
+        empty_mean(&outputs[7]) < 0.01,
+        "successful empty sample must clear the mask on its next publication"
     );
 }
 

@@ -153,7 +153,7 @@ pub struct RegionState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RegionSchedule {
-    consume_before_submit: bool,
+    consume_worker: bool,
     schedule_readback: bool,
 }
 
@@ -164,7 +164,7 @@ fn region_schedule(
     packet_free: bool,
 ) -> RegionSchedule {
     RegionSchedule {
-        consume_before_submit: worker_busy,
+        consume_worker: worker_busy,
         schedule_readback: due && !worker_busy && !readback_pending && packet_free,
     }
 }
@@ -541,8 +541,32 @@ impl Primitive for DetectRegions {
 
         let mut updated = false;
         if let Some(worker) = self.worker.as_mut() {
+            if state.readback_pending
+                && !worker.is_busy()
+                && let Some(packet) = state.packet.as_mut()
+                && state.readback.try_read_into(&mut packet.rgba)
+            {
+                READBACK_AGE_FRAMES
+                    .record((state.frame_counter - state.readback_frame).max(0) as u64);
+                state.readback_pending = false;
+                let mut packet = state.packet.take().expect("packet exists");
+                packet.width = state.width;
+                packet.height = state.height;
+                packet.options = options;
+                packet.max_box_area = max_box_area;
+                packet.generation = state.generation;
+                state.serial = state.serial.wrapping_add(1);
+                packet.serial = state.serial;
+                packet.capture = state.readback_capture;
+                packet.capture_frame = state.readback_frame;
+                worker.submit(packet);
+            }
+
+            // Publish at the ready-readback deadline, including work submitted above.
+            // Waiting here removes an extra frame of mask/HUD delay while keeping
+            // result timing independent of whether the native worker wins a race.
             let response =
-                if region_schedule(worker.is_busy(), false, false, false).consume_before_submit {
+                if region_schedule(worker.is_busy(), false, false, false).consume_worker {
                     let start = PERF_ENABLED.load(Ordering::Relaxed).then(Instant::now);
                     let response = worker.recv_blocking();
                     if let Some(start) = start {
@@ -587,27 +611,6 @@ impl Primitive for DetectRegions {
                     .labels
                     .resize(state.width as usize * state.height as usize, 0);
                 state.packet = Some(response.packet);
-            }
-
-            if state.readback_pending
-                && !worker.is_busy()
-                && let Some(packet) = state.packet.as_mut()
-                && state.readback.try_read_into(&mut packet.rgba)
-            {
-                READBACK_AGE_FRAMES
-                    .record((state.frame_counter - state.readback_frame).max(0) as u64);
-                state.readback_pending = false;
-                let mut packet = state.packet.take().expect("packet exists");
-                packet.width = state.width;
-                packet.height = state.height;
-                packet.options = options;
-                packet.max_box_area = max_box_area;
-                packet.generation = state.generation;
-                state.serial = state.serial.wrapping_add(1);
-                packet.serial = state.serial;
-                packet.capture = state.readback_capture;
-                packet.capture_frame = state.readback_frame;
-                worker.submit(packet);
             }
 
             let due = state.frame_counter - state.last_request_frame >= update_interval;
@@ -678,8 +681,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blob_v2_schedule_has_one_packet_and_a_next_run_deadline() {
-        assert!(region_schedule(true, false, true, false).consume_before_submit);
+    fn blob_v2_schedule_has_one_packet_and_a_worker_deadline() {
+        assert!(region_schedule(true, false, true, false).consume_worker);
         assert!(!region_schedule(true, false, true, false).schedule_readback);
         assert!(!region_schedule(false, true, true, true).schedule_readback);
         assert!(region_schedule(false, false, true, true).schedule_readback);
