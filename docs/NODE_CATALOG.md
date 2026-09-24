@@ -442,7 +442,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Stylize | 5 |
-| `BlobTrackingV2` | Blob Track V2 | effect | Stylize | 9 |
+| `BlobTrackingV2` | Blob Track V2 | effect | Stylize | 10 |
 | `BlobTrackingV2Colour` | Blob Track V2 — Colour | effect | Stylize | 12 |
 | `BlobTrackingV2Motion` | Blob Track V2 — Motion | effect | Stylize | 9 |
 | `Bloom` | Bloom | effect | Filmic | 1 |

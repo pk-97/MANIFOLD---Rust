@@ -7038,6 +7038,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "BlobTrackingV2",
         "Cymatics",
         "FluidSim2D",
         "OilyFluid",
@@ -22079,6 +22080,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "BlobTrackingV2",
         "Cymatics",
         "DepthOfField",
         "DigitalDrift",
@@ -25084,6 +25086,7 @@
       "category": "Routing",
       "examples": [
         "BasicShapes",
+        "BlobTrackingV2",
         "CodeTerminal",
         "Cymatics",
         "DepthOfField",
@@ -27798,6 +27801,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "BlobTrackingV2",
         "BlobTrackingV2Motion",
         "MaskBlobMotion",
         "MetallicGlass",
@@ -30628,6 +30632,13 @@
           "max": "1",
           "min": "0",
           "name": "Amount"
+        },
+        {
+          "default": "0",
+          "id": "detection_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Detection"
         },
         {
           "default": "0.5",
