@@ -213,6 +213,7 @@ pub(super) fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<Stri
         .ok_or_else(|| "BlobTrackingV2 has no mutable presetMetadata object".to_owned())?;
     metadata.insert("id".into(), json!("MaskBlob"));
     metadata.insert("displayName".into(), json!("Mask Blob Detector"));
+    metadata.insert("category".into(), json!("Spatial"));
     metadata.insert("oscPrefix".into(), json!("maskBlob"));
     metadata.insert("available".into(), json!(false));
     metadata.insert("params".into(), Value::Array(params));

@@ -493,7 +493,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
-| `MaskBlob` | Blob Mask | effect | Spatial | 14 |
+| `MaskBlob` | Mask Blob Detector | effect | Spatial | 15 |
 | `MaskBlobColour` | Blob Mask — Colour | effect | Spatial | 17 |
 | `MaskBlobMotion` | Blob Mask — Motion | effect | Spatial | 14 |
 | `MaskCircle` | Mask Circle | effect | Spatial | 8 |
