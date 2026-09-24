@@ -1220,8 +1220,7 @@ pub(super) fn build_static_compound_group(
         1.0,
     )];
 
-    // The primary scene object is the asset's stable logical handle. Extra
-    // scene objects retain their material-derived handles for addressing.
+    // The group names the asset; children keep material-derived names.
     if let Some(scene_object) = primary
         .group_node
         .group
@@ -1231,7 +1230,7 @@ pub(super) fn build_static_compound_group(
         .iter_mut()
         .find(|node| node.type_id == "node.scene_object")
     {
-        scene_object.handle = Some(compound_name.clone());
+        scene_object.handle = Some(materials[0].name.clone().unwrap_or_else(|| "Submesh 1".into()));
     }
 
     for (i, mut part) in parts.into_iter().enumerate() {
@@ -1343,6 +1342,33 @@ pub(super) fn build_static_compound_group(
         primary.textures_wired += part_textures_wired;
     }
 
+    // Keep each material draw editable below the asset's shared transform.
+    let body = primary.group_node.group.as_mut().expect("group body");
+    for (index, (object_id, _)) in boundary_pairs.iter().enumerate() {
+        for edge in &mut body.wires {
+            if edge.to_node == *object_id && edge.to_port == "transform" {
+                edge.to_port = "parent_transform".into();
+            }
+        }
+        let local = plain_node(
+            (ctx.fresh_id)(),
+            &format!("part_transform_{}", local_k_offset + index),
+            "node.transform_3d",
+            &format!("part_transform_{}", local_k_offset + index),
+        );
+        stamp_scene_node_exposures_into(
+            &mut primary.card_params, &mut primary.card_bindings, local.id,
+            &local.node_id, &local.type_id, &materials[index].name.clone().unwrap_or_else(|| format!("Submesh {}", index + 1)),
+            &metadata_for_node_type("node.transform_3d"), &local.params,
+        );
+        body.wires.push(wire(local.id, "transform", *object_id, "transform"));
+        body.nodes.push(local);
+    }
+    for binding in &mut shared_visible_bindings {
+        if let BindingTarget::Node { param, .. } = &mut binding.target {
+            *param = "parent_visible".into();
+        }
+    }
     primary.card_params.push(card_param(
         &visibility_id,
         "Visible",

@@ -152,7 +152,7 @@ pub(super) fn prepare(
         for target in targets {
             let object = def.nodes.iter().find(|n| n.node_id == target.node)
                 .ok_or_else(|| invalid("shatter", "prepared object is missing"))?.id;
-            let pose = input(def, object, "transform")
+            let pose = input(def, object, "parent_transform").or_else(|| input(def, object, "transform"))
                 .ok_or_else(|| invalid("shatter", "object needs Physics before Shatter"))?;
             if node(def, pose.0)?.type_id != "node.physics_world" {
                 return Err(invalid(
@@ -236,11 +236,15 @@ pub(super) fn prepare(
             let mut slot = slots.into_iter();
             for ((part, source), pieces) in parts.into_iter().zip(sources).zip(allocation) {
                 let original = node(def, part)?.clone();
+                let nested = input(def, part, "parent_transform").is_some();
+                let local = nested.then(|| input(def, part, "transform")).flatten();
                 let incoming: Vec<_> = def
                     .wires
                     .iter()
                     .filter(|w| {
-                        w.to_node == part && w.to_port != "vertices" && w.to_port != "transform"
+                        w.to_node == part && w.to_port != "vertices"
+                            && w.to_port != "parent_transform"
+                            && (nested || w.to_port != "transform")
                     })
                     .cloned()
                     .collect();
@@ -293,6 +297,7 @@ pub(super) fn prepare(
                         copy_id(&instance.id, &original.node_id, "body", piece),
                     )?;
                     let body = def.nodes.last_mut().expect("cloned body");
+                    body.params.remove("compound_materials");
                     for key in [
                         "path",
                         "mesh_index",
@@ -323,6 +328,9 @@ pub(super) fn prepare(
                         float(number(parent.params.get("mass")).unwrap_or(1.0) / count as f32),
                     );
                     wire(def, authored_pose.clone(), body_copy, "transform");
+                    if let Some(local) = &local {
+                        wire(def, local.clone(), body_copy, "source_transform");
+                    }
                     wire(
                         def,
                         (body_copy, "body".into()),
@@ -345,7 +353,7 @@ pub(super) fn prepare(
                         def,
                         (world, format!("pose_{body_slot}")),
                         object_copy,
-                        "transform",
+                        if nested { "parent_transform" } else { "transform" },
                     );
                     for old in &incoming {
                         wire(

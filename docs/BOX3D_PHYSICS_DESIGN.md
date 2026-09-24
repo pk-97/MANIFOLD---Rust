@@ -189,10 +189,20 @@ its settings and graph wiring. Turning it on restores participation; changing bo
 membership resets the shared simulation. Existing projects default to ON.
 Shared gravity, simulation speed and reset remain under World → Physics.
 
-Static imports group their material meshes into one scene object with one shared
-asset-center transform, visibility control and physics body. Geometry and textures
-remain separate internally. Animated/skinned imports retain their existing layout.
-Duplicate and Remove operate on every material draw as one undoable edit.
+Static imports appear as an expandable parent with selectable material submeshes.
+The parent owns the asset-center transform, visibility and one physics body.
+Children retain their original geometry and textures, with independent local
+transforms, visibility, materials, names, duplication and removal. Parent visibility
+preserves each child's eye state. Parent Duplicate/Remove affect the whole group;
+child Duplicate/Remove affect only that child, with undo. Older compound imports
+gain identity child transforms through the existing load migration.
+
+Rendering composes parent and local matrices. Collider preparation applies the
+same child transforms and material selectors before the standard Box3D hull cook;
+removing a child also removes its collider geometry. A body supports up to 64
+material parts. Hiding a child changes rendering, not its physics participation.
+Child pivots initially share the asset origin. Animated/skinned imports retain
+their existing layout. Shatter keeps using internal fragments under the parent.
 
 Shatter is a modifier added through the existing picker after enabling Physics.
 Its Pieces preparation control selects 2–32 internal fragments, subject to the

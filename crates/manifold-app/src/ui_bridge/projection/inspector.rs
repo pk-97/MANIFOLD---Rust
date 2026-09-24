@@ -558,6 +558,8 @@ pub fn sync_inspector_data(
                                             index,
                                             object_node_id,
                                             group_node_id,
+                                            is_group,
+                                            parent_group_id,
                                             name,
                                             visible_addr,
                                             visible_value,
@@ -644,6 +646,8 @@ pub fn sync_inspector_data(
                                                 index: *index,
                                                 object_node_id: *object_node_id,
                                                 group_node_id: *group_node_id,
+                                                is_group: *is_group,
+                                                parent_group_id: *parent_group_id,
                                                 name: name.clone(),
                                                 visible: scoped_row(
                                                     visible_addr.scope_path.clone(),

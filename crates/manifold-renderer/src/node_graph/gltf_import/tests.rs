@@ -763,6 +763,55 @@ fn tiger_lily_compound_import_preserves_material_sources_and_totals() {
     }).sum();
     let expected_total: u64 = summary.materials.iter().map(|material| u64::from(material.vertex_count)).sum();
     assert_eq!(imported_total, expected_total, "compound scan keeps every material's vertices");
+    let vm = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+    assert_eq!(vm.header.object_count, 1);
+    assert_eq!(vm.objects.len(), summary.materials.len() + 1);
+    let crate::node_graph::scene_vm::SceneObjectVm::Known(parent) = &vm.objects[0] else { panic!("parent") };
+    assert!(parent.is_group);
+    assert_eq!(parent.visible_addr.param_id, "parent_visible");
+    let parent_transform = parent.transform.as_ref().unwrap().node_doc_id;
+    for row in &vm.objects[1..] {
+        let crate::node_graph::scene_vm::SceneObjectVm::Known(child) = row else { panic!("child") };
+        assert_eq!(child.parent_group_id, Some(parent.object_node_id));
+        assert_ne!(child.transform.as_ref().unwrap().node_doc_id, parent_transform);
+        assert_eq!(child.visible_addr.param_id, "visible");
+        assert!(child.physics.is_none());
+        let crate::node_graph::scene_vm::MaterialVm::Known(material) = &child.material else { panic!("child material") };
+        assert_eq!(material.shared_object_count, Some(1));
+    }
+}
+
+#[test]
+fn legacy_compound_import_migrates_to_editable_children_once() {
+    use crate::node_graph::persistence::EffectGraphDefExt;
+    let path = azalea_fixture_path();
+    let (mut def, _) = assemble_import_graph(&path).unwrap();
+    let group = def.nodes.iter_mut().find(|node| node.node_id.as_str().starts_with("object_") && node.group.is_some()).unwrap().group.as_mut().unwrap();
+    let locals: std::collections::HashSet<_> = group.nodes.iter().filter(|n| n.node_id.as_str().starts_with("part_transform_")).map(|n| n.id).collect();
+    let local_ids: std::collections::HashSet<_> = group.nodes.iter().filter(|n| locals.contains(&n.id)).map(|n| n.node_id.clone()).collect();
+    group.nodes.retain(|n| !locals.contains(&n.id));
+    group.wires.retain(|w| !locals.contains(&w.from_node));
+    for w in &mut group.wires {
+        if w.to_port == "parent_transform" { w.to_port = "transform".into(); }
+    }
+    let metadata = def.preset_metadata.as_mut().unwrap();
+    let local_bindings: std::collections::HashSet<_> = metadata.bindings.iter().filter_map(|b| match &b.target {
+        BindingTarget::Node { node_id, .. } if local_ids.contains(node_id) => Some(b.id.clone()),
+        _ => None,
+    }).collect();
+    metadata.params.retain(|p| !local_bindings.contains(&p.id));
+    metadata.bindings.retain(|b| !local_bindings.contains(&b.id));
+    for binding in &mut metadata.bindings {
+        if let BindingTarget::Node { param, .. } = &mut binding.target && param == "parent_visible" { *param = "visible".into(); }
+    }
+    assert!(crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+    let saved = def.clone();
+    assert!(!crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+    assert_eq!(def, saved);
+    let vm = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+    assert_eq!(vm.header.object_count, 1);
+    assert_eq!(vm.objects.len(), 3);
+    def.into_graph(&PrimitiveRegistry::with_builtin(), &Default::default()).unwrap();
 }
 
 /// Structural gate (fast, no GPU): the assembled azalea graph must
@@ -951,8 +1000,10 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         ("tex_0", "out", "object_0_bind", "base_color_map"),
         ("mesh_1", "vertices", "object_1_bind", "vertices"),
         ("mat_1", "out", "object_1_bind", "material"),
-        ("transform_0", "transform", "object_0_bind", "transform"),
-        ("transform_0", "transform", "object_1_bind", "transform"),
+        ("transform_0", "transform", "object_0_bind", "parent_transform"),
+        ("transform_0", "transform", "object_1_bind", "parent_transform"),
+        ("part_transform_0", "transform", "object_0_bind", "transform"),
+        ("part_transform_1", "transform", "object_1_bind", "transform"),
     ] {
         assert!(
             conn.contains(&(

@@ -124,6 +124,8 @@ pub struct GizmoTarget {
     /// P2's "unwired = identity" contract), so the gizmo has a well-defined
     /// place to appear even before the user has dragged anything.
     pub origin: [f32; 3],
+    /// Parent-space axes expressed in world coordinates, including scale.
+    pub world_axes: [[f32; 3]; 3],
     /// `Some` when the object's `transform` port already resolves to a
     /// `node.transform_3d` atom — the direct-drag case. `None` means P6's
     /// "unwired `transform_n` → gizmo offers to create the atom" entry
@@ -133,6 +135,21 @@ pub struct GizmoTarget {
     pub transform: Option<TransformVm>,
 }
 
+impl GizmoTarget {
+    fn axis_direction(&self, axis: GizmoAxis) -> [f32; 3] {
+        self.world_axes[match axis { GizmoAxis::X => 0, GizmoAxis::Y => 1, GizmoAxis::Z => 2 }]
+    }
+
+    fn world_point(&self, point: [f32; 3]) -> [f32; 3] {
+        let d = [point[0] - self.origin[0], point[1] - self.origin[1], point[2] - self.origin[2]];
+        std::array::from_fn(|i| self.origin[i] + (0..3).map(|j| self.world_axes[j][i] * d[j]).sum::<f32>())
+    }
+
+    pub fn projected_drag_delta(&self, axis: GizmoAxis, cam: &Camera, width: u32, height: u32, delta: (f32, f32)) -> Option<f32> {
+        direction_drag_delta(self.origin, self.axis_direction(axis), cam, width, height, delta)
+    }
+}
+
 /// Find the selected object (`object_node_id`) in `scene` and resolve its
 /// gizmo target. `None` if the id isn't a `Known` object in this scene this
 /// frame (e.g. it was just deleted) — the caller drops the gizmo/selection
@@ -140,8 +157,19 @@ pub struct GizmoTarget {
 pub fn gizmo_target_for(scene: &SceneVm, object_node_id: u32) -> Option<GizmoTarget> {
     scene.objects.iter().find_map(|o| match o {
         SceneObjectVm::Known(row) if row.object_node_id == object_node_id => {
-            let origin = row.transform.as_ref().map(|t| [t.pos_value.0, t.pos_value.1, t.pos_value.2]).unwrap_or([0.0, 0.0, 0.0]);
-            Some(GizmoTarget { object_node_id, origin, transform: row.transform.clone() })
+            let local = row.transform.as_ref().map(|t| [t.pos_value.0, t.pos_value.1, t.pos_value.2]).unwrap_or([0.0; 3]);
+            let parent = row.parent_group_id.and_then(|id| scene.objects.iter().find_map(|o| match o {
+                SceneObjectVm::Known(parent) if parent.object_node_id == id => parent.transform.as_ref(),
+                _ => None,
+            }));
+            let matrix = parent.map(|t| crate::node_graph::primitives::render_scene::model_matrix(
+                [t.pos_value.0, t.pos_value.1, t.pos_value.2],
+                [t.rot_value.0, t.rot_value.1, t.rot_value.2],
+                [t.scale_value.0, t.scale_value.1, t.scale_value.2],
+            ));
+            let world_axes = matrix.map_or([[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]], |m| std::array::from_fn(|j| [m[j][0],m[j][1],m[j][2]]));
+            let origin = matrix.map_or(local, |m| std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * local[j]).sum::<f32>()));
+            Some(GizmoTarget { object_node_id, origin, world_axes, transform: row.transform.clone() })
         }
         _ => None,
     })
@@ -156,7 +184,8 @@ pub fn pick_object(scene: &SceneVm, cam: &Camera, width: u32, height: u32, click
     let mut best: Option<(u32, f32)> = None;
     for obj in &scene.objects {
         let SceneObjectVm::Known(row) = obj else { continue };
-        let origin = row.transform.as_ref().map(|t| [t.pos_value.0, t.pos_value.1, t.pos_value.2]).unwrap_or([0.0, 0.0, 0.0]);
+        if !row.visible_value || row.parent_group_id.is_some() { continue; }
+        let origin = gizmo_target_for(scene, row.object_node_id)?.origin;
         let Some(proj) = cam.project_to_pixel(origin, width, height) else { continue };
         let d = dist2(click, (proj.px, proj.py));
         if d <= PICK_RADIUS_PX * PICK_RADIUS_PX && best.is_none_or(|(_, bd)| d < bd) {
@@ -199,7 +228,7 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
         GizmoMode::Move => [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z]
             .into_iter()
             .map(|axis| {
-                let u = axis.unit();
+                let u = target.axis_direction(axis);
                 let tip = offset(origin, u, GIZMO_HANDLE_LEN);
                 WorldLine { a: origin, b: tip, color: color(axis) }
             })
@@ -207,7 +236,7 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
         GizmoMode::Scale => [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z]
             .into_iter()
             .flat_map(|axis| {
-                let u = axis.unit();
+                let u = target.axis_direction(axis);
                 let tip = offset(origin, u, GIZMO_HANDLE_LEN);
                 let c = color(axis);
                 // A small perpendicular tick at the tip distinguishes the
@@ -223,7 +252,7 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
             .collect(),
         GizmoMode::Rotate => [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z]
             .into_iter()
-            .flat_map(|axis| ring_lines(origin, axis, GIZMO_HANDLE_LEN, color(axis)))
+            .flat_map(|axis| ring_lines(origin, axis, GIZMO_HANDLE_LEN, color(axis)).into_iter().map(|line| WorldLine { a: target.world_point(line.a), b: target.world_point(line.b), color: line.color }))
             .collect(),
     }
 }
@@ -295,7 +324,7 @@ pub fn pick_axis(
     for axis in [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z] {
         let d = match mode {
             GizmoMode::Move | GizmoMode::Scale => {
-                let tip = offset(origin, axis.unit(), GIZMO_HANDLE_LEN);
+                let tip = offset(origin, target.axis_direction(axis), GIZMO_HANDLE_LEN);
                 let Some(tip_px) = cam.project_to_pixel(tip, width, height) else { continue };
                 point_segment_dist(click, (origin_px.px, origin_px.py), (tip_px.px, tip_px.py))
             }
@@ -306,7 +335,7 @@ pub fn pick_axis(
                 let mut nearest = f32::INFINITY;
                 for seg in &ring {
                     let (Some(a), Some(b)) =
-                        (cam.project_to_pixel(seg.a, width, height), cam.project_to_pixel(seg.b, width, height))
+                        (cam.project_to_pixel(target.world_point(seg.a), width, height), cam.project_to_pixel(target.world_point(seg.b), width, height))
                     else {
                         continue;
                     };
@@ -350,9 +379,13 @@ pub fn move_drag_delta(
     height: u32,
     mouse_delta: (f32, f32),
 ) -> Option<f32> {
+    direction_drag_delta(origin, axis.unit(), cam, width, height, mouse_delta)
+}
+
+fn direction_drag_delta(origin: [f32; 3], direction: [f32; 3], cam: &Camera, width: u32, height: u32, mouse_delta: (f32, f32)) -> Option<f32> {
     const EPS: f32 = 1.0;
     let p0 = cam.project_to_pixel(origin, width, height)?;
-    let p1 = cam.project_to_pixel(offset(origin, axis.unit(), EPS), width, height)?;
+    let p1 = cam.project_to_pixel(offset(origin, direction, EPS), width, height)?;
     let dir = (p1.px - p0.px, p1.py - p0.py);
     let px_per_unit = (dir.0 * dir.0 + dir.1 * dir.1).sqrt() / EPS;
     if px_per_unit < 1e-4 {
@@ -428,6 +461,8 @@ mod tests {
     fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> SceneObjectVm {
         let addr = |n: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: n.to_string() };
         SceneObjectVm::Known(Box::new(crate::node_graph::scene_vm::SceneObjectKnownRow {
+            is_group: false,
+            parent_group_id: None,
             index: 0,
             object_node_id: id,
             group_node_id: None,
@@ -504,6 +539,29 @@ mod tests {
     }
 
     #[test]
+    fn child_gizmo_composes_parent_origin_axes_and_drag_units() {
+        let mut parent = known_object(7, (2.0, 3.0, -8.0), (false, false, false));
+        let SceneObjectVm::Known(p) = &mut parent else { unreachable!() };
+        p.is_group = true;
+        let t = p.transform.as_mut().unwrap();
+        t.rot_value.2 = std::f32::consts::FRAC_PI_2;
+        t.scale_value = (2.0, 1.0, 1.0);
+        let mut child = known_object(8, (1.0, 0.0, 0.0), (false, false, false));
+        let SceneObjectVm::Known(c) = &mut child else { unreachable!() };
+        c.parent_group_id = Some(7);
+        let scene = scene_with(vec![parent, child]);
+        let target = gizmo_target_for(&scene, 8).unwrap();
+        assert!((target.origin[0] - 2.0).abs() < 1e-5);
+        assert!((target.origin[1] - 5.0).abs() < 1e-5);
+        let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
+        let start = cam.project_to_pixel(target.origin, 640, 480).unwrap();
+        let end = cam.project_to_pixel(offset(target.origin, target.axis_direction(GizmoAxis::X), 1.0), 640, 480).unwrap();
+        let delta = target.projected_drag_delta(GizmoAxis::X, &cam, 640, 480, (end.px-start.px, end.py-start.py)).unwrap();
+        assert!((delta-1.0).abs() < 1e-5, "one local unit includes the parent's rotation and scale");
+        assert_eq!(drag_write(GizmoMode::Move, GizmoAxis::X, &target).unwrap().1, 1.0);
+    }
+
+    #[test]
     fn move_gizmo_lines_locks_driven_axis_to_gray() {
         let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (true, false, false))]);
         let target = gizmo_target_for(&scene, 1).unwrap();
@@ -519,6 +577,8 @@ mod tests {
     fn unwired_transform_gizmo_target_has_identity_origin_and_no_transform() {
         let addr = |n: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 5, param_id: n.to_string() };
         let row = SceneObjectVm::Known(Box::new(crate::node_graph::scene_vm::SceneObjectKnownRow {
+            is_group: false,
+            parent_group_id: None,
             index: 0,
             object_node_id: 5,
             group_node_id: None,

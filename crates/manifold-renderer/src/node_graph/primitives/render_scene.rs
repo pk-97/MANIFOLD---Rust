@@ -2026,7 +2026,15 @@ impl RenderScene {
             } else {
                 t.rot_euler
             };
-            let model = model_matrix(t.pos, rot_euler, t.scale);
+            let local_model = model_matrix(t.pos, rot_euler, t.scale);
+            let model = object.parent_transform.map_or(local_model, |parent| {
+                let parent_rot = if parent.billboard {
+                    parent.billboard_rot_euler(cam.pos)
+                } else {
+                    parent.rot_euler
+                };
+                mat4_mul(model_matrix(parent.pos, parent_rot, parent.scale), local_model)
+            });
             // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
             // seeds prev = current, giving THIS object exactly-zero

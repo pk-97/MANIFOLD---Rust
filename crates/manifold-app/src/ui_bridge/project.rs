@@ -635,6 +635,25 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupRemoveSubmesh(layer_id, render_scene_node_id, physical_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::RemoveSceneSubmeshCommand::new(
+                    target,
+                    *render_scene_node_id,
+                    *physical_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                } else if let Some(reason) = boxed.rejection_reason() {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned()));
+                }
+            }
+            DispatchResult::structural()
+        }
         ProjectAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -741,6 +760,26 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::DuplicateSceneSubmeshCommand::new(
+                    target,
+                    *render_scene_node_id,
+                    *physical_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                } else if let Some(reason) = boxed.rejection_reason() {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned()));
+                }
+            }
+            DispatchResult::structural()
+        }
         ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
             use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
@@ -785,8 +824,8 @@ pub(super) fn dispatch_project(
         // params through `apply_scene_param_write` — the one write path every
         // scene-panel control shares (bound → binding slot, else def write).
         // All writes land as ONE CompositeCommand so a frame is one undo.
-        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_index) => {
-            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
+        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_node_id) => {
+            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneVm};
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
             };
@@ -802,15 +841,11 @@ pub(super) fn dispatch_project(
                 eprintln!("[Scene] frame-selected: no scene in this graph");
                 return DispatchResult::handled();
             };
-            let Some(pos) = vm.objects.iter().find_map(|o| match o {
-                SceneObjectVm::Known(r) if r.index == *object_index => {
-                    r.transform.as_ref().map(|t| t.pos_value)
-                }
-                _ => None,
-            }) else {
-                eprintln!("[Scene] frame-selected: object {object_index} has no transform row");
+            let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&vm, *object_node_id) else {
+                eprintln!("[Scene] frame-selected: object {object_node_id} has no transform target");
                 return DispatchResult::handled();
             };
+            let pos = (target.origin[0], target.origin[1], target.origin[2]);
             // Scene radius from the item-2 bounds chain: half the largest
             // axis extent, floored at 1.0 — the scale the importer framed at.
             let radius = vm
@@ -1793,12 +1828,12 @@ mod tests {
             CameraVm::Orbit(r) => r.node_doc_id,
             other => panic!("SceneStarter camera should be orbit, got {other:?}"),
         };
-        let obj_pos = vm
+        let (object_node_id, obj_pos) = vm
             .objects
             .iter()
             .find_map(|o| match o {
                 SceneObjectVm::Known(r) if r.index == 0 => {
-                    r.transform.as_ref().map(|t| t.pos_value)
+                    r.transform.as_ref().map(|t| (r.object_node_id, t.pos_value))
                 }
                 _ => None,
             })
@@ -1806,7 +1841,7 @@ mod tests {
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
 
-        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, 0);
+        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
         let result = dispatch_project(
             &action,
             &mut project,

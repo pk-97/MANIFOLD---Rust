@@ -163,6 +163,7 @@
     "scene-setup-modifier-stack": "gltfscene",
     "scene-setup-numeric-typein-box": "gltfscene",
     "scene-setup-select-updates": "gltfscene",
+    "scene-submesh-controls": "gltfscene",
     "scene-setup-modifier": "gltfscene",
     "scene-setup-modifier-trigger": "gltfscene",
     "scene-skin": "gltfscene",

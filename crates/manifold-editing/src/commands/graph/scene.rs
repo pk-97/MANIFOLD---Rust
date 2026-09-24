@@ -1156,6 +1156,480 @@ impl Command for RemoveSceneObjectCommand {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CompoundChildInfo {
+    group_id: u32,
+    output_id: u32,
+    output_port: String,
+    child_id: u32,
+    output_ports: Vec<String>,
+}
+
+fn compound_child_info(
+    def: &EffectGraphDef,
+    render_id: u32,
+    render_index: u32,
+) -> Result<CompoundChildInfo, &'static str> {
+    let render_wire = def
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == render_id && wire.to_port == format!("object_{render_index}"))
+        .ok_or("Selected submesh render output is unavailable")?;
+    let group_id = render_wire.from_node;
+    let group_node = def
+        .nodes
+        .iter()
+        .find(|node| node.id == group_id && node.type_id == GROUP_TYPE_ID)
+        .ok_or("Selected submesh is not inside an editable object group")?;
+    let group = group_node
+        .group
+        .as_deref()
+        .ok_or("Selected submesh group is malformed")?;
+    let output_port = render_wire
+        .from_port
+        .strip_prefix("object")
+        .map(|suffix| if suffix.is_empty() { "object".to_string() } else { format!("object{suffix}") })
+        .ok_or("Selected submesh group output is malformed")?;
+    let output_id = group
+        .wires
+        .iter()
+        .find(|wire| {
+            wire.to_port == output_port
+                && group
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == wire.to_node && node.type_id == GROUP_OUTPUT_TYPE_ID)
+        })
+        .map(|wire| wire.to_node)
+        .ok_or("Selected submesh group has no output boundary")?;
+    let child_id = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == output_id && wire.to_port == output_port)
+        .map(|wire| wire.from_node)
+        .ok_or("Selected submesh group output is unwired")?;
+    if !group
+        .nodes
+        .iter()
+        .any(|node| node.id == child_id && node.type_id == "node.scene_object")
+    {
+        return Err("Selected submesh output is not a scene object");
+    }
+    let output_ports = group
+        .interface
+        .outputs
+        .iter()
+        .filter(|port| port.port_type == "Object")
+        .map(|port| port.name.clone())
+        .collect::<Vec<_>>();
+    if !output_ports.iter().any(|port| port == &output_port) {
+        return Err("Selected submesh group interface is malformed");
+    }
+    Ok(CompoundChildInfo {
+        group_id,
+        output_id,
+        output_port,
+        child_id,
+        output_ports,
+    })
+}
+
+fn upstream_ids_for_child(group: &GroupDef, child_id: u32) -> std::collections::HashSet<u32> {
+    let mut ids = std::collections::HashSet::from([child_id]);
+    let mut stack = vec![child_id];
+    while let Some(to_node) = stack.pop() {
+        for wire in group.wires.iter().filter(|wire| wire.to_node == to_node) {
+            if wire.to_port == "parent_transform" || wire.to_port == "parent_visible" {
+                continue;
+            }
+            let Some(source) = group.nodes.iter().find(|node| node.id == wire.from_node) else {
+                continue;
+            };
+            if source.type_id == GROUP_INPUT_TYPE_ID || source.type_id == GROUP_OUTPUT_TYPE_ID {
+                continue;
+            }
+            if ids.insert(source.id) {
+                stack.push(source.id);
+            }
+        }
+    }
+    ids
+}
+
+fn child_owned_ids(group: &GroupDef, child_id: u32) -> std::collections::HashSet<u32> {
+    let sibling_ids = group
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == "node.scene_object" && node.id != child_id)
+        .flat_map(|node| upstream_ids_for_child(group, node.id))
+        .collect::<std::collections::HashSet<_>>();
+    upstream_ids_for_child(group, child_id)
+        .into_iter()
+        .filter(|id| *id == child_id || !sibling_ids.contains(id))
+        .collect()
+}
+
+fn output_port_index(port: &str) -> Option<usize> {
+    if port == "object" {
+        Some(0)
+    } else {
+        port.strip_prefix("object_")?.parse().ok()
+    }
+}
+
+fn object_output_port(index: usize) -> String {
+    if index == 0 {
+        "object".to_string()
+    } else {
+        format!("object_{index}")
+    }
+}
+
+fn shift_group_output_port(port: &mut String, removed: usize) {
+    let Some(index) = output_port_index(port) else {
+        return;
+    };
+    if index > removed {
+        *port = object_output_port(index - 1);
+    }
+}
+
+fn sync_group_physics_compound(group: &mut GroupDef) -> Result<(), &'static str> {
+    let body_id = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.rigid_body")
+        .map(|node| node.id);
+    let Some(body_id) = body_id else {
+        return Ok(());
+    };
+    let mut sources = Vec::new();
+    let mut transforms = Vec::new();
+    for port in group.interface.outputs.iter().filter(|port| port.port_type == "Object") {
+        let child_id = object_node_for_group_output(group, &port.name)
+            .ok_or("Physics compound child output is unavailable")?;
+        sources.push(imported_source_in_level(&group.nodes, &group.wires, child_id)?);
+        let transform_wire = group
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == child_id && wire.to_port == "transform")
+            .ok_or("Physics compound child transform is unavailable")?;
+        let transform = group
+            .nodes
+            .iter()
+            .find(|node| node.id == transform_wire.from_node && node.type_id == "node.transform_3d")
+            .ok_or("Physics compound child transform is malformed")?;
+        transforms.push(transform.id);
+    }
+    let materials = compound_materials_param(&sources)?;
+    group.wires.retain(|wire| !(wire.to_node == body_id && wire.to_port.starts_with("part_")));
+    for (index, transform_id) in transforms.into_iter().enumerate() {
+        group.wires.push(scene_build_wire(
+            transform_id,
+            "transform",
+            body_id,
+            &format!("part_{index}"),
+        ));
+    }
+    if let Some(body) = group.nodes.iter_mut().find(|node| node.id == body_id) {
+        body.params.insert("compound_materials".to_string(), materials);
+    }
+    Ok(())
+}
+
+fn preserve_shared_parent_visible_binding(
+    def: &mut EffectGraphDef,
+    source_node_id: &NodeId,
+    cloned_node_id: &NodeId,
+) {
+    let Some(meta) = def.preset_metadata.as_mut() else {
+        return;
+    };
+    let shared = meta
+        .bindings
+        .iter()
+        .filter_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, param }
+                if node_id == source_node_id && param == "parent_visible" =>
+            {
+                Some(binding.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if shared.is_empty() {
+        return;
+    }
+    let mut removed_ids = std::collections::HashSet::new();
+    meta.bindings.retain(|binding| {
+        if matches!(
+            &binding.target,
+            BindingTarget::Node { node_id, param }
+                if node_id == cloned_node_id && param == "parent_visible"
+        ) {
+            removed_ids.insert(binding.id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    meta.params.retain(|param| !removed_ids.contains(&param.id));
+    for mut binding in shared {
+        binding.target = BindingTarget::Node {
+            node_id: cloned_node_id.clone(),
+            param: "parent_visible".to_string(),
+        };
+        meta.bindings.push(binding);
+    }
+}
+
+/// Remove exactly one material output from a compound group.  The group is
+/// retained while siblings remain, so shared parent transform/visibility
+/// inputs and sibling mesh/material chains survive untouched.
+#[derive(Debug)]
+pub struct RemoveSceneSubmeshCommand {
+    target: GraphTarget,
+    render_scene_node_id: u32,
+    physical_index: u32,
+    catalog_default: EffectGraphDef,
+    prev: Option<RemovedObjectSnapshot>,
+    rejection: Option<String>,
+}
+
+impl RemoveSceneSubmeshCommand {
+    pub fn new(
+        target: GraphTarget,
+        render_scene_node_id: u32,
+        physical_index: u32,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self { target, render_scene_node_id, physical_index, catalog_default, prev: None, rejection: None }
+    }
+}
+
+impl Command for RemoveSceneSubmeshCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) { targets.push(self.target.clone()); }
+
+    fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
+        if deletion_breaks_explicit_modifier_target(def, &[], self.render_scene_node_id, self.physical_index) {
+            self.rejection = Some("Submesh is explicitly targeted by a scene modifier; retarget or remove that modifier first".into());
+            return;
+        }
+        let info = match compound_child_info(def, self.render_scene_node_id, self.physical_index) {
+            Ok(info) => info,
+            Err(reason) => { self.rejection = Some(reason.into()); return; }
+        };
+        let Some(instance) = resolve_target_instance(&self.target, project).map(|instance| InstanceLayerSnapshot::capture(instance)) else { return; };
+        let render_id = self.render_scene_node_id;
+        let physical_index = self.physical_index;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let previous_metadata = def.preset_metadata.clone();
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &[])?;
+            let previous = (nodes.clone(), wires.clone());
+            let group_index = nodes.iter().position(|node| node.id == info.group_id)?;
+            let group = nodes[group_index].group.as_deref()?.clone();
+            let owned = child_owned_ids(&group, info.child_id);
+            let remove_group = info.output_ports.len() <= 1;
+            let mut removed_node_ids = Vec::new();
+            if remove_group {
+                collect_node_ids(std::slice::from_ref(&nodes[group_index]), &mut removed_node_ids);
+                nodes.retain(|node| node.id != info.group_id);
+                wires.retain(|wire| wire.from_node != info.group_id && wire.to_node != info.group_id);
+            } else {
+                let removed_ids: std::collections::HashSet<_> = owned.iter().copied().collect();
+                for node in &group.nodes {
+                    if removed_ids.contains(&node.id) { collect_node_ids(std::slice::from_ref(node), &mut removed_node_ids); }
+                }
+                let mut group = group;
+                group.nodes.retain(|node| !removed_ids.contains(&node.id));
+                group.wires.retain(|wire| {
+                    !removed_ids.contains(&wire.from_node)
+                        && !removed_ids.contains(&wire.to_node)
+                        && (wire.to_node != info.output_id || wire.to_port != info.output_port)
+                });
+                let removed_output = output_port_index(&info.output_port)?;
+                group.interface.outputs.retain(|port| port.name != info.output_port);
+                for port in &mut group.interface.outputs { shift_group_output_port(&mut port.name, removed_output); }
+                for wire in &mut group.wires { shift_group_output_port(&mut wire.to_port, removed_output); }
+                sync_group_physics_compound(&mut group).ok()?;
+                for wire in wires.iter_mut().filter(|wire| wire.from_node == info.group_id) {
+                    shift_group_output_port(&mut wire.from_port, removed_output);
+                }
+                nodes[group_index].group = Some(Box::new(group));
+            }
+            wires.retain(|wire| !(wire.to_node == render_id && wire.to_port == format!("object_{physical_index}")));
+            for wire in wires.iter_mut().filter(|wire| wire.to_node == render_id) {
+                shift_indexed_port(wire, "object", physical_index);
+            }
+            let render = nodes.iter_mut().find(|node| node.id == render_id)?;
+            let count = match render.params.get("objects") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                Some(SerializedParamValue::Int { value }) => *value as f32,
+                _ => return None,
+            };
+            render.params.insert("objects".into(), SerializedParamValue::Float { value: (count - 1.0).max(0.0) });
+            let removed_params = prune_scene_object_metadata(def, &removed_node_ids);
+            Some((previous, previous_metadata, removed_params))
+        });
+        let Some((previous, metadata, removed_params)) = result.flatten() else { self.rejection = Some("Submesh graph changed before removal".into()); return; };
+        if let Some(instance) = resolve_target_instance(&self.target, project) { prune_instance_params(instance, &removed_params); }
+        self.prev = Some(RemovedObjectSnapshot { nodes: previous.0, wires: previous.1, metadata, instance });
+        refresh_target_manifest(project, &self.target);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(snapshot) = self.prev.take() else { return; };
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = snapshot.metadata;
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &[]) { *nodes = snapshot.nodes; *wires = snapshot.wires; }
+        });
+        if let Some(instance) = resolve_target_instance(&self.target, project) { snapshot.instance.restore(instance); }
+        refresh_target_manifest(project, &self.target);
+    }
+    fn description(&self) -> &str { "Remove Submesh" }
+    fn was_applied(&self) -> bool { self.prev.is_some() }
+    fn rejection_reason(&self) -> Option<&str> { self.rejection.as_deref() }
+}
+
+fn shift_indexed_port(wire: &mut EffectGraphWire, prefix: &str, removed: u32) {
+    let needle = format!("{prefix}_");
+    if let Some(index) = wire.to_port.strip_prefix(&needle).and_then(|value| value.parse::<u32>().ok())
+        && index > removed
+    {
+        wire.to_port = format!("{prefix}_{}", index - 1);
+    }
+}
+
+/// Duplicate one compound child into the same parent group and append its
+/// Object boundary at the next physical render slot.
+#[derive(Debug)]
+pub struct DuplicateSceneSubmeshCommand {
+    target: GraphTarget,
+    render_scene_node_id: u32,
+    physical_index: u32,
+    catalog_default: EffectGraphDef,
+    prev: Option<RemovedObjectSnapshot>,
+    rejection: Option<String>,
+}
+
+impl DuplicateSceneSubmeshCommand {
+    pub fn new(target: GraphTarget, render_scene_node_id: u32, physical_index: u32, catalog_default: EffectGraphDef) -> Self {
+        Self { target, render_scene_node_id, physical_index, catalog_default, prev: None, rejection: None }
+    }
+}
+
+impl Command for DuplicateSceneSubmeshCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) { targets.push(self.target.clone()); }
+
+    fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else { return; };
+        let info = match compound_child_info(def, self.render_scene_node_id, self.physical_index) {
+            Ok(info) => info,
+            Err(reason) => { self.rejection = Some(reason.into()); return; }
+        };
+        let Some(instance) = resolve_target_instance(&self.target, project).map(|instance| InstanceLayerSnapshot::capture(instance)) else { return; };
+        let render_id = self.render_scene_node_id;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let previous_metadata = def.preset_metadata.clone();
+            let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
+            let mut handles = std::collections::HashSet::new();
+            collect_all_handles(&def.nodes, &mut handles);
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &[])?;
+            let previous = (nodes.clone(), wires.clone());
+            let current_objects = match nodes
+                .iter()
+                .find(|node| node.id == render_id)?
+                .params
+                .get("objects")
+            {
+                Some(SerializedParamValue::Float { value }) => *value as u32,
+                Some(SerializedParamValue::Int { value }) => (*value).max(0) as u32,
+                _ => return None,
+            };
+            let group_index = nodes.iter().position(|node| node.id == info.group_id)?;
+            let mut group = nodes[group_index].group.as_deref()?.clone();
+            let source_child_node_id = group
+                .nodes
+                .iter()
+                .find(|node| node.id == info.child_id)
+                .map(|node| node.node_id.clone())?;
+            let owned = child_owned_ids(&group, info.child_id);
+            let mut id_map = Vec::new();
+            let mut clones = Vec::new();
+            for source in group.nodes.iter().filter(|node| owned.contains(&node.id)) {
+                let clone = deep_clone_with_fresh_ids(source, &mut next_id, &mut handles, &mut id_map);
+                clones.push((source.id, clone));
+            }
+            let numeric_map: std::collections::HashMap<_, _> = clones.iter().map(|(old, clone)| (*old, clone.id)).collect();
+            let mut cloned_wires = Vec::new();
+            for wire in &group.wires {
+                if let Some(&to_node) = numeric_map.get(&wire.to_node) {
+                    let from_node = numeric_map.get(&wire.from_node).copied().unwrap_or(wire.from_node);
+                    cloned_wires.push(EffectGraphWire { from_node, from_port: wire.from_port.clone(), to_node, to_port: wire.to_port.clone() });
+                }
+            }
+            let new_child_id = *numeric_map.get(&info.child_id)?;
+            let new_output_index = info.output_ports.len();
+            let new_output_port = object_output_port(new_output_index);
+            let new_output_id = next_id;
+            group.nodes.extend(clones.into_iter().map(|(_, clone)| clone));
+            group.nodes.push(scene_build_node(new_output_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new()));
+            group.wires.extend(cloned_wires);
+            group.wires.push(scene_build_wire(new_child_id, "object", new_output_id, &new_output_port));
+            group.interface.outputs.push(InterfacePortDef { name: new_output_port.clone(), port_type: "Object".into() });
+            sync_group_physics_compound(&mut group).ok()?;
+            nodes[group_index].group = Some(Box::new(group));
+            wires.push(scene_build_wire(info.group_id, &new_output_port, render_id, &format!("object_{current_objects}")));
+            let render = nodes.iter_mut().find(|node| node.id == render_id)?;
+            render.params.insert("objects".into(), SerializedParamValue::Float { value: current_objects as f32 + 1.0 });
+            if let Some(meta) = def.preset_metadata.as_mut() {
+                let source_bindings = meta.string_bindings.clone();
+                for binding in source_bindings {
+                    let target = match &binding.target {
+                        BindingTarget::Node { node_id, param } => Some((node_id.clone(), param.clone())),
+                        _ => None,
+                    };
+                    if let Some((node_id, param)) = target
+                        && let Some((_, new_id)) = id_map.iter().find(|(old, _)| *old == node_id)
+                    {
+                        let mut cloned = binding;
+                        cloned.target = BindingTarget::Node { node_id: new_id.clone(), param: param.clone() };
+                        meta.string_bindings.push(cloned);
+                    }
+                }
+            }
+            clone_sections::clone_scene_bindings(def, &id_map);
+            let cloned_child_node_id = id_map
+                .iter()
+                .find(|(old, _)| old == &source_child_node_id)
+                .map(|(_, new)| new.clone())?;
+            preserve_shared_parent_visible_binding(def, &source_child_node_id, &cloned_child_node_id);
+            Some((previous, previous_metadata))
+        });
+        let Some((previous, metadata)) = result.flatten() else { self.rejection = Some("Submesh graph changed before duplication".into()); return; };
+        self.prev = Some(RemovedObjectSnapshot { nodes: previous.0, wires: previous.1, metadata, instance });
+        refresh_target_manifest(project, &self.target);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(snapshot) = self.prev.take() else { return; };
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = snapshot.metadata;
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &[]) { *nodes = snapshot.nodes; *wires = snapshot.wires; }
+        });
+        if let Some(instance) = resolve_target_instance(&self.target, project) { snapshot.instance.restore(instance); }
+        refresh_target_manifest(project, &self.target);
+    }
+    fn description(&self) -> &str { "Duplicate Submesh" }
+    fn was_applied(&self) -> bool { self.prev.is_some() }
+    fn rejection_reason(&self) -> Option<&str> { self.rejection.as_deref() }
+}
+
 fn deletion_breaks_explicit_modifier_target(
     def: &EffectGraphDef,
     scope: &[u32],
@@ -1755,7 +2229,7 @@ fn grouped_physics_scene_object_match(
         wire.from_node == input.id
             && wire.from_port == "pose"
             && wire.to_node == object.id
-            && wire.to_port == "transform"
+            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
     }) else {
         return PhysicsSceneObjectMatch::Malformed("Physics group pose input is malformed");
     };
@@ -1803,6 +2277,23 @@ fn grouped_physics_scene_object_match(
     };
     if body_slot >= PHYSICS_BODY_SLOTS {
         return PhysicsSceneObjectMatch::Malformed("Physics group body slot is out of range");
+    }
+    let compound_count = group
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == "node.scene_object")
+        .count();
+    if compound_count > PHYSICS_BODY_SLOTS as usize {
+        return PhysicsSceneObjectMatch::Malformed("Physics compound group has more than 64 parts");
+    }
+    for part in 0..compound_count {
+        if !group.wires.iter().any(|wire| {
+            wire.to_node == body.id
+                && wire.to_port == "part_".to_string() + &part.to_string()
+                && wire.from_port == "transform"
+        }) {
+            return PhysicsSceneObjectMatch::Malformed("Physics compound child transform is missing");
+        }
     }
     let Some(pose_root_wire) = wires.iter().find(|wire| {
         wire.from_node == world.id
@@ -2199,6 +2690,11 @@ struct ImportedObjectParts {
     group_id: Option<u32>,
     authored_transform_id: u32,
     source: ImportedPhysicsSource,
+    /// Every retained static compound source in render order.  The first
+    /// entry is also `source`; keeping the complete list lets the rigid body
+    /// author a stable `compound_materials` selector table instead of
+    /// collapsing a multi-material asset to the primary material.
+    compound_sources: Vec<ImportedPhysicsSource>,
     object_handle: String,
     render_indices: Vec<u32>,
 }
@@ -2248,6 +2744,28 @@ fn object_node_in_group(group: &GroupDef) -> Option<u32> {
         .iter()
         .find(|node| node.id == object_wire.from_node)?;
     (object.type_id == "node.scene_object").then_some(object.id)
+}
+
+fn object_node_for_group_output(group: &GroupDef, output_port: &str) -> Option<u32> {
+    let object_wire = group
+        .wires
+        .iter()
+        .find(|wire| {
+            wire.to_port == output_port
+                && group
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == wire.to_node && node.type_id == GROUP_OUTPUT_TYPE_ID)
+        })?;
+    let object = group
+        .nodes
+        .iter()
+        .find(|node| node.id == object_wire.from_node)?;
+    (object.type_id == "node.scene_object").then_some(object.id)
+}
+
+fn group_output_port_for_render_wire(wire: &EffectGraphWire) -> Option<&str> {
+    (wire.from_port == "object" || wire.from_port.starts_with("object_")).then_some(wire.from_port.as_str())
 }
 
 fn authored_transform_in_level(
@@ -2303,6 +2821,61 @@ fn authored_transform_in_level(
         .find(|n| n.id == source.from_node && n.type_id == "node.transform_3d")
         .map(|n| n.id)
         .ok_or("Physics needs a direct authored transform")
+}
+
+/// Resolve the shared parent transform of a compound group.  New compound
+/// imports feed every child scene object through `parent_transform`; older
+/// graphs used the same transform node directly on `transform`, so retain
+/// that shape as a compatibility fallback for undoable edits.
+fn group_authored_transform_in_level(
+    group: &GroupDef,
+    object_id: u32,
+) -> Result<u32, &'static str> {
+    let wire = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == object_id && wire.to_port == "parent_transform")
+        .or_else(|| {
+            group
+                .wires
+                .iter()
+                .find(|wire| wire.to_node == object_id && wire.to_port == "transform")
+        })
+        .ok_or("Enable Physics requires a shared group transform")?;
+    let node = group
+        .nodes
+        .iter()
+        .find(|node| node.id == wire.from_node)
+        .ok_or("Enable Physics shared group transform is unavailable")?;
+    if node.type_id == "node.transform_3d" && wire.from_port == "transform" {
+        return Ok(node.id);
+    }
+    if node.type_id == GROUP_INPUT_TYPE_ID && wire.from_port == "pose" {
+        let body_output = group
+            .nodes
+            .iter()
+            .find(|candidate| candidate.type_id == GROUP_OUTPUT_TYPE_ID)
+            .and_then(|output| {
+                group
+                    .wires
+                    .iter()
+                    .find(|candidate| candidate.to_node == output.id && candidate.to_port == "body")
+                    .map(|candidate| candidate.from_node)
+            })
+            .ok_or("Enable Physics group body output is unavailable")?;
+        let body_transform = group
+            .wires
+            .iter()
+            .find(|candidate| candidate.to_node == body_output && candidate.to_port == "transform")
+            .ok_or("Enable Physics group body transform is unavailable")?;
+        return group
+            .nodes
+            .iter()
+            .find(|candidate| candidate.id == body_transform.from_node && candidate.type_id == "node.transform_3d")
+            .map(|candidate| candidate.id)
+            .ok_or("Enable Physics group body transform is malformed");
+    }
+    Err("Enable Physics requires a direct shared group transform")
 }
 
 /// Follow the scene object's mesh input through the curated single-mesh
@@ -2387,18 +2960,30 @@ fn imported_object_parts(
             .group
             .as_deref()
             .ok_or("Selected scene object group is malformed")?;
-        let object_id = object_node_in_group(group)
+        let outer_wire = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == render_id && wire.to_port == format!("object_{object_index}"))
+            .ok_or("Selected scene object render output is unavailable")?;
+        let output_port = group_output_port_for_render_wire(outer_wire)
+            .ok_or("Selected scene object group output is malformed")?;
+        let object_id = object_node_for_group_output(group, output_port)
             .ok_or("Selected scene object group has no scene_object output")?;
         let authored_transform_id =
-            authored_transform_in_level(&group.nodes, &group.wires, object_id)?;
-        let mut source = imported_source_in_level(&group.nodes, &group.wires, object_id)?;
-        source.scope_is_group = true;
-        if group.interface.outputs.iter().filter(|port| port.port_type == "Object").count() > 1 {
-            // All static material parts share the same source frame and body.
-            source.params.insert("material_index".into(), SerializedParamValue::Int { value: -1 });
-            source.params.insert("mesh_index".into(), SerializedParamValue::Int { value: -1 });
-            source.params.insert("primitive_index".into(), SerializedParamValue::Int { value: -1 });
+            group_authored_transform_in_level(group, object_id)?;
+        let source = imported_source_in_level(&group.nodes, &group.wires, object_id)?;
+        let mut compound_sources = Vec::new();
+        for port in group.interface.outputs.iter().filter(|port| port.port_type == "Object") {
+            let Some(part_id) = object_node_for_group_output(group, &port.name) else {
+                return Err("Selected scene object group has an unsupported material or mesh chain");
+            };
+            compound_sources.push(imported_source_in_level(&group.nodes, &group.wires, part_id)?);
         }
+        if compound_sources.is_empty() {
+            return Err("Selected scene object group has no material sources");
+        }
+        let mut source = source;
+        source.scope_is_group = true;
         let object = group
             .nodes
             .iter()
@@ -2410,6 +2995,7 @@ fn imported_object_parts(
             group_id: Some(producer_id),
             authored_transform_id,
             source,
+            compound_sources,
             object_handle: object
                 .handle
                 .clone()
@@ -2423,12 +3009,14 @@ fn imported_object_parts(
     }
     let authored_transform_id = authored_transform_in_level(&def.nodes, &def.wires, producer_id)?;
     let source = imported_source_in_level(&def.nodes, &def.wires, producer_id)?;
+    let compound_sources = vec![source.clone()];
     Ok(ImportedObjectParts {
         producer_id,
         object_id: producer_id,
         group_id: None,
         authored_transform_id,
         source,
+        compound_sources,
         object_handle: producer
             .handle
             .clone()
@@ -2480,6 +3068,27 @@ fn imported_body_params(
         SerializedParamValue::Int { value: 32 },
     );
     Ok(params)
+}
+
+fn compound_materials_param(
+    sources: &[ImportedPhysicsSource],
+) -> Result<SerializedParamValue, &'static str> {
+    if sources.len() > PHYSICS_BODY_SLOTS as usize {
+        return Err("Physics compound objects support at most 64 material parts");
+    }
+    let rows = sources
+        .iter()
+        .enumerate()
+        .map(|(slot, source)| {
+            let material_index = match source.params.get("material_index") {
+                Some(SerializedParamValue::Int { value }) => *value as f32,
+                Some(SerializedParamValue::Float { value }) => *value,
+                _ => -1.0,
+            };
+            vec![slot as f32, material_index]
+        })
+        .collect();
+    Ok(SerializedParamValue::Table { rows })
 }
 
 fn source_string_binding(
@@ -2543,10 +3152,16 @@ fn add_group_physics(
     let object_transform_wire = group
         .wires
         .iter()
-        .position(|wire| wire.to_node == object_id && wire.to_port == "transform")
-        .ok_or("Physics group scene_object transform is unwired")?;
+        .position(|wire| wire.to_node == object_id && wire.to_port == "parent_transform")
+        .or_else(|| {
+            group
+                .wires
+                .iter()
+                .position(|wire| wire.to_node == object_id && wire.to_port == "transform")
+        })
+        .ok_or("Physics group scene_object parent transform is unwired")?;
     if group.wires[object_transform_wire].from_node != authored_transform_id {
-        return Err("Physics group scene_object transform is already driven");
+        return Err("Physics group scene_object parent transform is already driven");
     }
     let body = fresh_scene_node(body_id, "node.rigid_body", Some(body_handle), body_params);
     let body_node_id = body.node_id.clone();
@@ -2568,10 +3183,25 @@ fn add_group_physics(
         name: "body".to_string(),
         port_type: "RigidBody".to_string(),
     });
+    let child_transform_ids: Vec<u32> = group
+        .interface
+        .outputs
+        .iter()
+        .filter(|port| port.port_type == "Object")
+        .filter_map(|port| {
+            let child_id = object_node_for_group_output(group, &port.name)?;
+            group
+                .wires
+                .iter()
+                .find(|wire| wire.to_node == child_id && wire.to_port == "transform")
+                .map(|wire| wire.from_node)
+        })
+        .collect();
     let object_ids: std::collections::HashSet<_> = group.nodes.iter()
         .filter(|node| node.type_id == "node.scene_object").map(|node| node.id).collect();
     for wire in &mut group.wires {
-        if object_ids.contains(&wire.to_node) && wire.to_port == "transform"
+        if object_ids.contains(&wire.to_node)
+            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
             && wire.from_node == authored_transform_id
         {
             wire.from_node = input_id;
@@ -2587,6 +3217,24 @@ fn add_group_physics(
     group
         .wires
         .push(scene_build_wire(body_id, "body", output_id, "body"));
+    // A compound body keeps the asset-wide transform on `transform`, while
+    // each retained material part contributes its own local transform on a
+    // dedicated `part_N` input.  The renderer uses these inputs when it
+    // prepares standard Box3D compound hulls.
+    for (part_index, local_id) in child_transform_ids.into_iter().enumerate() {
+        let Some(local) = group.nodes.iter().find(|node| node.id == local_id) else {
+            return Err("Physics compound child transform is unavailable");
+        };
+        if local.type_id != "node.transform_3d" {
+            return Err("Physics compound child transform is malformed");
+        }
+        group.wires.push(scene_build_wire(
+            local.id,
+            "transform",
+            body_id,
+            &format!("part_{part_index}"),
+        ));
+    }
     // Preserve the existing object output boundary wire; only the new body
     // output is added here.
     Ok((body_node_id, input_node_id))
@@ -2614,7 +3262,7 @@ fn remove_group_physics(
         wire.from_node == input_id
             && wire.from_port == "pose"
             && wire.to_node == object_id
-            && wire.to_port == "transform"
+            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
     }) {
         return Err("Physics group pose input is malformed");
     }
@@ -2627,14 +3275,18 @@ fn remove_group_physics(
         return Err("Physics group body output is malformed");
     }
     for wire in &mut group.wires {
-        if wire.from_node == input_id && wire.from_port == "pose" && wire.to_port == "transform" {
+        if wire.from_node == input_id
+            && wire.from_port == "pose"
+            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
+        {
             wire.from_node = authored_transform_id;
             wire.from_port = "transform".into();
         }
     }
     group.wires.retain(|wire| {
         !((wire.from_node == body_id && wire.to_node == output_id)
-            || (wire.from_node == authored_transform_id && wire.to_node == body_id))
+            || (wire.from_node == authored_transform_id && wire.to_node == body_id)
+            || (wire.to_node == body_id && wire.to_port.starts_with("part_")))
     });
     group
         .nodes
@@ -2889,6 +3541,17 @@ impl Command for EnableSceneObjectPhysicsCommand {
         }
         let body_params = match imported_body_params(&parts.source, def) {
             Ok(mut params) => {
+                if parts.compound_sources.len() > 1 {
+                    match compound_materials_param(&parts.compound_sources) {
+                        Ok(table) => {
+                            params.insert("compound_materials".to_string(), table);
+                        }
+                        Err(reason) => {
+                            self.rejection = Some(reason.into());
+                            return;
+                        }
+                    }
+                }
                 params.insert(
                     "motion".to_string(),
                     SerializedParamValue::Enum { value: 1 },
@@ -5174,7 +5837,27 @@ impl Command for ImportModelIntoSceneCommand {
 /// or group's handle at the same level.
 /// `(scene_object node id, prev scene_object handle, Option<(group node id,
 /// prev group handle)>)` — [`RenameSceneObjectCommand`]'s undo snapshot.
-type RenameSceneObjectPrev = (u32, Option<String>, Option<(u32, Option<String>)>);
+type RenameSceneObjectPrev = (Option<u32>, Option<String>, Option<(u32, Option<String>)>);
+
+fn find_scene_object_scope(
+    nodes: &[EffectGraphNode],
+    target_id: u32,
+    scope: &mut Vec<u32>,
+) -> Option<Vec<u32>> {
+    for node in nodes {
+        if node.id == target_id && node.type_id == "node.scene_object" {
+            return Some(scope.clone());
+        }
+        if let Some(group) = node.group.as_deref() {
+            scope.push(node.id);
+            if let Some(found) = find_scene_object_scope(&group.nodes, target_id, scope) {
+                return Some(found);
+            }
+            scope.pop();
+        }
+    }
+    None
+}
 
 #[derive(Debug)]
 pub struct RenameSceneObjectCommand {
@@ -5193,6 +5876,10 @@ pub struct RenameSceneObjectCommand {
     catalog_default: EffectGraphDef,
     /// Captured on first successful execute.
     prev: Option<RenameSceneObjectPrev>,
+    /// The containing group path when the panel addressed a child directly by
+    /// its scene_object id.  In that mode the enclosing group keeps its own
+    /// handle; only the child handle and its section metadata change.
+    nested_scope: Option<Vec<u32>>,
     /// D5 rename-sweep undo state — same shape as `RenameGroupCommand::swept`.
     /// Only ever populated when the object is grouped (an ungrouped bare
     /// scene_object has no group name for a card section to have followed).
@@ -5214,6 +5901,7 @@ impl RenameSceneObjectCommand {
             new_handle,
             catalog_default,
             prev: None,
+            nested_scope: None,
             swept: Vec::new(),
         }
     }
@@ -5239,7 +5927,29 @@ impl Command for RenameSceneObjectCommand {
                 }) {
                     return None;
                 }
-                let producer = nodes.iter_mut().find(|n| n.id == producer_id)?;
+                let Some(producer_index) = nodes.iter().position(|n| n.id == producer_id) else {
+                    if !scope.is_empty() {
+                        return None;
+                    }
+                    let mut nested = Vec::new();
+                    let nested_scope = find_scene_object_scope(&def.nodes, producer_id, &mut nested)?;
+                    if nested_scope.is_empty() {
+                        return None;
+                    }
+                    let (parent_nodes, _parent_wires) = descend_level(&mut def.nodes, &mut def.wires, &nested_scope)?;
+                    if parent_nodes.iter().any(|node| {
+                        node.id != producer_id && node.handle.as_deref() == Some(new_handle.as_str())
+                    }) {
+                        return None;
+                    }
+                    let child = parent_nodes.iter_mut().find(|node| node.id == producer_id)?;
+                    let previous = child.handle.clone();
+                    child.handle = Some(new_handle.clone());
+                    let mut inside = Vec::new();
+                    collect_node_ids(std::slice::from_ref(child), &mut inside);
+                    return Some(((Some(producer_id), previous, None, inside), Some(nested_scope)));
+                };
+                let producer = &mut nodes[producer_index];
 
                 if producer.type_id == GROUP_TYPE_ID {
                     // Grouped shape (Add / importer / merge): rename the group
@@ -5248,36 +5958,51 @@ impl Command for RenameSceneObjectCommand {
                     let prev_group_handle = producer.handle.clone();
                     producer.handle = Some(new_handle.clone());
                     let body = producer.group.as_deref_mut()?;
-                    let scene_object = body
+                    let scene_object_ids: Vec<u32> = body
                         .nodes
-                        .iter_mut()
-                        .find(|n| n.type_id == "node.scene_object")?;
-                    let scene_object_id = scene_object.id;
-                    let prev_object_handle = scene_object.handle.clone();
-                    scene_object.handle = Some(new_handle.clone());
+                        .iter()
+                        .filter(|node| node.type_id == "node.scene_object")
+                        .map(|node| node.id)
+                        .collect();
+                    let (scene_object_id, prev_object_handle) = if scene_object_ids.len() == 1
+                        && !body.wires.iter().any(|wire| wire.to_port == "parent_transform") {
+                        let scene_object = body
+                            .nodes
+                            .iter_mut()
+                            .find(|node| node.id == scene_object_ids[0])?;
+                        let previous = scene_object.handle.clone();
+                        scene_object.handle = Some(new_handle.clone());
+                        (Some(scene_object.id), previous)
+                    } else {
+                        // A compound parent owns several independently named
+                        // scene objects. Renaming the parent must not rename
+                        // the first child as a side effect.
+                        (None, None)
+                    };
 
                     let mut inside = Vec::new();
                     collect_node_ids(&body.nodes, &mut inside);
-                    Some((
+                    Some(((
                         scene_object_id,
                         prev_object_handle,
                         Some((producer_id, prev_group_handle)),
                         inside,
-                    ))
+                    ), None))
                 } else {
                     // Ungrouped bare scene_object: just its own handle, no group
                     // to keep in sync, no card-section sweep possible.
                     let prev_object_handle = producer.handle.clone();
                     producer.handle = Some(new_handle.clone());
-                    Some((producer_id, prev_object_handle, None, Vec::new()))
+                    Some(((Some(producer_id), prev_object_handle, None, Vec::new()), None))
                 }
             });
-        let Some((scene_object_id, prev_object_handle, prev_group, inside)) = captured.flatten()
+        let Some(((scene_object_id, prev_object_handle, prev_group, inside), nested_scope)) = captured.flatten()
         else {
             return;
         };
         if first_time {
             self.prev = Some((scene_object_id, prev_object_handle, prev_group.clone()));
+            self.nested_scope = nested_scope;
         }
         if !first_time {
             return;
@@ -5352,7 +6077,7 @@ impl Command for RenameSceneObjectCommand {
         let Some((scene_object_id, prev_object_handle, prev_group)) = self.prev.clone() else {
             return;
         };
-        let scope = self.scope_path.clone();
+        let scope = self.nested_scope.clone().unwrap_or_else(|| self.scope_path.clone());
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
             else {
@@ -5361,14 +6086,17 @@ impl Command for RenameSceneObjectCommand {
             if let Some((group_id, prev_group_handle)) = prev_group {
                 if let Some(group) = nodes.iter_mut().find(|n| n.id == group_id) {
                     group.handle = prev_group_handle;
-                    if let Some(body) = group.group.as_deref_mut()
+                    if let Some(scene_object_id) = scene_object_id
+                        && let Some(body) = group.group.as_deref_mut()
                         && let Some(scene_object) =
                             body.nodes.iter_mut().find(|n| n.id == scene_object_id)
                     {
                         scene_object.handle = prev_object_handle;
                     }
                 }
-            } else if let Some(node) = nodes.iter_mut().find(|n| n.id == scene_object_id) {
+            } else if let Some(scene_object_id) = scene_object_id
+                && let Some(node) = nodes.iter_mut().find(|n| n.id == scene_object_id)
+            {
                 node.handle = prev_object_handle;
             }
         });

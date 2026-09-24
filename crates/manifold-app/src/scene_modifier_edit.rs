@@ -459,7 +459,7 @@ fn shatter_targets(
         let SceneObjectVm::Known(row) = object else { return None };
         if !row.physics_imported || row.physics.is_none() { return None; }
         let node = descend_nodes(&graph.nodes, &row.visible_addr.scope_path)?
-            .iter().find(|n| n.id == row.object_node_id)?;
+            .iter().find(|n| n.id == row.visible_addr.node_doc_id)?;
         choices.iter().find(|reference| reference.node == node.node_id).cloned()
     }).collect();
     if objects.is_empty() {

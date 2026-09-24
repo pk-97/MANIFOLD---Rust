@@ -51,11 +51,11 @@ pub(super) fn selected_objects(
                 if target.scope.is_empty() {
                     continue;
                 }
-                let transform = index.input(target, "transform")?;
+                let transform = index.input(target, "parent_transform")?.or(index.input(target, "transform")?);
                 for part in &available {
                     if part.scope == target.scope
                         && transform.is_some()
-                        && index.input(part, "transform")?.map(|w| (w.from_node, &w.from_port))
+                        && index.input(part, "parent_transform")?.or(index.input(part, "transform")?).map(|w| (w.from_node, &w.from_port))
                             == transform.map(|w| (w.from_node, &w.from_port))
                     {
                         selected.insert(part.clone());

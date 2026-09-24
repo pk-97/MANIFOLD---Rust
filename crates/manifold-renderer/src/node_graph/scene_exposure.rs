@@ -8,6 +8,7 @@
 //!   creation-site commands that cannot depend on `manifold_renderer` directly.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
+mod compound;
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
 use crate::node_graph::parameters::ParamType;
@@ -78,6 +79,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
             type_id != "node.render_scene" || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref())
         })
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
+        .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or((0.0, 1.0));
             let default_value: manifold_core::effect_graph_def::SerializedParamValue =
@@ -127,6 +129,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
+    let compound = compound::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
@@ -135,7 +138,7 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         section_name_for_node,
         &provider,
     );
-    repaired || migrated
+    compound || repaired || migrated
 }
 
 /// Legacy tail repair (2026-08-27): pre-fix projects carry the lens's old

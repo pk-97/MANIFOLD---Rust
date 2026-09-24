@@ -215,6 +215,28 @@
         assert_eq!(apply(mat4_mul(translate, scale), p), [3.0, 4.0, 5.0]);
     }
 
+    #[test]
+    fn parent_model_is_composed_before_local_model() {
+        let parent = model_matrix(
+            [3.0, -1.0, 2.0],
+            [0.0, 0.0, std::f32::consts::FRAC_PI_2],
+            [2.0, 1.0, 1.0],
+        );
+        let local = model_matrix([1.0, 2.0, 0.0], [0.0; 3], [1.0, 1.0, 1.0]);
+        let composed = mat4_mul(parent, local);
+        let mut point = [0.0; 4];
+        let local_point = [0.0, 0.0, 0.0, 1.0];
+        for row in 0..4 {
+            point[row] = composed[0][row] * local_point[0]
+                + composed[1][row] * local_point[1]
+                + composed[2][row] * local_point[2]
+                + composed[3][row] * local_point[3];
+        }
+        assert!((point[0] - 1.0).abs() < 1e-6);
+        assert!((point[1] - 1.0).abs() < 1e-6);
+        assert!((point[2] - 2.0).abs() < 1e-6);
+    }
+
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1 negative gate: the old flat lod-0
     /// envmap sample + `ibl_strength = 1.0 - roughness*0.7` heuristic is
     /// gone, not paralleled — split-sum (prefiltered chain × BRDF LUT +

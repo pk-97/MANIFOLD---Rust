@@ -1136,11 +1136,11 @@ impl Application {
         let mouse_delta = (x - drag.last_x, y - drag.last_y);
         let new_value = match mode {
             manifold_renderer::node_graph::GizmoMode::Move => {
-                manifold_renderer::node_graph::move_drag_delta(target.origin, drag.axis, &cam, w, h, mouse_delta)
+                target.projected_drag_delta(drag.axis, &cam, w, h, mouse_delta)
                     .map(|d| current + d)
             }
             manifold_renderer::node_graph::GizmoMode::Scale => {
-                manifold_renderer::node_graph::scale_drag_delta(target.origin, drag.axis, &cam, w, h, mouse_delta)
+                target.projected_drag_delta(drag.axis, &cam, w, h, mouse_delta)
                     .map(|d| (current + d).max(0.01))
             }
             manifold_renderer::node_graph::GizmoMode::Rotate => manifold_renderer::node_graph::rotate_drag_delta(

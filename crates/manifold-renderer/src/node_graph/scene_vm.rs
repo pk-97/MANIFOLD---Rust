@@ -179,8 +179,14 @@ pub struct SkinVm {
 /// clippy `large_enum_variant` reason as [`LightRow`]/[`OrbitCameraRow`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneObjectKnownRow {
+    /// A virtual parent for the material draws of one imported static model.
+    pub is_group: bool,
+    /// Children follow their parent in `SceneVm.objects`; indices still refer
+    /// to the physical render slots used by graph editing commands.
+    pub parent_group_id: Option<u32>,
     pub index: usize,
-    /// The `node.scene_object`'s own doc id — the address
+    /// Stable selection identity: the group id for a virtual parent, otherwise
+    /// the `node.scene_object`'s own doc id — the address
     /// `RenameSceneObjectCommand`/the eye-toggle write take, and the same
     /// value `group_node_id` resolved to pre-D12 when an object happened to
     /// be grouped.
@@ -567,7 +573,7 @@ impl SceneVm {
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
-        let object_count = objects.len();
+        let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
 
@@ -746,6 +752,7 @@ fn assign_shared_material_counts(objects: &mut [SceneObjectVm]) {
             complete = false;
             continue;
         };
+        if row.is_group { continue; }
         let MaterialVm::Known(material) = &row.material else {
             complete = false;
             continue;
@@ -787,7 +794,7 @@ fn trace_objects(
     let mut seen_groups = HashSet::new();
     for k in 0..objects {
         let port = format!("object_{k}");
-        let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
+        let (mut row, source_vertex_count) = match level.producer(scene_node.id, &port) {
             Some((producer_id, output_port)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
                     trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set)
@@ -817,13 +824,50 @@ fn trace_objects(
             Some(v) => vertex_count += v as u64,
             None => vertex_count_exact = false,
         }
-        // Several material draws from one group are one authored object.
-        let already_listed = match &row {
-            SceneObjectVm::Known(row) => row.group_node_id.is_some_and(|id| !seen_groups.insert(id)),
-            _ => false,
-        };
-        if !already_listed { out.push(row); }
+        if let SceneObjectVm::Known(child) = &mut row
+            && let Some(group_id) = child.group_node_id
+            && let Some(group_node) = level.node(group_id)
+            && let Some(group) = group_node.group.as_ref()
+        {
+            let inner = Level { nodes: &group.nodes, wires: &group.wires };
+            if let Some((parent_source, _)) = inner.producer(child.object_node_id, "parent_transform") {
+                if seen_groups.insert(group_id) {
+                    let mut parent = child.clone();
+                    parent.is_group = true;
+                    parent.object_node_id = group_id;
+                    parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
+                    parent.visible_addr.param_id = "parent_visible".into();
+                    parent.visible_value = inner.node(child.object_node_id)
+                        .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
+                    parent.visible_driven = inner.producer(child.object_node_id, "parent_visible").is_some();
+                    let authored = inner.node(parent_source)
+                        .filter(|node| node.type_id == "node.transform_3d")
+                        .map(|node| node.id)
+                        .or_else(|| group_body_id(&inner).and_then(|body| inner.producer(body, "transform").map(|(id, _)| id)));
+                    parent.transform = authored.map(|id| trace_transform(&inner, vec![group_id], id));
+                    parent.material = MaterialVm::None;
+                    parent.skin = None;
+                    parent.transform_chain.clear();
+                    parent.modifier_chain.clear();
+                    out.push(SceneObjectVm::Known(parent));
+                }
+                child.parent_group_id = Some(group_id);
+                child.physics = None;
+                child.physics_imported = false;
+            }
+        }
+        out.push(row);
     }
+    // A duplicated child may occupy a later render slot, after another group.
+    // Keep the outliner in parent/children order without changing physical slots.
+    let group_indices: HashMap<_, _> = out.iter().filter_map(|row| match row {
+        SceneObjectVm::Known(row) if row.is_group => Some((row.object_node_id, row.index)),
+        _ => None,
+    }).collect();
+    out.sort_by_key(|row| match row {
+        SceneObjectVm::Known(row) => (row.parent_group_id.and_then(|id| group_indices.get(&id).copied()).unwrap_or(row.index), row.parent_group_id.is_some(), row.index),
+        SceneObjectVm::Custom { index } => (*index, false, *index),
+    });
     assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)
 }
@@ -971,12 +1015,10 @@ fn param_bool(node: &EffectGraphNode, name: &str, default: bool) -> bool {
 }
 
 fn group_body_id(level: &Level<'_>) -> Option<u32> {
-    let output = level
-        .nodes
-        .iter()
-        .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
-    let (body, _) = level.producer(output.id, "body")?;
-    (level.node(body)?.type_id == "node.rigid_body").then_some(body)
+    level.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).find_map(|output| {
+        let (body, _) = level.producer(output.id, "body")?;
+        (level.node(body)?.type_id == "node.rigid_body").then_some(body)
+    })
 }
 
 fn mesh_source_is_gltf(level: &Level<'_>, object_id: u32) -> bool {
@@ -1121,6 +1163,8 @@ fn trace_scene_object(
     chain.reverse(); // wire order: source → … → scene_object.
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
+        is_group: false,
+        parent_group_id: None,
         index: k,
         object_node_id,
         group_node_id,

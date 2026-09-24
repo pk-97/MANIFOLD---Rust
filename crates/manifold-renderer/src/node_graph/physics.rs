@@ -1813,7 +1813,7 @@ mod tests {
             .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
             .unwrap();
         assert!(!simulation.fragment_parent_released[0]);
-        assert_eq!(simulation.fragment_active[1], false);
+        assert!(!simulation.fragment_active[1]);
         assert!((simulation.poses[1].pos[1] - simulation.poses[0].pos[1]).abs() < 1.0e-5);
         let parent_before_release = simulation.poses[0].pos;
 

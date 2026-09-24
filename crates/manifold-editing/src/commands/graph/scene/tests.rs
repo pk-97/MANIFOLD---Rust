@@ -197,6 +197,171 @@ fn compound_imported_group_scene_graph() -> EffectGraphDef {
     def
 }
 
+fn compound_imported_group_with_one_boundary_per_material() -> EffectGraphDef {
+    let mut def = compound_imported_group_scene_graph();
+    let group = def.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    let old_output = group.nodes.iter().find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().clone();
+    let mut second_output = old_output;
+    second_output.id = 17;
+    second_output.node_id = NodeId::new("import_output_1");
+    second_output.handle = Some("output_1".into());
+    group.nodes.push(second_output);
+    group.wires.retain(|wire| !(wire.to_node == 15 && wire.to_port == "object_1"));
+    group.wires.push(EffectGraphWire { from_node: 16, from_port: "object".into(), to_node: 17, to_port: "object_1".into() });
+    // Match current imports: identity local transforms beneath a shared parent.
+    for (child_id, local_id) in [(14, 18), (16, 19)] {
+        let mut local = group.nodes.iter().find(|node| node.id == 11).unwrap().clone();
+        local.id = local_id;
+        local.node_id = NodeId::new(format!("local_{local_id}"));
+        local.handle = Some(format!("local_{local_id}"));
+        local.params.clear();
+        group.nodes.push(local);
+        group.wires.iter_mut().find(|wire| wire.to_node == child_id && wire.to_port == "transform").unwrap().to_port = "parent_transform".into();
+        group.wires.push(EffectGraphWire { from_node: local_id, from_port: "transform".into(), to_node: child_id, to_port: "transform".into() });
+    }
+    def
+}
+
+#[test]
+fn compound_submesh_remove_and_duplicate_preserve_boundary_shape_and_undo() {
+    let graph = compound_imported_group_with_one_boundary_per_material();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+
+    let mut remove = RemoveSceneSubmeshCommand::new(target.clone(), 0, 1, graph.clone());
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
+    let removed = graph_of(&project, &fx);
+    assert_eq!(removed.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 1.0 }));
+    let group = removed.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    assert_eq!(group.interface.outputs.iter().filter(|port| port.port_type == "Object").map(|port| port.name.as_str()).collect::<Vec<_>>(), vec!["object"]);
+    assert!(!removed.nodes.iter().any(|node| node.id == 16));
+    assert!(removed.nodes.iter().any(|node| node.id == 10));
+    remove.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph);
+
+    let mut duplicate = DuplicateSceneSubmeshCommand::new(target, 0, 1, graph.clone());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
+    let duplicated = graph_of(&project, &fx);
+    assert_eq!(duplicated.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 3.0 }));
+    let group = duplicated.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    assert_eq!(group.interface.outputs.iter().filter(|port| port.port_type == "Object").count(), 3);
+    assert!(duplicated.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_2"));
+    duplicate.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph);
+
+    let mut enable = EnableSceneObjectPhysicsCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        0,
+        0,
+        body_params(),
+        graph.clone(),
+    );
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "physics rejected: {:?}", enable.rejection_reason());
+    let physics = graph_of(&project, &fx);
+    let group = physics.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
+    assert_eq!(body.params.get("compound_materials"), Some(&SerializedParamValue::Table { rows: vec![vec![0.0, -1.0], vec![1.0, -1.0]] }));
+    assert_eq!(group.wires.iter().filter(|wire| wire.to_node == body.id && wire.to_port.starts_with("part_")).count(), 2);
+    let before = physics.clone();
+    let mut remove_first = RemoveSceneSubmeshCommand::new(GraphTarget::Effect(fx.clone()), 0, 0, graph.clone());
+    remove_first.execute(&mut project);
+    assert!(remove_first.was_applied(), "{:?}", remove_first.rejection_reason());
+    let remaining = graph_of(&project, &fx);
+    let group = remaining.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
+    assert_eq!(body.params.get("compound_materials"), Some(&SerializedParamValue::Table { rows: vec![vec![0.0, -1.0]] }));
+    assert_eq!(group.wires.iter().filter(|wire| wire.to_node == body.id && wire.to_port.starts_with("part_")).count(), 1);
+    assert!(group.wires.iter().any(|wire| wire.to_port == "parent_transform"));
+    remove_first.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &before);
+}
+
+#[test]
+fn nested_scene_object_rename_finds_child_by_doc_id_and_preserves_group_name() {
+    let graph = compound_imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut rename = RenameSceneObjectCommand::new(
+        target,
+        Vec::new(),
+        16,
+        "Imported Part 2 Renamed".into(),
+        graph.clone(),
+    );
+    rename.execute(&mut project);
+    assert!(rename.was_applied());
+    let renamed = graph_of(&project, &fx);
+    let group = renamed.nodes.iter().find(|node| node.id == 10).unwrap();
+    assert_eq!(group.handle.as_deref(), Some("Imported"));
+    assert_eq!(group.group.as_ref().unwrap().nodes.iter().find(|node| node.id == 16).unwrap().handle.as_deref(), Some("Imported Part 2 Renamed"));
+    rename.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph);
+}
+
+#[test]
+fn compound_parent_rename_keeps_each_child_name_and_duplicate_fans_out_parent_visibility() {
+    let mut graph = compound_imported_group_with_one_boundary_per_material();
+    let parent_visible_node_id = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_ref()
+        .unwrap()
+        .nodes
+        .iter()
+        .find(|node| node.id == 16)
+        .unwrap()
+        .node_id
+        .clone();
+    graph.preset_metadata.as_mut().unwrap().bindings.push(BindingDef {
+        id: "compound_parent_visible".into(),
+        label: "Visible".into(),
+        default_value: 1.0,
+        target: BindingTarget::Node { node_id: parent_visible_node_id.clone(), param: "parent_visible".into() },
+        convert: Default::default(),
+        user_added: false,
+        scale: 1.0,
+        offset: 0.0,
+        default_mirrors_node_param: true,
+    });
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+
+    let mut rename = RenameSceneObjectCommand::new(target.clone(), Vec::new(), 10, "Compound Renamed".into(), graph.clone());
+    rename.execute(&mut project);
+    let renamed = graph_of(&project, &fx);
+    let group = renamed.nodes.iter().find(|node| node.id == 10).unwrap();
+    assert_eq!(group.handle.as_deref(), Some("Compound Renamed"));
+    let body = group.group.as_ref().unwrap();
+    assert_eq!(body.nodes.iter().find(|node| node.id == 14).unwrap().handle.as_deref(), Some("Imported"));
+    assert_eq!(body.nodes.iter().find(|node| node.id == 16).unwrap().handle.as_deref(), Some("Imported Part 2"));
+    rename.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph);
+
+    let mut duplicate = DuplicateSceneSubmeshCommand::new(target, 0, 1, graph.clone());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
+    let duplicated = graph_of(&project, &fx);
+    let body = duplicated.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    let cloned_child = body.nodes.iter().find(|node| node.type_id == "node.scene_object" && node.id != 14 && node.id != 16).unwrap();
+    assert!(body.wires.iter().any(|wire| wire.from_node == 13 && wire.to_node == cloned_child.id && wire.to_port == "material"));
+    let visible_bindings: Vec<_> = duplicated
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if param == "parent_visible" && (*node_id == parent_visible_node_id || *node_id == cloned_child.node_id)))
+        .collect();
+    assert_eq!(visible_bindings.len(), 2);
+    assert!(visible_bindings.iter().all(|binding| binding.id == "compound_parent_visible"));
+}
+
 fn body_params() -> Vec<SceneParamMetadata> {
     vec![scene_param_meta("mass", "Mass"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
 }

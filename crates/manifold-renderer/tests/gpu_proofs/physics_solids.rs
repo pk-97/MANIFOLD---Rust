@@ -105,7 +105,8 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     );
     let primary_object = authored_objects[0].clone();
     let authored_vm = SceneVm::from_def(&enabled).expect("authored scene resolves");
-    assert_eq!(authored_vm.objects.len(), 1);
+    assert_eq!(authored_vm.header.object_count, 1);
+    assert_eq!(authored_vm.objects.len(), authored_objects.len() + 1);
     assert!(
         authored_vm.header.vertex_count > 0,
         "imported material triangle totals remain visible"
@@ -431,6 +432,55 @@ fn imported_flower_empty_scene_clears_and_restores() {
         pixel_stats(&restored).0 > 1.0,
         "flower must render after restoring visibility"
     );
+}
+
+#[test]
+fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
+    use manifold_core::effect_graph_def::BindingTarget;
+    use manifold_renderer::node_graph::{gltf_import::assemble_import_graph, scene_vm::{SceneVm, SceneObjectVm}};
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let (imported, _) = assemble_import_graph(&fixture).unwrap();
+    let vm = SceneVm::from_def(&imported).unwrap();
+    let SceneObjectVm::Known(child) = &vm.objects[1] else { panic!("flower child") };
+    let group = imported.nodes.iter().find(|n| Some(n.id) == child.parent_group_id).unwrap().group.as_ref().unwrap();
+    let object = group.nodes.iter().find(|n| n.id == child.object_node_id).unwrap();
+    let transform = group.nodes.iter().find(|n| n.id == child.transform.as_ref().unwrap().node_doc_id).unwrap();
+    let metadata = imported.preset_metadata.as_ref().unwrap();
+    let binding_id = |node: &manifold_core::NodeId, param_name: &str| metadata.bindings.iter().find_map(|binding| {
+        matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == node && param == param_name).then(|| binding.id.clone())
+    }).unwrap();
+    let visible_id = binding_id(&object.node_id, "visible");
+    let parent_id = binding_id(&object.node_id, "parent_visible");
+    let position_id = binding_id(&transform.node_id, "pos_x");
+    let shown = ParamManifest::from_params(metadata.params.iter().cloned().map(Param::bundled).collect());
+    let set = |params: &mut ParamManifest, id: &str, value: f32| {
+        let param = params.get_mut(id).unwrap(); param.base = value; param.value = value;
+    };
+    let h = harness::shared();
+    let mut runtime = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
+        .create_with_override(h.device.clone(), &metadata.id, Some(&imported), h.width, h.height, false, None, None).unwrap();
+    let target = h.make_target("flower-submesh-controls");
+    warm_imported_runtime(&mut runtime, &target, &shown);
+    let original = h.readback(&target.texture);
+    let mut edited = shown.clone();
+    set(&mut edited, &visible_id, 0.0);
+    render_frame_with_params(&mut runtime, &target, 1, h.width, h.height, &h.device, &edited);
+    let sibling = h.readback(&target.texture);
+    assert!(mean_abs_diff(&original, &sibling) > 0.001, "child eye must hide the flower");
+    assert!(max_abs_pixel(&sibling) > 0.01, "calibration mesh remains visible");
+    set(&mut edited, &parent_id, 0.0);
+    render_frame_with_params(&mut runtime, &target, 2, h.width, h.height, &h.device, &edited);
+    assert!(max_abs_pixel(&h.readback(&target.texture)) < 1e-4, "parent eye hides every child");
+    set(&mut edited, &parent_id, 1.0);
+    render_frame_with_params(&mut runtime, &target, 3, h.width, h.height, &h.device, &edited);
+    assert!(mean_abs_diff(&sibling, &h.readback(&target.texture)) < 0.002, "parent eye preserves child visibility");
+    set(&mut edited, &visible_id, 1.0);
+    set(&mut edited, &position_id, 0.3);
+    render_frame_with_params(&mut runtime, &target, 4, h.width, h.height, &h.device, &edited);
+    assert!(mean_abs_diff(&original, &h.readback(&target.texture)) > 0.001, "local child transform changes the render");
+    assert!(runtime.errors().is_empty(), "{:?}", runtime.errors());
+    std::fs::write("/tmp/flower-submesh-controls.png", manifold_renderer::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
 }
 
 #[test]
