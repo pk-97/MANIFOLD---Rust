@@ -93,21 +93,16 @@ int BlobDetector_Process(
     // Convert to grayscale
     cv::cvtColor(rgba, state->gray, cv::COLOR_RGBA2GRAY);
 
-    // Near-flat frame gate: on an empty/dark frame equalizeHist would
-    // stretch sensor/compression noise to full contrast and Canny would
-    // box the noise — phantom blobs that keep dead tracks alive. If the
-    // original frame has almost no dynamic range, there is no subject.
+    // Near-flat frames have no useful structure to track. Reject them before
+    // edge detection so sensor/compression noise cannot keep dead tracks alive.
     cv::Scalar mean, stddev;
     cv::meanStdDev(state->gray, mean, stddev);
     if (stddev[0] < 2.0) return 0;
 
-    // Normalize global contrast before edge detection. The Canny
-    // thresholds below are absolute gradient magnitudes, so without
-    // this a given `threshold` setting means something different on
-    // every clip — permissive on hard-edged generative content,
-    // brutal on soft low-contrast camera footage. Equalizing the
-    // histogram makes the knob behave consistently across sources.
-    cv::equalizeHist(state->gray, state->gray);
+    // Preserve source contrast. Histogram equalization promotes weak
+    // background texture into strong edges; dilation then joins distinct
+    // subjects into one frame-spanning contour that the graph rejects.
+    // Threshold remains the performer's control over edge sensitivity.
 
     // Gaussian blur — reduce noise before edge detection
     // sensitivity 0 → kernel 11 (heavy blur, smoother edges)
