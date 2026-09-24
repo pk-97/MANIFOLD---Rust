@@ -8,6 +8,20 @@ use crate::content_command::ContentCommand;
 use manifold_editing::commands::effects::BindingMappingEdit;
 use crate::app_render::mini_timeline_data;
 
+/// Apply live values after rebuilding: construction seeds rows from the last
+/// structural configuration and would otherwise overwrite the current readouts.
+fn rebuild_editor_inspector(
+    ui: &mut crate::ui_root::UIRoot,
+    project: &manifold_core::project::Project,
+    active_layer: Option<usize>,
+    viewport: manifold_ui::Rect,
+) {
+    ui.tree.clear();
+    ui.build_inspector_in_rect(viewport);
+    crate::ui_bridge::sync_card_values(ui, project, active_layer);
+    crate::ui_bridge::sync_scene_row_values(ui, project);
+}
+
 /// Build the reshape-edit command for the watched graph target — one
 /// [`manifold_editing::commands::effects::EditParamMappingCommand`] for
 /// both effects and generators. The reshape lives in the preset's
@@ -647,6 +661,48 @@ fn modifier_binding_for_node_param(
 }
 
 impl Application {
+    /// Window-hosted actions shared by both instances of the inspector.
+    /// The action already captures its parameter/mask identity; only the text
+    /// overlay and keyboard ownership depend on the emitting window.
+    pub(crate) fn dispatch_inspector_host_action(
+        &mut self,
+        action: &manifold_ui::panels::PanelAction,
+        in_editor: bool,
+    ) -> bool {
+        use manifold_ui::panels::{PanelAction, RootAction};
+        use crate::text_input::{AnchorRect, InspectorParamCtx, TextInputField};
+        match action {
+            PanelAction::Root(RootAction::PreviewEffectMask(effect_id)) => {
+                self.preview_effect_mask(effect_id);
+            }
+            PanelAction::Root(RootAction::BeginParamTextInput {
+                target, param_id, anchor, value, whole_numbers, degrees, ..
+            }) => {
+                let display = if *degrees { value.to_degrees() } else { *value };
+                let initial = if *whole_numbers {
+                    format!("{}", display.round() as i64)
+                } else {
+                    format!("{display:.3}")
+                };
+                self.text_input.begin(
+                    if in_editor { TextInputField::EditorInspectorParam } else { TextInputField::InspectorParam },
+                    &initial,
+                    AnchorRect::new(anchor.x, anchor.y, anchor.width, anchor.height),
+                    11.0,
+                );
+                self.text_input.inspector_param = Some(InspectorParamCtx {
+                    target: target.clone(), param_id: param_id.clone(),
+                    whole_numbers: *whole_numbers, degrees: *degrees,
+                });
+                if in_editor && let Some(editor) = self.graph_editor.as_mut() {
+                    editor.offscreen_dirty = true;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Open from the emitting card using the shared target resolver and its
     /// clicked node geometry. Canvas selection is not an input.
     pub(crate) fn open_card_mapping(
@@ -1775,14 +1831,12 @@ impl Application {
             .active_layer_id
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        crate::ui_bridge::sync_card_values(&mut ws.ui_root, &self.local_project, editor_active_idx);
-        crate::ui_bridge::sync_scene_row_values(&mut ws.ui_root, &self.local_project);
-
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small, so a clear + rebuild is cheaper than dirty-tracking and
         // means stale rows can never linger after the target changes.
-        ws.ui_root.tree.clear();
-        ws.ui_root.build_inspector_in_rect(card_viewport);
+        rebuild_editor_inspector(
+            &mut ws.ui_root, &self.local_project, editor_active_idx, card_viewport,
+        );
         let _ = (card_x, card_width);
 
         // Pinned preview monitors in the left column: a backing panel, the two pane
@@ -2295,7 +2349,10 @@ mod preview_target_tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
         app.node_preview_normalize = true;
-        app.preview_effect_mask(&mask_id);
+        assert!(app.dispatch_inspector_host_action(
+            &manifold_ui::PanelAction::Root(manifold_ui::RootAction::PreviewEffectMask(mask_id.clone())),
+            true,
+        ));
         assert!(app.pending_open_graph_editor);
         assert_eq!(app.pending_mask_preview.as_ref(), Some(&mask_id));
         assert!(!app.node_preview_normalize);
@@ -2472,6 +2529,81 @@ mod binding_reroute_tests {
         app.local_project.timeline.layers.push(layer);
         app.watched_graph_target = Some(a.clone());
         (app, a, b)
+    }
+
+    #[test]
+    fn editor_inspector_rebuild_preserves_live_parameter_readouts() {
+        // Effect cards require a registered preset definition. Keep the real
+        // Bloom identity and add a parameter, as the projection tests do.
+        let mut project = manifold_core::project::Project::default();
+        let mut effect = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
+        let spec = def_with_binding().preset_metadata.unwrap().params.remove(0);
+        effect.params = manifold_core::params::ParamManifest::from_params(vec![
+            manifold_core::params::Param::user_added(spec),
+        ]);
+        project.settings.master_effects.push(effect);
+        let mut ui = crate::ui_root::UIRoot::new();
+        crate::ui_bridge::sync_inspector_data(
+            &mut ui, &project, None,
+            &crate::app::SelectionState::default(), &[], None,
+        );
+        let viewport = manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0);
+        // Structural configuration stays unchanged while snapshots update values.
+        // Repeat a value to also cover an unchanged snapshot on the next frame.
+        for (value, expected) in [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")] {
+            project.settings.master_effects[0]
+                .params.get_mut("amount").unwrap().value = value;
+            super::rebuild_editor_inspector(&mut ui, &project, None, viewport);
+            assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(expected)),
+                "rebuilt inspector must show live value {expected}");
+        }
+    }
+
+    #[test]
+    fn inspector_numeric_entry_owns_emitting_window_and_commits_one_undo() {
+        use manifold_ui::{GraphParamTarget, PanelAction, RootAction, Rect};
+        use crate::text_input::TextInputField;
+        use manifold_editing::undo::UndoRedoManager;
+        for in_editor in [false, true] {
+            let (mut app, _, owner) = mapping_test_app();
+            let manifold_core::GraphTarget::Generator(layer) = &owner else { unreachable!() };
+            let action = PanelAction::Root(RootAction::BeginParamTextInput {
+                target: GraphParamTarget::GeneratorOf(layer.clone()), param_id: "amount".into(),
+                anchor: Rect::new(100.0, 300.0, 56.0, 24.0), value: 0.0,
+                min: 0.0, max: 1.0, whole_numbers: false, degrees: false,
+            });
+            let mut project = app.local_project.clone();
+            let (tx, rx) = crossbeam_channel::unbounded();
+            app.content_tx = Some(tx);
+            assert!(app.dispatch_inspector_host_action(&action, in_editor));
+            assert_eq!(app.text_input.is_owned_by_editor(), in_editor);
+            assert_eq!(app.text_input.is_owned_by_main(), !in_editor);
+            assert_eq!(app.text_input.field, if in_editor {
+                TextInputField::EditorInspectorParam
+            } else { TextInputField::InspectorParam });
+            app.text_input.paste("0.8");
+            let (field, text) = app.text_input.commit();
+            app.handle_text_input_commit(field, &text);
+            let mut undo = UndoRedoManager::new();
+            for command in rx.try_iter() {
+                match command {
+                    ContentCommand::MutateProjectLive(edit)
+                    | ContentCommand::MutateProjectPreview(edit)
+                    | ContentCommand::MutateProject(edit) => edit(&mut project),
+                    ContentCommand::Execute(command) => { undo.execute(command, &mut project); }
+                    _ => panic!("unexpected numeric-entry command"),
+                }
+            }
+            let value = |p: &manifold_core::project::Project| {
+                p.preset_instance(&owner).unwrap().params.get("amount").unwrap().base
+            };
+            assert_eq!(value(&project), 0.8);
+            assert_eq!(undo.undo_count(), 1);
+            assert!(undo.undo(&mut project));
+            assert_eq!(value(&project), 0.0);
+            assert!(undo.redo(&mut project));
+            assert_eq!(value(&project), 0.8);
+        }
     }
 
     fn scene_mapping_test_project() -> (manifold_core::project::Project, manifold_core::GraphTarget) {

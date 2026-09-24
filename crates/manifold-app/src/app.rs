@@ -1018,7 +1018,7 @@ impl Application {
                     self.needs_rebuild = true;
                 }
             }
-            TextInputField::InspectorParam => {
+            TextInputField::InspectorParam | TextInputField::EditorInspectorParam => {
                 if let Some(ctx) = self.text_input.inspector_param.take() {
                     // Lenient parse: keep only the numeric head so a value typed
                     // with a unit suffix (e.g. an angle "45°") still commits.
