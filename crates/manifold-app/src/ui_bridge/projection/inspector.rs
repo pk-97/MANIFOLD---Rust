@@ -55,7 +55,7 @@ fn rack_groups(
                     _ => group.name.clone(),
                 },
                 member_ids,
-                has_mask: group.mask_effect_id.is_some(),
+                mask_effect_id: group.mask_effect_id.clone(),
             })
         })
         .collect()

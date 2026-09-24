@@ -18,7 +18,7 @@ use crate::types::{
     PresetTypeId, TonemapCurve,
 };
 use crate::view::UiGraphTarget;
-use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, NodeId, ParamId};
+use manifold_foundation::{AudioSendId, Beats, ClipId, EffectId, LayerId, NodeId, ParamId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum AutomationShape {
@@ -878,6 +878,9 @@ pub enum RootAction {
         NodeId,
         crate::param_surface::ModifierObjectRef,
     ),
+    /// Preview the exact composable mask modifier shown in a masked group
+    /// header. The app resolves this effect id to the preview surface.
+    PreviewEffectMask(EffectId),
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write
     /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the

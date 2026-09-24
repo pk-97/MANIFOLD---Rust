@@ -44,7 +44,7 @@ use crate::frame_timer::FrameTimer;
 ///   (a fork or recalibrate), which can change the compositor-sourced
 ///   routings / default graph even when `version` didn't move.
 pub struct CachedGraphSnapshot {
-    pub target: manifold_core::GraphTarget,
+    pub target: Arc<manifold_core::GraphTarget>,
     pub preset_type: manifold_core::PresetTypeId,
     pub version: u32,
     pub fingerprint: u64,
@@ -1454,6 +1454,8 @@ impl ContentThread {
                 .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
             project_snapshot: snapshot,
             modulation_snapshot,
+            active_graph_target: active_graph_snapshot_arc.as_ref()
+                .and_then(|_| self.cached_graph_snapshot.as_ref().map(|cache| Arc::clone(&cache.target))),
             active_graph_snapshot: active_graph_snapshot_arc,
             node_preview_info: self.content_pipeline.node_preview_info(),
             live_node_params: self.content_pipeline.live_node_params(),
@@ -1531,7 +1533,7 @@ impl ContentThread {
 
         // Cache hit: identical target / type / version / catalog → clone Arc.
         if let Some(cache) = self.cached_graph_snapshot.as_ref()
-            && &cache.target == target
+            && cache.target.as_ref() == target
             && cache.preset_type == preset_type
             && cache.version == version
             && cache.fingerprint == fingerprint
@@ -1645,7 +1647,7 @@ impl ContentThread {
 
         let arc = Arc::new(snap);
         self.cached_graph_snapshot = Some(CachedGraphSnapshot {
-            target: target.clone(),
+            target: Arc::new(target.clone()),
             preset_type,
             version,
             fingerprint,

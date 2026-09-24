@@ -53,9 +53,9 @@ pub struct RackGroupConfig {
     pub id: EffectGroupId,
     pub name: String,
     pub member_ids: Vec<EffectId>,
-    /// Whether this group already contains a composable mask modifier.
-    /// Masked groups omit the group-header add-modifier affordance.
-    pub has_mask: bool,
+    /// The composable mask modifier in this group, when present.
+    /// Masked groups show a preview affordance instead of add-modifier.
+    pub mask_effect_id: Option<EffectId>,
 }
 
 // ── Tab strip ───────────────────────────────────────────────────
@@ -81,6 +81,8 @@ const KEY_ADD_MODIFIER_BTN: u64 = 95_002;
 /// be one instance per visible group; callers can use the structural query's
 /// `nth` selector when more than one group is present.
 const GROUP_ADD_MODIFIER_NAME: &str = "inspector.effect_group.add_modifier";
+/// Automation name for the group-header mask preview affordance.
+const GROUP_PREVIEW_MASK_NAME: &str = "inspector.effect_group.preview_mask";
 
 /// The "+ Add Modifier" button as a typed Chrome view — the same neutral kit
 /// button as "+ Add Effect" (`add_effect_button_view`), keyed separately so
@@ -281,6 +283,9 @@ pub struct InspectorCompositePanel {
     /// ids. Rebuilt each frame with the header nodes so intent registration
     /// cannot retain bindings to dead nodes after a structural rebuild.
     group_add_modifier_btns: Vec<(NodeId, EffectGroupId)>,
+    /// Live group-header preview-mask nodes, paired with the exact mask effect
+    /// ids captured by the projection.
+    group_preview_mask_btns: Vec<(NodeId, EffectId)>,
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's
     /// node id (layer scope only), and whether the current layer scope is a
     /// scene layer at all (the picker needs a live scene to offer kinds).
@@ -457,6 +462,7 @@ impl InspectorCompositePanel {
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
             group_add_modifier_btns: Vec::new(),
+            group_preview_mask_btns: Vec::new(),
             add_modifier_btn: None,
             show_add_modifier: false,
             // Set by `configure_gen_params`, which the app calls with the
@@ -1338,6 +1344,13 @@ impl Panel for InspectorCompositePanel {
                 *node_id,
                 crate::intent::Gesture::Click,
                 PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id.clone())),
+            );
+        }
+        for (node_id, effect_id) in &self.group_preview_mask_btns {
+            intents.on(
+                *node_id,
+                crate::intent::Gesture::Click,
+                PanelAction::Root(RootAction::PreviewEffectMask(effect_id.clone())),
             );
         }
         if self.master_chrome.node_count() > 0 {
