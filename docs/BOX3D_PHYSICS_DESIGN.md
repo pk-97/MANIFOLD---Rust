@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. General multi-set authoring, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. Imported rigid objects and edit-time splitting now use the same standard Box3D world in the local flower worktree; general multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -44,7 +44,7 @@ Physics Solids demo. The original larger design remains a roadmap.
   unsynchronized global registry. Worlds can move between threads but cannot be
   shared by reference. This is a correctness boundary, not a claim of concurrent
   multi-world performance. No UI or project state owns native handles.
-- `node.rigid_body` emits a typed immutable `RigidBody` description. Up to sixteen
+- `node.rigid_body` emits a typed immutable `RigidBody` description. Up to 64
   `body_N` inputs share one world; matching `pose_N` outputs are ordinary `Transform`
   values feeding existing `node.scene_object` and `node.render_scene`. This bounded
   single-object path makes five separately editable solids practical; it does not
@@ -133,7 +133,7 @@ the fixed floor and two ramps). The 4,000 ceiling is a bounded demo capacity, no
 real-time limit or a Box3D engine limit.
 
 The existing `node.physics_world` accepts an optional `copies` rigid-body
-prototype alongside its sixteen individual bodies. Copies share their native
+prototype alongside its 64 individual bodies. Copies share their native
 world and contacts. `copy_layout` selects the original centered Grid or a compact
 Pile: Pile caps its cube-root-derived row width at `copy_columns`, adds bounded
 position jitter, and varies each copy’s rotation with an index-seeded hash. Reset
@@ -147,7 +147,7 @@ buffer capacity. Unwired instance count preserves existing behavior.
 
 Physics timing covers CPU stepping and pose extraction, excludes rebuilding and
 GPU rendering, and sums worlds evaluated during the live content render. It is
-not the total frame cost. No photoscan fragmentation or sand simulation is added.
+not the total frame cost. The imported-object extension below adds bounded edit-time splitting; sand simulation remains outside this contract.
 
 Steady-state Rust stepping and pose reads use retained storage. A bounded
 release-mode CPU comparison on Apple arm64 (8 warmup and 8 measured ticks)
@@ -166,6 +166,44 @@ and a complete two-second graph render with initial/final images. The scene-pane
 flow covers body/world controls, speed edit/undo, and the Reset button. Physics-aware
 object add, duplication and removal are covered for the shipped root-level chains;
 arbitrary graph shapes and nested scene-panel discovery remain outside that contract.
+
+## Imported object physics (2026-09-24, local worktree)
+
+The experimental dynamic triangle-mesh collision code has been removed. The
+vendored Box3D collision and solver sources remain unchanged. Imported rigid
+glTF objects use the existing `node.rigid_body` and shared `node.physics_world`.
+The original visible triangles, normals, UVs and materials are preserved.
+
+Collider preparation uses the same file, mesh/material selection, fit, recenter
+and source offset as rendering. During asset warmup, spatial triangle partitions
+are cooked with the standard Box3D convex-hull builder, with at most 42 vertices
+per hull and 64 hull shapes per body. The default is 32 fitted hulls. Open scan
+surfaces receive a small explicit shell (0.1% of mesh extent) for solid collision
+volume. These are approximate colliders; exact triangle contact is not promised.
+Runtime scale applies to both geometry and collider. Loading holds physics time;
+preparation failures are visible errors, never a fallback bounding box.
+
+Scene actions enable/disable physics and split a supported imported object into
+eight independently rendered physical pieces. Splitting is an undoable authoring
+edit, not an impact trigger. It partitions original triangles without remeshing
+or adding cut caps. Each piece gets one standard hull and joins the same world.
+Skinned, deformed and unsupported graph sources reject the action. Enable/disable supports bare objects and importer object groups. Splitting supports
+importer groups and rejects already-split pieces; arbitrary graph topologies are not.
+Existing Fixed/Dynamic/Animated, mass, friction, bounce, World controls and
+transport reset remain the project workflow.
+
+A bounded optimized CPU measurement with the original 454,840-triangle tiger lily
+used 0.006 seconds to simulate six seconds intact, and 0.081 seconds for 32
+interacting pieces (0.224 ms mean, 1.042 ms p95, 12.777 ms maximum frame).
+Asset preparation was separate: 0.688 seconds intact and 7.251 seconds for the
+benchmark's sequential 32-piece preparation. These numbers exclude rendering
+and do not establish thousands-of-pieces or whole-project frame budgets.
+
+The focused Metal proof exercises production import, enable/split commands,
+save/reload, asynchronous preparation, visible motion and backward-time reset.
+CPU regressions cover original triangle/attribute preservation and the shared
+runtime's fixed-tick behaviour. The supported scale is a bounded creative scene,
+not a separate offline mesh simulation engine.
 
 ## 1. Audit — what exists (verified 2026-07-07)
 

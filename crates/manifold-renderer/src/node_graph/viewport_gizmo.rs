@@ -453,6 +453,8 @@ mod tests {
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
             skin: None,
+            physics: None,
+            physics_imported: false,
         }))
     }
 
@@ -531,6 +533,8 @@ mod tests {
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
             skin: None,
+            physics: None,
+            physics_imported: false,
         }));
         let scene = scene_with(vec![row]);
         let target = gizmo_target_for(&scene, 5).unwrap();

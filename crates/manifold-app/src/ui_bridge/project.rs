@@ -741,6 +741,50 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index) => {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let cmd = manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id.clone()),
+                    *render_scene_node_id,
+                    *object_index,
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+                    default,
+                ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"));
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() { ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                else if let Some(reason) = boxed.rejection_reason() { ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned())); }
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let cmd = manifold_editing::commands::graph::DisableSceneObjectPhysicsCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id.clone()), *render_scene_node_id, *object_index, default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() { ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                else if let Some(reason) = boxed.rejection_reason() { ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned())); }
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupSplitObject(layer_id, render_scene_node_id, object_index) => {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let cmd = manifold_editing::commands::graph::SplitSceneObjectCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id.clone()), *render_scene_node_id, *object_index,
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"), default,
+                ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"));
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() { ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                else if let Some(reason) = boxed.rejection_reason() { ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned())); }
+            }
+            DispatchResult::structural()
+        }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
         // effective def through the SAME SceneVm the panel builds, takes the
         // object's current translate as the focus point, and writes camera

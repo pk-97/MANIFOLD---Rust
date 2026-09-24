@@ -243,6 +243,12 @@ pub enum ProjectAction {
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
     /// existing `DuplicateSceneObjectCommand` (D11).
     SceneSetupDuplicateObject(LayerId, u32, u32),
+    /// Enable standard imported-object physics: `(layer_id, render_scene_node_id, object_index)`.
+    SceneSetupEnablePhysics(LayerId, u32, u32),
+    /// Disable standard imported-object physics.
+    SceneSetupDisablePhysics(LayerId, u32, u32),
+    /// Split one imported object into eight physics fragments.
+    SceneSetupSplitObject(LayerId, u32, u32),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
     /// Opens a native file dialog (the app's existing open-file plumbing,
     /// same `rfd::FileDialog` pattern as `ClipReplaceAudioClicked`) and, on

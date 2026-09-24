@@ -998,7 +998,31 @@ impl ScenePanel {
             obj_key(row.index, OBJ_OFF_REMOVE),
         );
         self.object_remove_ids.push((remove_id, row.index));
-        cy + ROW_H + ROW_GAP
+        let mut next_cy = cy + ROW_H + ROW_GAP;
+        if row.physics_imported {
+            let physics_id = tree.add_button_keyed(
+                Some(self.content_parent), inner_x, next_cy, inner_w, ROW_H,
+                btn_style(),
+                if row.physics_enabled { "Disable Physics" } else { "Enable Physics" },
+                obj_key(row.index, OBJ_OFF_PHYSICS),
+            );
+            if row.physics_enabled {
+                self.object_disable_physics_ids.push((physics_id, row.index));
+            } else {
+                self.object_enable_physics_ids.push((physics_id, row.index));
+            }
+            next_cy += ROW_H;
+            let split_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x, next_cy, inner_w, ROW_H,
+                btn_style(),
+                "Split into 8",
+                obj_key(row.index, OBJ_OFF_PHYSICS + 1),
+            );
+            self.object_split_ids.push((split_id, row.index));
+            next_cy += ROW_H;
+        }
+        next_cy + ROW_GAP
     }
 
     /// Object properties body: transform triplets, material quick knobs,

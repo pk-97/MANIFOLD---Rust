@@ -1,12 +1,13 @@
+//! Deterministic spatial partitions of original triangles, shared by scene splitting and collider preparation.
 use std::cmp::Ordering;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Fragment {
-    pub(super) vertices: Vec<[f32; 3]>,
-    pub(super) triangles: Vec<[u32; 3]>,
-    pub(super) triangle_ids: Vec<usize>,
-    pub(super) center: [f32; 3],
-    pub(super) area: f32,
+pub struct Fragment {
+    pub vertices: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub triangle_ids: Vec<usize>,
+    pub center: [f32; 3],
+    pub area: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -19,7 +20,7 @@ struct Group {
     triangle_ids: Vec<usize>,
 }
 
-pub(super) fn partition(
+pub fn partition(
     vertices: &[[f32; 3]],
     triangles: &[[u32; 3]],
     count: usize,

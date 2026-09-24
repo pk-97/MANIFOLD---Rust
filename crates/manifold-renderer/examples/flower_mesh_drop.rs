@@ -1,16 +1,18 @@
-//! One exact-mesh Box3D drop, saved as a GLB replay for MANIFOLD's existing importer.
+//! Standard Box3D convex-part flower drop, saved as a GLB replay.
 //! Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset [pieces]]
 //! Beat offsets start at zero; `120 4` places impact at two seconds.
-//! Original geometry/materials are preserved. No scan collider proxies or mesh reduction.
+//! Original visible geometry/materials are preserved; physics uses fitted convex parts.
 
 use std::{borrow::Cow, error::Error, fs, path::Path};
 
+use bytemuck::Zeroable;
 use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
+use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::node_graph::physics_mesh::prepare_colliders;
 use serde_json::{Value, json};
 
-#[path = "flower_mesh_drop/fracture.rs"]
-mod fracture;
+use manifold_renderer::node_graph::mesh_partition as fracture;
 
 struct Contributor {
     primitive: Value,
@@ -33,7 +35,7 @@ const IDENTITY: Mat4 = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-const CONTACT_HZ: u32 = 240;
+const CONTACT_HZ: u32 = 60;
 
 #[derive(Clone, Copy)]
 struct MusicalTiming {
@@ -255,9 +257,6 @@ fn slab() -> [[f32; 3]; 8] {
 
 fn floor_world() -> Result<PhysicsWorld, Box<dyn Error>> {
     let mut world = PhysicsWorld::new([0.0, -9.81, 0.0])?;
-    // Exact scan surfaces need firmer contact than the native 30 Hz default
-    // when fast fragments pile up. The small physics steps support this tuning.
-    world.set_contact_tuning(120.0, 10.0, 3.0)?;
     world.add_hull(
         &slab(),
         BodyConfig {
@@ -388,17 +387,37 @@ fn run(
     let fragments = pieces
         .map(|count| fracture::partition(&vertices, &triangles, count))
         .transpose()?;
+    let hulls_for = |vertices: &[[f32; 3]], triangles: &[[u32; 3]], parts| {
+        let mesh: Vec<_> = triangles
+            .iter()
+            .flat_map(|tri| {
+                tri.iter().map(|&index| MeshVertex {
+                    position: vertices[index as usize],
+                    ..MeshVertex::zeroed()
+                })
+            })
+            .collect();
+        prepare_colliders(&mesh, parts)
+    };
+    let collider = hulls_for(&vertices, &triangles, 32)?;
+    let fragment_colliders = fragments
+        .as_ref()
+        .map(|fragments| {
+            fragments
+                .iter()
+                .map(|f| hulls_for(&f.vertices, &f.triangles, 1))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
     let mut world = floor_world()?;
-    let body = world.add_triangle_mesh(&vertices, &triangles, config)?;
+    let body = world.add_hulls(&collider.hulls, config)?;
     world.set_hit_events(body, true)?;
     eprintln!(
-        "Exact scan collider: {} vertices, {} triangles; longest dimension 2.2 m; 1 m drop. Uniform surface mass, no collider approximation.",
+        "Original scan: {} vertices, {} triangles; 32 standard convex colliders; longest dimension 2.2 m; 1 m drop.",
         vertices.len(),
         triangles.len()
     );
-    // Upper pieces fall farther than the original lowest point. Mesh CCD is
-    // unsupported, so refresh more frequently for their faster floor impacts.
-    let contact_hz = if pieces.is_some() { 960 } else { CONTACT_HZ };
+    let contact_hz = CONTACT_HZ;
     let mut times = Vec::new();
     let mut tracks: Vec<Track> = (0..pieces.unwrap_or(1)).map(|_| Track::default()).collect();
     let mut fragment_bodies = Vec::new();
@@ -422,10 +441,11 @@ fn run(
                     let angular = world.angular_velocity(body)?;
                     let area: f32 = fragments.iter().map(|fragment| fragment.area).sum();
                     let mut broken_world = floor_world()?;
-                    for fragment in fragments {
-                        let handle = broken_world.add_triangle_mesh(
-                            &fragment.vertices,
-                            &fragment.triangles,
+                    for (fragment, collider) in
+                        fragments.iter().zip(fragment_colliders.as_ref().unwrap())
+                    {
+                        let handle = broken_world.add_hulls(
+                            &collider.hulls,
                             BodyConfig {
                                 position: pose.position,
                                 rotation: pose.rotation,
@@ -445,7 +465,7 @@ fn run(
                     // The intact body no longer exists in the active simulation.
                     world = broken_world;
                     eprintln!(
-                        "Released {} exact surface pieces at first impact; inherited motion; floor and piece-to-piece collisions enabled.",
+                        "Released {} original surface pieces with standard convex colliders at first impact; inherited motion; mutual collisions enabled.",
                         fragments.len()
                     );
                 }
@@ -532,7 +552,7 @@ fn run(
         if fragment_bodies.is_empty() {
             return Err("No impact detected to release the pieces".into());
         }
-        doc["extras"]["flowerFracture"] = json!({"pieces":fragments.len(),"sourceTriangles":triangles.len(),"pieceCollisions":true,"method":"original triangle surface patches","addedImpulse":0});
+        doc["extras"]["flowerFracture"] = json!({"pieces":fragments.len(),"sourceTriangles":triangles.len(),"pieceCollisions":true,"method":"original triangle surface patches", "colliders":"standard Box3D convex hulls","addedImpulse":0});
         fragment_nodes(&mut doc, &mut bin, fragments, &contributors, scale, offset)
     } else {
         let normalized = append(

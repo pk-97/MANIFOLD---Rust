@@ -14,6 +14,17 @@ use std::sync::{Mutex, MutexGuard};
 
 mod ffi {
     unsafe extern "C" {
+        pub fn manifold_box3d_cook_hull(
+            points: *const f32,
+            point_count: i32,
+            max_vertex_count: i32,
+        ) -> usize;
+        pub fn manifold_box3d_hull_copy_points(
+            hull: usize,
+            points_out: *mut f32,
+            capacity: i32,
+        ) -> i32;
+        pub fn manifold_box3d_destroy_hull(hull: usize);
         pub fn manifold_box3d_world_create(gx: f32, gy: f32, gz: f32) -> u32;
         pub fn manifold_box3d_world_destroy(world: u32);
         pub fn manifold_box3d_world_set_gravity(world: u32, gx: f32, gy: f32, gz: f32);
@@ -25,10 +36,12 @@ mod ffi {
             speed: f32,
         );
         pub fn manifold_box3d_world_step(world: u32, dt: f32, substeps: u32);
-        pub fn manifold_box3d_body_create(
+        pub fn manifold_box3d_body_create_hulls(
             world: u32,
             points: *const f32,
-            point_count: i32,
+            point_counts: *const i32,
+            hull_count: i32,
+            max_vertex_count: i32,
             kind: i32,
             px: f32,
             py: f32,
@@ -111,7 +124,6 @@ mod ffi {
             time_step: f32,
         ) -> i32;
         pub fn manifold_box3d_body_pose(body: u64, position: *mut f32, rotation: *mut f32) -> i32;
-        pub fn manifold_box3d_destroy_hull(hull: usize);
         pub fn manifold_box3d_destroy_mesh(mesh: usize);
     }
 }
@@ -198,6 +210,9 @@ pub struct BodyPose {
     pub rotation: [f32; 4],
 }
 
+const MAX_BODY_HULLS: usize = 64;
+const COOKED_HULL_MAX_VERTICES: i32 = 42;
+
 /// An opaque body reference tied to the world that created it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BodyHandle {
@@ -211,7 +226,7 @@ struct BodyRecord {
 }
 
 enum OwnedGeometry {
-    Hull(usize),
+    Hulls(Vec<usize>),
     Mesh(usize),
 }
 
@@ -222,6 +237,51 @@ pub struct PhysicsWorld {
     bodies: Vec<BodyRecord>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
+}
+
+/// Cook a point cloud into a compact convex hull using Box3D's standard
+/// builder. This is intended for background asset preparation before a world
+/// is rebuilt; it does not create a body or retain native state.
+/// The standard 42 vertex budget is applied by the builder itself. This keeps
+/// the upstream half-edge limit safe even for a fully triangulated hull.
+pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
+    if points.len() < 4 {
+        return Err(PhysicsError::InvalidInput("hull needs at least 4 points"));
+    }
+    if points.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
+        return Err(PhysicsError::InvalidInput("hull points must be finite"));
+    }
+    let point_count = i32::try_from(points.len())
+        .map_err(|_| PhysicsError::InvalidInput("too many hull points"))?;
+    let _lock = native_lock();
+    let hull = unsafe {
+        ffi::manifold_box3d_cook_hull(
+            points.as_ptr().cast::<f32>(),
+            point_count,
+            COOKED_HULL_MAX_VERTICES,
+        )
+    };
+    if hull == 0 {
+        return Err(PhysicsError::NativeAllocation);
+    }
+    let count = unsafe { ffi::manifold_box3d_hull_copy_points(hull, std::ptr::null_mut(), 0) };
+    if count < 4 {
+        unsafe { ffi::manifold_box3d_destroy_hull(hull) };
+        return Err(PhysicsError::NativeFailure);
+    }
+    let mut cooked = vec![[0.0; 3]; count as usize];
+    let copied = unsafe {
+        ffi::manifold_box3d_hull_copy_points(
+            hull,
+            cooked.as_mut_ptr().cast::<f32>(),
+            count,
+        )
+    };
+    unsafe { ffi::manifold_box3d_destroy_hull(hull) };
+    if copied != count {
+        return Err(PhysicsError::NativeFailure);
+    }
+    Ok(cooked)
 }
 
 impl PhysicsWorld {
@@ -259,18 +319,81 @@ impl PhysicsWorld {
         {
             return Err(PhysicsError::InvalidInput("hull points must be finite"));
         }
+        self.add_hull_batch(&[points], config, 255)
+    }
+
+    /// Add several convex hulls as collision shapes on one body.
+    ///
+    /// Each input hull is cooked by Box3D's standard convex hull builder. The
+    /// batch form accepts large point clouds; the native builder retains at
+    /// most 128 output vertices per hull while preserving the original point
+    /// positions used for cooking. A body may contain at most 64 hull shapes.
+    pub fn add_hulls(
+        &mut self,
+        hulls: &[Vec<[f32; 3]>],
+        config: BodyConfig,
+    ) -> Result<BodyHandle, PhysicsError> {
+        let config = validate_config(config)?;
+        if hulls.is_empty() {
+            return Err(PhysicsError::InvalidInput("body needs at least one hull"));
+        }
+        if hulls.len() > MAX_BODY_HULLS {
+            return Err(PhysicsError::InvalidInput("body supports at most 64 hulls"));
+        }
+        for hull in hulls {
+            if hull.len() < 4 {
+                return Err(PhysicsError::InvalidInput("hull needs at least 4 points"));
+            }
+            if hull.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
+                return Err(PhysicsError::InvalidInput("hull points must be finite"));
+            }
+        }
+        let hull_refs: Vec<&[[f32; 3]]> = hulls.iter().map(Vec::as_slice).collect();
+        self.add_hull_batch(&hull_refs, config, 128)
+    }
+
+    fn add_hull_batch(
+        &mut self,
+        hulls: &[&[[f32; 3]]],
+        config: BodyConfig,
+        max_vertex_count: i32,
+    ) -> Result<BodyHandle, PhysicsError> {
+        if hulls.len() > i32::MAX as usize {
+            return Err(PhysicsError::InvalidInput("too many hulls"));
+        }
+        let mut point_counts = Vec::with_capacity(hulls.len());
+        let mut total_points = 0usize;
+        for hull in hulls {
+            let point_count = i32::try_from(hull.len())
+                .map_err(|_| PhysicsError::InvalidInput("too many hull points"))?;
+            point_counts.push(point_count);
+            total_points = total_points
+                .checked_add(hull.len())
+                .ok_or(PhysicsError::InvalidInput("too many hull points"))?;
+        }
+        let flat_len = total_points
+            .checked_mul(3)
+            .ok_or(PhysicsError::InvalidInput("too many hull points"))?;
+        let mut flat_points = Vec::with_capacity(flat_len);
+        for hull in hulls {
+            for point in *hull {
+                flat_points.extend_from_slice(point);
+            }
+        }
+
         let index = self.bodies.len();
         if index > u32::MAX as usize {
             return Err(PhysicsError::NativeAllocation);
         }
-
-        let mut owned_hull = 0usize;
+        let mut owned_hulls = vec![0usize; hulls.len()];
         let _lock = native_lock();
         let native = unsafe {
-            ffi::manifold_box3d_body_create(
+            ffi::manifold_box3d_body_create_hulls(
                 self.native,
-                points.as_ptr().cast::<f32>(),
-                points.len() as i32,
+                flat_points.as_ptr(),
+                point_counts.as_ptr(),
+                hulls.len() as i32,
+                max_vertex_count,
                 config.kind.native_value(),
                 config.position[0],
                 config.position[1],
@@ -282,16 +405,16 @@ impl PhysicsWorld {
                 config.mass,
                 config.friction,
                 config.restitution,
-                &mut owned_hull,
+                owned_hulls.as_mut_ptr(),
             )
         };
-        if native == 0 || owned_hull == 0 {
+        if native == 0 || owned_hulls.contains(&0) {
             return Err(PhysicsError::NativeAllocation);
         }
 
         self.bodies.push(BodyRecord {
             native,
-            owned_geometry: OwnedGeometry::Hull(owned_hull),
+            owned_geometry: OwnedGeometry::Hulls(owned_hulls),
         });
         Ok(BodyHandle {
             provenance: self.provenance,
@@ -299,14 +422,11 @@ impl PhysicsWorld {
         })
     }
 
-    /// Add a body whose collision shape is the supplied triangle mesh.
+    /// Add a fixed body whose collision shape is the supplied triangle mesh.
     ///
-    /// Mesh vertices and triangle indices are retained as supplied. Box3D's
-    /// mesh builder rejects any triangle it considers degenerate, so this
-    /// method rejects the whole input if that would discard geometry.
-    /// Moving meshes use two-sided surface contact against hulls and other meshes.
-    /// Continuous collision detection for meshes is not supported; bound motion
-    /// per outer step to stay within the native speculative contact margin.
+    /// Box3D's standard mesh shape is static terrain geometry. Dynamic and
+    /// animated mesh bodies are rejected explicitly; use `add_hulls` for
+    /// movable convex geometry.
     pub fn add_triangle_mesh(
         &mut self,
         vertices: &[[f32; 3]],
@@ -314,6 +434,11 @@ impl PhysicsWorld {
         config: BodyConfig,
     ) -> Result<BodyHandle, PhysicsError> {
         let config = validate_config(config)?;
+        if config.kind != BodyKind::Fixed {
+            return Err(PhysicsError::InvalidInput(
+                "triangle meshes only support fixed bodies",
+            ));
+        }
         let (center, inertia) = triangle_mesh_mass_properties(vertices, triangles, config.mass)?;
         if vertices.len() > i32::MAX as usize {
             return Err(PhysicsError::InvalidInput("too many mesh vertices"));
@@ -444,12 +569,11 @@ impl PhysicsWorld {
         move_pose: bool,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
-        if matches!(
-            &self.body_record(handle)?.owned_geometry,
-            OwnedGeometry::Mesh(_)
-        ) {
+        if matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Mesh(_))
+            && config.kind != BodyKind::Fixed
+        {
             return Err(PhysicsError::InvalidInput(
-                "triangle mesh bodies do not support body updates",
+                "triangle meshes only support fixed bodies",
             ));
         }
         let native = self.native_body(handle)?;
@@ -471,10 +595,10 @@ impl PhysicsWorld {
                 i32::from(move_pose),
             )
         };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(PhysicsError::NativeFailure)
+        match result {
+            0 => Ok(()),
+            4 => Err(PhysicsError::InvalidInput("body supports at most 64 shapes")),
+            _ => Err(PhysicsError::NativeFailure),
         }
     }
 
@@ -684,7 +808,11 @@ impl Drop for PhysicsWorld {
         for body in &self.bodies {
             unsafe {
                 match &body.owned_geometry {
-                    OwnedGeometry::Hull(hull) => ffi::manifold_box3d_destroy_hull(*hull),
+                    OwnedGeometry::Hulls(hulls) => {
+                        for hull in hulls {
+                            ffi::manifold_box3d_destroy_hull(*hull);
+                        }
+                    }
                     OwnedGeometry::Mesh(mesh) => ffi::manifold_box3d_destroy_mesh(*mesh),
                 }
             }
@@ -883,60 +1011,6 @@ mod tests {
         ]
     }
 
-    fn concave_plate() -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
-        let mut vertices = Vec::new();
-        let mut triangles = Vec::new();
-        let mut add_rectangle = |x_min: f32,
-                                 x_max: f32,
-                                 z_min: f32,
-                                 z_max: f32,
-                                 x_subdivisions: u32,
-                                 z_subdivisions: u32| {
-            let base = vertices.len() as u32;
-            for z in 0..=z_subdivisions {
-                let z_fraction = z as f32 / z_subdivisions as f32;
-                for x in 0..=x_subdivisions {
-                    let x_fraction = x as f32 / x_subdivisions as f32;
-                    vertices.push([
-                        x_min + (x_max - x_min) * x_fraction,
-                        0.0,
-                        z_min + (z_max - z_min) * z_fraction,
-                    ]);
-                }
-            }
-            let row_stride = x_subdivisions + 1;
-            for z in 0..z_subdivisions {
-                for x in 0..x_subdivisions {
-                    let lower_left = base + z * row_stride + x;
-                    let lower_right = lower_left + 1;
-                    let upper_left = lower_left + row_stride;
-                    let upper_right = upper_left + 1;
-                    triangles.push([lower_left, lower_right, upper_right]);
-                    triangles.push([lower_left, upper_right, upper_left]);
-                }
-            }
-        };
-        add_rectangle(-1.0, 0.0, -1.0, 1.0, 12, 20);
-        add_rectangle(0.0, 1.0, -1.0, 0.0, 20, 12);
-        (vertices, triangles)
-    }
-
-    fn rotate_point(rotation: [f32; 4], point: [f32; 3]) -> [f32; 3] {
-        let [x, y, z, w] = rotation;
-        let [px, py, pz] = point;
-        [
-            (1.0 - 2.0 * (y * y + z * z)) * px
-                + 2.0 * (x * y - z * w) * py
-                + 2.0 * (x * z + y * w) * pz,
-            2.0 * (x * y + z * w) * px
-                + (1.0 - 2.0 * (x * x + z * z)) * py
-                + 2.0 * (y * z - x * w) * pz,
-            2.0 * (x * z - y * w) * px
-                + 2.0 * (y * z + x * w) * py
-                + (1.0 - 2.0 * (x * x + y * y)) * pz,
-        ]
-    }
-
     #[test]
     fn free_fall_is_close_to_analytic_solution() {
         let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
@@ -1000,118 +1074,39 @@ mod tests {
     }
 
     #[test]
-    fn triangle_mesh_rejects_malformed_input() {
-        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
-        assert!(
-            world
-                .add_triangle_mesh(
-                    &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
-                    &[[0, 1, 2]],
-                    BodyConfig::default(),
-                )
-                .is_err()
-        );
-        assert!(
-            world
-                .add_triangle_mesh(
-                    &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-                    &[[0, 1, 4]],
-                    BodyConfig::default(),
-                )
-                .is_err()
-        );
-        assert!(
-            world
-                .add_triangle_mesh(
-                    &[[f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-                    &[[0, 1, 2]],
-                    BodyConfig::default(),
-                )
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn triangle_mesh_retains_positive_area_scan_detail() {
-        let mut world = PhysicsWorld::new([0.0, 0.0, 0.0]).unwrap();
-        world
-            .add_triangle_mesh(
-                &[
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.5, 0.5, 0.0],
-                    [0.5001, 0.5, 0.0],
-                    [0.5, 0.5001, 0.0],
-                ],
-                &[[0, 1, 2], [3, 4, 5]],
-                BodyConfig::default(),
-            )
-            .expect("positive-area triangles must survive the native builder unchanged");
-    }
-
-    #[test]
-    fn moving_triangle_near_large_floor_does_not_create_sideways_impulse() {
-        // The terrain-only manifold used to select the triangle's nearly
-        // vertical plane and report roughly ten metres of overlap with this
-        // floor, although the entire triangle is above it. These are the
-        // tiger-lily triangle's coordinates at the first observed impact.
-        for triangle in [[0, 1, 2], [0, 2, 1]] {
-            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
-            let floor: [[f32; 3]; 8] = std::array::from_fn(|i| {
-                [
-                    if i & 1 == 0 { -10.0 } else { 10.0 },
-                    if i & 2 == 0 { -0.2 } else { 0.0 },
-                    if i & 4 == 0 { -10.0 } else { 10.0 },
-                ]
-            });
-            world
-                .add_hull(
-                    &floor,
-                    BodyConfig {
-                        kind: BodyKind::Fixed,
-                        ..BodyConfig::default()
-                    },
-                )
-                .unwrap();
-            let body = world
-                .add_triangle_mesh(
-                    &[
-                        [0.184_325_37, 0.015_924_633, -0.068_452_97],
-                        [0.188_043_65, 0.013_557_076, -0.068_199_45],
-                        [0.187_599_93, 0.016_908_705, -0.068_266_12],
-                    ],
-                    &[triangle],
-                    BodyConfig::default(),
-                )
-                .unwrap();
-            for _ in 0..8 {
-                world.step(Seconds(1.0 / 240.0), 4).unwrap();
+    fn cook_hull_reduces_large_point_cloud_with_standard_builder() {
+        let mut points = Vec::new();
+        for latitude in 1..=24 {
+            let polar = std::f32::consts::PI * latitude as f32 / 25.0;
+            for longitude in 0..48 {
+                let azimuth = std::f32::consts::TAU * longitude as f32 / 48.0;
+                points.push([
+                    polar.sin() * azimuth.cos(),
+                    polar.cos(),
+                    polar.sin() * azimuth.sin(),
+                ]);
             }
-            let velocity = world.linear_velocity(body).unwrap();
-            assert!(
-                velocity.iter().all(|v| v.abs() < 1e-5),
-                "separated triangle acquired velocity: {velocity:?}, winding {triangle:?}"
-            );
         }
+        let cooked = cook_hull(&points).unwrap();
+        assert!((4..=COOKED_HULL_MAX_VERTICES as usize).contains(&cooked.len()));
     }
 
     #[test]
-    fn dynamic_concave_mesh_contacts_floor_and_rotates() {
+    fn multi_hull_body_uses_one_pose_and_rejects_invalid_batches_without_leaks() {
         let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
         let floor = vec![
-            [-3.0, -0.1, -3.0],
-            [3.0, -0.1, -3.0],
-            [3.0, 0.1, -3.0],
-            [-3.0, 0.1, -3.0],
-            [-3.0, -0.1, 3.0],
-            [3.0, -0.1, 3.0],
-            [3.0, 0.1, 3.0],
-            [-3.0, 0.1, 3.0],
+            [-5.0, -0.5, -5.0],
+            [5.0, -0.5, -5.0],
+            [5.0, 0.5, -5.0],
+            [-5.0, 0.5, -5.0],
+            [-5.0, -0.5, 5.0],
+            [5.0, -0.5, 5.0],
+            [5.0, 0.5, 5.0],
+            [-5.0, 0.5, 5.0],
         ];
         world
-            .add_hull(
-                &floor,
+            .add_hulls(
+                &[floor],
                 BodyConfig {
                     kind: BodyKind::Fixed,
                     mass: 0.0,
@@ -1119,78 +1114,34 @@ mod tests {
                 },
             )
             .unwrap();
-        world
-            .add_hull(
-                &[
-                    [0.4, 0.1, 0.6],
-                    [0.6, 0.1, 0.6],
-                    [0.6, 0.5, 0.6],
-                    [0.4, 0.5, 0.6],
-                    [0.4, 0.1, 0.8],
-                    [0.6, 0.1, 0.8],
-                    [0.6, 0.5, 0.8],
-                    [0.4, 0.5, 0.8],
-                ],
+        assert!(world.add_hulls(&[vec![[0.0; 3]; 3]], BodyConfig::default()).is_err());
+        assert_eq!(
+            world.add_hulls(&vec![cube(0.1); MAX_BODY_HULLS + 1], BodyConfig::default()),
+            Err(PhysicsError::InvalidInput("body supports at most 64 hulls"))
+        );
+
+        let left = cube(0.5)
+            .into_iter()
+            .map(|[x, y, z]| [x - 1.0, y, z])
+            .collect();
+        let right = cube(0.5)
+            .into_iter()
+            .map(|[x, y, z]| [x + 1.0, y, z])
+            .collect();
+        let body = world
+            .add_hulls(
+                &[left, right],
                 BodyConfig {
-                    kind: BodyKind::Fixed,
-                    mass: 0.0,
+                    position: [0.0, 3.0, 0.0],
                     ..BodyConfig::default()
                 },
             )
             .unwrap();
-        let (vertices, triangles) = concave_plate();
-        assert!(triangles.len() > 256);
-        let mesh = world
-            .add_triangle_mesh(
-                &vertices,
-                &triangles,
-                BodyConfig {
-                    position: [0.15, 1.5, 0.0],
-                    rotation: [0.2, 0.0, 0.0, 1.0],
-                    ..BodyConfig::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            world.set_bullet(mesh, true),
-            Err(PhysicsError::InvalidInput(
-                "bullet is unsupported for triangle meshes"
-            ))
-        );
-        assert_eq!(
-            world.update_body(mesh, BodyConfig::default(), false),
-            Err(PhysicsError::InvalidInput(
-                "triangle mesh bodies do not support body updates"
-            ))
-        );
-        let initial = world.pose(mesh).unwrap();
-        for _ in 0..180 {
+        for _ in 0..240 {
             world.step(Seconds(1.0 / 60.0), 4).unwrap();
         }
-        let final_pose = world.pose(mesh).unwrap();
-        let lowest_vertex = vertices
-            .iter()
-            .map(|vertex| final_pose.position[1] + rotate_point(final_pose.rotation, *vertex)[1])
-            .fold(f32::INFINITY, f32::min);
-        assert!(
-            (0.1..0.15).contains(&lowest_vertex),
-            "mesh lost its floor gap or hit the concavity post: y={lowest_vertex}, {final_pose:?}"
-        );
-        let velocity = world.linear_velocity(mesh).unwrap();
-        assert!(
-            velocity.iter().all(|component| component.abs() < 0.1),
-            "mesh did not settle on the floor: {velocity:?}"
-        );
-        let rotation_delta = initial
-            .rotation
-            .iter()
-            .zip(final_pose.rotation)
-            .map(|(before, after)| (before - after).abs())
-            .sum::<f32>();
-        assert!(
-            rotation_delta > 0.05,
-            "mesh did not rotate in response to contact: {initial:?} -> {final_pose:?}"
-        );
+        let pose = world.pose(body).unwrap();
+        assert!((pose.position[1] - 1.0).abs() < 0.08, "body settled at {pose:?}");
     }
 
     #[test]
@@ -1962,6 +1913,3 @@ mod tests {
         assert_eq!(stream(), stream());
     }
 }
-
-#[cfg(test)]
-mod mesh_pair_tests;

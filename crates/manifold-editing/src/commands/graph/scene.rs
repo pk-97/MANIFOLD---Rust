@@ -12,8 +12,8 @@ use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
-    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef,
-    PresetMetadata, SerializedParamValue, StringBindingDef,
+    GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
+    InterfacePortDef, ParamSpecDef, PresetMetadata, SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
@@ -1406,7 +1406,10 @@ fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Opti
         .map(|w| w.from_node)
 }
 
-const PHYSICS_BODY_SLOTS: u32 = 16;
+// Keep authoring in lock-step with the runtime world.  The graph schema is
+// intentionally sparse (only occupied ports are serialized), so increasing
+// this limit does not change existing documents.
+const PHYSICS_BODY_SLOTS: u32 = 64;
 
 #[derive(Debug, Clone)]
 struct PhysicsSceneObject {
@@ -1416,6 +1419,7 @@ struct PhysicsSceneObject {
     transform_id: u32,
     object_id: u32,
     owned_ids: Vec<u32>,
+    grouped: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1467,6 +1471,9 @@ fn physics_scene_object_match(
     let Some(object) = nodes.iter().find(|node| node.id == object_id) else {
         return PhysicsSceneObjectMatch::Malformed("Physics object node is unavailable");
     };
+    if object.type_id == GROUP_TYPE_ID && object.group.is_some() {
+        return grouped_physics_scene_object_match(nodes, wires, render_id, object_index, object);
+    }
     if object.type_id != "node.scene_object" {
         return PhysicsSceneObjectMatch::NotPhysics;
     }
@@ -1670,6 +1677,134 @@ fn physics_scene_object_match(
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,
+        grouped: false,
+    })
+}
+
+fn grouped_physics_scene_object_match(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    render_id: u32,
+    object_index: u32,
+    group_node: &EffectGraphNode,
+) -> PhysicsSceneObjectMatch {
+    let Some(group) = group_node.group.as_deref() else {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    };
+    let Some(object) = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.scene_object")
+    else {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    };
+    let Some(output) = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+    else {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    };
+    let Some(input) = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+    else {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    };
+    let Some(body_output) = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == output.id && wire.to_port == "body")
+    else {
+        return PhysicsSceneObjectMatch::NotPhysics;
+    };
+    let Some(body) = group
+        .nodes
+        .iter()
+        .find(|node| node.id == body_output.from_node && node.type_id == "node.rigid_body")
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group body node is unavailable");
+    };
+    let Some(_pose_wire) = group.wires.iter().find(|wire| {
+        wire.from_node == input.id
+            && wire.from_port == "pose"
+            && wire.to_node == object.id
+            && wire.to_port == "transform"
+    }) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group pose input is malformed");
+    };
+    let Some(authored_wire) = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == body.id && wire.to_port == "transform")
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group authored transform is missing");
+    };
+    let Some(authored) = group
+        .nodes
+        .iter()
+        .find(|node| node.id == authored_wire.from_node && node.type_id == "node.transform_3d")
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group authored transform is malformed");
+    };
+    let Some(object_wire) = wires.iter().find(|wire| {
+        wire.from_node == group_node.id
+            && wire.from_port == "object"
+            && wire.to_node == render_id
+            && wire.to_port == format!("object_{object_index}")
+    }) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group render output is malformed");
+    };
+    let _ = object_wire;
+    let Some(body_wire) = wires
+        .iter()
+        .find(|wire| wire.from_node == group_node.id && wire.from_port == "body")
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group body output is missing");
+    };
+    let Some(world) = nodes
+        .iter()
+        .find(|node| node.id == body_wire.to_node && node.type_id == "node.physics_world")
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group world is unavailable");
+    };
+    let Some(body_slot) = body_wire
+        .to_port
+        .strip_prefix("body_")
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group body slot is malformed");
+    };
+    if body_slot >= PHYSICS_BODY_SLOTS {
+        return PhysicsSceneObjectMatch::Malformed("Physics group body slot is out of range");
+    }
+    let Some(pose_root_wire) = wires.iter().find(|wire| {
+        wire.from_node == world.id
+            && wire.from_port == format!("pose_{body_slot}")
+            && wire.to_node == group_node.id
+            && wire.to_port == "pose"
+    }) else {
+        return PhysicsSceneObjectMatch::Malformed("Physics group pose output is missing");
+    };
+    let _ = pose_root_wire;
+    let body_port = format!("body_{body_slot}");
+    if wires
+        .iter()
+        .filter(|wire| wire.to_node == world.id && wire.to_port == body_port)
+        .count()
+        != 1
+    {
+        return PhysicsSceneObjectMatch::Malformed("Physics group body slot is duplicated");
+    }
+    PhysicsSceneObjectMatch::Valid(PhysicsSceneObject {
+        world_id: world.id,
+        body_slot,
+        copies: false,
+        transform_id: authored.id,
+        object_id: group_node.id,
+        owned_ids: vec![group_node.id],
+        grouped: true,
     })
 }
 
@@ -1983,6 +2118,7 @@ fn physics_copies_scene_object_match(
         transform_id: authored_transform.id,
         object_id: object.id,
         owned_ids,
+        grouped: false,
     })
 }
 
@@ -1995,6 +2131,1663 @@ fn first_free_physics_body_slot(wires: &[EffectGraphWire], world_id: u32) -> Opt
                 || (wire.from_node == world_id && wire.from_port == pose_port)
         })
     })
+}
+
+/// The source and authored-transform facts needed by the standard imported
+/// object authoring commands.  Keeping this discovery local to editing is
+/// deliberate: the renderer VM is a read model, while commands must validate
+/// the graph again on the content thread before changing it.
+#[derive(Debug, Clone)]
+struct ImportedPhysicsSource {
+    node_id: NodeId,
+    params: BTreeMap<String, SerializedParamValue>,
+    scope_is_group: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ImportedObjectParts {
+    producer_id: u32,
+    object_id: u32,
+    group_id: Option<u32>,
+    authored_transform_id: u32,
+    source: ImportedPhysicsSource,
+    object_handle: String,
+}
+
+const IMPORTED_SOURCE_PARAMS: &[&str] = &[
+    "path",
+    "mesh_index",
+    "primitive_index",
+    "material_index",
+    "fit",
+    "recenter",
+    "translate_x",
+    "translate_y",
+    "translate_z",
+    "fragment_count",
+    "fragment_index",
+];
+
+fn source_param_default(name: &str) -> SerializedParamValue {
+    match name {
+        "path" => SerializedParamValue::String {
+            value: String::new(),
+        },
+        "fit" => SerializedParamValue::Enum { value: 0 },
+        "recenter" => SerializedParamValue::Bool { value: true },
+        "mesh_index" | "primitive_index" | "material_index" => {
+            SerializedParamValue::Int { value: -1 }
+        }
+        "fragment_count" => SerializedParamValue::Int { value: 1 },
+        "fragment_index" => SerializedParamValue::Int { value: 0 },
+        _ if name.starts_with("translate_") => SerializedParamValue::Float { value: 0.0 },
+        _ => SerializedParamValue::Float { value: 0.0 },
+    }
+}
+
+fn object_node_in_group(group: &GroupDef) -> Option<u32> {
+    let output = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)?;
+    let object_wire = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == output.id && wire.to_port == "object")?;
+    let object = group
+        .nodes
+        .iter()
+        .find(|node| node.id == object_wire.from_node)?;
+    (object.type_id == "node.scene_object").then_some(object.id)
+}
+
+fn authored_transform_in_level(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    object_id: u32,
+) -> Result<u32, &'static str> {
+    let Some(wire) = wires
+        .iter()
+        .find(|wire| wire.to_node == object_id && wire.to_port == "transform")
+    else {
+        return Err("Enable Physics requires an authored transform");
+    };
+    let node = nodes
+        .iter()
+        .find(|node| node.id == wire.from_node)
+        .ok_or("Enable Physics authored transform is unavailable")?;
+    if node.type_id == "node.transform_3d" && wire.from_port == "transform" {
+        return Ok(node.id);
+    }
+    let body_id = if node.type_id == GROUP_INPUT_TYPE_ID && wire.from_port == "pose" {
+        let output = nodes
+            .iter()
+            .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+            .ok_or("Missing group output")?;
+        wires
+            .iter()
+            .find(|w| w.to_node == output.id && w.to_port == "body")
+            .map(|w| w.from_node)
+    } else if node.type_id == "node.physics_world" {
+        wire.from_port.strip_prefix("pose_").and_then(|slot| {
+            wires
+                .iter()
+                .find(|w| w.to_node == node.id && w.to_port == format!("body_{slot}"))
+                .map(|w| w.from_node)
+        })
+    } else {
+        None
+    }
+    .ok_or("Enable Physics supports a direct authored transform only")?;
+    if !nodes
+        .iter()
+        .any(|n| n.id == body_id && n.type_id == "node.rigid_body")
+    {
+        return Err("Invalid physics body");
+    }
+    let source = wires
+        .iter()
+        .find(|w| w.to_node == body_id && w.to_port == "transform")
+        .ok_or("Missing body transform")?;
+    nodes
+        .iter()
+        .find(|n| n.id == source.from_node && n.type_id == "node.transform_3d")
+        .map(|n| n.id)
+        .ok_or("Physics needs a direct authored transform")
+}
+
+/// Follow the scene object's mesh input through the curated single-mesh
+/// modifiers and transparent groups until its glTF source.  Skinned and
+/// otherwise GPU-deformed sources are rejected before mutation because their
+/// rendered geometry is not a stable standard Box3D collider source.
+fn imported_source_in_level(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    object_id: u32,
+) -> Result<ImportedPhysicsSource, &'static str> {
+    let mut current_nodes = nodes;
+    let mut cursor = wires
+        .iter()
+        .find(|wire| wire.to_node == object_id && wire.to_port == "vertices")
+        .map(|wire| (wire.from_node, wire.from_port.as_str()));
+    let mut scope_is_group = false;
+    let mut guard = 0;
+    while let Some((node_id, port)) = cursor {
+        guard += 1;
+        if guard > 64 {
+            return Err("Enable Physics rejected a cyclic mesh source");
+        }
+        let node = current_nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .ok_or("Enable Physics mesh source is unavailable")?;
+        if node.type_id == GROUP_TYPE_ID {
+            let group = node
+                .group
+                .as_deref()
+                .ok_or("Enable Physics rejected a malformed mesh group")?;
+            let output = group
+                .nodes
+                .iter()
+                .find(|inner| inner.type_id == GROUP_OUTPUT_TYPE_ID)
+                .ok_or("Enable Physics mesh group has no output")?;
+            let wire = group
+                .wires
+                .iter()
+                .find(|wire| wire.to_node == output.id && wire.to_port == port)
+                .ok_or("Enable Physics mesh group output is unwired")?;
+            current_nodes = &group.nodes;
+            cursor = Some((wire.from_node, wire.from_port.as_str()));
+            scope_is_group = true;
+            continue;
+        }
+        match node.type_id.as_str() {
+            "node.gltf_mesh_source" => {
+                return Ok(ImportedPhysicsSource {
+                    node_id: node.node_id.clone(),
+                    params: node.params.clone(),
+                    scope_is_group,
+                });
+            }
+            "node.gltf_skinned_mesh_source"
+            | "node.skin_mesh"
+            | "node.morph_targets_blend"
+            | "node.gltf_morph_deltas_source" => {
+                return Err("Enable Physics does not support skinned or GPU-deformed sources");
+            }
+            _ => return Err("Enable Physics requires a supported glTF mesh source"),
+        }
+    }
+    Err("Enable Physics requires a supported glTF mesh source")
+}
+
+fn imported_object_parts(
+    def: &EffectGraphDef,
+    render_id: u32,
+    object_index: u32,
+) -> Result<ImportedObjectParts, &'static str> {
+    let producer_id = object_producer_id(&def.wires, render_id, object_index)
+        .ok_or("Selected scene object is unavailable")?;
+    let producer = def
+        .nodes
+        .iter()
+        .find(|node| node.id == producer_id)
+        .ok_or("Selected scene object producer is unavailable")?;
+    if producer.type_id == GROUP_TYPE_ID {
+        let group = producer
+            .group
+            .as_deref()
+            .ok_or("Selected scene object group is malformed")?;
+        let object_id = object_node_in_group(group)
+            .ok_or("Selected scene object group has no scene_object output")?;
+        let authored_transform_id =
+            authored_transform_in_level(&group.nodes, &group.wires, object_id)?;
+        let mut source = imported_source_in_level(&group.nodes, &group.wires, object_id)?;
+        source.scope_is_group = true;
+        let object = group
+            .nodes
+            .iter()
+            .find(|node| node.id == object_id)
+            .ok_or("Selected scene object is unavailable")?;
+        return Ok(ImportedObjectParts {
+            producer_id,
+            object_id,
+            group_id: Some(producer_id),
+            authored_transform_id,
+            source,
+            object_handle: object
+                .handle
+                .clone()
+                .or_else(|| producer.handle.clone())
+                .unwrap_or_else(|| format!("Object {object_index}")),
+        });
+    }
+    if producer.type_id != "node.scene_object" {
+        return Err("Selected scene object is a custom graph source");
+    }
+    let authored_transform_id = authored_transform_in_level(&def.nodes, &def.wires, producer_id)?;
+    let source = imported_source_in_level(&def.nodes, &def.wires, producer_id)?;
+    Ok(ImportedObjectParts {
+        producer_id,
+        object_id: producer_id,
+        group_id: None,
+        authored_transform_id,
+        source,
+        object_handle: producer
+            .handle
+            .clone()
+            .unwrap_or_else(|| format!("Object {object_index}")),
+    })
+}
+
+fn imported_body_params(
+    source: &ImportedPhysicsSource,
+    def: &EffectGraphDef,
+) -> Result<BTreeMap<String, SerializedParamValue>, &'static str> {
+    let mut params = BTreeMap::new();
+    for name in IMPORTED_SOURCE_PARAMS {
+        let value = source
+            .params
+            .get(*name)
+            .cloned()
+            .or_else(|| {
+                if *name == "path" {
+                    def.preset_metadata.as_ref().and_then(|meta| {
+                        meta.string_bindings
+                            .iter()
+                            .find_map(|binding| match &binding.target {
+                                BindingTarget::Node { node_id, param }
+                                    if node_id == &source.node_id && param == "path" =>
+                                {
+                                    Some(SerializedParamValue::String {
+                                        value: binding.default_value.clone(),
+                                    })
+                                }
+                                _ => None,
+                            })
+                    })
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| source_param_default(name));
+        if *name == "path"
+            && matches!(&value, SerializedParamValue::String { value } if value.is_empty())
+        {
+            return Err("Enable Physics requires a bound glTF source path");
+        }
+        params.insert((*name).to_string(), value);
+    }
+    params.insert(
+        "collider_parts".to_string(),
+        SerializedParamValue::Int { value: 32 },
+    );
+    Ok(params)
+}
+
+fn source_string_binding(
+    def: &EffectGraphDef,
+    source: &ImportedPhysicsSource,
+    body_node_id: NodeId,
+) -> Option<StringBindingDef> {
+    def.preset_metadata
+        .as_ref()?
+        .string_bindings
+        .iter()
+        .find_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, param }
+                if node_id == &source.node_id && param == "path" =>
+            {
+                Some(StringBindingDef {
+                    id: binding.id.clone(),
+                    label: binding.label.clone(),
+                    default_value: binding.default_value.clone(),
+                    target: BindingTarget::Node {
+                        node_id: body_node_id.clone(),
+                        param: "path".to_string(),
+                    },
+                })
+            }
+            _ => None,
+        })
+}
+
+fn fresh_scene_node(
+    id: u32,
+    type_id: &str,
+    handle: Option<String>,
+    params: BTreeMap<String, SerializedParamValue>,
+) -> EffectGraphNode {
+    scene_build_node(id, type_id, handle, params)
+}
+
+fn add_group_physics(
+    group: &mut GroupDef,
+    body_id: u32,
+    body_params: BTreeMap<String, SerializedParamValue>,
+    body_handle: String,
+    input_id: u32,
+    _output_id: u32,
+    authored_transform_id: u32,
+    object_id: u32,
+) -> Result<(NodeId, NodeId), &'static str> {
+    let output_exists = group
+        .nodes
+        .iter()
+        .any(|node| node.type_id == GROUP_OUTPUT_TYPE_ID);
+    if !output_exists {
+        return Err("Physics group has no output boundary");
+    }
+    if group.interface.inputs.iter().any(|p| p.name == "pose")
+        || group.interface.outputs.iter().any(|p| p.name == "body")
+    {
+        return Err("Physics group already has a body interface");
+    }
+    let object_transform_wire = group
+        .wires
+        .iter()
+        .position(|wire| wire.to_node == object_id && wire.to_port == "transform")
+        .ok_or("Physics group scene_object transform is unwired")?;
+    if group.wires[object_transform_wire].from_node != authored_transform_id {
+        return Err("Physics group scene_object transform is already driven");
+    }
+    let body = fresh_scene_node(body_id, "node.rigid_body", Some(body_handle), body_params);
+    let body_node_id = body.node_id.clone();
+    let input = fresh_scene_node(input_id, GROUP_INPUT_TYPE_ID, None, BTreeMap::new());
+    let input_node_id = input.node_id.clone();
+    let output_id = group
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+        .unwrap()
+        .id;
+    group.nodes.push(body);
+    group.nodes.push(input);
+    group.interface.inputs.push(InterfacePortDef {
+        name: "pose".to_string(),
+        port_type: "Transform".to_string(),
+    });
+    group.interface.outputs.push(InterfacePortDef {
+        name: "body".to_string(),
+        port_type: "RigidBody".to_string(),
+    });
+    group.wires[object_transform_wire].from_node = input_id;
+    group.wires[object_transform_wire].from_port = "pose".to_string();
+    group.wires.push(scene_build_wire(
+        authored_transform_id,
+        "transform",
+        body_id,
+        "transform",
+    ));
+    group
+        .wires
+        .push(scene_build_wire(body_id, "body", output_id, "body"));
+    // Preserve the existing object output boundary wire; only the new body
+    // output is added here.
+    Ok((body_node_id, input_node_id))
+}
+
+fn remove_group_physics(
+    group: &mut GroupDef,
+    body_id: u32,
+    object_id: u32,
+    authored_transform_id: u32,
+) -> Result<(), &'static str> {
+    let input_id = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+        .ok_or("Physics group pose input is unavailable")?
+        .id;
+    let output_id = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .ok_or("Physics group body output is unavailable")?
+        .id;
+    if !group.wires.iter().any(|wire| {
+        wire.from_node == input_id
+            && wire.from_port == "pose"
+            && wire.to_node == object_id
+            && wire.to_port == "transform"
+    }) {
+        return Err("Physics group pose input is malformed");
+    }
+    if !group.wires.iter().any(|wire| {
+        wire.from_node == body_id
+            && wire.from_port == "body"
+            && wire.to_node == output_id
+            && wire.to_port == "body"
+    }) {
+        return Err("Physics group body output is malformed");
+    }
+    group.wires.retain(|wire| {
+        !((wire.from_node == input_id && wire.to_node == object_id)
+            || (wire.from_node == body_id && wire.to_node == output_id)
+            || (wire.from_node == authored_transform_id && wire.to_node == body_id))
+    });
+    group.wires.push(scene_build_wire(
+        authored_transform_id,
+        "transform",
+        object_id,
+        "transform",
+    ));
+    group
+        .nodes
+        .retain(|node| node.id != body_id && node.id != input_id);
+    // Remove the boundary only when it has no other non-object output; the
+    // imported object shape has exactly one output and this keeps malformed
+    // hand-authored groups from losing unrelated ports.
+    let body_output_used = group
+        .wires
+        .iter()
+        .any(|wire| wire.to_node == output_id && wire.to_port == "body");
+    if !body_output_used {
+        group.interface.inputs.retain(|port| port.name != "pose");
+        group.interface.outputs.retain(|port| port.name != "body");
+        let output_still_used = group.wires.iter().any(|wire| wire.to_node == output_id);
+        if !output_still_used {
+            group.nodes.retain(|node| node.id != output_id);
+        }
+    }
+    Ok(())
+}
+
+fn strip_group_physics_for_split(group: &mut GroupDef) -> Result<(), &'static str> {
+    let body_id = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.rigid_body")
+        .map(|node| node.id)
+        .ok_or("Split Physics group body is unavailable")?;
+    if !group
+        .nodes
+        .iter()
+        .any(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+    {
+        return Err("Split Physics group pose input is unavailable");
+    }
+    let object_id =
+        object_node_in_group(group).ok_or("Split Physics group object is unavailable")?;
+    let authored_transform_id = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == body_id && wire.to_port == "transform")
+        .map(|wire| wire.from_node)
+        .ok_or("Split Physics authored transform is unavailable")?;
+    remove_group_physics(group, body_id, object_id, authored_transform_id)
+}
+
+#[derive(Debug, Clone)]
+struct ImportedPhysicsBinding {
+    world_id: u32,
+    body_slot: u32,
+    body_id: u32,
+}
+
+fn imported_physics_binding(
+    def: &EffectGraphDef,
+    parts: &ImportedObjectParts,
+) -> Result<ImportedPhysicsBinding, &'static str> {
+    let Some(group_id) = parts.group_id else {
+        let pose_wire = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == parts.object_id && wire.to_port == "transform")
+            .ok_or("Physics object pose input is missing")?;
+        let world = def
+            .nodes
+            .iter()
+            .find(|node| node.id == pose_wire.from_node)
+            .ok_or("Physics object world is unavailable")?;
+        if world.type_id != "node.physics_world" {
+            return Err("Selected object does not have standard physics enabled");
+        }
+        let slot = pose_wire
+            .from_port
+            .strip_prefix("pose_")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|slot| *slot < PHYSICS_BODY_SLOTS)
+            .ok_or("Physics object pose slot is malformed")?;
+        let body_wire = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == world.id && wire.to_port == format!("body_{slot}"))
+            .ok_or("Physics object body input is missing")?;
+        let body = def
+            .nodes
+            .iter()
+            .find(|node| node.id == body_wire.from_node)
+            .ok_or("Physics object body is unavailable")?;
+        if body.type_id != "node.rigid_body" {
+            return Err("Physics object body has the wrong type");
+        }
+        return Ok(ImportedPhysicsBinding {
+            world_id: world.id,
+            body_slot: slot,
+            body_id: body.id,
+        });
+    };
+
+    let group = def
+        .nodes
+        .iter()
+        .find(|node| node.id == group_id)
+        .and_then(|node| node.group.as_deref())
+        .ok_or("Physics object group is unavailable")?;
+    let output = group
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .ok_or("Physics object group output is unavailable")?;
+    if !group
+        .wires
+        .iter()
+        .any(|wire| wire.to_node == output.id && wire.to_port == "body")
+    {
+        return Err("Physics object group body output is missing");
+    }
+    // The body output boundary is fed by the body node, so resolve that
+    // direction explicitly rather than trusting a hand-authored port name.
+    let body_id = group
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == output.id && wire.to_port == "body")
+        .map(|wire| wire.from_node)
+        .ok_or("Physics object group body output is malformed")?;
+    let body = group
+        .nodes
+        .iter()
+        .find(|node| node.id == body_id)
+        .ok_or("Physics object group body is unavailable")?;
+    if body.type_id != "node.rigid_body" {
+        return Err("Physics object group body has the wrong type");
+    }
+    // Top-level world pose is the producer, and the group is its consumer.
+    let (world_id, slot) = {
+        let pose_source = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == parts.producer_id && wire.to_port == "pose")
+            .ok_or("Physics object group pose input is missing")?;
+        let world = def
+            .nodes
+            .iter()
+            .find(|node| node.id == pose_source.from_node)
+            .ok_or("Physics object group world is unavailable")?;
+        let slot = pose_source
+            .from_port
+            .strip_prefix("pose_")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|slot| *slot < PHYSICS_BODY_SLOTS)
+            .ok_or("Physics object group pose slot is malformed")?;
+        (world.id, slot)
+    };
+    let world = def.nodes.iter().find(|node| node.id == world_id).unwrap();
+    if world.type_id != "node.physics_world" {
+        return Err("Physics object group world has the wrong type");
+    }
+    let top_body_wire = def
+        .wires
+        .iter()
+        .find(|wire| {
+            wire.to_node == world_id
+                && wire.to_port == format!("body_{slot}")
+                && wire.from_node == parts.producer_id
+        })
+        .ok_or("Physics object group body slot is missing")?;
+    let _ = (body, top_body_wire);
+    Ok(ImportedPhysicsBinding {
+        world_id,
+        body_slot: slot,
+        body_id,
+    })
+}
+
+fn remove_string_binding_target(def: &mut EffectGraphDef, node_id: &NodeId) {
+    if let Some(meta) = def.preset_metadata.as_mut() {
+        meta.string_bindings.retain(|binding| {
+            !matches!(&binding.target, BindingTarget::Node { node_id: target, .. } if target == node_id)
+        });
+    }
+}
+
+/// Enable standard physics for one imported object.  Grouped imports expose a
+/// `body` output and accept a `pose` input so the shared root world remains
+/// outside the visual object group; the flattener then folds that boundary to
+/// the same flat wiring used by a bare object.
+#[derive(Debug)]
+pub struct EnableSceneObjectPhysicsCommand {
+    target: GraphTarget,
+    render_scene_node_id: u32,
+    object_index: u32,
+    body_metadata: Vec<SceneParamMetadata>,
+    world_metadata: Option<Vec<SceneParamMetadata>>,
+    catalog_default: EffectGraphDef,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
+    rejection: Option<String>,
+}
+
+impl EnableSceneObjectPhysicsCommand {
+    pub fn new(
+        target: GraphTarget,
+        render_scene_node_id: u32,
+        object_index: u32,
+        body_metadata: Vec<SceneParamMetadata>,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            render_scene_node_id,
+            object_index,
+            body_metadata,
+            world_metadata: None,
+            catalog_default,
+            prev: None,
+            rejection: None,
+        }
+    }
+
+    pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+        self.world_metadata = Some(metadata);
+        self
+    }
+}
+
+impl Command for EnableSceneObjectPhysicsCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
+    fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+            return;
+        };
+        let Ok(parts) = imported_object_parts(def, self.render_scene_node_id, self.object_index)
+        else {
+            self.rejection =
+                Some("Enable Physics supports imported rigid glTF objects only".into());
+            return;
+        };
+        if imported_physics_binding(def, &parts).is_ok() {
+            self.rejection = Some("Selected object already has standard physics enabled".into());
+            return;
+        }
+        let body_params = match imported_body_params(&parts.source, def) {
+            Ok(mut params) => {
+                params.insert(
+                    "motion".to_string(),
+                    SerializedParamValue::Enum { value: 1 },
+                );
+                params.insert(
+                    "mass".to_string(),
+                    SerializedParamValue::Float { value: 1.0 },
+                );
+                params.insert(
+                    "friction".to_string(),
+                    SerializedParamValue::Float { value: 0.5 },
+                );
+                params.insert(
+                    "bounce".to_string(),
+                    SerializedParamValue::Float { value: 0.15 },
+                );
+                params
+            }
+            Err(reason) => {
+                self.rejection = Some(reason.into());
+                return;
+            }
+        };
+        let worlds: Vec<u32> = def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.physics_world")
+            .map(|node| node.id)
+            .collect();
+        if worlds.len() > 1 {
+            self.rejection = Some("Enable Physics requires one shared root Physics World".into());
+            return;
+        }
+        let world_id = worlds
+            .first()
+            .copied()
+            .unwrap_or_else(|| max_node_id_over(&def.nodes).saturating_add(1));
+        let body_slot = first_free_physics_body_slot(&def.wires, world_id).unwrap_or({
+            // A new world has no occupied slots; this branch is only used to
+            // make the preflight expression total.
+            0
+        });
+        if !worlds.is_empty() && first_free_physics_body_slot(&def.wires, world_id).is_none() {
+            self.rejection = Some("Physics World has no free body slots".into());
+            return;
+        }
+        let mut candidate = def.clone();
+        let result = (|| {
+            let def = &mut candidate;
+            let previous = (
+                def.nodes.clone(),
+                def.wires.clone(),
+                def.preset_metadata.clone(),
+            );
+            let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
+            let mut taken = std::collections::HashSet::new();
+            collect_all_handles(&def.nodes, &mut taken);
+            if worlds.is_empty() {
+                let handle = dedup_handle("Physics World", &mut taken);
+                def.nodes.push(fresh_scene_node(
+                    next_id,
+                    "node.physics_world",
+                    Some(handle),
+                    BTreeMap::new(),
+                ));
+                next_id += 1;
+            }
+            let body_id = next_id;
+            next_id += 1;
+            let body_handle = dedup_handle(&format!("{} Physics", parts.object_handle), &mut taken);
+            let body_node_id = if let Some(group_id) = parts.group_id {
+                let group = def
+                    .nodes
+                    .iter_mut()
+                    .find(|node| node.id == group_id)?
+                    .group
+                    .as_deref_mut()?;
+                let input_id = next_id;
+                next_id += 1;
+                let output_id = next_id;
+                let (node_id, _) = add_group_physics(
+                    group,
+                    body_id,
+                    body_params.clone(),
+                    body_handle,
+                    input_id,
+                    output_id,
+                    parts.authored_transform_id,
+                    parts.object_id,
+                )
+                .ok()?;
+                def.wires.push(scene_build_wire(
+                    group_id,
+                    "body",
+                    world_id,
+                    &format!("body_{body_slot}"),
+                ));
+                def.wires.push(scene_build_wire(
+                    world_id,
+                    &format!("pose_{body_slot}"),
+                    group_id,
+                    "pose",
+                ));
+                node_id
+            } else {
+                let object_wire = def
+                    .wires
+                    .iter_mut()
+                    .find(|wire| wire.to_node == parts.object_id && wire.to_port == "transform")?;
+                object_wire.from_node = world_id;
+                object_wire.from_port = format!("pose_{body_slot}");
+                let body = fresh_scene_node(
+                    body_id,
+                    "node.rigid_body",
+                    Some(body_handle),
+                    body_params.clone(),
+                );
+                let body_node_id = body.node_id.clone();
+                def.nodes.push(body);
+                def.wires.push(scene_build_wire(
+                    parts.authored_transform_id,
+                    "transform",
+                    body_id,
+                    "transform",
+                ));
+                def.wires.push(scene_build_wire(
+                    body_id,
+                    "body",
+                    world_id,
+                    &format!("body_{body_slot}"),
+                ));
+                body_node_id
+            };
+            let string_binding = source_string_binding(def, &parts.source, body_node_id.clone());
+            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                display_name: "Scene".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "scene".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                layer_types: None,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+                scene_modifier: None,
+                scene_bounds: None,
+            });
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                body_id,
+                &body_node_id,
+                "node.rigid_body",
+                &format!("{} — Physics", parts.object_handle),
+                &self.body_metadata,
+                &body_params,
+            );
+            if worlds.is_empty()
+                && let (Some(world), Some(world_metadata)) = (
+                    def.nodes.iter().find(|node| node.id == world_id),
+                    self.world_metadata.as_ref(),
+                )
+            {
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    world.id,
+                    &world.node_id,
+                    "node.physics_world",
+                    "Physics World",
+                    world_metadata,
+                    &world.params,
+                );
+            }
+            if let Some(binding) = string_binding {
+                meta.string_bindings.push(binding);
+            }
+            Some(previous)
+        })();
+        if let Some(previous) = result {
+            let _ =
+                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                    *def = candidate
+                });
+            self.prev = Some(previous);
+            refresh_target_manifest(project, &self.target);
+        } else {
+            self.rejection =
+                Some("Physics edit requires an unmodified imported object graph".into());
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((nodes, wires, metadata)) = self.prev.take() else {
+            return;
+        };
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.nodes = nodes;
+            def.wires = wires;
+            def.preset_metadata = metadata;
+        });
+        refresh_target_manifest(project, &self.target);
+    }
+
+    fn description(&self) -> &str {
+        "Enable Physics"
+    }
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
+}
+
+/// Remove the body/world wiring while leaving the imported visual object and
+/// its authored transform intact.  The world node itself is retained as the
+/// shared scene service, so disabling one object never invalidates another.
+#[derive(Debug)]
+pub struct DisableSceneObjectPhysicsCommand {
+    target: GraphTarget,
+    render_scene_node_id: u32,
+    object_index: u32,
+    catalog_default: EffectGraphDef,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
+    rejection: Option<String>,
+}
+
+impl DisableSceneObjectPhysicsCommand {
+    pub fn new(
+        target: GraphTarget,
+        render_scene_node_id: u32,
+        object_index: u32,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            render_scene_node_id,
+            object_index,
+            catalog_default,
+            prev: None,
+            rejection: None,
+        }
+    }
+}
+
+impl Command for DisableSceneObjectPhysicsCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+    fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+            return;
+        };
+        let Ok(parts) = imported_object_parts(def, self.render_scene_node_id, self.object_index)
+        else {
+            self.rejection =
+                Some("Disable Physics supports imported rigid glTF objects only".into());
+            return;
+        };
+        let Ok(binding) = imported_physics_binding(def, &parts) else {
+            self.rejection = Some("Selected object does not have standard physics enabled".into());
+            return;
+        };
+        let mut candidate = def.clone();
+        let result = (|| {
+            let def = &mut candidate;
+            let previous = (
+                def.nodes.clone(),
+                def.wires.clone(),
+                def.preset_metadata.clone(),
+            );
+            if let Some(group_id) = parts.group_id {
+                let group = def
+                    .nodes
+                    .iter_mut()
+                    .find(|node| node.id == group_id)?
+                    .group
+                    .as_deref_mut()?;
+                remove_group_physics(
+                    group,
+                    binding.body_id,
+                    parts.object_id,
+                    parts.authored_transform_id,
+                )
+                .ok()?;
+                def.wires.retain(|wire| {
+                    !(wire.from_node == group_id
+                        && wire.to_node == binding.world_id
+                        && wire.to_port == format!("body_{}", binding.body_slot)
+                        || wire.from_node == binding.world_id
+                            && wire.from_port == format!("pose_{}", binding.body_slot)
+                            && wire.to_node == group_id)
+                });
+            } else {
+                def.wires.retain(|wire| {
+                    !((wire.from_node == binding.world_id
+                        && wire.from_port == format!("pose_{}", binding.body_slot)
+                        && wire.to_node == parts.object_id)
+                        || (wire.from_node == binding.body_id
+                            && wire.to_node == binding.world_id
+                            && wire.to_port == format!("body_{}", binding.body_slot))
+                        || (wire.from_node == parts.authored_transform_id
+                            && wire.to_node == binding.body_id))
+                });
+                def.wires.push(scene_build_wire(
+                    parts.authored_transform_id,
+                    "transform",
+                    parts.object_id,
+                    "transform",
+                ));
+                def.nodes.retain(|node| node.id != binding.body_id);
+            }
+            let body_node_id = if parts.group_id.is_some() {
+                // The body is inside the group; use its stable NodeId before
+                // removing the node so the exposure sweep can prune it.
+                previous
+                    .0
+                    .iter()
+                    .flat_map(|node| node.group.as_ref().map(|g| g.nodes.iter()))
+                    .flatten()
+                    .find(|node| node.id == binding.body_id)
+                    .map(|node| node.node_id.clone())
+            } else {
+                previous
+                    .0
+                    .iter()
+                    .find(|node| node.id == binding.body_id)
+                    .map(|node| node.node_id.clone())
+            };
+            if let Some(body_node_id) = body_node_id {
+                prune_scene_object_metadata(def, std::slice::from_ref(&body_node_id));
+                remove_string_binding_target(def, &body_node_id);
+            }
+            Some(previous)
+        })();
+        if let Some(previous) = result {
+            let _ =
+                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                    *def = candidate
+                });
+            self.prev = Some(previous);
+            refresh_target_manifest(project, &self.target);
+        } else {
+            self.rejection =
+                Some("Physics edit requires an unmodified imported object graph".into());
+        }
+    }
+    fn undo(&mut self, project: &mut Project) {
+        let Some((nodes, wires, metadata)) = self.prev.take() else {
+            return;
+        };
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.nodes = nodes;
+            def.wires = wires;
+            def.preset_metadata = metadata;
+        });
+        refresh_target_manifest(project, &self.target);
+    }
+    fn description(&self) -> &str {
+        "Disable Physics"
+    }
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
+}
+
+fn split_capacity_value(value: &SerializedParamValue) -> SerializedParamValue {
+    let raw = match value {
+        SerializedParamValue::Float { value } => *value,
+        SerializedParamValue::Int { value } => *value as f32,
+        _ => return value.clone(),
+    };
+    let pieces = (raw.max(0.0).ceil() as u32).div_ceil(8).div_ceil(3) * 3;
+    SerializedParamValue::Int {
+        value: pieces.max(36) as i32,
+    }
+}
+
+fn mutate_fragment_source(node: &mut EffectGraphNode, fragment_index: u32) -> Option<NodeId> {
+    if node.type_id == "node.gltf_mesh_source" {
+        node.params.insert(
+            "fragment_count".to_string(),
+            SerializedParamValue::Int { value: 8 },
+        );
+        node.params.insert(
+            "fragment_index".to_string(),
+            SerializedParamValue::Int {
+                value: fragment_index as i32,
+            },
+        );
+        if let Some(value) = node.params.get("max_capacity").cloned() {
+            node.params
+                .insert("max_capacity".to_string(), split_capacity_value(&value));
+        }
+        if let Some(value) = node.params.get("source_vertex_count").cloned() {
+            node.params.insert(
+                "source_vertex_count".to_string(),
+                split_capacity_value(&value),
+            );
+        }
+        return Some(node.node_id.clone());
+    }
+    node.group
+        .as_deref_mut()?
+        .nodes
+        .iter_mut()
+        .find_map(|child| mutate_fragment_source(child, fragment_index))
+}
+
+fn find_node_id_in_tree(nodes: &[EffectGraphNode], type_id: &str) -> Option<u32> {
+    nodes.iter().find_map(|node| {
+        (node.type_id == type_id).then_some(node.id).or_else(|| {
+            node.group
+                .as_deref()
+                .and_then(|group| find_node_id_in_tree(&group.nodes, type_id))
+        })
+    })
+}
+
+/// Replace one imported object with eight independently rendered and
+/// simulated fragments.  The command snapshots the complete authored level,
+/// so rejection (unsupported source or fewer than eight world slots) is
+/// atomic and undo/redo restores the exact original wiring and exposures.
+#[derive(Debug)]
+pub struct SplitSceneObjectCommand {
+    target: GraphTarget,
+    render_scene_node_id: u32,
+    object_index: u32,
+    body_metadata: Vec<SceneParamMetadata>,
+    world_metadata: Option<Vec<SceneParamMetadata>>,
+    catalog_default: EffectGraphDef,
+    prev: Option<(
+        Vec<EffectGraphNode>,
+        Vec<EffectGraphWire>,
+        Option<PresetMetadata>,
+    )>,
+    rejection: Option<String>,
+}
+
+impl SplitSceneObjectCommand {
+    pub fn new(
+        target: GraphTarget,
+        render_scene_node_id: u32,
+        object_index: u32,
+        body_metadata: Vec<SceneParamMetadata>,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            render_scene_node_id,
+            object_index,
+            body_metadata,
+            world_metadata: None,
+            catalog_default,
+            prev: None,
+            rejection: None,
+        }
+    }
+
+    pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+        self.world_metadata = Some(metadata);
+        self
+    }
+}
+
+impl Command for SplitSceneObjectCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
+    fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
+        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+            return;
+        };
+        let Ok(parts) = imported_object_parts(def, self.render_scene_node_id, self.object_index)
+        else {
+            self.rejection = Some("Split Object supports imported rigid glTF objects only".into());
+            return;
+        };
+        if parts.group_id.is_none() {
+            self.rejection = Some(
+                "Split supports imported object groups; group the object before splitting".into(),
+            );
+            return;
+        }
+        if parts.source.params.get("fragment_count").is_some_and(|value| match value {
+            SerializedParamValue::Int { value } => *value > 1,
+            SerializedParamValue::Float { value } => *value > 1.0,
+            _ => false,
+        }) {
+            self.rejection = Some("This object is already a split piece".into());
+            return;
+        }
+        let existing_binding = imported_physics_binding(def, &parts).ok();
+        let existing_body = existing_binding.as_ref().and_then(|binding| {
+            if let Some(group_id) = parts.group_id {
+                def.nodes
+                    .iter()
+                    .find(|node| node.id == group_id)?
+                    .group
+                    .as_deref()?
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == binding.body_id)
+            } else {
+                def.nodes.iter().find(|node| node.id == binding.body_id)
+            }
+        });
+        let body_float = |name: &str, fallback: f32| match existing_body
+            .and_then(|node| node.params.get(name))
+        {
+            Some(SerializedParamValue::Float { value }) => *value,
+            Some(SerializedParamValue::Int { value }) => *value as f32,
+            _ => fallback,
+        };
+        let total_mass = body_float("mass", 1.0);
+        let friction = body_float("friction", 0.5);
+        let bounce = body_float("bounce", 0.15);
+        let body_params = match imported_body_params(&parts.source, def) {
+            Ok(mut params) => {
+                params.insert(
+                    "motion".to_string(),
+                    SerializedParamValue::Enum { value: 1 },
+                );
+                params.insert(
+                    "mass".to_string(),
+                    SerializedParamValue::Float {
+                        value: total_mass / 8.0,
+                    },
+                );
+                params.insert(
+                    "friction".to_string(),
+                    SerializedParamValue::Float { value: friction },
+                );
+                params.insert(
+                    "bounce".to_string(),
+                    SerializedParamValue::Float { value: bounce },
+                );
+                params.insert(
+                    "collider_parts".to_string(),
+                    SerializedParamValue::Int { value: 1 },
+                );
+                params
+            }
+            Err(reason) => {
+                self.rejection = Some(reason.into());
+                return;
+            }
+        };
+        let worlds: Vec<u32> = def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.physics_world")
+            .map(|node| node.id)
+            .collect();
+        if worlds.len() > 1 {
+            self.rejection = Some("Split Object requires one shared root Physics World".into());
+            return;
+        }
+        let world_id = worlds
+            .first()
+            .copied()
+            .unwrap_or_else(|| max_node_id_over(&def.nodes).saturating_add(1));
+        let mut free_slots = Vec::new();
+        let mut occupied = std::collections::HashSet::new();
+        for wire in &def.wires {
+            if wire.to_node == world_id
+                && wire
+                    .to_port
+                    .strip_prefix("body_")
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .is_some_and(|slot| slot < PHYSICS_BODY_SLOTS)
+            {
+                occupied.insert(wire.to_port.clone());
+            }
+        }
+        if let Some(binding) = existing_binding.as_ref() {
+            free_slots.push(binding.body_slot);
+        }
+        for slot in 0..PHYSICS_BODY_SLOTS {
+            if existing_binding
+                .as_ref()
+                .is_some_and(|binding| binding.body_slot == slot)
+            {
+                continue;
+            }
+            if !occupied.contains(&format!("body_{slot}")) {
+                free_slots.push(slot);
+            }
+            if free_slots.len() == 8 {
+                break;
+            }
+        }
+        if free_slots.len() != 8 {
+            self.rejection = Some("Physics World has fewer than eight free body slots".into());
+            return;
+        }
+        let original_strings = def
+            .preset_metadata
+            .as_ref()
+            .map(|meta| meta.string_bindings.clone())
+            .unwrap_or_default();
+        let mut candidate = def.clone();
+        let result = (|| {
+            let def = &mut candidate;
+            let previous = (
+                def.nodes.clone(),
+                def.wires.clone(),
+                def.preset_metadata.clone(),
+            );
+            let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
+            let mut taken = std::collections::HashSet::new();
+            collect_all_handles(&def.nodes, &mut taken);
+            if worlds.is_empty() {
+                let handle = dedup_handle("Physics World", &mut taken);
+                def.nodes.push(fresh_scene_node(
+                    next_id,
+                    "node.physics_world",
+                    Some(handle),
+                    BTreeMap::new(),
+                ));
+                next_id += 1;
+            }
+            let mut source_node = def
+                .nodes
+                .iter()
+                .find(|node| node.id == parts.producer_id)?
+                .clone();
+            let mut removed = Vec::new();
+            collect_node_ids(std::slice::from_ref(&source_node), &mut removed);
+            if existing_binding.is_some() {
+                strip_group_physics_for_split(source_node.group.as_deref_mut()?).ok()?;
+            }
+            let source_count = match def
+                .nodes
+                .iter()
+                .find(|node| node.id == self.render_scene_node_id)?
+                .params
+                .get("objects")
+            {
+                Some(SerializedParamValue::Float { value }) => *value as u32,
+                Some(SerializedParamValue::Int { value }) => (*value).max(0) as u32,
+                _ => return None,
+            };
+            if self.object_index >= source_count {
+                return None;
+            }
+            if let Some(binding) = existing_binding.as_ref() {
+                def.wires.retain(|wire| {
+                    !(wire.to_node == binding.world_id
+                        && wire.to_port == format!("body_{}", binding.body_slot)
+                        || wire.from_node == binding.world_id
+                            && wire.from_port == format!("pose_{}", binding.body_slot)
+                            && wire.to_node == parts.producer_id)
+                        && !(wire.from_node == binding.body_id && wire.to_node == binding.world_id)
+                        && !(wire.from_node == parts.authored_transform_id
+                            && wire.to_node == binding.body_id)
+                });
+                if parts.group_id.is_none() {
+                    def.nodes.retain(|node| node.id != binding.body_id);
+                }
+            }
+            def.wires.retain(|wire| {
+                wire.from_node != parts.producer_id
+                    && !(wire.to_node == self.render_scene_node_id
+                        && wire.to_port == format!("object_{}", self.object_index))
+            });
+            // The eight fragments occupy the replaced slot and the seven
+            // additional slots immediately after it. Existing objects move
+            // upward by seven slots.
+            for wire in &mut def.wires {
+                if wire.to_node == self.render_scene_node_id
+                    && let Some(index) = wire
+                        .to_port
+                        .strip_prefix("object_")
+                        .and_then(|s| s.parse::<u32>().ok())
+                    && index > self.object_index
+                {
+                    wire.to_port = format!("object_{}", index + 7);
+                }
+            }
+            let mut body_entries = Vec::new();
+            for (fragment_index, body_slot) in free_slots.iter().copied().enumerate() {
+                let mut map = Vec::new();
+                let mut clone =
+                    deep_clone_with_fresh_ids(&source_node, &mut next_id, &mut taken, &mut map);
+                let piece_name = dedup_handle(&format!("{} Piece {}", parts.object_handle, fragment_index + 1), &mut taken);
+                clone.handle = Some(piece_name.clone());
+                if let Some(group) = clone.group.as_deref_mut() {
+                    group.nodes.iter_mut().find(|n| n.type_id == "node.scene_object")?.handle = Some(piece_name.clone());
+                }
+                let fragment_object_id =
+                    find_node_id_in_tree(std::slice::from_ref(&clone), "node.scene_object")?;
+                let fragment_transform_id =
+                    find_node_id_in_tree(std::slice::from_ref(&clone), "node.transform_3d")?;
+                mutate_fragment_source(&mut clone, fragment_index as u32)?;
+                let mut cloned_source_params = clone_fragment_body_params(&body_params);
+                cloned_source_params.insert(
+                    "fragment_count".to_string(),
+                    SerializedParamValue::Int { value: 8 },
+                );
+                cloned_source_params.insert(
+                    "fragment_index".to_string(),
+                    SerializedParamValue::Int {
+                        value: fragment_index as i32,
+                    },
+                );
+                cloned_source_params.insert(
+                    "collider_parts".to_string(),
+                    SerializedParamValue::Int { value: 1 },
+                );
+                let body_id = next_id;
+                next_id += 1;
+                let body_handle = dedup_handle(
+                    &format!(
+                        "{} Piece {} Physics",
+                        parts.object_handle,
+                        fragment_index + 1
+                    ),
+                    &mut taken,
+                );
+                let body_node_id = if let Some(group) = clone.group.as_deref_mut() {
+                    let input_id = next_id;
+                    next_id += 1;
+                    let output_id = next_id;
+                    next_id += 1;
+                    let inner_transform = find_node_id_in_tree(&group.nodes, "node.transform_3d")?;
+                    let inner_object = find_node_id_in_tree(&group.nodes, "node.scene_object")?;
+                    let (body_node_id, _) = add_group_physics(
+                        group,
+                        body_id,
+                        cloned_source_params.clone(),
+                        body_handle,
+                        input_id,
+                        output_id,
+                        inner_transform,
+                        inner_object,
+                    )
+                    .ok()?;
+                    body_node_id
+                } else {
+                    let body = fresh_scene_node(
+                        body_id,
+                        "node.rigid_body",
+                        Some(body_handle),
+                        cloned_source_params.clone(),
+                    );
+                    let body_node_id = body.node_id.clone();
+                    clone_fragment_root_wires(
+                        &mut def.wires,
+                        fragment_object_id,
+                        fragment_transform_id,
+                        world_id,
+                        body_slot,
+                        body_id,
+                    );
+                    clone.group = None;
+                    // The body is a root-level producer for a bare object.
+                    def.nodes.push(body);
+                    body_node_id
+                };
+                let clone_id = clone.id;
+                def.nodes.push(clone);
+                if parts.group_id.is_some() {
+                    def.wires.push(scene_build_wire(
+                        clone_id,
+                        "body",
+                        world_id,
+                        &format!("body_{body_slot}"),
+                    ));
+                    def.wires.push(scene_build_wire(
+                        world_id,
+                        &format!("pose_{body_slot}"),
+                        clone_id,
+                        "pose",
+                    ));
+                }
+                def.wires.push(scene_build_wire(
+                    clone_id,
+                    "object",
+                    self.render_scene_node_id,
+                    &format!("object_{}", self.object_index + fragment_index as u32),
+                ));
+                if let Some(meta) = def.preset_metadata.as_mut() {
+                    for binding in &original_strings {
+                        if let BindingTarget::Node { node_id, param } = &binding.target
+                            && let Some((_, new_id)) = map.iter().find(|(old, _)| old == node_id)
+                        {
+                            let mut copied = binding.clone();
+                            copied.target = BindingTarget::Node {
+                                node_id: new_id.clone(),
+                                param: param.clone(),
+                            };
+                            meta.string_bindings.push(copied);
+                        }
+                    }
+                }
+                if let Some(binding) =
+                    original_strings
+                        .iter()
+                        .find_map(|binding| match &binding.target {
+                            BindingTarget::Node { node_id, param }
+                                if node_id == &parts.source.node_id && param == "path" =>
+                            {
+                                Some(StringBindingDef {
+                                    id: binding.id.clone(),
+                                    label: binding.label.clone(),
+                                    default_value: binding.default_value.clone(),
+                                    target: BindingTarget::Node {
+                                        node_id: body_node_id.clone(),
+                                        param: "path".to_string(),
+                                    },
+                                })
+                            }
+                            _ => None,
+                        })
+                    && let Some(meta) = def.preset_metadata.as_mut()
+                {
+                    meta.string_bindings.push(binding);
+                }
+                clone_sections::clone_scene_bindings(def, &map);
+                // Separate sections keep every piece independently editable.
+                if let Some(meta) = def.preset_metadata.as_mut() {
+                    let ids: std::collections::HashSet<_> = meta.bindings.iter().filter_map(|binding| {
+                        matches!(&binding.target, BindingTarget::Node { node_id, .. } if map.iter().any(|(_, new)| new == node_id)).then_some(binding.id.clone())
+                    }).collect();
+                    for param in &mut meta.params {
+                        if ids.contains(&param.id) {
+                            param.section = Some(format!("{} — {}", piece_name, param.section.as_deref().unwrap_or("Object")));
+                        }
+                    }
+                }
+                body_entries.push((body_id, body_node_id, cloned_source_params));
+            }
+            let render = def
+                .nodes
+                .iter_mut()
+                .find(|node| node.id == self.render_scene_node_id)?;
+            render.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Float {
+                    value: (source_count + 7) as f32,
+                },
+            );
+            def.nodes.retain(|node| node.id != parts.producer_id);
+            prune_scene_object_metadata(def, &removed);
+            for id in &removed {
+                remove_string_binding_target(def, id);
+            }
+            if let Some(meta) = def.preset_metadata.as_mut() {
+                for (index, (body_id, body_node_id, params)) in body_entries.iter().enumerate() {
+                    stamp_scene_node_exposures_into(
+                        &mut meta.params,
+                        &mut meta.bindings,
+                        *body_id,
+                        body_node_id,
+                        "node.rigid_body",
+                        &format!("{} Piece {} — Physics", parts.object_handle, index + 1),
+                        &self.body_metadata,
+                        params,
+                    );
+                }
+            }
+            if worlds.is_empty()
+                && let (Some(world), Some(world_metadata)) = (
+                    def.nodes.iter().find(|node| node.id == world_id),
+                    self.world_metadata.as_ref(),
+                )
+                && let Some(meta) = def.preset_metadata.as_mut()
+            {
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    world.id,
+                    &world.node_id,
+                    "node.physics_world",
+                    "Physics World",
+                    world_metadata,
+                    &world.params,
+                );
+            }
+            Some(previous)
+        })();
+        if let Some(previous) = result {
+            let _ =
+                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                    *def = candidate
+                });
+            self.prev = Some(previous);
+            refresh_target_manifest(project, &self.target);
+        } else {
+            self.rejection =
+                Some("Physics edit requires an unmodified imported object graph".into());
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((nodes, wires, metadata)) = self.prev.take() else {
+            return;
+        };
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.nodes = nodes;
+            def.wires = wires;
+            def.preset_metadata = metadata;
+        });
+        refresh_target_manifest(project, &self.target);
+    }
+    fn description(&self) -> &str {
+        "Split Object into 8 Pieces"
+    }
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
+}
+
+fn clone_fragment_body_params(
+    body_params: &BTreeMap<String, SerializedParamValue>,
+) -> BTreeMap<String, SerializedParamValue> {
+    body_params.clone()
+}
+
+fn clone_fragment_root_wires(
+    wires: &mut Vec<EffectGraphWire>,
+    object_id: u32,
+    transform_id: u32,
+    world_id: u32,
+    body_slot: u32,
+    body_id: u32,
+) {
+    wires.push(scene_build_wire(
+        world_id,
+        &format!("pose_{body_slot}"),
+        object_id,
+        "transform",
+    ));
+    wires.push(scene_build_wire(
+        transform_id,
+        "transform",
+        body_id,
+        "transform",
+    ));
+    wires.push(scene_build_wire(
+        body_id,
+        "body",
+        world_id,
+        &format!("body_{body_slot}"),
+    ));
 }
 
 fn remap_physics_wire(
@@ -2072,6 +3865,26 @@ fn append_physics_duplicate(
             _ => 0.0,
         };
         clone.params.insert(
+            "pos_x".to_string(),
+            SerializedParamValue::Float {
+                value: current + 0.5,
+            },
+        );
+    }
+    if physics.grouped
+        && let Some(clone) = clones.get_mut(&physics.object_id)
+        && let Some(transform) = clone.group.as_deref_mut().and_then(|group| {
+            group
+                .nodes
+                .iter_mut()
+                .find(|node| node.type_id == "node.transform_3d")
+        })
+    {
+        let current = match transform.params.get("pos_x") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            _ => 0.0,
+        };
+        transform.params.insert(
             "pos_x".to_string(),
             SerializedParamValue::Float {
                 value: current + 0.5,

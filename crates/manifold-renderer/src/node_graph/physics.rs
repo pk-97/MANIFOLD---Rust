@@ -2,6 +2,7 @@
 use manifold_core::Seconds;
 use manifold_physics::{BodyConfig, BodyHandle, BodyKind, PhysicsWorld};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
@@ -77,15 +78,27 @@ impl Drop for PhysicsStepScope {
     }
 }
 
-pub const MAX_BODIES: usize = 16;
+pub const MAX_BODIES: usize = 64;
 pub const MAX_COPIES: usize = 4_000;
 pub const BODY_PORTS: [&str; MAX_BODIES] = [
     "body_0", "body_1", "body_2", "body_3", "body_4", "body_5", "body_6", "body_7", "body_8",
-    "body_9", "body_10", "body_11", "body_12", "body_13", "body_14", "body_15",
+    "body_9", "body_10", "body_11", "body_12", "body_13", "body_14", "body_15", "body_16",
+    "body_17", "body_18", "body_19", "body_20", "body_21", "body_22", "body_23", "body_24",
+    "body_25", "body_26", "body_27", "body_28", "body_29", "body_30", "body_31", "body_32",
+    "body_33", "body_34", "body_35", "body_36", "body_37", "body_38", "body_39", "body_40",
+    "body_41", "body_42", "body_43", "body_44", "body_45", "body_46", "body_47", "body_48",
+    "body_49", "body_50", "body_51", "body_52", "body_53", "body_54", "body_55", "body_56",
+    "body_57", "body_58", "body_59", "body_60", "body_61", "body_62", "body_63",
 ];
 pub const POSE_PORTS: [&str; MAX_BODIES] = [
     "pose_0", "pose_1", "pose_2", "pose_3", "pose_4", "pose_5", "pose_6", "pose_7", "pose_8",
-    "pose_9", "pose_10", "pose_11", "pose_12", "pose_13", "pose_14", "pose_15",
+    "pose_9", "pose_10", "pose_11", "pose_12", "pose_13", "pose_14", "pose_15", "pose_16",
+    "pose_17", "pose_18", "pose_19", "pose_20", "pose_21", "pose_22", "pose_23", "pose_24",
+    "pose_25", "pose_26", "pose_27", "pose_28", "pose_29", "pose_30", "pose_31", "pose_32",
+    "pose_33", "pose_34", "pose_35", "pose_36", "pose_37", "pose_38", "pose_39", "pose_40",
+    "pose_41", "pose_42", "pose_43", "pose_44", "pose_45", "pose_46", "pose_47", "pose_48",
+    "pose_49", "pose_50", "pose_51", "pose_52", "pose_53", "pose_54", "pose_55", "pose_56",
+    "pose_57", "pose_58", "pose_59", "pose_60", "pose_61", "pose_62", "pose_63",
 ];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +118,12 @@ impl CopyLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColliderGeometry {
+    pub hulls: Vec<Vec<[f32; 3]>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct RigidBody {
     pub transform: Transform,
     pub shape: u32,
@@ -113,20 +131,21 @@ pub struct RigidBody {
     pub mass: f32,
     pub friction: f32,
     pub bounce: f32,
+    pub collider: Option<Arc<ColliderGeometry>>,
 }
 
 /// An authored graph sample retained until all fixed ticks that can use it
 /// have been replayed. Between rendered samples, position and the raw Euler
 /// angles are interpolated linearly. This does not reconstruct nonlinear
 /// upstream animation between rendered samples.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AuthoredPoseSample {
     time: f64,
     bodies: [Option<RigidBody>; MAX_BODIES],
     prototype: Option<RigidBody>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct DeferredAnimatedEdit {
     time: f64,
     body: RigidBody,
@@ -141,12 +160,13 @@ impl Default for RigidBody {
             mass: 1.0,
             friction: 0.5,
             bounce: 0.15,
+            collider: None,
         }
     }
 }
 
 impl RigidBody {
-    fn config(self) -> BodyConfig {
+    fn config(&self) -> BodyConfig {
         // Same Rz * Ry * Rx convention as render_scene, quaternion stored xyzw.
         let [x, y, z] = self.transform.rot_euler;
         let (sx, cx) = (x * 0.5).sin_cos();
@@ -169,6 +189,67 @@ impl RigidBody {
             friction: self.friction,
             restitution: self.bounce,
         }
+    }
+}
+
+fn same_collider(left: &RigidBody, right: &RigidBody) -> bool {
+    match (&left.collider, &right.collider) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
+fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
+    left.transform == right.transform
+        && left.shape == right.shape
+        && left.kind == right.kind
+        && left.mass == right.mass
+        && left.friction == right.friction
+        && left.bounce == right.bounce
+        && same_collider(left, right)
+}
+
+fn scale_platonic_points(points: &[[f32; 3]], scale: [f32; 3]) -> [[f32; 3]; 20] {
+    let mut scaled = [[0.0; 3]; 20];
+    for (dst, src) in scaled.iter_mut().zip(points) {
+        for axis in 0..3 {
+            dst[axis] = src[axis] * scale[axis];
+        }
+    }
+    scaled
+}
+
+fn scale_hulls(geometry: &ColliderGeometry, scale: [f32; 3]) -> Vec<Vec<[f32; 3]>> {
+    geometry
+        .hulls
+        .iter()
+        .map(|hull| {
+            hull.iter()
+                .map(|point| {
+                    [
+                        point[0] * scale[0],
+                        point[1] * scale[1],
+                        point[2] * scale[2],
+                    ]
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn add_body_geometry(world: &mut PhysicsWorld, body: &RigidBody) -> Result<BodyHandle, String> {
+    if let Some(geometry) = body.collider.as_ref() {
+        let scaled = scale_hulls(geometry, body.transform.scale);
+        world
+            .add_hulls(&scaled, body.config())
+            .map_err(|error| error.to_string())
+    } else {
+        let points = platonic_points(body.shape);
+        let scaled = scale_platonic_points(points, body.transform.scale);
+        world
+            .add_hull(&scaled[..points.len()], body.config())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -208,10 +289,10 @@ impl Default for RigidSimulation {
     fn default() -> Self {
         Self {
             world: None,
-            handles: [None; MAX_BODIES],
-            descriptions: [None; MAX_BODIES],
+            handles: std::array::from_fn(|_| None),
+            descriptions: std::array::from_fn(|_| None),
             bullet_enabled: [false; MAX_BODIES],
-            deferred_animated_edit: [None; MAX_BODIES],
+            deferred_animated_edit: std::array::from_fn(|_| None),
             copy_handles: vec![None; MAX_COPIES],
             copy_description: None,
             copy_bullet_enabled: vec![false; MAX_COPIES],
@@ -237,6 +318,16 @@ impl Default for RigidSimulation {
 }
 
 impl RigidSimulation {
+    /// Hold the transport clock while an upstream collider is still being
+    /// prepared. The next ready frame starts from its current authored time
+    /// instead of replaying time that elapsed with incomplete geometry.
+    pub fn hold_pending(&mut self, now: Seconds) {
+        if now.0.is_finite() {
+            self.last_time = Some(now);
+        }
+        self.pending_time = Seconds::ZERO;
+    }
+
     /// 60 Hz outer ticks, four Box3D substeps each. A paused transport contributes no time.
     pub fn advance(
         &mut self,
@@ -330,7 +421,7 @@ impl RigidSimulation {
         };
         let requested_copy_columns = copy_columns.round().clamp(1.0, 64.0) as usize;
         let requested_copy_layout = CopyLayout::from_scalar(layout);
-        if let Some(prototype) = prototype {
+        if let Some(prototype) = prototype.as_ref() {
             validate_copy_prototype(prototype)?;
         }
         for b in bodies.iter().flatten() {
@@ -348,20 +439,26 @@ impl RigidSimulation {
                 );
             }
         }
-        let topology_changed = bodies
-            .iter()
-            .zip(self.descriptions)
-            .any(|(a, b)| match (a, b) {
-                (Some(a), Some(b)) => a.shape != b.shape || a.transform.scale != b.transform.scale,
-                (None, None) => false,
-                _ => true,
-            });
+        let topology_changed =
+            bodies
+                .iter()
+                .zip(self.descriptions.iter())
+                .any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => {
+                        a.shape != b.shape
+                            || a.transform.scale != b.transform.scale
+                            || !same_collider(a, b)
+                    }
+                    (None, None) => false,
+                    _ => true,
+                });
         let reset = self.reset_count.is_some_and(|old| old != reset_count)
             || self.last_time.is_some_and(|last| now.0 < last.0);
-        let copy_topology_changed = match (prototype, self.copy_description) {
+        let copy_topology_changed = match (prototype.as_ref(), self.copy_description.as_ref()) {
             (Some(current), Some(previous)) => {
                 current.shape != previous.shape
                     || current.transform.scale != previous.transform.scale
+                    || !same_collider(current, previous)
             }
             (None, None) => false,
             _ => true,
@@ -374,7 +471,7 @@ impl RigidSimulation {
                 let elapsed_simulation = elapsed * f64::from(speed);
                 self.authored_time += elapsed_simulation;
                 self.accumulator += elapsed_simulation;
-                self.record_authored_sample(self.authored_time, bodies, prototype);
+                self.record_authored_sample(self.authored_time, bodies.clone(), prototype.clone());
                 self.last_time = Some(now);
             }
             return Ok(());
@@ -405,37 +502,23 @@ impl RigidSimulation {
             } else {
                 self.latched_copy_layout
             };
-            if let Some(prototype) = prototype {
+            if let Some(prototype) = prototype.as_ref() {
                 validate_copy_prototype(prototype)?;
             }
             let mut world = PhysicsWorld::new(gravity).map_err(|e| e.to_string())?;
-            let mut handles = [None; MAX_BODIES];
+            let mut handles = std::array::from_fn(|_| None);
             for (i, body) in bodies.iter().enumerate() {
                 let Some(body) = body else { continue };
-                let points = platonic_points(body.shape);
-                let mut scaled = [[0.0; 3]; 20];
-                for (dst, src) in scaled.iter_mut().zip(points) {
-                    for axis in 0..3 {
-                        dst[axis] = src[axis] * body.transform.scale[axis];
-                    }
-                }
-                handles[i] = Some(
-                    world
-                        .add_hull(&scaled[..points.len()], body.config())
-                        .map_err(|e| e.to_string())?,
-                );
+                handles[i] = Some(add_body_geometry(&mut world, body)?);
             }
             let mut copy_handles = vec![None; active_copy_count];
-            if let Some(prototype) = prototype {
-                let points = platonic_points(prototype.shape);
-                let mut scaled = [[0.0; 3]; 20];
-                for (dst, src) in scaled.iter_mut().zip(points) {
-                    for axis in 0..3 {
-                        dst[axis] = src[axis] * prototype.transform.scale[axis];
-                    }
-                }
+            if let Some(prototype) = prototype.as_ref() {
+                let scaled_geometry = prototype
+                    .collider
+                    .as_ref()
+                    .map(|geometry| scale_hulls(geometry, prototype.transform.scale));
                 for (index, handle) in copy_handles.iter_mut().enumerate() {
-                    let mut copy = prototype;
+                    let mut copy = prototype.clone();
                     copy = copy_transform_for_layout(
                         copy,
                         prototype.transform.pos,
@@ -445,11 +528,17 @@ impl RigidSimulation {
                         active_copy_spacing,
                         active_copy_layout,
                     );
-                    *handle = Some(
+                    *handle = Some(if let Some(hulls) = scaled_geometry.as_deref() {
+                        world
+                            .add_hulls(hulls, copy.config())
+                            .map_err(|e| e.to_string())?
+                    } else {
+                        let points = platonic_points(copy.shape);
+                        let scaled = scale_platonic_points(points, copy.transform.scale);
                         world
                             .add_hull(&scaled[..points.len()], copy.config())
-                            .map_err(|e| e.to_string())?,
-                    );
+                            .map_err(|e| e.to_string())?
+                    });
                 }
             }
             self.world = Some(world);
@@ -460,8 +549,8 @@ impl RigidSimulation {
             self.copy_bullet_enabled.fill(false);
             self.deferred_copy_animated_edit = None;
             self.copy_handles[..active_copy_count].copy_from_slice(&copy_handles);
-            self.descriptions = bodies;
-            self.copy_description = prototype;
+            self.descriptions = bodies.clone();
+            self.copy_description = prototype.clone();
             self.active_copy_count = active_copy_count;
             self.latched_copy_count = active_copy_count;
             self.latched_copy_spacing = active_copy_spacing;
@@ -474,8 +563,8 @@ impl RigidSimulation {
             self.authored_samples.clear();
             self.authored_samples.push_back(AuthoredPoseSample {
                 time: 0.0,
-                bodies,
-                prototype,
+                bodies: bodies.clone(),
+                prototype: prototype.clone(),
             });
         }
         let elapsed = now.0 - self.last_time.unwrap_or(now).0;
@@ -483,7 +572,7 @@ impl RigidSimulation {
         let elapsed_simulation = elapsed * f64::from(speed);
         let stationary_edit = elapsed_simulation == 0.0;
         self.authored_time += elapsed_simulation;
-        self.record_authored_sample(self.authored_time, bodies, prototype);
+        self.record_authored_sample(self.authored_time, bodies.clone(), prototype.clone());
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = 1.0 / 60.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
@@ -500,14 +589,14 @@ impl RigidSimulation {
                 let (Some(body), Some(handle)) = (body, self.handles[i]) else {
                     continue;
                 };
-                let old = self.descriptions[i];
-                if old != Some(*body) {
+                let old = self.descriptions[i].as_ref();
+                if old.is_none_or(|old| !same_body(old, body)) {
                     let pose_changed = old.is_none_or(|old| old.transform != body.transform);
                     let animated_edit = body.kind == 2 && stationary_edit && pose_changed;
                     if animated_edit && due_steps > 0 {
                         self.deferred_animated_edit[i] = Some(DeferredAnimatedEdit {
                             time: self.authored_time,
-                            body: *body,
+                            body: body.clone(),
                         });
                     }
                     let move_pose =
@@ -521,15 +610,15 @@ impl RigidSimulation {
                     }
                 }
             }
-            if let Some(prototype) = prototype {
-                let old = self.copy_description;
-                if old != Some(prototype) {
+            if let Some(prototype) = prototype.as_ref() {
+                let old = self.copy_description.as_ref();
+                if old.is_none_or(|old| !same_body(old, prototype)) {
                     let pose_changed = old.is_some_and(|old| old.transform != prototype.transform);
                     let animated_edit = prototype.kind == 2 && stationary_edit && pose_changed;
                     if animated_edit && due_steps > 0 {
                         self.deferred_copy_animated_edit = Some(DeferredAnimatedEdit {
                             time: self.authored_time,
-                            body: prototype,
+                            body: prototype.clone(),
                         });
                     }
                     let move_pose =
@@ -539,7 +628,7 @@ impl RigidSimulation {
                             continue;
                         };
                         let copy = copy_transform_for_layout(
-                            prototype,
+                            prototype.clone(),
                             prototype.transform.pos,
                             index,
                             self.active_copy_count,
@@ -561,9 +650,10 @@ impl RigidSimulation {
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for _ in 0..steps {
-            let dynamic_microsteps = self.configure_fast_bodies(bodies, prototype, gravity, TICK)?;
+            let dynamic_microsteps =
+                self.configure_fast_bodies(&bodies, prototype.as_ref(), gravity, TICK)?;
             let (animated_microsteps, animated_speed) =
-                self.animated_microsteps(bodies, prototype, TICK);
+                self.animated_microsteps(&bodies, prototype.as_ref(), TICK);
             let microsteps = animated_microsteps.max(dynamic_microsteps);
             self.world
                 .as_mut()
@@ -574,23 +664,23 @@ impl RigidSimulation {
             let solver_substeps = 4;
             for microstep in 1..=microsteps {
                 let target_time = self.physics_time + microstep_time * microstep as f64;
-                let mut targets = [None; MAX_BODIES];
+                let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
                 for (i, body) in bodies.iter().enumerate() {
                     let Some(body) = body else { continue };
                     if body.kind == 2 {
                         targets[i] = Some(
-                            self.interpolated_body(i, target_time, *body)
-                                .unwrap_or(*body),
+                            self.interpolated_body(i, target_time, body.clone())
+                                .unwrap_or_else(|| body.clone()),
                         );
                     }
                 }
-                let copy_target =
-                    prototype
-                        .filter(|prototype| prototype.kind == 2)
-                        .map(|prototype| {
-                            self.interpolated_prototype(target_time, prototype)
-                                .unwrap_or(prototype)
-                        });
+                let copy_target = prototype
+                    .as_ref()
+                    .filter(|prototype| prototype.kind == 2)
+                    .map(|prototype| {
+                        self.interpolated_prototype(target_time, prototype.clone())
+                            .unwrap_or_else(|| prototype.clone())
+                    });
                 let world = self.world.as_mut().expect("world constructed above");
                 for (i, target) in targets.into_iter().enumerate() {
                     let Some(target) = target else { continue };
@@ -607,7 +697,7 @@ impl RigidSimulation {
                             continue;
                         };
                         let target = copy_transform_for_layout(
-                            prototype,
+                            prototype.clone(),
                             prototype.transform.pos,
                             index,
                             self.active_copy_count,
@@ -651,7 +741,7 @@ impl RigidSimulation {
         self.accumulator = (accumulated - completed as f64 * TICK).max(0.0);
         self.last_time = Some(now);
         self.reset_count = Some(reset_count);
-        self.descriptions = bodies;
+        self.descriptions = bodies.clone();
         for (i, body) in bodies.iter().enumerate() {
             let (Some(body), Some(handle)) = (body, self.handles[i]) else {
                 self.poses[i] = Transform::default();
@@ -675,7 +765,7 @@ impl RigidSimulation {
                 self.poses[i].rot_euler = body.transform.rot_euler;
             }
         }
-        if let Some(prototype) = prototype {
+        if let Some(prototype) = prototype.as_ref() {
             for index in 0..self.active_copy_count {
                 let Some(handle) = self.copy_handles[index] else {
                     continue;
@@ -694,7 +784,7 @@ impl RigidSimulation {
                 };
                 if self.deferred_copy_animated_edit.is_some() {
                     let authored = copy_transform_for_layout(
-                        prototype,
+                        prototype.clone(),
                         prototype.transform.pos,
                         index,
                         self.active_copy_count,
@@ -707,7 +797,7 @@ impl RigidSimulation {
                 }
             }
         }
-        self.copy_description = prototype;
+        self.copy_description = prototype.clone();
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
         Ok(())
     }
@@ -716,7 +806,9 @@ impl RigidSimulation {
         const EPSILON: f64 = 1.0e-12;
         let world = self.world.as_mut().expect("world constructed above");
         for (index, edit_time) in self.deferred_animated_edit.iter_mut().enumerate() {
-            let Some(edit) = *edit_time else { continue };
+            let Some(edit) = edit_time.as_ref() else {
+                continue;
+            };
             if self.physics_time + EPSILON < edit.time {
                 continue;
             }
@@ -729,15 +821,16 @@ impl RigidSimulation {
         }
         if let Some(edit) = self
             .deferred_copy_animated_edit
+            .as_ref()
             .filter(|edit| self.physics_time + EPSILON >= edit.time)
         {
-            let prototype = edit.body;
+            let prototype = &edit.body;
             for index in 0..self.active_copy_count {
                 let Some(handle) = self.copy_handles[index] else {
                     continue;
                 };
                 let copy = copy_transform_for_layout(
-                    prototype,
+                    prototype.clone(),
                     prototype.transform.pos,
                     index,
                     self.active_copy_count,
@@ -766,11 +859,10 @@ impl RigidSimulation {
             .back()
             .is_some_and(|last| (last.time - time).abs() <= EPSILON);
         if same_time {
-            if self
-                .authored_samples
-                .back()
-                .is_some_and(|last| last.bodies == bodies && last.prototype == prototype)
-            {
+            if self.authored_samples.back().is_some_and(|last| {
+                same_body_arrays(&last.bodies, &bodies)
+                    && same_optional_body(last.prototype.as_ref(), prototype.as_ref())
+            }) {
                 return;
             }
             let preserve_owed_endpoint = self.physics_time + EPSILON < time
@@ -782,8 +874,8 @@ impl RigidSimulation {
             if !preserve_owed_endpoint {
                 *self.authored_samples.back_mut().expect("sample exists") = AuthoredPoseSample {
                     time,
-                    bodies,
-                    prototype,
+                    bodies: bodies.clone(),
+                    prototype: prototype.clone(),
                 };
                 return;
             }
@@ -797,8 +889,8 @@ impl RigidSimulation {
 
     fn configure_fast_bodies(
         &mut self,
-        bodies: [Option<RigidBody>; MAX_BODIES],
-        prototype: Option<RigidBody>,
+        bodies: &[Option<RigidBody>; MAX_BODIES],
+        prototype: Option<&RigidBody>,
         gravity: [f32; 3],
         tick: f64,
     ) -> Result<usize, String> {
@@ -817,9 +909,9 @@ impl RigidSimulation {
                     continue;
                 }
                 let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-                if needs_bullet(*body, velocity, gravity, tick) {
+                if needs_bullet(body, velocity, gravity, tick) {
                     fast_count += 1;
-                    let extent = body.transform.scale.into_iter().fold(f32::INFINITY, f32::min);
+                    let extent = body_min_extent(body);
                     fast_steps = fast_steps.max(
                         (predicted_dynamic_travel(velocity, gravity, tick) / (extent * 0.5))
                             .ceil()
@@ -837,7 +929,7 @@ impl RigidSimulation {
                 continue;
             }
             let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-            let enabled = fast_count < 2 && needs_bullet(*body, velocity, gravity, tick);
+            let enabled = fast_count < 2 && needs_bullet(body, velocity, gravity, tick);
             if self.bullet_enabled[index] != enabled {
                 world
                     .set_bullet(handle, enabled)
@@ -867,8 +959,8 @@ impl RigidSimulation {
 
     fn animated_microsteps(
         &self,
-        bodies: [Option<RigidBody>; MAX_BODIES],
-        prototype: Option<RigidBody>,
+        bodies: &[Option<RigidBody>; MAX_BODIES],
+        prototype: Option<&RigidBody>,
         tick: f64,
     ) -> (usize, f32) {
         // Box3D bullet CCD does not sweep Animated motion. Smaller outer
@@ -878,21 +970,11 @@ impl RigidSimulation {
             .iter()
             .flatten()
             .filter(|body| body.kind == 1)
-            .map(|body| {
-                body.transform
-                    .scale
-                    .into_iter()
-                    .fold(f32::INFINITY, f32::min)
-            })
+            .map(body_min_extent)
             .chain(
                 prototype
                     .filter(|body| body.kind == 1 && self.active_copy_count > 0)
-                    .map(|body| {
-                        body.transform
-                            .scale
-                            .into_iter()
-                            .fold(f32::INFINITY, f32::min)
-                    }),
+                    .map(body_min_extent),
             )
             .fold(f32::INFINITY, f32::min);
         if !dynamic_extent.is_finite() {
@@ -903,13 +985,13 @@ impl RigidSimulation {
         let mut travel: f32 = 0.0;
         let mut required_speed: f32 = 400.0;
         for (index, body) in bodies.iter().enumerate() {
-            let Some(body) = *body else { continue };
+            let Some(body) = body.as_ref() else { continue };
             if body.kind != 2 {
                 continue;
             }
             let start = self
-                .interpolated_body(index, start_time, body)
-                .unwrap_or(body);
+                .interpolated_body(index, start_time, body.clone())
+                .unwrap_or_else(|| body.clone());
             let mut previous = start;
             let mut previous_time = start_time;
             let mut path = 0.0;
@@ -918,22 +1000,23 @@ impl RigidSimulation {
                 .iter()
                 .filter(|sample| sample.time > start_time && sample.time < end_time)
             {
-                if let Some(next) = sample.bodies[index] {
+                if let Some(next) = sample.bodies[index].as_ref() {
                     if sample.time - previous_time <= 1.0e-9 {
-                        previous = next;
+                        previous = next.clone();
                         continue;
                     }
-                    let segment = animated_sweep_distance(previous, next);
+                    let segment = animated_sweep_distance(&previous, next);
                     path += segment;
-                    required_speed = required_speed.max(
-                        segment / (sample.time - previous_time) as f32,
-                    );
-                    previous = next;
+                    required_speed =
+                        required_speed.max(segment / (sample.time - previous_time) as f32);
+                    previous = next.clone();
                     previous_time = sample.time;
                 }
             }
-            let end = self.interpolated_body(index, end_time, body).unwrap_or(body);
-            let segment = animated_sweep_distance(previous, end);
+            let end = self
+                .interpolated_body(index, end_time, body.clone())
+                .unwrap_or_else(|| body.clone());
+            let segment = animated_sweep_distance(&previous, &end);
             if end_time - previous_time > 1.0e-9 {
                 path += segment;
                 required_speed = required_speed.max(segment / (end_time - previous_time) as f32);
@@ -942,8 +1025,8 @@ impl RigidSimulation {
         }
         if let Some(body) = prototype.filter(|body| body.kind == 2 && self.active_copy_count > 0) {
             let start = self
-                .interpolated_prototype(start_time, body)
-                .unwrap_or(body);
+                .interpolated_prototype(start_time, body.clone())
+                .unwrap_or_else(|| body.clone());
             let mut previous = start;
             let mut previous_time = start_time;
             let mut path = 0.0;
@@ -952,22 +1035,23 @@ impl RigidSimulation {
                 .iter()
                 .filter(|sample| sample.time > start_time && sample.time < end_time)
             {
-                if let Some(next) = sample.prototype {
+                if let Some(next) = sample.prototype.as_ref() {
                     if sample.time - previous_time <= 1.0e-9 {
-                        previous = next;
+                        previous = next.clone();
                         continue;
                     }
-                    let segment = animated_sweep_distance(previous, next);
+                    let segment = animated_sweep_distance(&previous, next);
                     path += segment;
-                    required_speed = required_speed.max(
-                        segment / (sample.time - previous_time) as f32,
-                    );
-                    previous = next;
+                    required_speed =
+                        required_speed.max(segment / (sample.time - previous_time) as f32);
+                    previous = next.clone();
                     previous_time = sample.time;
                 }
             }
-            let end = self.interpolated_prototype(end_time, body).unwrap_or(body);
-            let segment = animated_sweep_distance(previous, end);
+            let end = self
+                .interpolated_prototype(end_time, body.clone())
+                .unwrap_or_else(|| body.clone());
+            let segment = animated_sweep_distance(&previous, &end);
             if end_time - previous_time > 1.0e-9 {
                 path += segment;
                 required_speed = required_speed.max(segment / (end_time - previous_time) as f32);
@@ -989,10 +1073,10 @@ impl RigidSimulation {
         time: f64,
         mut current: RigidBody,
     ) -> Option<RigidBody> {
-        let mut previous = self.authored_samples.front()?.bodies[index]?;
+        let mut previous = self.authored_samples.front()?.bodies[index].clone()?;
         let mut previous_time = self.authored_samples.front()?.time;
         for sample in self.authored_samples.iter().skip(1) {
-            let next = sample.bodies[index]?;
+            let next = sample.bodies[index].clone()?;
             if sample.time >= time {
                 let alpha = interpolation_alpha(previous_time, sample.time, time);
                 let pose = interpolate_body(previous, next, alpha).transform;
@@ -1009,11 +1093,11 @@ impl RigidSimulation {
     }
 
     fn interpolated_prototype(&self, time: f64, mut current: RigidBody) -> Option<RigidBody> {
-        let first = self.authored_samples.front()?.prototype?;
+        let first = self.authored_samples.front()?.prototype.clone()?;
         let mut previous = first;
         let mut previous_time = self.authored_samples.front()?.time;
         for sample in self.authored_samples.iter().skip(1) {
-            let next = sample.prototype?;
+            let next = sample.prototype.clone()?;
             if sample.time >= time {
                 let alpha = interpolation_alpha(previous_time, sample.time, time);
                 let pose = interpolate_body(previous, next, alpha).transform;
@@ -1038,6 +1122,23 @@ impl RigidSimulation {
     }
 }
 
+fn same_optional_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => same_body(left, right),
+        _ => false,
+    }
+}
+
+fn same_body_arrays(
+    left: &[Option<RigidBody>; MAX_BODIES],
+    right: &[Option<RigidBody>; MAX_BODIES],
+) -> bool {
+    left.iter()
+        .zip(right)
+        .all(|(left, right)| same_optional_body(left.as_ref(), right.as_ref()))
+}
+
 fn interpolation_alpha(previous_time: f64, next_time: f64, time: f64) -> f32 {
     if next_time <= previous_time {
         1.0
@@ -1056,7 +1157,7 @@ fn interpolate_body(mut previous: RigidBody, next: RigidBody, alpha: f32) -> Rig
     previous
 }
 
-fn animated_sweep_distance(start: RigidBody, end: RigidBody) -> f32 {
+fn animated_sweep_distance(start: &RigidBody, end: &RigidBody) -> f32 {
     let mut linear_squared = 0.0;
     let mut angular = 0.0;
     for axis in 0..3 {
@@ -1064,18 +1165,73 @@ fn animated_sweep_distance(start: RigidBody, end: RigidBody) -> f32 {
         linear_squared += delta * delta;
         angular += (end.transform.rot_euler[axis] - start.transform.rot_euler[axis]).abs();
     }
-    let radius = start.transform.scale.into_iter().fold(0.0, f32::max);
+    let radius = body_collision_radius(start);
     linear_squared.sqrt() + angular * radius
 }
 
-fn needs_bullet(body: RigidBody, velocity: [f32; 3], gravity: [f32; 3], tick: f64) -> bool {
+fn needs_bullet(body: &RigidBody, velocity: [f32; 3], gravity: [f32; 3], tick: f64) -> bool {
     let predicted_travel = predicted_dynamic_travel(velocity, gravity, tick);
-    let extent = body
-        .transform
-        .scale
-        .into_iter()
-        .fold(f32::INFINITY, f32::min);
+    let extent = body_min_extent(body);
     predicted_travel > extent * 0.5
+}
+
+fn body_min_extent(body: &RigidBody) -> f32 {
+    let Some(geometry) = body.collider.as_ref() else {
+        return body
+            .transform
+            .scale
+            .into_iter()
+            .fold(f32::INFINITY, f32::min);
+    };
+    let mut minimum = [f32::INFINITY; 3];
+    let mut maximum = [f32::NEG_INFINITY; 3];
+    for hull in &geometry.hulls {
+        for point in hull {
+            for axis in 0..3 {
+                let scaled = point[axis] * body.transform.scale[axis];
+                minimum[axis] = minimum[axis].min(scaled);
+                maximum[axis] = maximum[axis].max(scaled);
+            }
+        }
+    }
+    let extent = minimum
+        .into_iter()
+        .zip(maximum)
+        .map(|(min, max)| (max - min).abs() * 0.5)
+        .fold(f32::INFINITY, f32::min);
+    if extent.is_finite() && extent > 0.0 {
+        extent
+    } else {
+        body.transform
+            .scale
+            .into_iter()
+            .fold(f32::INFINITY, f32::min)
+    }
+}
+
+fn body_collision_radius(body: &RigidBody) -> f32 {
+    let Some(geometry) = body.collider.as_ref() else {
+        return body.transform.scale.into_iter().fold(0.0, f32::max);
+    };
+    let radius = geometry
+        .hulls
+        .iter()
+        .flat_map(|hull| hull.iter())
+        .map(|point| {
+            point
+                .iter()
+                .enumerate()
+                .map(|(axis, value)| value * body.transform.scale[axis])
+                .map(|value| value * value)
+                .sum::<f32>()
+                .sqrt()
+        })
+        .fold(0.0, f32::max);
+    if radius > 0.0 && radius.is_finite() {
+        radius
+    } else {
+        body.transform.scale.into_iter().fold(0.0, f32::max)
+    }
 }
 
 fn predicted_dynamic_travel(velocity: [f32; 3], gravity: [f32; 3], tick: f64) -> f32 {
@@ -1085,7 +1241,7 @@ fn predicted_dynamic_travel(velocity: [f32; 3], gravity: [f32; 3], tick: f64) ->
     speed * tick + 0.5 * acceleration * tick * tick
 }
 
-fn validate_copy_prototype(prototype: RigidBody) -> Result<(), String> {
+fn validate_copy_prototype(prototype: &RigidBody) -> Result<(), String> {
     if prototype.shape >= 5
         || prototype.kind > 2
         || prototype.transform.billboard
@@ -1232,7 +1388,7 @@ mod tests {
     }
 
     fn one_body(position: [f32; 3]) -> [Option<RigidBody>; MAX_BODIES] {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(body(position));
         bodies
     }
@@ -1243,21 +1399,27 @@ mod tests {
         let mut per_frame = RigidSimulation::default();
         let mut partitioned = RigidSimulation::default();
         per_frame
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         partitioned
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
 
         for frame in 1..=60 {
             per_frame
-                .advance(bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .advance(
+                    bodies.clone(),
+                    GRAVITY,
+                    Seconds(frame as f64 * FRAME),
+                    1.0,
+                    0.0,
+                )
                 .unwrap();
         }
         for half_frame in 1..=120 {
             partitioned
                 .advance(
-                    bodies,
+                    bodies.clone(),
                     GRAVITY,
                     Seconds(half_frame as f64 * FRAME / 2.0),
                     1.0,
@@ -1275,22 +1437,22 @@ mod tests {
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         let authored = simulation.poses[0].pos;
         simulation
-            .advance(bodies, GRAVITY, Seconds(0.5), 0.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 0.0, 0.0)
             .unwrap();
         assert_eq!(simulation.poses[0].pos, authored);
         simulation
-            .advance(bodies, GRAVITY, Seconds(1.0), 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(1.0), 1.0, 0.0)
             .unwrap();
         assert!(simulation.poses[0].pos[1] < authored[1] - 0.1);
     }
 
     #[test]
     fn animated_body_pushes_a_dynamic_body_instead_of_teleporting_through_it() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(RigidBody {
             kind: 2,
             transform: Transform {
@@ -1302,13 +1464,19 @@ mod tests {
         bodies[1] = Some(body([0.4, 0.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
 
         for frame in 1..=30 {
             bodies[0].as_mut().unwrap().transform.pos[0] = -1.3 + frame as f32 * 0.05;
             simulation
-                .advance(bodies, [0.0; 3], Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .advance(
+                    bodies.clone(),
+                    [0.0; 3],
+                    Seconds(frame as f64 * FRAME),
+                    1.0,
+                    0.0,
+                )
                 .unwrap();
         }
 
@@ -1321,7 +1489,7 @@ mod tests {
 
     #[test]
     fn rotating_animated_body_contacts_a_dynamic_body() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(RigidBody {
             kind: 2,
             transform: Transform {
@@ -1334,14 +1502,20 @@ mod tests {
         bodies[1] = Some(body(start));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
 
         for frame in 1..=60 {
             bodies[0].as_mut().unwrap().transform.rot_euler[1] =
                 frame as f32 * std::f32::consts::FRAC_PI_2 / 60.0;
             simulation
-                .advance(bodies, [0.0; 3], Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .advance(
+                    bodies.clone(),
+                    [0.0; 3],
+                    Seconds(frame as f64 * FRAME),
+                    1.0,
+                    0.0,
+                )
                 .unwrap();
         }
 
@@ -1357,19 +1531,19 @@ mod tests {
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         simulation
-            .advance(bodies, GRAVITY, Seconds(0.75), 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(0.75), 1.0, 0.0)
             .unwrap();
         assert!(simulation.poses[0].pos[1] < 4.0);
 
         simulation
-            .advance(bodies, GRAVITY, Seconds(0.75), 1.0, 1.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(0.75), 1.0, 1.0)
             .unwrap();
         assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
         simulation
-            .advance(bodies, GRAVITY, Seconds(0.5), 1.0, 1.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 1.0)
             .unwrap();
         assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
     }
@@ -1379,33 +1553,86 @@ mod tests {
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         simulation
-            .advance(bodies, GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
             .unwrap();
         let falling_pose = simulation.poses[0].pos;
 
         let mut edited = bodies;
-        let mut edited_body = edited[0].unwrap();
+        let mut edited_body = edited[0].clone().unwrap();
         edited_body.friction = 0.9;
         edited_body.mass = 2.0;
         edited_body.bounce = 0.4;
         edited[0] = Some(edited_body);
         simulation
-            .advance(edited, GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .advance(edited.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
             .unwrap();
         assert!((simulation.poses[0].pos[1] - falling_pose[1]).abs() < 1.0e-5);
 
         simulation
-            .advance(edited, GRAVITY, Seconds(0.75), 1.0, 0.0)
+            .advance(edited.clone(), GRAVITY, Seconds(0.75), 1.0, 0.0)
             .unwrap();
         assert!(simulation.poses[0].pos[1] < falling_pose[1] - 0.05);
     }
 
     #[test]
+    fn multi_hull_geometry_rebuilds_on_reset_and_material_edits_keep_pose() {
+        let geometry = Arc::new(ColliderGeometry {
+            hulls: vec![
+                vec![
+                    [-0.5, -0.5, -0.5],
+                    [0.5, -0.5, -0.5],
+                    [0.0, 0.5, -0.5],
+                    [0.0, 0.0, 0.5],
+                ],
+                vec![
+                    [-0.5, -0.5, 0.5],
+                    [0.5, -0.5, 0.5],
+                    [0.0, 0.5, 0.5],
+                    [0.0, 0.0, -0.5],
+                ],
+            ],
+        });
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            collider: Some(geometry.clone()),
+            transform: Transform {
+                pos: [0.0, 4.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        let falling_pose = simulation.poses[0].pos;
+
+        let mut edited = bodies.clone();
+        let mut edited_body = edited[0].take().expect("body exists");
+        edited_body.friction = 0.9;
+        edited_body.mass = 2.0;
+        edited_body.collider = Some(geometry.clone());
+        edited[0] = Some(edited_body);
+        simulation
+            .advance(edited.clone(), GRAVITY, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        assert!((simulation.poses[0].pos[1] - falling_pose[1]).abs() < 1.0e-5);
+
+        simulation
+            .advance(edited, GRAVITY, Seconds(0.5), 1.0, 1.0)
+            .unwrap();
+        assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);
+    }
+
+    #[test]
     fn all_scaled_platonic_hulls_settle_on_the_ground() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(RigidBody {
             transform: Transform {
                 pos: [0.0, -1.0, 0.0],
@@ -1430,18 +1657,24 @@ mod tests {
 
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         // A dodecahedron can still roll between faces at four seconds.
         // Give every shape time to sleep before measuring stable contact.
         for frame in 1..=720 {
             simulation
-                .advance(bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .advance(
+                    bodies.clone(),
+                    GRAVITY,
+                    Seconds(frame as f64 * FRAME),
+                    1.0,
+                    0.0,
+                )
                 .unwrap();
         }
         let settled = simulation.poses;
         simulation
-            .advance(bodies, GRAVITY, Seconds(12.5), 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(12.5), 1.0, 0.0)
             .unwrap();
         for (index, before) in settled.iter().enumerate().take(6).skip(1) {
             assert!(
@@ -1461,22 +1694,28 @@ mod tests {
         let mut caught_up = RigidSimulation::default();
         let mut regular = RigidSimulation::default();
         caught_up
-            .advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         for frame in 0..=181 {
             regular
-                .advance(bodies, GRAVITY, Seconds(frame as f64 * FRAME), 1.0, 0.0)
+                .advance(
+                    bodies.clone(),
+                    GRAVITY,
+                    Seconds(frame as f64 * FRAME),
+                    1.0,
+                    0.0,
+                )
                 .unwrap();
         }
         caught_up
-            .advance(bodies, GRAVITY, Seconds(180.0 * FRAME), 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(180.0 * FRAME), 1.0, 0.0)
             .unwrap();
         caught_up
-            .advance(bodies, GRAVITY, Seconds(181.0 * FRAME), 1.0, 0.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(181.0 * FRAME), 1.0, 0.0)
             .unwrap();
         assert_eq!(caught_up.poses, regular.poses);
         caught_up
-            .advance(bodies, GRAVITY, Seconds(181.0 * FRAME), 1.0, 1.0)
+            .advance(bodies.clone(), GRAVITY, Seconds(181.0 * FRAME), 1.0, 1.0)
             .unwrap();
         assert_eq!(caught_up.poses[0].pos, [0.0, 4.0, 0.0]);
     }
@@ -1493,31 +1732,43 @@ mod tests {
         let mut preview = RigidSimulation::default();
         let mut export = RigidSimulation::default();
         for sim in [&mut preview, &mut export] {
-            sim.advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            sim.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
                 .unwrap();
         }
         let now = Seconds(3.0 + FRAME / 2.0);
-        preview.advance(bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+        preview
+            .advance(bodies.clone(), GRAVITY, now, 1.0, 0.0)
+            .unwrap();
         assert!((preview.pending_time.0 - 179.0 * FRAME).abs() < 1e-9);
         let held = preview.poses;
-        preview.advance(bodies, GRAVITY, now, 0.0, 0.0).unwrap();
+        preview
+            .advance(bodies.clone(), GRAVITY, now, 0.0, 0.0)
+            .unwrap();
         assert_eq!(preview.poses, held);
         for _ in 1..180 {
-            preview.advance(bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+            preview
+                .advance(bodies.clone(), GRAVITY, now, 1.0, 0.0)
+                .unwrap();
         }
         assert_eq!(preview.pending_time, Seconds::ZERO);
         assert!((preview.accumulator - FRAME / 2.0).abs() < 1e-9);
         {
             let _export = PhysicsStepScope::for_render(true);
-            export.advance(bodies, GRAVITY, now, 1.0, 0.0).unwrap();
+            export
+                .advance(bodies.clone(), GRAVITY, now, 1.0, 0.0)
+                .unwrap();
         }
         assert_eq!(
             preview.poses, export.poses,
             "chunking must not change collision results"
         );
         let next = Seconds(3.0 + FRAME);
-        preview.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
-        export.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
+        preview
+            .advance(bodies.clone(), GRAVITY, next, 1.0, 0.0)
+            .unwrap();
+        export
+            .advance(bodies.clone(), GRAVITY, next, 1.0, 0.0)
+            .unwrap();
         assert_eq!(preview.poses, export.poses);
     }
 
@@ -1526,7 +1777,7 @@ mod tests {
         let _preview_scope =
             PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
 
-        let mut moving = [None; MAX_BODIES];
+        let mut moving = std::array::from_fn(|_| None);
         moving[0] = Some(RigidBody {
             kind: 2,
             transform: Transform {
@@ -1539,39 +1790,39 @@ mod tests {
         let mut moving_preview = RigidSimulation::default();
         let mut moving_export = RigidSimulation::default();
         moving_preview
-            .advance(moving, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(moving.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         moving_export
-            .advance(moving, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(moving.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         moving[0].as_mut().unwrap().transform.pos[0] = -0.55;
         moving_preview
-            .advance(moving, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .advance(moving.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
             .unwrap();
         {
             let _export_scope = PhysicsStepScope::for_render(true);
             moving_export
-                .advance(moving, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+                .advance(moving.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
                 .unwrap();
         }
         moving[0].as_mut().unwrap().transform.pos[0] = 0.2;
         moving_preview
-            .advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+            .advance(moving.clone(), [0.0; 3], Seconds(1.0), 1.0, 0.0)
             .unwrap();
         {
             let _export_scope = PhysicsStepScope::for_render(true);
             moving_export
-                .advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .advance(moving.clone(), [0.0; 3], Seconds(1.0), 1.0, 0.0)
                 .unwrap();
         }
         while moving_preview.pending_time.0 > 0.0 {
             moving_preview
-                .advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .advance(moving.clone(), [0.0; 3], Seconds(1.0), 1.0, 0.0)
                 .unwrap();
         }
         assert_eq!(moving_preview.poses, moving_export.poses);
 
-        let mut rotating = [None; MAX_BODIES];
+        let mut rotating = std::array::from_fn(|_| None);
         rotating[0] = Some(RigidBody {
             kind: 2,
             transform: Transform {
@@ -1584,34 +1835,34 @@ mod tests {
         let mut rotating_preview = RigidSimulation::default();
         let mut rotating_export = RigidSimulation::default();
         rotating_preview
-            .advance(rotating, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(rotating.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         rotating_export
-            .advance(rotating, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(rotating.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_4;
         rotating_preview
-            .advance(rotating, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .advance(rotating.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
             .unwrap();
         {
             let _export_scope = PhysicsStepScope::for_render(true);
             rotating_export
-                .advance(rotating, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+                .advance(rotating.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
                 .unwrap();
         }
         rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_2;
         rotating_preview
-            .advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+            .advance(rotating.clone(), [0.0; 3], Seconds(1.0), 1.0, 0.0)
             .unwrap();
         {
             let _export_scope = PhysicsStepScope::for_render(true);
             rotating_export
-                .advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .advance(rotating.clone(), [0.0; 3], Seconds(1.0), 1.0, 0.0)
                 .unwrap();
         }
         while rotating_preview.pending_time.0 > 0.0 {
             rotating_preview
-                .advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0)
+                .advance(rotating.clone(), [0.0; 3], Seconds(1.0), 1.0, 0.0)
                 .unwrap();
         }
         assert_eq!(rotating_preview.poses, rotating_export.poses);
@@ -1620,45 +1871,45 @@ mod tests {
     #[test]
     fn paused_authored_edit_keeps_pose_sample_needed_by_preview_backlog() {
         let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-2.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = -0.5;
         simulation
-            .advance(bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
             .unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = 2.0;
         simulation
-            .advance(bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
             .unwrap();
         let owed_pose = simulation
-            .interpolated_body(0, 0.25, bodies[0].unwrap())
+            .interpolated_body(0, 0.25, bodies[0].clone().unwrap())
             .unwrap();
         assert!((owed_pose.transform.pos[0] + 1.25).abs() < 1.0e-4);
     }
 
     #[test]
     fn paused_animated_pose_edit_and_undo_move_only_the_authored_body() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([0.0, 0.0, 0.0]);
         animated.kind = 2;
-        bodies[0] = Some(animated);
+        bodies[0] = Some(animated.clone());
         bodies[1] = Some(body([10.0, 0.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         let dynamic_before = simulation.poses[1];
 
         bodies[0].as_mut().unwrap().transform.pos[0] = 5.0;
         bodies[0].as_mut().unwrap().transform.rot_euler[2] = 0.4;
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
         assert!((simulation.poses[0].rot_euler[2] - 0.4).abs() < 1.0e-5);
@@ -1667,7 +1918,7 @@ mod tests {
 
         bodies[0] = Some(animated);
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         assert!(simulation.poses[0].pos[0].abs() < 1.0e-5);
         assert!(simulation.poses[0].rot_euler[2].abs() < 1.0e-5);
@@ -1682,8 +1933,8 @@ mod tests {
         let mut advance = |prototype: RigidBody| {
             simulation
                 .advance_with_copies(
-                    [None; MAX_BODIES],
-                    Some(prototype),
+                    std::array::from_fn(|_| None),
+                    Some(prototype.clone()),
                     2.0,
                     1.25,
                     2.0,
@@ -1695,46 +1946,46 @@ mod tests {
                 .unwrap();
             simulation.copy_poses[..2].to_vec()
         };
-        let before = advance(prototype);
+        let before = advance(prototype.clone());
         prototype.transform.pos[0] = 5.0;
         prototype.transform.rot_euler[1] = 0.25;
-        let edited = advance(prototype);
+        let edited = advance(prototype.clone());
         for (old, new) in before.iter().zip(&edited) {
             assert!((new.pos[0] - old.pos[0] - 5.0).abs() < 1.0e-5);
             assert!((new.rot_euler[1] - old.rot_euler[1] - 0.25).abs() < 1.0e-5);
         }
         prototype.transform.pos[0] = 0.0;
         prototype.transform.rot_euler[1] = 0.0;
-        let undone = advance(prototype);
+        let undone = advance(prototype.clone());
         assert_eq!(undone, before);
     }
 
     #[test]
     fn paused_edit_during_backlog_stays_visible_without_sweeping_a_dynamic_body() {
         let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-2.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
         bodies[1] = Some(body([2.0, 0.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = -1.0;
         simulation
-            .advance(bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
             .unwrap();
         assert!(simulation.pending_time.0 > 0.0);
         bodies[0].as_mut().unwrap().transform.pos[0] = 5.0;
         simulation
-            .advance(bodies, [0.0; 3], Seconds(0.5), 0.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(0.5), 0.0, 0.0)
             .unwrap();
         assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
         assert!(simulation.pending_time.0 > 0.0);
         while simulation.pending_time.0 > 0.0 {
             simulation
-                .advance(bodies, [0.0; 3], Seconds(0.5), 1.0, 0.0)
+                .advance(bodies.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0)
                 .unwrap();
         }
         assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
@@ -1743,18 +1994,18 @@ mod tests {
 
     #[test]
     fn fast_animated_sweep_uses_outer_steps_to_reach_dynamic_body() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-2.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
         bodies[1] = Some(body([0.0, 0.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = 2.0;
         simulation
-            .advance(bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(FRAME), 1.0, 0.0)
             .unwrap();
         assert!(
             simulation.poses[1]
@@ -1767,14 +2018,14 @@ mod tests {
 
     #[test]
     fn nonlinear_animated_round_trip_is_sampled_inside_one_render_frame() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-2.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
         bodies[1] = Some(body([0.0, 0.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
 
         // The authored curve returns to its starting position by the next
@@ -1785,13 +2036,13 @@ mod tests {
                 -2.0 * (std::f32::consts::TAU * quarter as f32 / 4.0).cos();
             let _sample = PhysicsAuthoredSampleScope::new();
             simulation
-                .advance(bodies, [0.0; 3], Seconds(t), 1.0, 0.0)
+                .advance(bodies.clone(), [0.0; 3], Seconds(t), 1.0, 0.0)
                 .unwrap();
         }
         bodies[0].as_mut().unwrap().transform.pos[0] = -2.0;
-        assert!(simulation.animated_microsteps(bodies, None, FRAME).0 > 1);
+        assert!(simulation.animated_microsteps(&bodies, None, FRAME).0 > 1);
         simulation
-            .advance(bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(FRAME), 1.0, 0.0)
             .unwrap();
         assert!(
             simulation.poses[1].pos.iter().any(|value| value.abs() > 0.01),
@@ -1803,7 +2054,7 @@ mod tests {
     #[test]
     fn nonlinear_contacts_match_regular_irregular_and_preview_export_delivery() {
         fn trajectory(tick: usize) -> [Option<RigidBody>; MAX_BODIES] {
-            let mut bodies = [None; MAX_BODIES];
+            let mut bodies = std::array::from_fn(|_| None);
             let mut animated = body([
                 -2.0 * (std::f32::consts::TAU * tick as f32 / 8.0).cos(),
                 0.0,
@@ -1821,9 +2072,8 @@ mod tests {
             simulation
                 .advance(trajectory(0), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
                 .unwrap();
-            let _preview = preview.then(|| {
-                PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO)
-            });
+            let _preview = preview
+                .then(|| PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO));
             for sample in 1..=32 {
                 let time = Seconds(sample as f64 / 240.0);
                 if irregular && sample != 32 {
@@ -1862,17 +2112,29 @@ mod tests {
 
     #[test]
     fn fast_dynamic_body_uses_bullet_collision_against_animated_body() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(body([0.0, 3.0, 0.0]));
         let mut animated = body([0.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[1] = Some(animated);
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0, -20_000.0, 0.0], Seconds::ZERO, 1.0, 0.0)
+            .advance(
+                bodies.clone(),
+                [0.0, -20_000.0, 0.0],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+            )
             .unwrap();
         simulation
-            .advance(bodies, [0.0, -20_000.0, 0.0], Seconds(FRAME), 1.0, 0.0)
+            .advance(
+                bodies.clone(),
+                [0.0, -20_000.0, 0.0],
+                Seconds(FRAME),
+                1.0,
+                0.0,
+            )
             .unwrap();
         assert!(
             simulation.poses[0].pos[1] > 0.9,
@@ -1883,7 +2145,7 @@ mod tests {
 
     #[test]
     fn two_fast_dynamics_collide_without_bullet_target_skip() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut floor = body([0.0, -2.0, 0.0]);
         floor.kind = 0;
         bodies[0] = Some(floor);
@@ -1891,10 +2153,22 @@ mod tests {
         bodies[2] = Some(body([0.0, 3.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0, -20_000.0, 0.0], Seconds::ZERO, 1.0, 0.0)
+            .advance(
+                bodies.clone(),
+                [0.0, -20_000.0, 0.0],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+            )
             .unwrap();
         simulation
-            .advance(bodies, [0.0, -20_000.0, 0.0], Seconds(FRAME), 1.0, 0.0)
+            .advance(
+                bodies.clone(),
+                [0.0, -20_000.0, 0.0],
+                Seconds(FRAME),
+                1.0,
+                0.0,
+            )
             .unwrap();
         assert!(
             simulation.poses[2].pos[1] > 0.0,
@@ -1905,18 +2179,18 @@ mod tests {
 
     #[test]
     fn extreme_animated_translation_uses_automatic_outer_steps() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-100.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
         bodies[1] = Some(body([0.0, 0.0, 0.0]));
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(bodies, [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = 100.0;
         simulation
-            .advance(bodies, [0.0; 3], Seconds(FRAME), 1.0, 0.0)
+            .advance(bodies.clone(), [0.0; 3], Seconds(FRAME), 1.0, 0.0)
             .unwrap();
         assert!(
             simulation.poses[1].pos.iter().any(|value| value.abs() > 0.01),
@@ -1931,21 +2205,21 @@ mod tests {
         let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut sim = RigidSimulation::default();
-        sim.advance(bodies, GRAVITY, Seconds::ZERO, 1.0, 0.0)
+        sim.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
-        sim.advance(bodies, GRAVITY, Seconds(3.0), 1.0, 0.0)
+        sim.advance(bodies.clone(), GRAVITY, Seconds(3.0), 1.0, 0.0)
             .unwrap();
         assert!(sim.pending_time.0 > 2.9);
         {
             let _export = PhysicsStepScope::for_render(true);
-            sim.advance(bodies, GRAVITY, Seconds(3.0), 0.0, 0.0)
+            sim.advance(bodies.clone(), GRAVITY, Seconds(3.0), 0.0, 0.0)
                 .unwrap();
         }
         assert_eq!(sim.pending_time, Seconds::ZERO);
-        sim.advance(bodies, GRAVITY, Seconds(6.0), 1.0, 0.0)
+        sim.advance(bodies.clone(), GRAVITY, Seconds(6.0), 1.0, 0.0)
             .unwrap();
         assert!(sim.pending_time.0 > 2.9);
-        sim.advance(bodies, GRAVITY, Seconds(6.0), 1.0, 1.0)
+        sim.advance(bodies.clone(), GRAVITY, Seconds(6.0), 1.0, 1.0)
             .unwrap();
         assert_eq!(sim.pending_time, Seconds::ZERO);
         assert_eq!(sim.poses[0].pos, [0.0, 4.0, 0.0]);
@@ -1970,13 +2244,13 @@ mod tests {
 
     #[test]
     fn copies_are_reset_latched_and_shrink_tail_is_inactive() {
-        let bodies = [None; MAX_BODIES];
+        let bodies = std::array::from_fn(|_| None);
         let prototype = body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation
             .advance_with_copies(
-                bodies,
-                Some(prototype),
+                bodies.clone(),
+                Some(prototype.clone()),
                 130.0,
                 1.25,
                 16.0,
@@ -1991,8 +2265,8 @@ mod tests {
 
         simulation
             .advance_with_copies(
-                bodies,
-                Some(prototype),
+                bodies.clone(),
+                Some(prototype.clone()),
                 3.0,
                 2.0,
                 1.0,
@@ -2006,8 +2280,8 @@ mod tests {
 
         simulation
             .advance_with_copies(
-                bodies,
-                Some(prototype),
+                bodies.clone(),
+                Some(prototype.clone()),
                 3.0,
                 2.0,
                 1.0,
@@ -2027,8 +2301,8 @@ mod tests {
         let mut simulation = RigidSimulation::default();
         simulation
             .advance_with_copy_layout(
-                [None; MAX_BODIES],
-                Some(prototype),
+                std::array::from_fn(|_| None),
+                Some(prototype.clone()),
                 32.0,
                 1.85,
                 16.0,
@@ -2043,8 +2317,8 @@ mod tests {
 
         simulation
             .advance_with_copy_layout(
-                [None; MAX_BODIES],
-                Some(prototype),
+                std::array::from_fn(|_| None),
+                Some(prototype.clone()),
                 3.0,
                 0.5,
                 1.0,
@@ -2060,8 +2334,8 @@ mod tests {
 
         simulation
             .advance_with_copy_layout(
-                [None; MAX_BODIES],
-                Some(prototype),
+                std::array::from_fn(|_| None),
+                Some(prototype.clone()),
                 3.0,
                 0.5,
                 1.0,
@@ -2076,8 +2350,8 @@ mod tests {
 
         simulation
             .advance_with_copy_layout(
-                [None; MAX_BODIES],
-                Some(prototype),
+                std::array::from_fn(|_| None),
+                Some(prototype.clone()),
                 32.0,
                 1.85,
                 16.0,
@@ -2095,7 +2369,7 @@ mod tests {
     fn pile_layout_has_bounded_jitter_distinct_rotations_and_clearance() {
         let prototype = body([0.0, 9.0, 0.0]);
         let first = copy_transform_for_layout(
-            prototype,
+            prototype.clone(),
             prototype.transform.pos,
             0,
             256,
@@ -2104,7 +2378,7 @@ mod tests {
             CopyLayout::Pile,
         );
         let second = copy_transform_for_layout(
-            prototype,
+            prototype.clone(),
             prototype.transform.pos,
             1,
             256,
@@ -2116,7 +2390,7 @@ mod tests {
         assert_eq!(
             first.transform,
             copy_transform_for_layout(
-                prototype,
+                prototype.clone(),
                 prototype.transform.pos,
                 0,
                 256,
@@ -2165,7 +2439,7 @@ mod tests {
 
     #[test]
     fn bulk_boxes_share_floor_contacts_and_reset_after_catch_up() {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
         let mut ground = body([0.0, -0.28867513, 0.0]);
         ground.kind = 0;
         ground.transform.scale = [20.0, 0.5, 20.0];
@@ -2175,8 +2449,8 @@ mod tests {
         let mut sim = RigidSimulation::default();
         for frame in 0..=240 {
             sim.advance_with_copies(
-                bodies,
-                Some(prototype),
+                bodies.clone(),
+                Some(prototype.clone()),
                 32.0,
                 1.25,
                 4.0,
@@ -2196,8 +2470,8 @@ mod tests {
         }
         let held = sim.copy_poses.clone();
         sim.advance_with_copies(
-            bodies,
-            Some(prototype),
+            bodies.clone(),
+            Some(prototype.clone()),
             64.0,
             1.25,
             4.0,
@@ -2212,8 +2486,8 @@ mod tests {
             "zero speed holds and count edit stays pending"
         );
         sim.advance_with_copies(
-            bodies,
-            Some(prototype),
+            bodies.clone(),
+            Some(prototype.clone()),
             64.0,
             1.25,
             4.0,
@@ -2224,8 +2498,8 @@ mod tests {
         )
         .unwrap();
         sim.advance_with_copies(
-            bodies,
-            Some(prototype),
+            bodies.clone(),
+            Some(prototype.clone()),
             64.0,
             1.25,
             4.0,
@@ -2247,7 +2521,7 @@ mod tests {
             for frame in 0..=frames {
                 simulation
                     .advance_with_copies(
-                        [None; MAX_BODIES],
+                        std::array::from_fn(|_| None),
                         Some(body([0.0, 8.0, 0.0])),
                         20.0,
                         2.0,

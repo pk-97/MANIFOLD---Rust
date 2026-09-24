@@ -77,6 +77,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         .filter(|pd| {
             type_id != "node.render_scene" || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref())
         })
+        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or((0.0, 1.0));
             let default_value: manifold_core::effect_graph_def::SerializedParamValue =

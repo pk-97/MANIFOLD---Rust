@@ -135,7 +135,6 @@ void b3InitializeContactRegisters( void )
 		b3AddType( b3_meshShape, b3_sphereShape );
 		b3AddType( b3_meshShape, b3_capsuleShape );
 		b3AddType( b3_meshShape, b3_hullShape );
-		b3AddType( b3_meshShape, b3_meshShape );
 		b3AddType( b3_heightShape, b3_sphereShape );
 		b3AddType( b3_heightShape, b3_capsuleShape );
 		b3AddType( b3_heightShape, b3_hullShape );
@@ -153,7 +152,7 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
 
 	if ( s_registers[typeA][typeB].supported == false )
 	{
-		// This shape pairing has no registered narrow phase.
+		// For example, no mesh vs mesh collision
 		return;
 	}
 
@@ -232,7 +231,7 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
 	}
 
 	// todo impose these restrictions to make life easier
-	B3_ASSERT( shapeB->type == b3_sphereShape || shapeB->type == b3_capsuleShape || shapeB->type == b3_hullShape || shapeB->type == b3_meshShape );
+	B3_ASSERT( shapeB->type == b3_sphereShape || shapeB->type == b3_capsuleShape || shapeB->type == b3_hullShape );
 	// B3_ASSERT( bodyB->type != b3_staticBody );
 
 	// Is either body static?
@@ -813,18 +812,6 @@ bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Sha
 				b3ManifoldPoint* mp = manifold->points + j;
 				mp->anchorA = b3Add( mp->anchorA, offset );
 			}
-		}
-	}
-	else if ( shapeA->type == b3_meshShape && shapeB->type == b3_meshShape )
-	{
-		touching = b3ComputeMeshPairManifolds( world, contact, shapeA, xfA, shapeB, xfB, arena );
-		if ( touching && ( shapeA->enableHitEvents || shapeB->enableHitEvents ) )
-		{
-			contact->flags |= b3_simEnableHitEvent;
-		}
-		else
-		{
-			contact->flags &= ~b3_simEnableHitEvent;
 		}
 	}
 	else if ( shapeA->type == b3_meshShape || shapeA->type == b3_heightShape )

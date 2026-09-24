@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "contact.h"
-#include "body.h"
 #include "manifold.h"
 #include "physics_world.h"
 #include "qsort.h"
@@ -75,17 +74,14 @@ static int b3QueryHeightFieldTriangles( int* indices, int capacity, const b3Heig
 	return context.count;
 }
 
-static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTransform xfA, const b3AABB* bounds,
-						   b3Arena arena )
+static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTransform xfA, const b3AABB* bounds )
 {
 	B3_ASSERT( shapeA->type == b3_meshShape || shapeA->type == b3_heightShape );
 
 	b3MeshContact* meshContact = &contact->meshContact;
 
-	// Cache in the mesh frame: the mesh itself may move against a fixed floor.
-	b3Transform meshTransform = b3ToRelativeTransform( xfA, b3Pos_zero );
-	b3AABB localBounds = b3AABB_Transform( b3InvertTransform( meshTransform ), *bounds );
-	if ( b3AABB_Contains( meshContact->queryBounds, localBounds ) )
+	// If the dynamic body didn't move out of the cached query bounds we are done!
+	if ( b3AABB_Contains( meshContact->queryBounds, *bounds ) )
 	{
 		if ( shapeA->type == b3_meshShape )
 		{
@@ -102,26 +98,30 @@ static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTr
 	// Enlarge to the query bounds to absorb small movement
 	float radius = B3_MAX_AABB_MARGIN + B3_SPECULATIVE_DISTANCE;
 	b3Vec3 extension = { radius, radius, radius };
-	meshContact->queryBounds.lowerBound = b3Sub( localBounds.lowerBound, extension );
-	meshContact->queryBounds.upperBound = b3Add( localBounds.upperBound, extension );
+	meshContact->queryBounds.lowerBound = b3Sub( bounds->lowerBound, extension );
+	meshContact->queryBounds.upperBound = b3Add( bounds->upperBound, extension );
 
 	// Query triangles
-	// Exact scan meshes must not silently lose contacts after the first 256 triangles.
-	// Reuse the world's arena; its capacity persists between simulation steps.
-	int triangleCapacity = shapeA->type == b3_meshShape ? shapeA->mesh.data->triangleCount : B3_MAX_MESH_CONTACT_TRIANGLES;
-	int* triangleIndices = b3Bump( &arena, triangleCapacity * sizeof( int ) );
+	int triangleCapacity = B3_MAX_MESH_CONTACT_TRIANGLES;
+
+	int triangleIndices[B3_MAX_MESH_CONTACT_TRIANGLES];
+
+	// Bounds are in world space. Convert to the local mesh frame. The broadphase bounds are float,
+	// so the demoted mesh transform is the matching float world frame (exact in float mode).
+	b3Transform meshTransform = b3ToRelativeTransform( xfA, b3Pos_zero );
+	b3AABB localBounds = b3AABB_Transform( b3InvertTransform( meshTransform ), meshContact->queryBounds );
 	int triangleCount;
 	if ( shapeA->type == b3_meshShape )
 	{
-		triangleCount = b3QueryMeshTriangles( triangleIndices, triangleCapacity, &shapeA->mesh, meshContact->queryBounds );
+		triangleCount = b3QueryMeshTriangles( triangleIndices, triangleCapacity, &shapeA->mesh, localBounds );
 	}
 	else
 	{
 		B3_ASSERT( shapeA->type == b3_heightShape );
-		triangleCount = b3QueryHeightFieldTriangles( triangleIndices, triangleCapacity, shapeA->heightField, meshContact->queryBounds );
+		triangleCount = b3QueryHeightFieldTriangles( triangleIndices, triangleCapacity, shapeA->heightField, localBounds );
 	}
 
-	if ( shapeA->type == b3_heightShape && triangleCount == triangleCapacity )
+	if ( triangleCount == triangleCapacity )
 	{
 		static bool s_once = false;
 		if ( s_once == false )
@@ -135,7 +135,7 @@ static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTr
 	B3_VALIDATE( b3IsSorted( triangleIndices, triangleCount ) );
 
 	// Create new contact cache and match with old one
-	b3ContactCache* contactCache = b3Bump( &arena, triangleCount * sizeof( b3ContactCache ) );
+	b3ContactCache contactCache[B3_MAX_MESH_CONTACT_TRIANGLES];
 
 	int index2 = 0;
 	for ( int index1 = 0; index1 < triangleCount; ++index1 )
@@ -513,129 +513,6 @@ static int b3ReduceCluster( b3LocalManifoldPoint* points, int count1, b3Vec3 nor
 	return count2;
 }
 
-static inline b3Vec2 b3ProjectMovingMeshPoint( b3Vec3 point, b3Vec3 origin, b3Vec3 u, b3Vec3 v )
-{
-	b3Vec3 d = b3Sub( point, origin );
-	return (b3Vec2){ b3Dot( d, u ), b3Dot( d, v ) };
-}
-
-int b3ReduceMovingMeshPoints( b3LocalManifoldPoint* points, int count, b3Vec3 normal )
-{
-	if ( count <= 1 )
-	{
-		return count;
-	}
-
-	// Keep the selection deterministic and bounded. The selected projected points are
-	// also used to reject duplicate contacts, so this never needs an O(n) scratch array.
-	int selected[4];
-	b3Vec2 projected[4];
-	int selectedCount = 0;
-
-	b3Vec3 origin = points[0].point;
-	b3Vec3 u = b3Perp( normal );
-	b3Vec3 v = b3Cross( normal, u );
-
-	// First anchor: always retain the deepest contact. Strict comparisons preserve
-	// input order for ties.
-	int deepestIndex = 0;
-	for ( int i = 1; i < count; ++i )
-	{
-		if ( points[i].separation < points[deepestIndex].separation )
-		{
-			deepestIndex = i;
-		}
-	}
-
-	selected[0] = deepestIndex;
-	projected[0] = b3ProjectMovingMeshPoint( points[deepestIndex].point, origin, u, v );
-	selectedCount = 1;
-
-	// Second anchor: choose the farthest projected point from the deepest point.
-	int bestIndex = B3_NULL_INDEX;
-	float bestScore = -1.0f;
-	for ( int i = 0; i < count; ++i )
-	{
-		b3Vec2 p = b3ProjectMovingMeshPoint( points[i].point, origin, u, v );
-		float score = b3DistanceSquared2( p, projected[0] );
-		if ( score > bestScore )
-		{
-			bestScore = score;
-			bestIndex = i;
-		}
-	}
-
-	if ( bestIndex != B3_NULL_INDEX && bestScore > 0.0f )
-	{
-		selected[selectedCount] = bestIndex;
-		projected[selectedCount] = b3ProjectMovingMeshPoint( points[bestIndex].point, origin, u, v );
-		selectedCount += 1;
-	}
-
-	if ( selectedCount == 2 )
-	{
-		// Third anchor: maximize the projected triangle area.
-		b3Vec2 edge = b3Sub2( projected[1], projected[0] );
-		bestIndex = B3_NULL_INDEX;
-		bestScore = -1.0f;
-		for ( int i = 0; i < count; ++i )
-		{
-			b3Vec2 p = b3ProjectMovingMeshPoint( points[i].point, origin, u, v );
-			float score = b3AbsFloat( b3Cross2( edge, b3Sub2( p, projected[0] ) ) );
-			if ( score > bestScore && b3DistanceSquared2( p, projected[0] ) > 0.0f &&
-				 b3DistanceSquared2( p, projected[1] ) > 0.0f )
-			{
-				bestScore = score;
-				bestIndex = i;
-			}
-		}
-
-		if ( bestIndex != B3_NULL_INDEX )
-		{
-			selected[selectedCount] = bestIndex;
-			projected[selectedCount] = b3ProjectMovingMeshPoint( points[bestIndex].point, origin, u, v );
-			selectedCount += 1;
-		}
-	}
-
-	if ( selectedCount == 3 )
-	{
-		// Fourth anchor: maximize the minimum projected distance to the selected set.
-		bestIndex = B3_NULL_INDEX;
-		bestScore = -1.0f;
-		for ( int i = 0; i < count; ++i )
-		{
-			b3Vec2 p = b3ProjectMovingMeshPoint( points[i].point, origin, u, v );
-			float minimumDistance = FLT_MAX;
-			for ( int j = 0; j < selectedCount; ++j )
-			{
-				minimumDistance = b3MinFloat( minimumDistance, b3DistanceSquared2( p, projected[j] ) );
-			}
-
-			if ( minimumDistance > bestScore )
-			{
-				bestScore = minimumDistance;
-				bestIndex = i;
-			}
-		}
-
-		if ( bestIndex != B3_NULL_INDEX && bestScore > 0.0f )
-		{
-			selected[selectedCount] = bestIndex;
-			projected[selectedCount] = b3ProjectMovingMeshPoint( points[bestIndex].point, origin, u, v );
-			selectedCount += 1;
-		}
-	}
-
-	b3LocalManifoldPoint finalPoints[4];
-	for ( int i = 0; i < selectedCount; ++i )
-	{
-		finalPoints[i] = points[selected[i]];
-	}
-	memcpy( points, finalPoints, selectedCount * sizeof( b3LocalManifoldPoint ) );
-	return selectedCount;
-}
-
 typedef struct b3Cluster
 {
 	b3Vec3 manifoldNormal;
@@ -655,7 +532,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 
 	b3TaskContext* context = b3Array_Get( world->taskContexts, workerIndex );
 
-	b3RefreshCache( contact, shapeA, xfA, &shapeB->aabb, arena );
+	b3RefreshCache( contact, shapeA, xfA, &shapeB->aabb );
 
 	// Collide with triangles and build manifolds
 	b3MeshContact* meshContact = &contact->meshContact;
@@ -697,8 +574,6 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	b3TriangleCache* triangleCaches = meshContact->triangleCache.data;
 
 	const b3HullData* hullB = shapeB->type == b3_hullShape ? shapeB->hull : NULL;
-	bool movingMeshHull = hullB != NULL && shapeA->type == b3_meshShape &&
-		b3Array_Get( world->bodies, shapeA->bodyId )->type != b3_staticBody;
 
 	for ( int index = 0; index < triangleCount && totalPointCount + 3 < pointBufferCapacity; ++index )
 	{
@@ -743,15 +618,8 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 					cache->satCache = (b3SATCache){ 0 };
 				}
 
-				if ( movingMeshHull )
-				{
-					b3CollideHullAndMovingTriangle( manifold, pointCapacity, hullB, vertices[0], vertices[1], vertices[2], &cache->satCache );
-				}
-				else
-				{
-					b3CollideHullAndTriangle( manifold, pointCapacity, hullB, vertices[0], vertices[1], vertices[2],
-											  triangle.flags, &cache->satCache );
-				}
+				b3CollideHullAndTriangle( manifold, pointCapacity, hullB, vertices[0], vertices[1], vertices[2],
+										  triangle.flags, &cache->satCache );
 				context->satCallCount += 1;
 				context->satCacheHitCount += cache->satCache.hit;
 				break;
@@ -779,7 +647,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 			manifold->i2 = triangle.i2;
 			manifold->i3 = triangle.i3;
 
-			if ( movingMeshHull || manifold->feature == b3_featureTriangleFace || B3_FORCE_GHOST_COLLISIONS )
+			if ( manifold->feature == b3_featureTriangleFace || B3_FORCE_GHOST_COLLISIONS )
 			{
 				(void)b3AddEdge( &foundEdges, triangle.i1, triangle.i2 );
 				(void)b3AddEdge( &foundEdges, triangle.i2, triangle.i3 );
@@ -991,8 +859,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		const b3LocalManifold* manifold = acceptedManifolds[i];
 		clusterPointCount += manifold->pointCount;
 
-		// Moving mesh contacts cluster by contact normal. Static terrain keeps the
-		// triangle-normal guard to avoid merging separate terrain surfaces.
+		// Cluster based on the triangle normal and contact normal.
 		// The first cluster found is accepted because the tolerance is tight.
 		// todo consider requiring the triangles to be connect by an edge.
 		// todo consider looking for the best cluster instead of the first one within tolerance
@@ -1005,7 +872,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		{
 			float cosManifoldAngle = b3Dot( clusters[j].manifoldNormal, manifoldNormal );
 			float cosTriangleAngle = b3Dot( clusters[j].triangleNormal, triangleNormal );
-			if ( cosManifoldAngle <= clusterThreshold || ( !movingMeshHull && cosTriangleAngle <= clusterThreshold ) )
+			if ( cosManifoldAngle <= clusterThreshold || cosTriangleAngle <= clusterThreshold )
 			{
 				continue;
 			}
@@ -1107,15 +974,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	{
 		b3Cluster* cm = clusters + i;
 		B3_ASSERT( cm->pointCount == cm->pointCapacity );
-		int reducedCount;
-		if ( movingMeshHull )
-		{
-			reducedCount = b3ReduceMovingMeshPoints( cm->points, cm->pointCount, cm->manifoldNormal );
-		}
-		else
-		{
-			reducedCount = b3ReduceCluster( cm->points, cm->pointCount, cm->triangleNormal, arena );
-		}
+		int reducedCount = b3ReduceCluster( cm->points, cm->pointCount, cm->triangleNormal, arena );
 		cm->pointCount = reducedCount;
 	}
 

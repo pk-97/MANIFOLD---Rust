@@ -5,9 +5,11 @@ use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, GROUP_TYPE_ID, ParamSpecDef, PresetMetadata, StringBindingDef,
+    BindingDef, BindingTarget, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
+    InterfacePortDef, ParamSpecDef, PresetMetadata, StringBindingDef,
 };
 use manifold_core::layer::Layer;
+use manifold_core::scene_exposure::SceneParamMetadata;
 use manifold_core::types::LayerType;
 
 /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
@@ -110,6 +112,183 @@ fn physics_scene_graph() -> EffectGraphDef {
         wire(104, "object", 0, "object_0"),
     ]);
     def
+}
+
+fn imported_group_scene_graph() -> EffectGraphDef {
+    let mut def = render_scene_graph(1, 0);
+    let node = |id: u32, node_id: &str, type_id: &str, handle: &str, params| EffectGraphNode {
+        id,
+        node_id: NodeId::new(node_id),
+        type_id: type_id.to_string(),
+        handle: Some(handle.to_string()),
+        params,
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let mut source_params = BTreeMap::new();
+    source_params.insert("path".into(), SerializedParamValue::String { value: "assets/flower.glb".into() });
+    source_params.insert("fragment_count".into(), SerializedParamValue::Int { value: 1 });
+    source_params.insert("fragment_index".into(), SerializedParamValue::Int { value: 0 });
+    source_params.insert("source_vertex_count".into(), SerializedParamValue::Int { value: 96 });
+    source_params.insert("max_capacity".into(), SerializedParamValue::Int { value: 96 });
+    let transform = node(11, "import_transform", "node.transform_3d", "Transform", BTreeMap::new());
+    let source = node(12, "import_source", "node.gltf_mesh_source", "Source", source_params);
+    let material = node(13, "import_material", "node.pbr_material", "Material", BTreeMap::new());
+    let object = node(14, "import_object", "node.scene_object", "Imported", BTreeMap::new());
+    let output = node(15, "import_output", GROUP_OUTPUT_TYPE_ID, "", BTreeMap::new());
+    let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() };
+    let group = GroupDef {
+        interface: GroupInterface { inputs: vec![], outputs: vec![InterfacePortDef { name: "object".into(), port_type: "Object".into() }], params: vec![] },
+        nodes: vec![transform, source, material, object, output],
+        wires: vec![wire(11, "transform", 14, "transform"), wire(12, "vertices", 14, "vertices"), wire(13, "out", 14, "material"), wire(14, "object", 15, "object")],
+        tint: None,
+    };
+    let mut group_node = node(10, "import_group", GROUP_TYPE_ID, "Imported", BTreeMap::new());
+    group_node.group = Some(Box::new(group));
+    def.nodes.push(group_node);
+    def.wires.push(wire(10, "object", 0, "object_0"));
+    def.preset_metadata = Some(PresetMetadata {
+        id: PresetTypeId::from_string("Imported".into()), display_name: "Imported".into(), category: "Geometry".into(), osc_prefix: "imported".into(),
+        legacy_discriminant: None, scene_modifier: None, scene_bounds: None, available: true, is_line_based: false, layer_types: None,
+        params: vec![], bindings: vec![], param_aliases: vec![], value_aliases: vec![], string_params: vec![],
+        string_bindings: vec![StringBindingDef { id: "model_file".into(), label: "Model File".into(), default_value: "assets/flower.glb".into(), target: BindingTarget::Node { node_id: NodeId::new("import_source"), param: "path".into() } }],
+    });
+    def
+}
+
+fn body_params() -> Vec<SceneParamMetadata> {
+    vec![scene_param_meta("mass", "Mass"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
+}
+
+#[test]
+fn imported_physics_enable_disable_group_roundtrips_shared_world_and_bindings() {
+    let graph = imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(target.clone(), 0, 0, body_params(), graph.clone());
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "enable rejected: {:?}", enable.rejection_reason());
+    let enabled = graph_of(&project, &fx).clone();
+    let world = enabled.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("shared world");
+    assert!(enabled.wires.iter().any(|wire| wire.from_node == 10 && wire.to_node == world.id && wire.to_port == "body_0"));
+    let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    assert!(group.interface.inputs.iter().any(|port| port.name == "pose"));
+    assert!(group.interface.outputs.iter().any(|port| port.name == "body"));
+    let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
+    assert_eq!(body.params.get("collider_parts"), Some(&SerializedParamValue::Int { value: 32 }));
+    assert!(enabled.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if *node_id == body.node_id && param == "path")));
+
+    enable.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph);
+    enable.execute(&mut project);
+    let mut disable = DisableSceneObjectPhysicsCommand::new(target, 0, 0, graph.clone());
+    disable.execute(&mut project);
+    assert!(disable.was_applied(), "disable rejected: {:?}", disable.rejection_reason());
+    let disabled = graph_of(&project, &fx);
+    assert!(disabled.nodes.iter().any(|node| node.type_id == "node.physics_world"));
+    assert!(!disabled.nodes.iter().any(|node| node.type_id == "node.rigid_body"));
+    assert!(!disabled.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == body.node_id)));
+}
+
+#[test]
+fn imported_physics_split_sets_matching_source_and_body_fragments() {
+    let mut graph = imported_group_scene_graph();
+    let meta = graph.preset_metadata.as_mut().unwrap();
+    manifold_core::scene_exposure::stamp_scene_node_exposures_into(&mut meta.params, &mut meta.bindings, 11, &NodeId::new("import_transform"), "node.transform_3d", "Imported — Transform", &[scene_param_meta("pos_y", "Position Y")], &BTreeMap::new());
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(target.clone(), 0, 0, body_params(), graph.clone());
+    enable.execute(&mut project);
+    assert!(enable.was_applied());
+    let enabled = graph_of(&project, &fx).clone();
+    let mut split = SplitSceneObjectCommand::new(target.clone(), 0, 0, body_params(), graph.clone());
+    split.execute(&mut project);
+    assert!(split.was_applied(), "split rejected: {:?}", split.rejection_reason());
+    let def = graph_of(&project, &fx);
+    assert_eq!(def.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"), Some(&SerializedParamValue::Float { value: 8.0 }));
+    let groups: Vec<_> = def.nodes.iter().filter(|node| node.type_id == GROUP_TYPE_ID).collect();
+    assert_eq!(groups.len(), 8);
+    for (index, group_node) in groups.iter().enumerate() {
+        let group = group_node.group.as_ref().unwrap();
+        let source = group.nodes.iter().find(|node| node.type_id == "node.gltf_mesh_source").unwrap();
+        let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
+        assert_eq!(source.params.get("fragment_count"), Some(&SerializedParamValue::Int { value: 8 }));
+        assert_eq!(source.params.get("fragment_index"), Some(&SerializedParamValue::Int { value: index as i32 }));
+        assert_eq!(body.params.get("fragment_count"), Some(&SerializedParamValue::Int { value: 8 }));
+        assert_eq!(body.params.get("fragment_index"), Some(&SerializedParamValue::Int { value: index as i32 }));
+        assert_eq!(body.params.get("collider_parts"), Some(&SerializedParamValue::Int { value: 1 }));
+    }
+    let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+    assert_eq!(def.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 8);
+    let meta = def.preset_metadata.as_ref().unwrap();
+    let sections: std::collections::HashSet<_> = meta.params.iter().filter(|p| p.name == "Position Y").map(|p| p.section.clone()).collect();
+    assert_eq!(sections.len(), 8, "each piece owns separate transform controls");
+    let mut ids = Vec::new();
+    super::collect_node_ids(&def.nodes, &mut ids);
+    for binding in &meta.bindings {
+        if let BindingTarget::Node { node_id, .. } = &binding.target { assert!(ids.contains(node_id), "dangling numeric binding"); }
+    }
+    for binding in &meta.string_bindings {
+        if let BindingTarget::Node { node_id, .. } = &binding.target { assert!(ids.contains(node_id), "dangling asset binding"); }
+    }
+    let split_def = def.clone();
+    let mut again = SplitSceneObjectCommand::new(target, 0, 0, body_params(), graph);
+    again.execute(&mut project);
+    assert!(!again.was_applied());
+    assert_eq!(graph_of(&project, &fx), &split_def);
+    split.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &enabled);
+    split.execute(&mut project);
+    assert!(split.was_applied());
+
+}
+
+#[test]
+fn imported_group_physics_duplicate_remove_uses_fresh_world_slot() {
+    let graph = imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(target.clone(), 0, 0, body_params(), graph.clone());
+    enable.execute(&mut project);
+    assert!(enable.was_applied());
+    let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
+    let duplicated = graph_of(&project, &fx);
+    let world = duplicated.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+    assert_eq!(duplicated.wires.iter().filter(|wire| wire.to_node == world.id && wire.to_port.starts_with("body_")).count(), 2);
+    let mut remove = RemoveSceneObjectCommand::new(target, vec![], 0, 1, graph);
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
+    let removed = graph_of(&project, &fx);
+    assert_eq!(removed.nodes.iter().filter(|node| node.type_id == GROUP_TYPE_ID).count(), 1);
+    assert!(removed.nodes.iter().any(|node| node.type_id == "node.physics_world"));
+}
+
+#[test]
+fn imported_physics_rejects_unsupported_source_and_conflicting_group_atomically() {
+    let mut unsupported = imported_group_scene_graph();
+    let group = unsupported.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    group.nodes.iter_mut().find(|node| node.type_id == "node.gltf_mesh_source").unwrap().type_id = "node.bend_mesh".into();
+    let (mut project, fx) = project_with_graph(unsupported.clone());
+    let mut command = EnableSceneObjectPhysicsCommand::new(GraphTarget::Effect(fx.clone()), 0, 0, body_params(), unsupported.clone());
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(graph_of(&project, &fx), &unsupported);
+
+    let mut conflict = imported_group_scene_graph();
+    let group = conflict.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    group.interface.inputs.push(InterfacePortDef { name: "pose".into(), port_type: "Transform".into() });
+    let (mut project, fx) = project_with_graph(conflict.clone());
+    let mut command = EnableSceneObjectPhysicsCommand::new(GraphTarget::Effect(fx.clone()), 0, 0, body_params(), conflict.clone());
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(graph_of(&project, &fx), &conflict);
 }
 
 /// A generator-hosted twin of [`project_with_graph`] (BUG-295 regression
@@ -821,7 +1000,7 @@ fn physics_scene_commands_reject_shared_pose_atomically() {
 #[test]
 fn duplicate_physics_scene_object_rejects_full_world_atomically() {
     let mut graph = physics_scene_graph();
-    for slot in 1..16 {
+    for slot in 1..64 {
         let id = 2_000 + slot;
         graph.nodes.push(EffectGraphNode {
             id,
@@ -1691,7 +1870,7 @@ fn add_scene_object_rejects_a_full_physics_world_atomically() {
         "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
     )))
     .unwrap();
-    for slot in 6..16 {
+    for slot in 6..64 {
         graph.wires.push(EffectGraphWire {
             from_node: 101,
             from_port: "body".to_string(),

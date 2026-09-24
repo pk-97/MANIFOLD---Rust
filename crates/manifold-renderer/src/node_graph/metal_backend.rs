@@ -918,7 +918,7 @@ impl Backend for MetalBackend {
     }
 
     fn rigid_body(&self, slot: Slot) -> Option<crate::node_graph::physics::RigidBody> {
-        self.rigid_bodies.get(&slot).copied()
+        self.rigid_bodies.get(&slot).cloned()
     }
 
     fn set_render_mode(&mut self, slot: Slot, value: crate::node_graph::render_mode::RenderMode) {

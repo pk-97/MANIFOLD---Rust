@@ -75,6 +75,7 @@ const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
 const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
+const OBJ_OFF_PHYSICS: u64 = 36;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -427,6 +428,8 @@ pub struct ObjectKnownRow {
     /// P4b: the object's layer-skin row. `None` when no `node.layer_source`
     /// is wired into the object's material maps.
     pub skin: Option<SkinRowVm>,
+    pub physics_enabled: bool,
+    pub physics_imported: bool,
 }
 
 /// One Objects-section row (D3/D4).
@@ -965,6 +968,9 @@ pub struct ScenePanel {
     /// header's "Frame" button, when a Known object is selected this frame
     /// — resolves to `PanelAction::SceneSetupFrameSelected`.
     object_frame_ids: Vec<(NodeId, usize)>,
+    object_enable_physics_ids: Vec<(NodeId, usize)>,
+    object_disable_physics_ids: Vec<(NodeId, usize)>,
+    object_split_ids: Vec<(NodeId, usize)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -1058,6 +1064,9 @@ impl Default for ScenePanel {
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
             object_frame_ids: Vec::new(),
+            object_enable_physics_ids: Vec::new(),
+            object_disable_physics_ids: Vec::new(),
+            object_split_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
             modifier_remove_ids: Vec::new(),
@@ -1305,6 +1314,9 @@ impl ScenePanel {
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
+        self.object_enable_physics_ids.clear();
+        self.object_disable_physics_ids.clear();
+        self.object_split_ids.clear();
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.add_modifier_button_id = None;
@@ -1889,6 +1901,12 @@ impl ScenePanel {
             self.properties_card.resize(0);
             return cy;
         };
+        let imported_selection = self.state.as_live().is_some_and(|vm| {
+            self.selection.get(&vm.layer_id).is_some_and(|selection| {
+                matches!(selection, SceneSelection::Object(id) if vm.objects.iter().any(|object|
+                    matches!(object, ObjectRowVm::Known(row) if row.object_node_id == *id && row.physics_imported)))
+            })
+        });
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
@@ -1906,6 +1924,8 @@ impl ScenePanel {
                 });
                 if p.spec.section.as_deref() == Some(section.as_str())
                     && owned
+                    && !(imported_selection && p.spec.name == "Shape")
+                    && (imported_selection || p.spec.name != "Collider Detail")
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
                     && self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
@@ -2420,6 +2440,18 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             *index as u32,
                         )));
+                    } else if let Some((_, index)) = self.object_enable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
+                    } else if let Some((_, index)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
+                    } else if let Some((_, index)) = self.object_split_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupSplitObject(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
                     } else if let Some((light_node_id, _, current_name)) =
                         self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -2929,6 +2961,8 @@ mod tests {
                     modifiers_addable: true,
                     sections: Vec::new(),
                     skin: None,
+                    physics_enabled: false,
+                    physics_imported: false,
                 })),
                 ObjectRowVm::Custom { index: 1 },
             ],

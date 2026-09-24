@@ -140,7 +140,7 @@ mod generate_range;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
 mod gltf_animation_source;
-mod gltf_mesh_source;
+pub(crate) mod gltf_mesh_source;
 mod gltf_morph_deltas_source;
 mod gltf_morph_weights;
 mod gltf_skeleton_pose;

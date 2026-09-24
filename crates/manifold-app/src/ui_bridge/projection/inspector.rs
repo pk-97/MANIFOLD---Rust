@@ -568,6 +568,8 @@ pub fn sync_inspector_data(
                                             transform_chain_parseable: _,
                                             modifier_chain,
                                             modifier_chain_parseable,
+                                            physics,
+                                            physics_imported,
                                             ..
                                         } = known.as_ref();
                                         // P2 slice 2a: the real P1 section
@@ -584,7 +586,9 @@ pub fn sync_inspector_data(
                                         // different strings for the same
                                         // node kind).
                                         let mut object_doc_ids = vec![*object_node_id];
-                                        if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
+                                        if let Some(physics) = physics {
+                                            object_doc_ids.push(physics.body_node_id);
+                                        } else if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
                                             manifold_renderer::node_graph::scene_vm::physics_body_doc_id(def, *object_node_id)) {
                                             object_doc_ids.push(body);
                                         }
@@ -665,6 +669,8 @@ pub fn sync_inspector_data(
                                                 modifiers_addable: *modifier_chain_parseable,
                                                 sections,
                                                 skin,
+                                                physics_enabled: physics.is_some(),
+                                                physics_imported: *physics_imported,
                                             },
                                         ))
                                     }

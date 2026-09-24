@@ -12,6 +12,8 @@ enum
 	BOX3D_BRIDGE_ERROR = 1,
 	BOX3D_BRIDGE_NO_SHAPE = 2,
 	BOX3D_BRIDGE_NO_HIT = 3,
+	BOX3D_BRIDGE_TOO_MANY_SHAPES = 4,
+	BOX3D_MAX_BODY_SHAPES = 64,
 };
 
 static b3BodyType box3d_body_type( int kind )
@@ -29,6 +31,37 @@ static b3Quat box3d_quat( float x, float y, float z, float w )
 {
 	b3Quat result = { { x, y, z }, w };
 	return result;
+}
+
+uintptr_t manifold_box3d_cook_hull( const float* points, int point_count, int max_vertex_count )
+{
+	if ( points == NULL || point_count < 4 || max_vertex_count < 4 )
+	{
+		return 0;
+	}
+	return (uintptr_t)b3CreateHull( (const b3Vec3*)points, point_count, max_vertex_count );
+}
+
+int manifold_box3d_hull_copy_points( uintptr_t hull_value, float* points_out, int capacity )
+{
+	if ( hull_value == 0 )
+	{
+		return 0;
+	}
+	b3HullData* hull = (b3HullData*)hull_value;
+	int count = hull->vertexCount;
+	if ( points_out == NULL || capacity < count )
+	{
+		return count;
+	}
+	const b3Vec3* points = b3GetHullPoints( hull );
+	for ( int i = 0; i < count; ++i )
+	{
+		points_out[3 * i] = points[i].x;
+		points_out[3 * i + 1] = points[i].y;
+		points_out[3 * i + 2] = points[i].z;
+	}
+	return count;
 }
 
 static void box3d_set_mass( b3BodyId body_id, float mass )
@@ -82,12 +115,93 @@ void manifold_box3d_world_set_max_linear_speed( uint32_t world_id, float speed )
 
 void manifold_box3d_world_set_contact_tuning( uint32_t world_id, float hertz, float damping, float speed )
 {
-    b3World_SetContactTuning( b3LoadWorldId( world_id ), hertz, damping, speed );
+	b3World_SetContactTuning( b3LoadWorldId( world_id ), hertz, damping, speed );
 }
 
 void manifold_box3d_world_step( uint32_t world_id, float dt, uint32_t substeps )
 {
 	b3World_Step( b3LoadWorldId( world_id ), dt, (int)substeps );
+}
+
+static uint64_t box3d_body_create_hulls(
+	uint32_t world_id,
+	const float* points,
+	const int32_t* point_counts,
+	int hull_count,
+	int max_vertex_count,
+	int kind,
+	float px,
+	float py,
+	float pz,
+	float qx,
+	float qy,
+	float qz,
+	float qw,
+	float mass,
+	float friction,
+	float restitution,
+	uintptr_t* hull_out )
+{
+	b3BodyType body_type = box3d_body_type( kind );
+	if ( body_type == b3_bodyTypeCount || points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 || max_vertex_count < 4 )
+	{
+		return 0;
+	}
+
+	b3BodyDef body_definition = b3DefaultBodyDef();
+	body_definition.type = body_type;
+	body_definition.position = (b3Pos){ px, py, pz };
+	body_definition.rotation = box3d_quat( qx, qy, qz, qw );
+	b3BodyId body_id = b3CreateBody( b3LoadWorldId( world_id ), &body_definition );
+	if ( body_id.index1 == 0 )
+	{
+		return 0;
+	}
+
+	b3ShapeDef shape_definition = b3DefaultShapeDef();
+	shape_definition.density = 1.0f;
+	shape_definition.baseMaterial.friction = friction;
+	shape_definition.baseMaterial.restitution = restitution;
+	size_t point_offset = 0;
+	for ( int i = 0; i < hull_count; ++i )
+	{
+		int point_count = point_counts[i];
+		if ( point_count < 4 )
+		{
+			for ( int j = 0; j < i; ++j )
+			{
+				b3DestroyHull( (b3HullData*)hull_out[j] );
+			}
+			b3DestroyBody( body_id );
+			return 0;
+		}
+		b3HullData* hull = b3CreateHull( (const b3Vec3*)( points + 3 * point_offset ), point_count, max_vertex_count );
+		if ( hull == NULL )
+		{
+			for ( int j = 0; j < i; ++j )
+			{
+				b3DestroyHull( (b3HullData*)hull_out[j] );
+			}
+			b3DestroyBody( body_id );
+			return 0;
+		}
+		b3ShapeId shape_id = b3CreateHullShape( body_id, &shape_definition, hull );
+		if ( shape_id.index1 == 0 )
+		{
+			b3DestroyHull( hull );
+			for ( int j = 0; j < i; ++j )
+			{
+				b3DestroyHull( (b3HullData*)hull_out[j] );
+			}
+			b3DestroyBody( body_id );
+			return 0;
+		}
+		hull_out[i] = (uintptr_t)hull;
+		point_offset += (size_t)point_count;
+	}
+
+	box3d_set_mass( body_id, mass );
+	return b3StoreBodyId( body_id );
 }
 
 uint64_t manifold_box3d_body_create(
@@ -107,50 +221,32 @@ uint64_t manifold_box3d_body_create(
 	float restitution,
 	uintptr_t* hull_out )
 {
-	b3BodyType body_type = box3d_body_type( kind );
-	if ( body_type == b3_bodyTypeCount || hull_out == NULL )
-	{
-		return 0;
-	}
+	int32_t point_counts[1] = { point_count };
+	return box3d_body_create_hulls( world_id, points, point_counts, 1, point_count, kind, px, py, pz, qx, qy, qz, qw,
+		mass, friction, restitution, hull_out );
+}
 
-	b3BodyDef body_definition = b3DefaultBodyDef();
-	body_definition.type = body_type;
-	body_definition.position = (b3Pos){ px, py, pz };
-	body_definition.rotation = box3d_quat( qx, qy, qz, qw );
-	b3BodyId body_id = b3CreateBody( b3LoadWorldId( world_id ), &body_definition );
-	if ( body_id.index1 == 0 )
-	{
-		return 0;
-	}
-
-	b3Vec3 local_points[255];
-	for ( int i = 0; i < point_count; ++i )
-	{
-		local_points[i] = (b3Vec3){ points[3 * i], points[3 * i + 1], points[3 * i + 2] };
-	}
-
-	b3HullData* hull = b3CreateHull( local_points, point_count, point_count );
-	if ( hull == NULL )
-	{
-		b3DestroyBody( body_id );
-		return 0;
-	}
-
-	b3ShapeDef shape_definition = b3DefaultShapeDef();
-	shape_definition.density = 1.0f;
-	shape_definition.baseMaterial.friction = friction;
-	shape_definition.baseMaterial.restitution = restitution;
-	b3ShapeId shape_id = b3CreateHullShape( body_id, &shape_definition, hull );
-	if ( shape_id.index1 == 0 )
-	{
-		b3DestroyHull( hull );
-		b3DestroyBody( body_id );
-		return 0;
-	}
-
-	box3d_set_mass( body_id, mass );
-	*hull_out = (uintptr_t)hull;
-	return b3StoreBodyId( body_id );
+uint64_t manifold_box3d_body_create_hulls(
+	uint32_t world_id,
+	const float* points,
+	const int32_t* point_counts,
+	int hull_count,
+	int max_vertex_count,
+	int kind,
+	float px,
+	float py,
+	float pz,
+	float qx,
+	float qy,
+	float qz,
+	float qw,
+	float mass,
+	float friction,
+	float restitution,
+	uintptr_t* hull_out )
+{
+	return box3d_body_create_hulls( world_id, points, point_counts, hull_count, max_vertex_count, kind, px, py, pz, qx, qy, qz, qw,
+		mass, friction, restitution, hull_out );
 }
 
 uint64_t manifold_box3d_mesh_body_create(
@@ -198,7 +294,6 @@ uint64_t manifold_box3d_mesh_body_create(
 	mesh_definition.triangleCount = triangle_count;
 	mesh_definition.useMedianSplit = true;
 	mesh_definition.identifyEdges = true;
-	mesh_definition.preserveSmallTriangles = true;
 	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
 	if ( mesh == NULL || mesh->triangleCount != triangle_count )
 	{
@@ -262,6 +357,16 @@ int manifold_box3d_body_update(
 		return BOX3D_BRIDGE_ERROR;
 	}
 
+	int shape_count = b3Body_GetShapeCount( body_id );
+	if ( shape_count < 1 )
+	{
+		return BOX3D_BRIDGE_NO_SHAPE;
+	}
+	if ( shape_count > BOX3D_MAX_BODY_SHAPES )
+	{
+		return BOX3D_BRIDGE_TOO_MANY_SHAPES;
+	}
+
 	// Box3D's bullet flag is meaningful only for dynamic bodies, but it is
 	// stored on the body independently of its type. Clear it before changing a
 	// dynamic body to static or kinematic so a later return to dynamic cannot
@@ -276,13 +381,17 @@ int manifold_box3d_body_update(
 		b3Body_SetType( body_id, body_type );
 	}
 
-	b3ShapeId shape_ids[1];
-	if ( b3Body_GetShapes( body_id, shape_ids, 1 ) != 1 )
+	b3ShapeId shape_ids[BOX3D_MAX_BODY_SHAPES];
+	int stored_shape_count = b3Body_GetShapes( body_id, shape_ids, shape_count );
+	if ( stored_shape_count != shape_count )
 	{
 		return BOX3D_BRIDGE_NO_SHAPE;
 	}
-	b3Shape_SetFriction( shape_ids[0], friction );
-	b3Shape_SetRestitution( shape_ids[0], restitution );
+	for ( int i = 0; i < shape_count; ++i )
+	{
+		b3Shape_SetFriction( shape_ids[i], friction );
+		b3Shape_SetRestitution( shape_ids[i], restitution );
+	}
 	box3d_set_mass( body_id, mass );
 	if ( move_pose != 0 )
 	{

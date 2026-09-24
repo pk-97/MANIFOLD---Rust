@@ -19,6 +19,242 @@ use crate::harness;
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../../assets/generator-presets/PhysicsSolids.json");
 const FRAME_COUNT: u32 = 120;
 
+/// Production import, scene commands, saved graph and native physics together.
+#[test]
+fn physics_imported_flower_enable_split_render_and_reset() {
+    use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
+    use manifold_core::types::LayerType;
+    use manifold_core::{Beats, GraphTarget};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::{
+        EnableSceneObjectPhysicsCommand, SplitSceneObjectCommand,
+    };
+    use manifold_renderer::node_graph::{
+        gltf_import::assemble_import_graph, scene_exposure::metadata_for_node_type,
+    };
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let (imported, _) = assemble_import_graph(&fixture).expect("original flower imports");
+    let render_id = imported
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.render_scene")
+        .unwrap()
+        .id;
+    let registry = PrimitiveRegistry::with_builtin();
+    let h = harness::shared();
+    for split in [false, true] {
+        let mut project = Project::default();
+        let preset_id = imported.preset_metadata.as_ref().unwrap().id.clone();
+        let layer_index =
+            project
+                .timeline
+                .add_layer("Flower Physics", LayerType::Generator, preset_id);
+        let layer = &mut project.timeline.layers[layer_index];
+        layer.gen_params_or_init().graph = Some(imported.clone());
+        layer
+            .clips
+            .push(manifold_core::clip::TimelineClip::new_generator(
+                Beats(0.0),
+                Beats(16.0),
+            ));
+        let target = GraphTarget::Generator(layer.layer_id.clone());
+        let mut enable = EnableSceneObjectPhysicsCommand::new(
+            target.clone(),
+            render_id,
+            0,
+            metadata_for_node_type("node.rigid_body"),
+            imported.clone(),
+        )
+        .with_world_metadata(metadata_for_node_type("node.physics_world"));
+        enable.execute(&mut project);
+        assert!(
+            enable.was_applied(),
+            "enable rejected: {:?}",
+            enable.rejection_reason()
+        );
+        if split {
+            let mut command = SplitSceneObjectCommand::new(
+                target,
+                render_id,
+                0,
+                metadata_for_node_type("node.rigid_body"),
+                imported.clone(),
+            );
+            command.execute(&mut project);
+            assert!(
+                command.was_applied(),
+                "split rejected: {:?}",
+                command.rejection_reason()
+            );
+        }
+        let mut def = project.timeline.layers[layer_index]
+            .generator_graph()
+            .unwrap()
+            .clone();
+        let world = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.physics_world")
+            .unwrap()
+            .id;
+        // Same floor mesh and collider mapping as the shipped Physics Solids.
+        let ground: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS_JSON).unwrap();
+        let object_index = def
+            .wires
+            .iter()
+            .filter(|w| w.to_node == render_id && w.to_port.starts_with("object_"))
+            .count();
+        for mut node in ground
+            .nodes
+            .into_iter()
+            .filter(|n| (100..105).contains(&n.id))
+        {
+            node.id += 100_000;
+            if node.type_id == "node.transform_3d" {
+                node.params
+                    .insert("pos_y".into(), SerializedParamValue::Float { value: -1.5 });
+                node.params.insert(
+                    "scale_x".into(),
+                    SerializedParamValue::Float { value: 20.0 },
+                );
+                node.params.insert(
+                    "scale_z".into(),
+                    SerializedParamValue::Float { value: 20.0 },
+                );
+            }
+            def.nodes.push(node);
+        }
+        for mut wire in ground
+            .wires
+            .into_iter()
+            .filter(|w| (100..105).contains(&w.from_node) || (100..105).contains(&w.to_node))
+        {
+            if (100..105).contains(&wire.from_node) {
+                wire.from_node += 100_000;
+            }
+            if (100..105).contains(&wire.to_node) {
+                wire.to_node += 100_000;
+            }
+            if wire.to_node == 40 {
+                wire.to_node = world;
+                wire.to_port = "body_63".into();
+            }
+            if wire.from_node == 40 {
+                wire.from_node = world;
+                wire.from_port = "pose_63".into();
+            }
+            if wire.to_node == 30 {
+                wire.to_node = render_id;
+                wire.to_port = format!("object_{object_index}");
+            }
+            def.wires.push(wire);
+        }
+        def.nodes
+            .iter_mut()
+            .find(|n| n.id == render_id)
+            .unwrap()
+            .params
+            .insert(
+                "objects".into(),
+                SerializedParamValue::Float {
+                    value: (object_index + 1) as f32,
+                },
+            );
+        project.timeline.layers[layer_index]
+            .gen_params_or_init()
+            .graph = Some(def.clone());
+        project.embedded_presets.push(EmbeddedPreset {
+            kind: manifold_core::preset_def::PresetKind::Generator,
+            def: def.clone(),
+            origin: EmbeddedOrigin::Saved,
+        });
+        let label = if split { "split" } else { "intact" };
+        let output = std::env::temp_dir().join(format!("manifold-standard-box3d-{label}.manifold"));
+        manifold_io::saver::save_project_v1(&project, &output).unwrap();
+        let reloaded = manifold_io::loader::load_project(&output).unwrap();
+        let def = reloaded.timeline.layers[layer_index]
+            .generator_graph()
+            .unwrap()
+            .clone();
+        let mut runtime = PresetRuntime::from_def_with_device(
+            def,
+            &registry,
+            h.device.clone(),
+            h.width,
+            h.height,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .expect("edited and saved graph builds");
+        let target = h.make_target("imported-physics");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
+            assert!(
+                runtime.errors().is_empty(),
+                "imported physics errors: {:?}",
+                runtime.errors()
+            );
+            if !runtime.warmup_pending() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "collider warmup timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
+        let initial = h.readback(&target.texture);
+        assert!(
+            pixel_stats(&initial).0 > 1.0,
+            "flower must render before simulation"
+        );
+        std::fs::write(
+            format!("/tmp/standard-box3d-{label}-initial.png"),
+            manifold_renderer::headless_readback::readback_to_srgb_png(
+                &h.device,
+                &target.texture,
+                h.width,
+                h.height,
+            ),
+        )
+        .unwrap();
+        for frame in 1..=120 {
+            render_frame(&mut runtime, &target, frame, h.width, h.height, &h.device);
+        }
+        assert!(
+            runtime.errors().is_empty(),
+            "simulation errors: {:?}",
+            runtime.errors()
+        );
+        let settled = h.readback(&target.texture);
+        assert!(
+            mean_abs_diff(&initial, &settled) > 0.001,
+            "imported physics must move visible geometry"
+        );
+        std::fs::write(
+            format!("/tmp/standard-box3d-{label}-settled.png"),
+            manifold_renderer::headless_readback::readback_to_srgb_png(
+                &h.device,
+                &target.texture,
+                h.width,
+                h.height,
+            ),
+        )
+        .unwrap();
+        render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
+        let reset = h.readback(&target.texture);
+        assert!(
+            mean_abs_diff(&initial, &reset) < 0.002,
+            "transport reset must restore imported poses"
+        );
+    }
+}
+
 fn render_frame(
     runtime: &mut PresetRuntime,
     target: &manifold_renderer::render_target::RenderTarget,
@@ -170,7 +406,9 @@ fn physics_nonlinear_animated_graph_matches_irregular_frame_delivery() {
     let mut def: serde_json::Value = serde_json::from_str(PHYSICS_SOLIDS_JSON).unwrap();
     for node in def["nodes"].as_array_mut().unwrap() {
         match node["id"].as_u64() {
-            Some(111) => node["params"]["motion"] = serde_json::json!({ "type": "Enum", "value": 2 }),
+            Some(111) => {
+                node["params"]["motion"] = serde_json::json!({ "type": "Enum", "value": 2 })
+            }
             Some(120) => {
                 node["params"]["pos_x"] = serde_json::json!({ "type": "Float", "value": 0.0 });
                 node["params"]["pos_y"] = serde_json::json!({ "type": "Float", "value": 3.8 });
@@ -192,15 +430,18 @@ fn physics_nonlinear_animated_graph_matches_irregular_frame_delivery() {
         "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
     }));
     let json = serde_json::to_string(&def).unwrap();
-    let build = || PresetRuntime::from_json_str_with_device(
-        &json,
-        &registry,
-        std::sync::Arc::clone(&harness.device),
-        harness.width,
-        harness.height,
-        GpuTextureFormat::Rgba16Float,
-        None,
-    ).expect("nonlinear PhysicsSolids graph builds");
+    let build = || {
+        PresetRuntime::from_json_str_with_device(
+            &json,
+            &registry,
+            std::sync::Arc::clone(&harness.device),
+            harness.width,
+            harness.height,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .expect("nonlinear PhysicsSolids graph builds")
+    };
     let mut regular = build();
     let mut irregular = build();
     let regular_target = harness.make_target("physics-nonlinear-regular");

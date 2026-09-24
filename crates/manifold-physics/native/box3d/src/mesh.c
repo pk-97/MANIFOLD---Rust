@@ -1601,7 +1601,7 @@ b3MeshData* b3CreateMesh( const b3MeshDef* def, int* degenerateTriangleIndices, 
 	b3Array( b3Primitive ) primitives;
 	b3Array_CreateN( primitives, triangleCount );
 	int degenerateCount = 0;
-	float minArea = def->preserveSmallTriangles ? 0.0f : 0.01f * B3_LINEAR_SLOP * B3_LINEAR_SLOP;
+	float minArea = 0.01f * B3_LINEAR_SLOP * B3_LINEAR_SLOP;
 	float surfaceArea = 0.0f;
 	int materialCount = 1;
 
@@ -1618,7 +1618,7 @@ b3MeshData* b3CreateMesh( const b3MeshDef* def, int* degenerateTriangleIndices, 
 		b3Vec3 normal = b3Cross( b3Sub( vertex2, vertex1 ), b3Sub( vertex3, vertex1 ) );
 		float area = 0.5f * b3Length( normal );
 
-		if ( area <= 0.0f || area < minArea )
+		if ( area < minArea )
 		{
 			// b3Log( "degenerate: %d %d %d\n", index1, index2, index3 );
 
