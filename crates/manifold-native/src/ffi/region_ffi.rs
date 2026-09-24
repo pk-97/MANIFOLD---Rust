@@ -22,6 +22,19 @@ type FnProcess = unsafe extern "C" fn(
     *mut BlobRegionV2,
     usize,
 ) -> i32;
+type FnProcessBounded = unsafe extern "C" fn(
+    *mut c_void,
+    *const u8,
+    usize,
+    u32,
+    u32,
+    *const BlobRegionOptionsV2,
+    *mut u8,
+    usize,
+    *mut BlobRegionV2,
+    usize,
+    f32,
+) -> i32;
 
 /// FFI-backed V2 detector.  The plugin is intentionally leaked after symbol
 /// resolution, matching the existing BlobDetector wrapper's non-unloading
@@ -29,6 +42,7 @@ type FnProcess = unsafe extern "C" fn(
 pub struct FfiRegionDetector {
     fn_destroy: FnDestroy,
     fn_process: FnProcess,
+    fn_process_bounded: FnProcessBounded,
     handle: *mut c_void,
 }
 
@@ -70,6 +84,12 @@ impl FfiRegionDetector {
                 .map_err(|error| missing_symbol(path, "BlobDetectorV2_Process", &error))
                 .map(|symbol| *symbol)?
         };
+        let fn_process_bounded = unsafe {
+            library
+                .get::<FnProcessBounded>(b"BlobDetectorV2_ProcessBounded\0")
+                .map_err(|error| missing_symbol(path, "BlobDetectorV2_ProcessBounded", &error))
+                .map(|symbol| *symbol)?
+        };
 
         let handle = unsafe { fn_create() };
         if handle.is_null() {
@@ -90,6 +110,7 @@ impl FfiRegionDetector {
         Ok(Self {
             fn_destroy,
             fn_process,
+            fn_process_bounded,
             handle,
         })
     }
@@ -122,26 +143,82 @@ impl RegionDetector for FfiRegionDetector {
         labels: &mut [u8],
         regions: &mut [Region; MAX_REGIONS],
     ) -> Result<usize, RegionError> {
+        self.process_with_bound(rgba, width, height, options, None, labels, regions)
+    }
+
+    fn process_bounded(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        options: RegionOptions,
+        max_box_area: f32,
+        labels: &mut [u8],
+        regions: &mut [Region; MAX_REGIONS],
+    ) -> Result<usize, RegionError> {
+        self.process_with_bound(
+            rgba,
+            width,
+            height,
+            options,
+            Some(max_box_area),
+            labels,
+            regions,
+        )
+    }
+}
+
+impl FfiRegionDetector {
+    fn process_with_bound(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        options: RegionOptions,
+        max_box_area: Option<f32>,
+        labels: &mut [u8],
+        regions: &mut [Region; MAX_REGIONS],
+    ) -> Result<usize, RegionError> {
         // Always clear first so stale labels/records cannot escape a failed
         // call or a native exception translated to -2.
         labels.fill(0);
         regions.fill(Region::default());
 
         validate_region_input(rgba, width, height, options, labels, regions.len())?;
+        if let Some(max_box_area) = max_box_area
+            && (!max_box_area.is_finite() || !(0.0..=1.0).contains(&max_box_area))
+        {
+            return Err(RegionError::InvalidInput);
+        }
 
         let result = unsafe {
-            (self.fn_process)(
-                self.handle,
-                rgba.as_ptr(),
-                rgba.len(),
-                width,
-                height,
-                &options,
-                labels.as_mut_ptr(),
-                labels.len(),
-                regions.as_mut_ptr(),
-                regions.len(),
-            )
+            match max_box_area {
+                Some(max_box_area) => (self.fn_process_bounded)(
+                    self.handle,
+                    rgba.as_ptr(),
+                    rgba.len(),
+                    width,
+                    height,
+                    &options,
+                    labels.as_mut_ptr(),
+                    labels.len(),
+                    regions.as_mut_ptr(),
+                    regions.len(),
+                    max_box_area,
+                ),
+                None => (self.fn_process)(
+                    self.handle,
+                    rgba.as_ptr(),
+                    rgba.len(),
+                    width,
+                    height,
+                    &options,
+                    labels.as_mut_ptr(),
+                    labels.len(),
+                    regions.as_mut_ptr(),
+                    regions.len(),
+                ),
+            }
         };
 
         if (0..=MAX_REGIONS as i32).contains(&result) {
@@ -323,6 +400,21 @@ mod tests {
         ) -> i32 {
             panic!("invalid input reached native process");
         }
+        unsafe extern "C" fn never_process_bounded(
+            _handle: *mut c_void,
+            _rgba: *const u8,
+            _rgba_len: usize,
+            _width: u32,
+            _height: u32,
+            _options: *const BlobRegionOptionsV2,
+            _labels: *mut u8,
+            _labels_len: usize,
+            _regions: *mut BlobRegionV2,
+            _regions_capacity: usize,
+            _max_box_area: f32,
+        ) -> i32 {
+            panic!("invalid input reached native bounded process");
+        }
         unsafe extern "C" fn noop_destroy(_handle: *mut c_void) {}
 
         let mut labels = vec![255; 4];
@@ -341,6 +433,7 @@ mod tests {
         let mut detector = FfiRegionDetector {
             fn_destroy: noop_destroy,
             fn_process: never_process,
+            fn_process_bounded: never_process_bounded,
             handle: std::ptr::null_mut(),
         };
         assert_eq!(

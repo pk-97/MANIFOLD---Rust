@@ -302,6 +302,20 @@ fn dim_contrast_scene() -> Vec<[f32; 4]> {
     pixels
 }
 
+fn bounded_outline_scene() -> Vec<[f32; 4]> {
+    let mut pixels = blank();
+    for y in 20..=120 {
+        for x in 24..=200 {
+            let outline = x == 24 || x == 200 || y == 20 || y == 120;
+            let patch = (112..=117).contains(&x) && (68..=73).contains(&y);
+            if outline || patch {
+                pixels[(y * WIDTH + x) as usize] = [1.0, 1.0, 1.0, 1.0];
+            }
+        }
+    }
+    pixels
+}
+
 fn render_fixture(
     device: &Arc<GpuDevice>,
     runtime: &mut PresetRuntime,
@@ -913,5 +927,60 @@ fn blob_v2_detection_mode() {
     assert!(
         low_threshold_delta > high_threshold_delta + 0.0001,
         "raising the edge threshold must reduce detected density: low={low_threshold_delta:.5}, high={high_threshold_delta:.5}"
+    );
+}
+
+#[test]
+fn blob_v2_box_area() {
+    let device = Arc::new(GpuDevice::new());
+    let registry = PrimitiveRegistry::with_builtin();
+    let input = input_texture(&device, "blob-v2-box-area-input");
+    let source = bounded_outline_scene();
+    let mut effect = effect("MaskBlob");
+    set_param(&mut effect, "denoise", 0.0);
+    set_param(&mut effect, "min_area", 0.0);
+    set_param(&mut effect, "max_blobs", 1.0);
+    set_param(&mut effect, "smoothing", 0.0);
+    set_param(&mut effect, "retention", 0.0);
+    set_param(&mut effect, "feather", 0.0);
+    let mut runtime = build(&device, &registry, &effect);
+
+    let mut unrestricted = Vec::new();
+    for frame in 0..8 {
+        unrestricted = render_fixture(
+            &device,
+            &mut runtime,
+            &effect,
+            &input,
+            frame,
+            &source,
+        );
+    }
+    assert_finite_and_bounded("box-area-unrestricted", &unrestricted);
+    let unrestricted_border = region_mean(&unrestricted, 40, 20, 190, 21);
+    let unrestricted_patch = region_mean(&unrestricted, 112, 68, 118, 74);
+    assert!(
+        unrestricted_border > 0.9 && unrestricted_patch < 0.05,
+        "max_blobs=1 must select the larger outline before the box-area bound: border={unrestricted_border:.3}, patch={unrestricted_patch:.3}"
+    );
+
+    set_param(&mut effect, "max_box_area", 0.25);
+    let mut bounded = Vec::new();
+    for frame in 8..16 {
+        bounded = render_fixture(
+            &device,
+            &mut runtime,
+            &effect,
+            &input,
+            frame,
+            &source,
+        );
+    }
+    assert_finite_and_bounded("box-area-bounded", &bounded);
+    let bounded_border = region_mean(&bounded, 40, 20, 190, 21);
+    let bounded_patch = region_mean(&bounded, 112, 68, 118, 74);
+    assert!(
+        bounded_patch > 0.9 && bounded_border < 0.05,
+        "max_box_area must reject the large outline before max_blobs selection and preserve the small patch: border={bounded_border:.3}, patch={bounded_patch:.3}"
     );
 }

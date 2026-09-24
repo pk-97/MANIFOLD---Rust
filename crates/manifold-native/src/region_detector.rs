@@ -52,6 +52,17 @@ pub trait RegionDetector: Send {
         labels: &mut [u8],
         regions: &mut [Region; MAX_REGIONS],
     ) -> Result<usize, RegionError>;
+
+    fn process_bounded(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        options: RegionOptions,
+        max_box_area: f32,
+        labels: &mut [u8],
+        regions: &mut [Region; MAX_REGIONS],
+    ) -> Result<usize, RegionError>;
 }
 
 /// Validate the part of the native contract that can be checked from Rust.
@@ -274,5 +285,110 @@ mod tests {
         assert!(labels.iter().all(|label| *label <= 2));
         assert_eq!(labels[5 * 8], 0);
         assert_eq!(labels[7 * 8 + 7], 0);
+    }
+
+    #[test]
+    fn blob_v2_bounded_filters_sparse_outline_before_top_k() {
+        let mut pixels = Vec::new();
+        // A sparse frame-spanning outline has little foreground area but a
+        // large enclosing bounding box. It must not consume the top-k slot.
+        for y in 0..16 {
+            for x in 0..16 {
+                if x == 0 || x == 15 || y == 0 || y == 15 {
+                    pixels.push((x, y));
+                }
+            }
+        }
+        // Two disconnected interior objects remain below the box-area bound.
+        pixels.extend((4..6).flat_map(|y| (4..6).map(move |x| (x, y))));
+        pixels.extend((10..12).flat_map(|y| (10..12).map(move |x| (x, y))));
+
+        let rgba = red_fixture(16, 16, &pixels);
+        let mut detector = FfiRegionDetector::new()
+            .expect("rebuilt BlobDetector bundle with bounded V2 symbol is required");
+        let mut labels = vec![255; 256];
+        let mut regions = [Region::default(); MAX_REGIONS];
+        let count = detector
+            .process_bounded(
+                &rgba,
+                16,
+                16,
+                native_options(1),
+                0.25,
+                &mut labels,
+                &mut regions,
+            )
+            .expect("bounded outline fixture should process");
+
+        assert_eq!(count, 1);
+        assert_eq!(regions[0].label, 1);
+        assert_eq!(regions[0].width, 2.0 / 16.0);
+        assert_eq!(regions[0].height, 2.0 / 16.0);
+        assert!(labels[..16].iter().all(|label| *label == 0));
+        assert_eq!(labels[4 * 16 + 4], 1);
+        assert!(labels.iter().all(|label| *label <= 1));
+    }
+
+    #[test]
+    fn blob_v2_bounded_one_matches_legacy_process_and_rejects_invalid_bounds() {
+        let pixels = [(1, 1), (1, 2), (2, 1), (2, 2), (6, 5), (6, 6)];
+        let rgba = red_fixture(8, 8, &pixels);
+        let options = native_options(8);
+
+        let mut legacy = FfiRegionDetector::new()
+            .expect("rebuilt BlobDetector bundle with V2 symbols is required");
+        let mut bounded = FfiRegionDetector::new()
+            .expect("rebuilt BlobDetector bundle with bounded V2 symbol is required");
+        let mut legacy_labels = vec![0; 64];
+        let mut bounded_labels = vec![0; 64];
+        let mut legacy_regions = [Region::default(); MAX_REGIONS];
+        let mut bounded_regions = [Region::default(); MAX_REGIONS];
+
+        let legacy_count = legacy
+            .process(
+                &rgba,
+                8,
+                8,
+                options,
+                &mut legacy_labels,
+                &mut legacy_regions,
+            )
+            .expect("legacy V2 process should process");
+        let bounded_count = bounded
+            .process_bounded(
+                &rgba,
+                8,
+                8,
+                options,
+                1.0,
+                &mut bounded_labels,
+                &mut bounded_regions,
+            )
+            .expect("permissive bounded process should process");
+        assert_eq!(bounded_count, legacy_count);
+        assert_eq!(bounded_labels, legacy_labels);
+        assert_eq!(bounded_regions, legacy_regions);
+
+        for invalid_bound in [f32::NAN, f32::NEG_INFINITY, -0.01, 1.01] {
+            let mut labels = vec![255; 64];
+            let mut regions = [Region {
+                label: 7,
+                ..Region::default()
+            }; MAX_REGIONS];
+            assert_eq!(
+                bounded.process_bounded(
+                    &rgba,
+                    8,
+                    8,
+                    options,
+                    invalid_bound,
+                    &mut labels,
+                    &mut regions,
+                ),
+                Err(RegionError::InvalidInput)
+            );
+            assert!(labels.iter().all(|label| *label == 0));
+            assert!(regions.iter().all(|region| *region == Region::default()));
+        }
     }
 }

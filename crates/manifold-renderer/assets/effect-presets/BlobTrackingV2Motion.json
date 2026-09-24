@@ -65,6 +65,18 @@
         "formatString": "F2"
       },
       {
+        "id": "max_box_area",
+        "name": "Max Box Area",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "MaxBoxArea"
+      },
+      {
         "id": "max_blobs",
         "name": "Max Blobs",
         "min": 1.0,
@@ -183,6 +195,19 @@
           "kind": "node",
           "nodeId": "detect",
           "param": "max_area"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "max_box_area",
+        "label": "Max Box Area",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "detect",
+          "param": "max_box_area"
         },
         "convert": {
           "type": "Float"
@@ -349,6 +374,10 @@
               "update_interval": {
                 "type": "Int",
                 "value": 2
+              },
+              "max_box_area": {
+                "type": "Float",
+                "value": 1.0
               }
             },
             "title": "Detect Regions"
