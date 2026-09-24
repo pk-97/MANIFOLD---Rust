@@ -113,6 +113,7 @@ pub struct RegionPacket {
     labels: Vec<u8>,
     regions: [NativeRegion; MAX_REGIONS],
     options: RegionOptions,
+    max_box_area: f32,
     width: u32,
     height: u32,
     generation: u64,
@@ -190,6 +191,7 @@ fn packet_for(width: u32, height: u32) -> RegionPacket {
             max_aspect: 20.0,
             max_regions: 8,
         },
+        max_box_area: 1.0,
         width,
         height,
         generation: 0,
@@ -269,13 +271,14 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("threshold"), label: "Threshold", ty: ParamType::Float, default: ParamValue::Float(0.5), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("min_area"), label: "Min Area", ty: ParamType::Float, default: ParamValue::Float(0.001), range: Some((0.0, 0.25)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("max_area"), label: "Max Area", ty: ParamType::Float, default: ParamValue::Float(0.8), range: Some((0.01, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("max_box_area"), label: "Max Box Area", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("min_aspect"), label: "Min Aspect", ty: ParamType::Float, default: ParamValue::Float(0.05), range: Some((0.0, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("max_aspect"), label: "Max Aspect", ty: ParamType::Float, default: ParamValue::Float(20.0), range: Some((0.0, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("max_regions"), label: "Max Blobs", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((1.0, 32.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("update_interval"), label: "Update Interval", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((1.0, 8.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Resize and denoise the mask before this node. Its Rgba8Unorm labels are categorical: read exact texels and round red*255. `updated` is a one-run pulse when a native sample is consumed; `valid` remains published between samples. Wire regions, updated, sample_dt and valid to node.track_regions. A successful empty result is valid; an error or reset is invalid.",
+    composition_notes: "Resize and denoise the mask before this node. Min/Max Area measure foreground pixels; Max Box Area measures width*height of the enclosing rectangle as a fraction of the image. All filters run before Max Blobs selection, and rejected regions have no label pixels. A Max Box Area of 1 preserves unrestricted bounds. Its Rgba8Unorm labels are categorical: read exact texels and round red*255. `updated` is a one-run pulse when a native sample is consumed; `valid` remains published between samples. Wire regions, updated, sample_dt and valid to node.track_regions. A successful empty result is valid; an error or reset is invalid.",
     examples: [],
     picker: { label: "Detect Regions", category: Atom },
     summary: "Finds filled regions and keeps their real pixel shapes for blob masks and tracking.",
@@ -308,11 +311,12 @@ impl DetectRegions {
             };
             Some(move |mut packet: RegionPacket| {
                 let start = PERF_ENABLED.load(Ordering::Relaxed).then(Instant::now);
-                let result = detector.process(
+                let result = detector.process_bounded(
                     &packet.rgba,
                     packet.width,
                     packet.height,
                     packet.options,
+                    packet.max_box_area,
                     &mut packet.labels,
                     &mut packet.regions,
                 );
@@ -522,6 +526,7 @@ impl Primitive for DetectRegions {
                 as u32,
         };
         let capture_time = ctx.time.seconds;
+        let max_box_area = finite_clamped(ctx.param_f32("max_box_area", 1.0), 1.0, 0.0, 1.0);
         let gpu = ctx.gpu_encoder();
         self.ensure_worker();
         self.ensure_state(gpu, mask.width, mask.height);
@@ -596,6 +601,7 @@ impl Primitive for DetectRegions {
                 packet.width = state.width;
                 packet.height = state.height;
                 packet.options = options;
+                packet.max_box_area = max_box_area;
                 packet.generation = state.generation;
                 state.serial = state.serial.wrapping_add(1);
                 packet.serial = state.serial;

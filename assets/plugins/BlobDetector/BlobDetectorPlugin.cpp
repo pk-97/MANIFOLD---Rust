@@ -327,32 +327,7 @@ bool candidate_precedes(const BlobRegionV2Candidate& a, const BlobRegionV2Candid
     return a.label < b.label;
 }
 
-} // namespace
-
-extern "C"
-{
-
-void* BlobDetectorV2_Create(void)
-{
-    try {
-        return new BlobDetectorV2State();
-    } catch (...) {
-        return nullptr;
-    }
-}
-
-void BlobDetectorV2_Destroy(void* handle)
-{
-    if (!handle)
-        return;
-    try {
-        delete static_cast<BlobDetectorV2State*>(handle);
-    } catch (...) {
-        // Do not allow a C++ destructor failure to cross the C ABI.
-    }
-}
-
-std::int32_t BlobDetectorV2_Process(
+std::int32_t process_v2(
     void* handle,
     const std::uint8_t* rgba,
     std::size_t rgba_len,
@@ -362,7 +337,8 @@ std::int32_t BlobDetectorV2_Process(
     std::uint8_t* labels,
     std::size_t labels_len,
     BlobRegionV2* regions,
-    std::size_t regions_capacity)
+    std::size_t regions_capacity,
+    float max_box_area)
 {
     clear_v2_outputs(labels, labels_len, regions, regions_capacity);
 
@@ -375,7 +351,8 @@ std::int32_t BlobDetectorV2_Process(
 
     if (!handle || !rgba || !options || !labels || !regions ||
         !valid_sizes || rgba_len != expected_rgba_len || labels_len != pixel_count ||
-        !valid_regions_capacity || !is_valid_options(*options))
+        !valid_regions_capacity || !is_valid_options(*options) ||
+        !std::isfinite(max_box_area) || max_box_area < 0.0f || max_box_area > 1.0f)
     {
         return -1;
     }
@@ -419,9 +396,13 @@ std::int32_t BlobDetectorV2_Process(
             const float normalized_area = static_cast<float>(area) * inverse_pixel_count;
             const float aspect = static_cast<float>(component_width) /
                                  static_cast<float>(component_height);
+            const float normalized_box_area = static_cast<float>(component_width) *
+                                              static_cast<float>(component_height) *
+                                              inverse_pixel_count;
 
             if (normalized_area >= options->min_area &&
                 normalized_area <= options->max_area &&
+                normalized_box_area <= max_box_area &&
                 aspect >= options->min_aspect && aspect <= options->max_aspect)
             {
                 state->candidates.push_back({
@@ -476,6 +457,64 @@ std::int32_t BlobDetectorV2_Process(
         clear_v2_outputs(labels, labels_len, regions, regions_capacity);
         return -2;
     }
+}
+
+} // namespace
+
+extern "C"
+{
+
+void* BlobDetectorV2_Create(void)
+{
+    try {
+        return new BlobDetectorV2State();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void BlobDetectorV2_Destroy(void* handle)
+{
+    if (!handle)
+        return;
+    try {
+        delete static_cast<BlobDetectorV2State*>(handle);
+    } catch (...) {
+        // Do not allow a C++ destructor failure to cross the C ABI.
+    }
+}
+
+std::int32_t BlobDetectorV2_Process(
+    void* handle,
+    const std::uint8_t* rgba,
+    std::size_t rgba_len,
+    std::uint32_t width,
+    std::uint32_t height,
+    const BlobRegionOptionsV2* options,
+    std::uint8_t* labels,
+    std::size_t labels_len,
+    BlobRegionV2* regions,
+    std::size_t regions_capacity)
+{
+    return process_v2(handle, rgba, rgba_len, width, height, options, labels, labels_len,
+                      regions, regions_capacity, 1.0f);
+}
+
+std::int32_t BlobDetectorV2_ProcessBounded(
+    void* handle,
+    const std::uint8_t* rgba,
+    std::size_t rgba_len,
+    std::uint32_t width,
+    std::uint32_t height,
+    const BlobRegionOptionsV2* options,
+    std::uint8_t* labels,
+    std::size_t labels_len,
+    BlobRegionV2* regions,
+    std::size_t regions_capacity,
+    float max_box_area)
+{
+    return process_v2(handle, rgba, rgba_len, width, height, options, labels, labels_len,
+                      regions, regions_capacity, max_box_area);
 }
 
 } // extern "C"

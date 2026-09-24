@@ -5232,6 +5232,16 @@
           "type": "float"
         },
         {
+          "default": "1",
+          "label": "Max Box Area",
+          "name": "max_box_area",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
           "default": "0.05",
           "label": "Min Aspect",
           "name": "min_aspect",
@@ -30669,6 +30679,13 @@
           "name": "Max Area"
         },
         {
+          "default": "1",
+          "id": "max_box_area",
+          "max": "1",
+          "min": "0",
+          "name": "Max Box Area"
+        },
+        {
           "default": "8",
           "id": "max_blobs",
           "max": "32",
@@ -30762,6 +30779,13 @@
           "name": "Max Area"
         },
         {
+          "default": "1",
+          "id": "max_box_area",
+          "max": "1",
+          "min": "0",
+          "name": "Max Box Area"
+        },
+        {
           "default": "8",
           "id": "max_blobs",
           "max": "32",
@@ -30832,6 +30856,13 @@
           "max": "1",
           "min": "0.01",
           "name": "Max Area"
+        },
+        {
+          "default": "1",
+          "id": "max_box_area",
+          "max": "1",
+          "min": "0",
+          "name": "Max Box Area"
         },
         {
           "default": "8",
@@ -35579,6 +35610,13 @@
           "name": "Max Area"
         },
         {
+          "default": "1",
+          "id": "max_box_area",
+          "max": "1",
+          "min": "0",
+          "name": "Max Box Area"
+        },
+        {
           "default": "8",
           "id": "max_blobs",
           "max": "32",
@@ -35693,6 +35731,13 @@
           "name": "Max Area"
         },
         {
+          "default": "1",
+          "id": "max_box_area",
+          "max": "1",
+          "min": "0",
+          "name": "Max Box Area"
+        },
+        {
           "default": "8",
           "id": "max_blobs",
           "max": "32",
@@ -35784,6 +35829,13 @@
           "max": "1",
           "min": "0.01",
           "name": "Max Area"
+        },
+        {
+          "default": "1",
+          "id": "max_box_area",
+          "max": "1",
+          "min": "0",
+          "name": "Max Box Area"
         },
         {
           "default": "8",

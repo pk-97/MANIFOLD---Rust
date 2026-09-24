@@ -442,9 +442,9 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Stylize | 5 |
-| `BlobTrackingV2` | Blob Track V2 | effect | Stylize | 10 |
-| `BlobTrackingV2Colour` | Blob Track V2 — Colour | effect | Stylize | 12 |
-| `BlobTrackingV2Motion` | Blob Track V2 — Motion | effect | Stylize | 9 |
+| `BlobTrackingV2` | Blob Track V2 | effect | Stylize | 11 |
+| `BlobTrackingV2Colour` | Blob Track V2 — Colour | effect | Stylize | 13 |
+| `BlobTrackingV2Motion` | Blob Track V2 — Motion | effect | Stylize | 10 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
 | `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
@@ -493,9 +493,9 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
-| `MaskBlob` | Blob Mask | effect | Spatial | 12 |
-| `MaskBlobColour` | Blob Mask — Colour | effect | Spatial | 15 |
-| `MaskBlobMotion` | Blob Mask — Motion | effect | Spatial | 12 |
+| `MaskBlob` | Blob Mask | effect | Spatial | 13 |
+| `MaskBlobColour` | Blob Mask — Colour | effect | Spatial | 16 |
+| `MaskBlobMotion` | Blob Mask — Motion | effect | Spatial | 13 |
 | `MaskCircle` | Mask Circle | effect | Spatial | 8 |
 | `MaskGradient` | Mask Gradient | effect | Spatial | 6 |
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
