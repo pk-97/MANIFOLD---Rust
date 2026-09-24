@@ -76,6 +76,23 @@ mod ffi {
         pub fn manifold_box3d_body_set_hit_events(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_hit_speed(world: u32, body: u64, speed_out: *mut f32) -> i32;
         pub fn manifold_box3d_body_linear_velocity(body: u64, velocity_out: *mut f32) -> i32;
+        pub fn manifold_box3d_body_angular_velocity(body: u64, velocity_out: *mut f32) -> i32;
+        pub fn manifold_box3d_body_local_point_velocity(
+            body: u64,
+            px: f32,
+            py: f32,
+            pz: f32,
+            velocity_out: *mut f32,
+        ) -> i32;
+        pub fn manifold_box3d_body_set_velocity(
+            body: u64,
+            linear_x: f32,
+            linear_y: f32,
+            linear_z: f32,
+            angular_x: f32,
+            angular_y: f32,
+            angular_z: f32,
+        ) -> i32;
         pub fn manifold_box3d_body_set_target(
             body: u64,
             px: f32,
@@ -490,6 +507,69 @@ impl PhysicsWorld {
             unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) };
         if result == 0 {
             Ok(velocity)
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Read a body's current angular velocity in radians per second.
+    pub fn angular_velocity(&self, handle: BodyHandle) -> Result<[f32; 3], PhysicsError> {
+        let native = self.native_body(handle)?;
+        let mut velocity = [0.0; 3];
+        let _lock = native_lock();
+        let result =
+            unsafe { ffi::manifold_box3d_body_angular_velocity(native, velocity.as_mut_ptr()) };
+        if result == 0 {
+            Ok(velocity)
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Read a body's current world-space velocity at a point in local coordinates.
+    pub fn velocity_at_local_point(
+        &self,
+        handle: BodyHandle,
+        point: [f32; 3],
+    ) -> Result<[f32; 3], PhysicsError> {
+        validate_vec3(point, "point")?;
+        let native = self.native_body(handle)?;
+        let mut velocity = [0.0; 3];
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_local_point_velocity(
+                native,
+                point[0],
+                point[1],
+                point[2],
+                velocity.as_mut_ptr(),
+            )
+        };
+        if result == 0 {
+            Ok(velocity)
+        } else {
+            Err(PhysicsError::NativeFailure)
+        }
+    }
+
+    /// Set a body's linear and angular velocity in world coordinates.
+    pub fn set_velocity(
+        &mut self,
+        handle: BodyHandle,
+        linear: [f32; 3],
+        angular: [f32; 3],
+    ) -> Result<(), PhysicsError> {
+        validate_vec3(linear, "linear velocity")?;
+        validate_vec3(angular, "angular velocity")?;
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_set_velocity(
+                native, linear[0], linear[1], linear[2], angular[0], angular[1], angular[2],
+            )
+        };
+        if result == 0 {
+            Ok(())
         } else {
             Err(PhysicsError::NativeFailure)
         }
@@ -1107,6 +1187,52 @@ mod tests {
             .unwrap();
         let after = world.pose(handle).unwrap();
         assert_eq!(before.position, after.position);
+    }
+
+    #[test]
+    fn body_motion_round_trip_includes_angular_point_velocity() {
+        let half_turn = 0.5_f32.sqrt();
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let body = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    rotation: [0.0, 0.0, half_turn, half_turn],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+
+        world
+            .set_velocity(body, [1.0, 2.0, 3.0], [0.0, 0.0, 4.0])
+            .unwrap();
+        assert_eq!(world.linear_velocity(body).unwrap(), [1.0, 2.0, 3.0]);
+        assert_eq!(world.angular_velocity(body).unwrap(), [0.0, 0.0, 4.0]);
+        let point_velocity = world
+            .velocity_at_local_point(body, [1.0, 0.0, 0.0])
+            .unwrap();
+        for (actual, expected) in point_velocity.iter().zip([-3.0, 2.0, 3.0]) {
+            assert!((actual - expected).abs() < 1.0e-5, "{point_velocity:?}");
+        }
+
+        assert_eq!(
+            world.set_velocity(body, [f32::NAN; 3], [0.0; 3]),
+            Err(PhysicsError::InvalidInput("linear velocity"))
+        );
+        assert_eq!(
+            world.velocity_at_local_point(body, [f32::INFINITY; 3]),
+            Err(PhysicsError::InvalidInput("point"))
+        );
+
+        let mut other_world = PhysicsWorld::new([0.0; 3]).unwrap();
+        assert_eq!(
+            other_world.angular_velocity(body),
+            Err(PhysicsError::InvalidHandle)
+        );
+        assert_eq!(
+            other_world.set_velocity(body, [0.0; 3], [0.0; 3]),
+            Err(PhysicsError::InvalidHandle)
+        );
     }
 
     #[test]

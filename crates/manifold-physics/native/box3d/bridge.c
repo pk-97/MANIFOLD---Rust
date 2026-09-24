@@ -350,6 +350,53 @@ int manifold_box3d_body_linear_velocity( uint64_t body_value, float* velocity_ou
 	return BOX3D_BRIDGE_OK;
 }
 
+int manifold_box3d_body_angular_velocity( uint64_t body_value, float* velocity_out )
+{
+	if ( velocity_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3Vec3 velocity = b3Body_GetAngularVelocity( b3LoadBodyId( body_value ) );
+	velocity_out[0] = velocity.x;
+	velocity_out[1] = velocity.y;
+	velocity_out[2] = velocity.z;
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_local_point_velocity(
+	uint64_t body_value,
+	float px,
+	float py,
+	float pz,
+	float* velocity_out )
+{
+	if ( velocity_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3Vec3 velocity = b3Body_GetLocalPointVelocity(
+		b3LoadBodyId( body_value ), (b3Vec3){ px, py, pz } );
+	velocity_out[0] = velocity.x;
+	velocity_out[1] = velocity.y;
+	velocity_out[2] = velocity.z;
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_set_velocity(
+	uint64_t body_value,
+	float linear_x,
+	float linear_y,
+	float linear_z,
+	float angular_x,
+	float angular_y,
+	float angular_z )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	b3Body_SetLinearVelocity( body_id, (b3Vec3){ linear_x, linear_y, linear_z } );
+	b3Body_SetAngularVelocity( body_id, (b3Vec3){ angular_x, angular_y, angular_z } );
+	return BOX3D_BRIDGE_OK;
+}
+
 int manifold_box3d_body_set_target(
 	uint64_t body_value,
 	float px,

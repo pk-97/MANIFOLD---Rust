@@ -30,3 +30,16 @@ bash .claude/scripts/with-build-lock.sh target/debug/examples/flower_mesh_drop '
 ```
 
 Keep source, generated GLBs and commits local in this active worktree per Peter's preference; no experiment push or landing.
+
+32-piece fracture preview: optional fifth argument `32` partitions original triangles spatially into surface patches, retaining all source attributes/materials and triangle winding. Patches may include disconnected islands; this does not create sealed solid shards. All pieces share the intact motion through the first hit, then receive separate exact-mesh bodies with area-proportional mass and inherited linear/angular motion. No added explosion impulse. Recreates the world without the intact body at release. Native bridge adds point/angular velocity reads and velocity writes.
+
+Mesh/mesh contacts are explicitly unsupported by native `src/contact.c`; each piece has gravity and floor contact but passes through other pieces. Peter questioned this limitation: genuine piece-to-piece contact remains the next physics foundation gap, not a claim of completed shatter physics.
+
+240 Hz fragment run failed: two upper pieces penetrated the floor by up to 0.339 m. 960 Hz contact refresh reduced sampled minimum y to -0.01103 m; final maximum piece clearance 0.00499 m, settled. Six simulated seconds took 104.97 s. First hit 0.451042 s, release 1.548958 s, aligned impact 2 s. Existing 3 cm floor tolerance passes, but the residual ~1 cm penetration is not zero-gap contact. Normal intact-drop mode retains 240 Hz.
+
+Verified 23 physics tests, 5 example tests, focused physics/example clippy; all 454840 source triangles appear exactly once in exported pieces, original binary/attributes/materials preserved. Every piece has identical poses until impact and independent poses afterward. Observed 30 fps render of intact flower, impact, break and settled pieces. Video: `/Users/peterkiemann/.codex/visualizations/2026/09/23/01a0cc0e-e40b-77c1-8813-db543d368523/tiger-lily-shatter.mp4`. Replay: `tests/fixtures/gltf/tiger_lily_shatter.glb` (ignored, retained).
+
+```sh
+cd '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-0'
+bash .claude/scripts/with-build-lock.sh target/debug/examples/flower_mesh_drop '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__tiger_lily.glb' tests/fixtures/gltf/tiger_lily_shatter.glb 120 4 32
+```

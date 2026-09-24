@@ -1,5 +1,5 @@
 //! One exact-mesh Box3D drop, saved as a GLB replay for MANIFOLD's existing importer.
-//! Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset]
+//! Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset [pieces]]
 //! Beat offsets start at zero; `120 4` places impact at two seconds.
 //! Original geometry/materials are preserved. No scan collider proxies or mesh reduction.
 
@@ -8,6 +8,22 @@ use std::{borrow::Cow, error::Error, fs, path::Path};
 use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
 use serde_json::{Value, json};
+
+#[path = "flower_mesh_drop/fracture.rs"]
+mod fracture;
+
+struct Contributor {
+    primitive: Value,
+    transform: Mat4,
+    triangle_start: usize,
+    indices: Vec<u32>,
+}
+
+#[derive(Default)]
+struct Track {
+    positions: Vec<[f32; 3]>,
+    rotations: Vec<[f32; 4]>,
+}
 
 type Mat4 = [[f32; 4]; 4];
 const IDENTITY: Mat4 = [
@@ -100,6 +116,8 @@ fn collect(
     bin: &[u8],
     vertices: &mut Vec<[f32; 3]>,
     triangles: &mut Vec<[u32; 3]>,
+    contributors: &mut Vec<Contributor>,
+    doc: &Value,
 ) -> Result<(), Box<dyn Error>> {
     let world = multiply(parent, node.transform().matrix());
     if node.skin().is_some() {
@@ -125,6 +143,7 @@ fn collect(
             if !indices.len().is_multiple_of(3) {
                 return Err("Incomplete triangle".into());
             }
+            let triangle_start = triangles.len();
             for t in indices.chunks_exact(3) {
                 if t.iter()
                     .any(|&i| i as usize >= vertices.len() - base as usize)
@@ -133,10 +152,16 @@ fn collect(
                 }
                 triangles.push([base + t[0], base + t[1], base + t[2]]);
             }
+            contributors.push(Contributor {
+                primitive: doc["meshes"][mesh.index()]["primitives"][primitive.index()].clone(),
+                transform: world,
+                triangle_start,
+                indices,
+            });
         }
     }
     for child in node.children() {
-        collect(child, world, bin, vertices, triangles)?;
+        collect(child, world, bin, vertices, triangles, contributors, doc)?;
     }
     Ok(())
 }
@@ -228,7 +253,61 @@ fn slab() -> [[f32; 3]; 8] {
     })
 }
 
-fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(), Box<dyn Error>> {
+fn floor_world() -> Result<PhysicsWorld, Box<dyn Error>> {
+    let mut world = PhysicsWorld::new([0.0, -9.81, 0.0])?;
+    world.add_hull(
+        &slab(),
+        BodyConfig {
+            kind: BodyKind::Fixed,
+            ..BodyConfig::default()
+        },
+    )?;
+    Ok(world)
+}
+
+/// Reuse every source attribute and material; only triangle index lists change.
+/// Surface patches retain scan boundaries. No new caps or thickness are invented.
+fn fragment_nodes(
+    doc: &mut Value,
+    bin: &mut Vec<u8>,
+    fragments: &[fracture::Fragment],
+    contributors: &[Contributor],
+    scale: f32,
+    offset: [f32; 3],
+) -> Vec<usize> {
+    fragments.iter().enumerate().map(|(number, fragment)| {
+        let mut children = Vec::new();
+        for contributor in contributors {
+            let end = contributor.triangle_start + contributor.indices.len() / 3;
+            let indices: Vec<u32> = fragment.triangle_ids.iter()
+                .filter(|&&i| i >= contributor.triangle_start && i < end)
+                .flat_map(|&i| {
+                    let start = (i - contributor.triangle_start) * 3;
+                    contributor.indices[start..start + 3].iter().copied()
+                }).collect();
+            if indices.is_empty() { continue; }
+            while !bin.len().is_multiple_of(4) { bin.push(0); }
+            let byte_offset = bin.len();
+            for index in &indices { bin.extend(index.to_le_bytes()); }
+            let view = append(doc, "bufferViews", json!({"buffer":0,"byteOffset":byte_offset,"byteLength":indices.len()*4}));
+            let accessor = append(doc, "accessors", json!({"bufferView":view,"componentType":5125,"count":indices.len(),"type":"SCALAR"}));
+            let mut primitive = contributor.primitive.clone();
+            primitive["indices"] = json!(accessor);
+            let mesh = append(doc, "meshes", json!({"primitives":[primitive]}));
+            let matrix: Vec<f32> = contributor.transform.into_iter().flatten().collect();
+            children.push(append(doc, "nodes", json!({"mesh":mesh,"matrix":matrix})));
+        }
+        let normalized = append(doc, "nodes", json!({"children":children,"translation":offset,"scale":[scale,scale,scale]}));
+        append(doc, "nodes", json!({"name":format!("Flower piece {}", number+1),"children":[normalized]}))
+    }).collect()
+}
+
+fn run(
+    input: &Path,
+    output: &Path,
+    timing: Option<MusicalTiming>,
+    pieces: Option<usize>,
+) -> Result<(), Box<dyn Error>> {
     if input == output || (output.exists() && fs::canonicalize(input)? == fs::canonicalize(output)?)
     {
         return Err("Choose a separate output file; the source scan must remain intact".into());
@@ -258,8 +337,17 @@ fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(),
     let roots: Vec<usize> = scene.nodes().map(|n| n.index()).collect();
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();
+    let mut contributors = Vec::new();
     for root in scene.nodes() {
-        collect(root, IDENTITY, &bin, &mut vertices, &mut triangles)?;
+        collect(
+            root,
+            IDENTITY,
+            &bin,
+            &mut vertices,
+            &mut triangles,
+            &mut contributors,
+            &doc,
+        )?;
     }
     if vertices.is_empty() {
         return Err("Scan contains no vertices".into());
@@ -294,14 +382,10 @@ fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(),
         rotation,
         ..BodyConfig::default()
     };
-    let mut world = PhysicsWorld::new([0.0, -9.81, 0.0])?;
-    world.add_hull(
-        &slab(),
-        BodyConfig {
-            kind: BodyKind::Fixed,
-            ..BodyConfig::default()
-        },
-    )?;
+    let fragments = pieces
+        .map(|count| fracture::partition(&vertices, &triangles, count))
+        .transpose()?;
+    let mut world = floor_world()?;
     let body = world.add_triangle_mesh(&vertices, &triangles, config)?;
     world.set_hit_events(body, true)?;
     eprintln!(
@@ -309,60 +393,110 @@ fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(),
         vertices.len(),
         triangles.len()
     );
+    // Upper pieces fall farther than the original lowest point. Mesh CCD is
+    // unsupported, so refresh more frequently for their faster floor impacts.
+    let contact_hz = if pieces.is_some() { 960 } else { CONTACT_HZ };
     let mut times = Vec::new();
-    let mut positions = Vec::new();
-    let mut rotations = Vec::new();
+    let mut tracks: Vec<Track> = (0..pieces.unwrap_or(1)).map(|_| Track::default()).collect();
+    let mut fragment_bodies = Vec::new();
     let mut lowest = f32::INFINITY;
-    let mut final_clearance = 0.0;
+    let mut final_clearance = 0.0_f32;
     let start = std::time::Instant::now();
     const REPLAY_SECONDS: u32 = 6;
     let mut first_hit = None;
-    for tick in 0..=REPLAY_SECONDS * CONTACT_HZ {
+    for tick in 0..=REPLAY_SECONDS * contact_hz {
         let mut impact_sample = false;
         if tick > 0 {
-            // Mesh CCD is unsupported. Refresh contacts at 240 Hz so this
-            // one-metre drop advances less than the speculative contact margin.
-            world.step(Seconds(1.0 / f64::from(CONTACT_HZ)), 4)?;
+            // Refresh collision contacts independently of the 60 Hz replay.
+            world.step(Seconds(1.0 / f64::from(contact_hz)), 4)?;
             if first_hit.is_none()
                 && let Some(speed) = world.hit_speed(body)?
             {
-                first_hit = Some((Seconds(f64::from(tick) / f64::from(CONTACT_HZ)), speed));
+                first_hit = Some((Seconds(f64::from(tick) / f64::from(contact_hz)), speed));
                 impact_sample = true;
+                if let Some(fragments) = &fragments {
+                    let pose = world.pose(body)?;
+                    let angular = world.angular_velocity(body)?;
+                    let area: f32 = fragments.iter().map(|fragment| fragment.area).sum();
+                    let mut broken_world = floor_world()?;
+                    for fragment in fragments {
+                        let handle = broken_world.add_triangle_mesh(
+                            &fragment.vertices,
+                            &fragment.triangles,
+                            BodyConfig {
+                                position: pose.position,
+                                rotation: pose.rotation,
+                                mass: config.mass * fragment.area / area,
+                                ..config
+                            },
+                        )?;
+                        // Inherit the rigid body's velocity at this piece's centre
+                        // of mass, including angular motion. No explosion kick.
+                        broken_world.set_velocity(
+                            handle,
+                            world.velocity_at_local_point(body, fragment.center)?,
+                            angular,
+                        )?;
+                        fragment_bodies.push(handle);
+                    }
+                    // The intact body no longer exists in the active simulation.
+                    world = broken_world;
+                    eprintln!(
+                        "Released {} exact surface pieces at first impact; inherited motion; floor collisions only (mesh/mesh unsupported).",
+                        fragments.len()
+                    );
+                }
             }
         }
         // Keep the exact detected impact pose even when it falls between the
-        // usual 60 Hz replay samples. Event timing is bounded by a 240 Hz tick.
-        if tick % 4 != 0 && !impact_sample {
+        // usual 60 Hz replay samples. Event timing is bounded by a contact tick.
+        if tick % (contact_hz / 60) != 0 && !impact_sample {
             continue;
         }
-        let pose = world.pose(body)?;
-        if !pose
-            .position
-            .iter()
-            .chain(&pose.rotation)
-            .all(|x| x.is_finite())
-        {
-            return Err("Simulation produced a non-finite pose".into());
+        final_clearance = 0.0;
+        for (index, track) in tracks.iter_mut().enumerate() {
+            let pose = world.pose(fragment_bodies.get(index).copied().unwrap_or(body))?;
+            if !pose
+                .position
+                .iter()
+                .chain(&pose.rotation)
+                .all(|x| x.is_finite())
+            {
+                return Err("Simulation produced a non-finite pose".into());
+            }
+            let points = fragments.as_ref().map_or(vertices.as_slice(), |fragments| {
+                fragments[index].vertices.as_slice()
+            });
+            let clearance = points
+                .iter()
+                .map(|&p| rotate(pose.rotation, p)[1] + pose.position[1])
+                .fold(f32::INFINITY, f32::min);
+            lowest = lowest.min(clearance);
+            final_clearance = final_clearance.max(clearance.abs());
+            track.positions.push(pose.position);
+            track.rotations.push(pose.rotation);
         }
-        final_clearance = vertices
-            .iter()
-            .map(|&p| rotate(pose.rotation, p)[1] + pose.position[1])
-            .fold(f32::INFINITY, f32::min);
-        lowest = lowest.min(final_clearance);
-        times.push([tick as f32 / CONTACT_HZ as f32]);
-        positions.push(pose.position);
-        rotations.push(pose.rotation);
+        times.push([tick as f32 / contact_hz as f32]);
     }
     eprintln!(
         "{} s simulation in {:.2} s: lowest vertex y={lowest:.5} m, final clearance={final_clearance:.5} m, final velocity={:?}",
         REPLAY_SECONDS,
         start.elapsed().as_secs_f64(),
-        world.linear_velocity(body)?
+        world.linear_velocity(fragment_bodies.first().copied().unwrap_or(body))?
     );
     if let Some(timing) = timing {
         let (flight, speed) = first_hit.ok_or("No impact event was detected for beat alignment")?;
         let release = timing.release_time(flight)?;
-        delay_replay(&mut times, &mut positions, &mut rotations, release)?;
+        let original_times = times.clone();
+        for track in &mut tracks {
+            times.clone_from(&original_times);
+            delay_replay(
+                &mut times,
+                &mut track.positions,
+                &mut track.rotations,
+                release,
+            )?;
+        }
         // Private experiment metadata; the importer needs only the standard
         // animation keys. Beat offsets are measured from playback time zero.
         doc["extras"]["flowerDropTiming"] = json!({
@@ -372,7 +506,7 @@ fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(),
             "releaseSeconds": release.0,
             "flightSeconds": flight.0,
             "approachSpeed": speed,
-            "resolutionSeconds": 1.0 / f64::from(CONTACT_HZ),
+            "resolutionSeconds": 1.0 / f64::from(contact_hz),
         });
         eprintln!(
             "{}: release at {:.6} s; first solver hit after {:.6} s ({speed:.3} m/s); impact at beat offset {} / {:.6} s. Event resolution {:.3} ms.",
@@ -381,34 +515,50 @@ fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(),
             flight.0,
             timing.impact.0,
             timing.impact_time().0,
-            1000.0 / f64::from(CONTACT_HZ)
+            1000.0 / f64::from(contact_hz)
         );
     }
-    let normalized = append(
-        &mut doc,
-        "nodes",
-        json!({"name":"Scan scale and origin","children":roots,"translation":offset,"scale":[scale,scale,scale]}),
-    );
-    let root = append(
-        &mut doc,
-        "nodes",
-        json!({"name":"Box3D exact mesh drop","children":[normalized],"translation":positions[0],"rotation":rotations[0]}),
-    );
+    let mut replay_roots = if let Some(fragments) = &fragments {
+        if fragment_bodies.is_empty() {
+            return Err("No impact detected to release the pieces".into());
+        }
+        doc["extras"]["flowerFracture"] = json!({"pieces":fragments.len(),"sourceTriangles":triangles.len(),"pieceCollisions":false,"method":"original triangle surface patches","addedImpulse":0});
+        fragment_nodes(&mut doc, &mut bin, fragments, &contributors, scale, offset)
+    } else {
+        let normalized = append(
+            &mut doc,
+            "nodes",
+            json!({"name":"Scan scale and origin","children":roots,"translation":offset,"scale":[scale,scale,scale]}),
+        );
+        vec![append(
+            &mut doc,
+            "nodes",
+            json!({"name":"Box3D exact mesh drop","children":[normalized]}),
+        )]
+    };
+    let time = accessor(&mut doc, &mut bin, &times, "SCALAR");
+    let mut samplers = Vec::new();
+    let mut channels = Vec::new();
+    for (&root, track) in replay_roots.iter().zip(&tracks) {
+        doc["nodes"][root]["translation"] = json!(track.positions[0]);
+        doc["nodes"][root]["rotation"] = json!(track.rotations[0]);
+        let position = accessor(&mut doc, &mut bin, &track.positions, "VEC3");
+        let rotation = accessor(&mut doc, &mut bin, &track.rotations, "VEC4");
+        for (path, output) in [("translation", position), ("rotation", rotation)] {
+            channels.push(json!({"sampler":samplers.len(),"target":{"node":root,"path":path}}));
+            samplers.push(json!({"input":time,"output":output,"interpolation":"LINEAR"}));
+        }
+    }
     let floor_node = floor(&mut doc, &mut bin);
+    replay_roots.push(floor_node);
     let scene = append(
         &mut doc,
         "scenes",
-        json!({"name":"Flower mesh contact experiment","nodes":[root,floor_node]}),
+        json!({"name":"Flower mesh contact experiment","nodes":replay_roots}),
     );
     doc["scene"] = json!(scene);
-    let time = accessor(&mut doc, &mut bin, &times, "SCALAR");
-    let position = accessor(&mut doc, &mut bin, &positions, "VEC3");
-    let rotation = accessor(&mut doc, &mut bin, &rotations, "VEC4");
-    doc["animations"] = json!([{"name":"Box3D drop replay","samplers":[
-        {"input":time,"output":position,"interpolation":"LINEAR"},
-        {"input":time,"output":rotation,"interpolation":"LINEAR"}],"channels":[
-        {"sampler":0,"target":{"node":root,"path":"translation"}},
-        {"sampler":1,"target":{"node":root,"path":"rotation"}}]}]);
+    doc["animations"] =
+        json!([{"name":"Box3D drop replay","samplers":samplers,"channels":channels}]);
     doc["buffers"][0]["byteLength"] = json!(bin.len());
     let json = serde_json::to_vec(&doc)?;
     let result = gltf::binary::Glb {
@@ -438,10 +588,10 @@ fn run(input: &Path, output: &Path, timing: Option<MusicalTiming>) -> Result<(),
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 && args.len() != 4 {
-        return Err("Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset] (120 4 = impact at 2 seconds)".into());
+    if args.len() != 2 && args.len() != 4 && args.len() != 5 {
+        return Err("Usage: flower_mesh_drop input.glb output.glb [bpm impact-beat-offset [pieces]] (120 4 32 = 32 pieces at 2 seconds)".into());
     }
-    let timing = if args.len() == 4 {
+    let timing = if args.len() >= 4 {
         Some(MusicalTiming::new(
             Bpm(args[2].to_str().ok_or("Invalid BPM text")?.parse()?),
             Beats(args[3].to_str().ok_or("Invalid beat text")?.parse()?),
@@ -449,7 +599,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-    run(Path::new(&args[0]), Path::new(&args[1]), timing)
+    let pieces = if args.len() == 5 {
+        let count: usize = args[4].to_str().ok_or("Invalid piece count")?.parse()?;
+        if !(2..=50).contains(&count) {
+            return Err("This small fracture experiment supports 2–50 pieces".into());
+        }
+        Some(count)
+    } else {
+        None
+    };
+    run(Path::new(&args[0]), Path::new(&args[1]), timing, pieces)
 }
 
 #[cfg(test)]
