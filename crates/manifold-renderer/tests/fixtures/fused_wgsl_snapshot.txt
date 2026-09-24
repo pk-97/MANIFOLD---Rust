@@ -407,7 +407,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r5);
 }
 
-=== effect:BlobTrackingV2 node:24 ===
+=== effect:BlobTrackingV2 node:28 ===
 // @input_access: src_0 gather_texel
 // @precision_critical: src_0
 struct Params {
@@ -500,7 +500,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:BlobTrackingV2 node:25 ===
+=== effect:BlobTrackingV2 node:29 ===
 struct Element {
     x: f32,
     y: f32,
@@ -865,7 +865,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r5);
 }
 
-=== effect:BlobTrackingV2Colour node:24 ===
+=== effect:BlobTrackingV2Colour node:28 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_red: f32,
@@ -917,7 +917,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:BlobTrackingV2Colour node:25 ===
+=== effect:BlobTrackingV2Colour node:29 ===
 struct Element {
     x: f32,
     y: f32,
@@ -1282,7 +1282,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r5);
 }
 
-=== effect:BlobTrackingV2Motion node:31 ===
+=== effect:BlobTrackingV2Motion node:35 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_row0_x: f32,
@@ -1411,7 +1411,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r5);
 }
 
-=== effect:BlobTrackingV2Motion node:32 ===
+=== effect:BlobTrackingV2Motion node:36 ===
 struct Element {
     x: f32,
     y: f32,
@@ -4285,7 +4285,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:MaskBlob node:17 ===
+=== effect:MaskBlob node:21 ===
 // @input_access: src_0 gather
 struct Params {
     n0_kernel_size: u32,
@@ -4525,7 +4525,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r0);
 }
 
-=== effect:MaskBlob node:18 ===
+=== effect:MaskBlob node:22 ===
 // @input_access: src_0 gather
 struct Params {
     n0_kernel_size: u32,
@@ -4768,7 +4768,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r3);
 }
 
-=== effect:MaskBlobColour node:21 ===
+=== effect:MaskBlobColour node:25 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_red: f32,
@@ -4820,7 +4820,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:MaskBlobColour node:22 ===
+=== effect:MaskBlobColour node:26 ===
 // @input_access: src_0 gather
 struct Params {
     n0_kernel_size: u32,
@@ -5063,7 +5063,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r3);
 }
 
-=== effect:MaskBlobMotion node:30 ===
+=== effect:MaskBlobMotion node:34 ===
 // @input_access: src_0 coincident
 // @input_access: src_1 coincident
 struct Params {
@@ -5197,7 +5197,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r5);
 }
 
-=== effect:MaskBlobMotion node:31 ===
+=== effect:MaskBlobMotion node:35 ===
 // @input_access: src_0 coincident
 // @input_access: src_1 gather
 // @input_access: src_2 coincident

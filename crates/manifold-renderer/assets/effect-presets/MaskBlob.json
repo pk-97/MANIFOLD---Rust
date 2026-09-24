@@ -11,6 +11,7 @@
     "params": [
       { "id": "threshold", "name": "Threshold", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
       { "id": "denoise", "name": "Denoise", "min": 0.0, "max": 3.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
+      {"id": "separation", "name": "Separate", "min": 0.0, "max": 3.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "oscSuffix": "Separate"},
       { "id": "min_area", "name": "Min Area", "min": 0.0, "max": 0.25, "defaultValue": 0.001, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F3" },
       { "id": "max_area", "name": "Max Area", "min": 0.01, "max": 1.0, "defaultValue": 0.8, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2" },
       {"id": "max_box_area", "name": "Max Box Area", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2", "oscSuffix": "MaxBoxArea"},
@@ -27,6 +28,10 @@
       { "id": "threshold", "label": "Threshold", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "detect", "param": "threshold" }, "convert": { "type": "Float" } },
       { "id": "denoise", "label": "Denoise", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "denoise_h", "param": "radius" }, "convert": { "type": "Float" } },
       { "id": "denoise", "label": "Denoise", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "denoise_v", "param": "radius" }, "convert": { "type": "Float" } },
+      {"id": "separation", "label": "Separate", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "separate_erode_x", "param": "radius"}, "convert": {"type": "Float"}, "scale": -1.0},
+      {"id": "separation", "label": "Separate", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "separate_erode_y", "param": "radius"}, "convert": {"type": "Float"}, "scale": -1.0},
+      {"id": "separation", "label": "Separate", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "separate_dilate_x", "param": "radius"}, "convert": {"type": "Float"}},
+      {"id": "separation", "label": "Separate", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "separate_dilate_y", "param": "radius"}, "convert": {"type": "Float"}},
       { "id": "min_area", "label": "Min Area", "defaultValue": 0.001, "target": { "kind": "node", "nodeId": "detect", "param": "min_area" }, "convert": { "type": "Float" } },
       { "id": "max_area", "label": "Max Area", "defaultValue": 0.8, "target": { "kind": "node", "nodeId": "detect", "param": "max_area" }, "convert": { "type": "Float" } },
       {"id": "max_box_area", "label": "Max Box Area", "defaultValue": 1.0, "target": {"kind": "node", "nodeId": "detect", "param": "max_box_area"}, "convert": {"type": "Float"}},
@@ -59,14 +64,18 @@
     { "id": 12, "nodeId": "invert", "typeId": "node.invert", "handle": "invert", "params": { "intensity": { "type": "Float", "value": 0.0 } }, "title": "Invert" },
     { "id": 13, "nodeId": "amount", "typeId": "node.scale_offset_image", "handle": "amount", "params": { "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 0.0 } }, "title": "Amount" },
     { "id": 14, "nodeId": "valid_gate", "typeId": "node.scale_offset_image", "handle": "valid_gate", "params": { "scale": { "type": "Float", "value": 0.0 }, "offset": { "type": "Float", "value": 0.0 } }, "title": "Validity Gate" },
-    { "id": 15, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output", "title": "Output" }
+    { "id": 15, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output", "title": "Output" },
+    {"id": 17, "nodeId": "separate_erode_x", "typeId": "node.mask_extrema", "handle": "separate_erode_x", "params": {"radius": {"type": "Float", "value": 0.0}, "axis": {"type": "Enum", "value": 0}}, "title": "Separate Erode X"},
+    {"id": 18, "nodeId": "separate_erode_y", "typeId": "node.mask_extrema", "handle": "separate_erode_y", "params": {"radius": {"type": "Float", "value": 0.0}, "axis": {"type": "Enum", "value": 1}}, "title": "Separate Erode Y"},
+    {"id": 19, "nodeId": "separate_dilate_x", "typeId": "node.mask_extrema", "handle": "separate_dilate_x", "params": {"radius": {"type": "Float", "value": 0.0}, "axis": {"type": "Enum", "value": 0}}, "title": "Separate Dilate X"},
+    {"id": 20, "nodeId": "separate_dilate_y", "typeId": "node.mask_extrema", "handle": "separate_dilate_y", "params": {"radius": {"type": "Float", "value": 0.0}, "axis": {"type": "Enum", "value": 1}}, "title": "Separate Dilate Y"}
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
     { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
     { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
     { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "mask" },
+    {"fromNode": 20, "fromPort": "out", "toNode": 5, "toPort": "mask"},
     { "fromNode": 5, "fromPort": "labels", "toNode": 7, "toPort": "labels" },
     { "fromNode": 5, "fromPort": "valid", "toNode": 6, "toPort": "valid" },
     { "fromNode": 5, "fromPort": "updated", "toNode": 6, "toPort": "updated" },
@@ -83,6 +92,10 @@
     { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
     { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
     { "fromNode": 5, "fromPort": "valid", "toNode": 14, "toPort": "scale" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" }
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    {"fromNode": 4, "fromPort": "out", "toNode": 17, "toPort": "in"},
+    {"fromNode": 17, "fromPort": "out", "toNode": 18, "toPort": "in"},
+    {"fromNode": 18, "fromPort": "out", "toNode": 19, "toPort": "in"},
+    {"fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "in"}
   ]
 }
