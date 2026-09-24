@@ -1055,6 +1055,7 @@ impl Application {
             .unwrap_or_default();
 
         for (action_idx, action) in actions.iter().enumerate().take(editor_card_seg_start) {
+            if self.dispatch_inspector_host_action(action, false) { continue; }
             if let PanelAction::Root(action) = action
                 && self.dispatch_mapping_action(action)
             {
@@ -1216,10 +1217,6 @@ impl Application {
                         self.watch_generator_graph(lid);
                     }
                     self.pending_open_graph_editor = true;
-                    continue;
-                }
-                PanelAction::Root(RootAction::PreviewEffectMask(effect_id)) => {
-                    self.preview_effect_mask(effect_id);
                     continue;
                 }
                 PanelAction::Root(RootAction::OpenGraphEditor(ei)) => {
@@ -1393,46 +1390,6 @@ impl Application {
                     value_norm,
                 )) => {
                     crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
-                    continue;
-                }
-                PanelAction::Root(RootAction::BeginParamTextInput {
-                    target,
-                    param_id,
-                    anchor,
-                    value,
-                    min: _,
-                    max: _,
-                    whole_numbers,
-                    degrees,
-                }) => {
-                    // Prefill the box with the base (set) value, formatted as a
-                    // plain number so editing in place stays parseable. Angle
-                    // rows prefill in degrees (the stored `value` stays radians)
-                    // — the same boundary contract as
-                    // `SceneSetupBeginNumericTextInput`'s D10.
-                    let display = if *degrees { value.to_degrees() } else { *value };
-                    let initial = if *whole_numbers {
-                        format!("{}", display.round() as i64)
-                    } else {
-                        format!("{display:.3}")
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::InspectorParam,
-                        &initial,
-                        crate::text_input::AnchorRect::new(
-                            anchor.x,
-                            anchor.y,
-                            anchor.width,
-                            anchor.height,
-                        ),
-                        11.0,
-                    );
-                    self.text_input.inspector_param = Some(crate::text_input::InspectorParamCtx {
-                        target: target.clone(),
-                        param_id: param_id.clone(),
-                        whole_numbers: *whole_numbers,
-                        degrees: *degrees,
-                    });
                     continue;
                 }
                 PanelAction::Root(RootAction::BeginMaterialColourTextInput {
@@ -1852,6 +1809,7 @@ impl Application {
                 })
                 .unwrap_or((1280.0, 720.0));
             for action in &actions[editor_card_seg_start..] {
+                if self.dispatch_inspector_host_action(action, true) { continue; }
                 if let PanelAction::Root(RootAction::OpenCardMapping { target, param_id, anchor_node_id }) = action {
                     self.open_card_mapping(target, param_id.as_ref(), *anchor_node_id,
                         manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));

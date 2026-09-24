@@ -48,6 +48,8 @@ pub enum TextInputField {
     /// [`TextInputState::inspector_param`] (carries a non-`Copy` `ParamId`).
     /// Commit parses the f32, clamps, and dispatches `ParamChanged` + `ParamCommit`.
     InspectorParam,
+    /// The same inspector value entry, hosted by the graph-editor window.
+    EditorInspectorParam,
     /// Material RGB swatch hex type-in. The target + channel ids ride on
     /// [`TextInputState::material_colour`]. Commit routes through the atomic
     /// `ParamRgb` scrub path so the edit has one undo entry.
@@ -149,6 +151,7 @@ impl TextInputField {
         matches!(
             self,
             TextInputField::GraphGroupRename(_)
+                | TextInputField::EditorInspectorParam
                 | TextInputField::GraphStringParam(_)
                 | TextInputField::GraphWgsl(_)
                 | TextInputField::GraphNodeSearch

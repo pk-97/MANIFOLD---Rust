@@ -46,6 +46,10 @@ D2. Cmd+G wraps one or several selected effects in a **Modifier Group** using
    before the group wet/dry multiplier; disabled masks/groups are bypassed in the
    live result. Previewing does not edit the project. The request uses the stable
    mask EffectId and waits for its own snapshot before focusing the coverage node.
+   Preview Mask works in either inspector window. Numeric value entry in the
+   editor belongs to that window and commits through the ordinary undoable
+   parameter scrub path, so typing a threshold does not invoke graph shortcuts.
+   Editor readouts receive live values after the inspector tree is rebuilt.
    The picker captures the group ID; membership resolves on the content thread.
    Existing generic Group/Masked Group labels display as Modifier Group; custom
    names and serialized group data remain intact. Cmd+Shift+G ungroups as before.
