@@ -36,6 +36,27 @@ mod ffi {
             restitution: f32,
             hull_out: *mut usize,
         ) -> u64;
+        pub fn manifold_box3d_mesh_body_create(
+            world: u32,
+            vertices: *const f32,
+            vertex_count: i32,
+            indices: *const i32,
+            triangle_count: i32,
+            kind: i32,
+            px: f32,
+            py: f32,
+            pz: f32,
+            qx: f32,
+            qy: f32,
+            qz: f32,
+            qw: f32,
+            mass: f32,
+            friction: f32,
+            restitution: f32,
+            center: *const f32,
+            inertia: *const f32,
+            mesh_out: *mut usize,
+        ) -> u64;
         pub fn manifold_box3d_body_update(
             body: u64,
             kind: i32,
@@ -66,6 +87,7 @@ mod ffi {
         ) -> i32;
         pub fn manifold_box3d_body_pose(body: u64, position: *mut f32, rotation: *mut f32) -> i32;
         pub fn manifold_box3d_destroy_hull(hull: usize);
+        pub fn manifold_box3d_destroy_mesh(mesh: usize);
     }
 }
 
@@ -160,7 +182,12 @@ pub struct BodyHandle {
 
 struct BodyRecord {
     native: u64,
-    owned_hull: usize,
+    owned_geometry: OwnedGeometry,
+}
+
+enum OwnedGeometry {
+    Hull(usize),
+    Mesh(usize),
 }
 
 /// An exclusively owned Box3D simulation world.
@@ -237,7 +264,89 @@ impl PhysicsWorld {
             return Err(PhysicsError::NativeAllocation);
         }
 
-        self.bodies.push(BodyRecord { native, owned_hull });
+        self.bodies.push(BodyRecord {
+            native,
+            owned_geometry: OwnedGeometry::Hull(owned_hull),
+        });
+        Ok(BodyHandle {
+            provenance: self.provenance,
+            index: index as u32,
+        })
+    }
+
+    /// Add a body whose collision shape is the supplied triangle mesh.
+    ///
+    /// Mesh vertices and triangle indices are retained as supplied. Box3D's
+    /// mesh builder rejects any triangle it considers degenerate, so this
+    /// method rejects the whole input if that would discard geometry.
+    /// Moving meshes use two-sided surface contact against hulls. Mesh pairs
+    /// and continuous collision detection for meshes are not supported.
+    pub fn add_triangle_mesh(
+        &mut self,
+        vertices: &[[f32; 3]],
+        triangles: &[[u32; 3]],
+        config: BodyConfig,
+    ) -> Result<BodyHandle, PhysicsError> {
+        let config = validate_config(config)?;
+        let (center, inertia) = triangle_mesh_mass_properties(vertices, triangles, config.mass)?;
+        if vertices.len() > i32::MAX as usize {
+            return Err(PhysicsError::InvalidInput("too many mesh vertices"));
+        }
+        if triangles.len() > i32::MAX as usize {
+            return Err(PhysicsError::InvalidInput("too many mesh triangles"));
+        }
+        let mut indices = Vec::with_capacity(triangles.len() * 3);
+        for triangle in triangles {
+            for &index in triangle {
+                indices.push(
+                    i32::try_from(index)
+                        .map_err(|_| PhysicsError::InvalidInput("mesh index is too large"))?,
+                );
+            }
+        }
+        let index = self.bodies.len();
+        if index > u32::MAX as usize {
+            return Err(PhysicsError::NativeAllocation);
+        }
+
+        let mut owned_mesh = 0usize;
+        let _lock = native_lock();
+        let native = unsafe {
+            ffi::manifold_box3d_mesh_body_create(
+                self.native,
+                vertices.as_ptr().cast::<f32>(),
+                vertices.len() as i32,
+                indices.as_ptr(),
+                triangles.len() as i32,
+                config.kind.native_value(),
+                config.position[0],
+                config.position[1],
+                config.position[2],
+                config.rotation[0],
+                config.rotation[1],
+                config.rotation[2],
+                config.rotation[3],
+                config.mass,
+                config.friction,
+                config.restitution,
+                center.as_ptr(),
+                inertia.as_ptr(),
+                &mut owned_mesh,
+            )
+        };
+        if native == u64::MAX {
+            return Err(PhysicsError::InvalidInput(
+                "Box3D discarded degenerate mesh triangles",
+            ));
+        }
+        if native == 0 || owned_mesh == 0 {
+            return Err(PhysicsError::NativeAllocation);
+        }
+
+        self.bodies.push(BodyRecord {
+            native,
+            owned_geometry: OwnedGeometry::Mesh(owned_mesh),
+        });
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -285,6 +394,14 @@ impl PhysicsWorld {
         move_pose: bool,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
+        if matches!(
+            &self.body_record(handle)?.owned_geometry,
+            OwnedGeometry::Mesh(_)
+        ) {
+            return Err(PhysicsError::InvalidInput(
+                "triangle mesh bodies do not support body updates",
+            ));
+        }
         let native = self.native_body(handle)?;
         let _lock = native_lock();
         let result = unsafe {
@@ -313,6 +430,14 @@ impl PhysicsWorld {
 
     /// Enable or disable continuous collision detection for a dynamic body.
     pub fn set_bullet(&mut self, handle: BodyHandle, enabled: bool) -> Result<(), PhysicsError> {
+        if matches!(
+            &self.body_record(handle)?.owned_geometry,
+            OwnedGeometry::Mesh(_)
+        ) {
+            return Err(PhysicsError::InvalidInput(
+                "bullet is unsupported for triangle meshes",
+            ));
+        }
         let native = self.native_body(handle)?;
         let _lock = native_lock();
         let result = unsafe { ffi::manifold_box3d_body_set_bullet(native, i32::from(enabled)) };
@@ -395,12 +520,15 @@ impl PhysicsWorld {
     }
 
     fn native_body(&self, handle: BodyHandle) -> Result<u64, PhysicsError> {
+        Ok(self.body_record(handle)?.native)
+    }
+
+    fn body_record(&self, handle: BodyHandle) -> Result<&BodyRecord, PhysicsError> {
         if handle.provenance != self.provenance {
             return Err(PhysicsError::InvalidHandle);
         }
         self.bodies
             .get(handle.index as usize)
-            .map(|body| body.native)
             .ok_or(PhysicsError::InvalidHandle)
     }
 }
@@ -410,9 +538,138 @@ impl Drop for PhysicsWorld {
         let _lock = native_lock();
         unsafe { ffi::manifold_box3d_world_destroy(self.native) };
         for body in &self.bodies {
-            unsafe { ffi::manifold_box3d_destroy_hull(body.owned_hull) };
+            unsafe {
+                match &body.owned_geometry {
+                    OwnedGeometry::Hull(hull) => ffi::manifold_box3d_destroy_hull(*hull),
+                    OwnedGeometry::Mesh(mesh) => ffi::manifold_box3d_destroy_mesh(*mesh),
+                }
+            }
         }
     }
+}
+
+fn triangle_mesh_mass_properties(
+    vertices: &[[f32; 3]],
+    triangles: &[[u32; 3]],
+    mass: f32,
+) -> Result<([f32; 3], [f32; 9]), PhysicsError> {
+    if vertices.len() < 3 {
+        return Err(PhysicsError::InvalidInput("mesh needs at least 3 vertices"));
+    }
+    if triangles.is_empty() {
+        return Err(PhysicsError::InvalidInput("mesh needs at least 1 triangle"));
+    }
+    if vertices
+        .iter()
+        .any(|vertex| !vertex.iter().all(|value| value.is_finite()))
+    {
+        return Err(PhysicsError::InvalidInput("mesh vertices must be finite"));
+    }
+
+    let mut area_sum = 0.0_f64;
+    let mut first_moment = [0.0_f64; 3];
+    let mut second_moment = [[0.0_f64; 3]; 3];
+    for triangle in triangles {
+        let [a_index, b_index, c_index] = *triangle;
+        let a = *vertices
+            .get(a_index as usize)
+            .ok_or(PhysicsError::InvalidInput("mesh index is out of bounds"))?;
+        let b = *vertices
+            .get(b_index as usize)
+            .ok_or(PhysicsError::InvalidInput("mesh index is out of bounds"))?;
+        let c = *vertices
+            .get(c_index as usize)
+            .ok_or(PhysicsError::InvalidInput("mesh index is out of bounds"))?;
+        let ab = [
+            f64::from(b[0]) - f64::from(a[0]),
+            f64::from(b[1]) - f64::from(a[1]),
+            f64::from(b[2]) - f64::from(a[2]),
+        ];
+        let ac = [
+            f64::from(c[0]) - f64::from(a[0]),
+            f64::from(c[1]) - f64::from(a[1]),
+            f64::from(c[2]) - f64::from(a[2]),
+        ];
+        let cross = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        let area = 0.5 * cross.iter().map(|value| value * value).sum::<f64>().sqrt();
+        if !area.is_finite() || area <= 0.0 {
+            return Err(PhysicsError::InvalidInput(
+                "mesh triangles must have positive area",
+            ));
+        }
+        area_sum += area;
+        let points = [a, b, c];
+        for axis in 0..3 {
+            first_moment[axis] += area
+                * points
+                    .iter()
+                    .map(|point| f64::from(point[axis]))
+                    .sum::<f64>()
+                / 3.0;
+        }
+        let mut sum = [0.0_f64; 3];
+        for axis in 0..3 {
+            sum[axis] = points.iter().map(|point| f64::from(point[axis])).sum();
+        }
+        for row in 0..3 {
+            for column in 0..3 {
+                second_moment[row][column] += area
+                    * (sum[row] * sum[column]
+                        + points
+                            .iter()
+                            .map(|point| f64::from(point[row]) * f64::from(point[column]))
+                            .sum::<f64>())
+                    / 12.0;
+            }
+        }
+    }
+
+    if !area_sum.is_finite() || area_sum <= 0.0 {
+        return Err(PhysicsError::InvalidInput(
+            "mesh surface area must be positive",
+        ));
+    }
+    let center = first_moment.map(|value| value / area_sum);
+    let mut inertia = [[0.0_f64; 3]; 3];
+    let center_norm = center.iter().map(|value| value * value).sum::<f64>();
+    for row in 0..3 {
+        for column in 0..3 {
+            let identity = if row == column { 1.0 } else { 0.0 };
+            inertia[row][column] = (identity
+                * second_moment
+                    .iter()
+                    .enumerate()
+                    .map(|(axis, values)| values[axis])
+                    .sum::<f64>()
+                - second_moment[row][column])
+                - area_sum * (identity * center_norm - center[row] * center[column]);
+        }
+    }
+    let density = f64::from(mass) / area_sum;
+    let center = center.map(|value| value as f32);
+    let inertia = [
+        (inertia[0][0] * density) as f32,
+        (inertia[1][0] * density) as f32,
+        (inertia[2][0] * density) as f32,
+        (inertia[0][1] * density) as f32,
+        (inertia[1][1] * density) as f32,
+        (inertia[2][1] * density) as f32,
+        (inertia[0][2] * density) as f32,
+        (inertia[1][2] * density) as f32,
+        (inertia[2][2] * density) as f32,
+    ];
+    if !center.iter().all(|value| value.is_finite())
+        || !inertia.iter().all(|value| value.is_finite())
+    {
+        return Err(PhysicsError::InvalidInput(
+            "mesh mass properties are non-finite",
+        ));
+    }
+    Ok((center, inertia))
 }
 
 fn validate_vec3(value: [f32; 3], name: &'static str) -> Result<(), PhysicsError> {
@@ -482,6 +739,60 @@ mod tests {
         ]
     }
 
+    fn concave_plate() -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
+        let mut vertices = Vec::new();
+        let mut triangles = Vec::new();
+        let mut add_rectangle = |x_min: f32,
+                                 x_max: f32,
+                                 z_min: f32,
+                                 z_max: f32,
+                                 x_subdivisions: u32,
+                                 z_subdivisions: u32| {
+            let base = vertices.len() as u32;
+            for z in 0..=z_subdivisions {
+                let z_fraction = z as f32 / z_subdivisions as f32;
+                for x in 0..=x_subdivisions {
+                    let x_fraction = x as f32 / x_subdivisions as f32;
+                    vertices.push([
+                        x_min + (x_max - x_min) * x_fraction,
+                        0.0,
+                        z_min + (z_max - z_min) * z_fraction,
+                    ]);
+                }
+            }
+            let row_stride = x_subdivisions + 1;
+            for z in 0..z_subdivisions {
+                for x in 0..x_subdivisions {
+                    let lower_left = base + z * row_stride + x;
+                    let lower_right = lower_left + 1;
+                    let upper_left = lower_left + row_stride;
+                    let upper_right = upper_left + 1;
+                    triangles.push([lower_left, lower_right, upper_right]);
+                    triangles.push([lower_left, upper_right, upper_left]);
+                }
+            }
+        };
+        add_rectangle(-1.0, 0.0, -1.0, 1.0, 12, 20);
+        add_rectangle(0.0, 1.0, -1.0, 0.0, 20, 12);
+        (vertices, triangles)
+    }
+
+    fn rotate_point(rotation: [f32; 4], point: [f32; 3]) -> [f32; 3] {
+        let [x, y, z, w] = rotation;
+        let [px, py, pz] = point;
+        [
+            (1.0 - 2.0 * (y * y + z * z)) * px
+                + 2.0 * (x * y - z * w) * py
+                + 2.0 * (x * z + y * w) * pz,
+            2.0 * (x * y + z * w) * px
+                + (1.0 - 2.0 * (x * x + z * z)) * py
+                + 2.0 * (y * z - x * w) * pz,
+            2.0 * (x * z - y * w) * px
+                + 2.0 * (y * z + x * w) * py
+                + (1.0 - 2.0 * (x * x + y * y)) * pz,
+        ]
+    }
+
     #[test]
     fn free_fall_is_close_to_analytic_solution() {
         let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
@@ -541,6 +852,200 @@ mod tests {
                     BodyConfig::default()
                 )
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn triangle_mesh_rejects_malformed_input() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        assert!(
+            world
+                .add_triangle_mesh(
+                    &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+                    &[[0, 1, 2]],
+                    BodyConfig::default(),
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .add_triangle_mesh(
+                    &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                    &[[0, 1, 4]],
+                    BodyConfig::default(),
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .add_triangle_mesh(
+                    &[[f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                    &[[0, 1, 2]],
+                    BodyConfig::default(),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn triangle_mesh_retains_positive_area_scan_detail() {
+        let mut world = PhysicsWorld::new([0.0, 0.0, 0.0]).unwrap();
+        world
+            .add_triangle_mesh(
+                &[
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.5, 0.5, 0.0],
+                    [0.5001, 0.5, 0.0],
+                    [0.5, 0.5001, 0.0],
+                ],
+                &[[0, 1, 2], [3, 4, 5]],
+                BodyConfig::default(),
+            )
+            .expect("positive-area triangles must survive the native builder unchanged");
+    }
+
+    #[test]
+    fn moving_triangle_near_large_floor_does_not_create_sideways_impulse() {
+        // The terrain-only manifold used to select the triangle's nearly
+        // vertical plane and report roughly ten metres of overlap with this
+        // floor, although the entire triangle is above it. These are the
+        // tiger-lily triangle's coordinates at the first observed impact.
+        for triangle in [[0, 1, 2], [0, 2, 1]] {
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            let floor: [[f32; 3]; 8] = std::array::from_fn(|i| {
+                [
+                    if i & 1 == 0 { -10.0 } else { 10.0 },
+                    if i & 2 == 0 { -0.2 } else { 0.0 },
+                    if i & 4 == 0 { -10.0 } else { 10.0 },
+                ]
+            });
+            world
+                .add_hull(
+                    &floor,
+                    BodyConfig {
+                        kind: BodyKind::Fixed,
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            let body = world
+                .add_triangle_mesh(
+                    &[
+                        [0.184_325_37, 0.015_924_633, -0.068_452_97],
+                        [0.188_043_65, 0.013_557_076, -0.068_199_45],
+                        [0.187_599_93, 0.016_908_705, -0.068_266_12],
+                    ],
+                    &[triangle],
+                    BodyConfig::default(),
+                )
+                .unwrap();
+            for _ in 0..8 {
+                world.step(Seconds(1.0 / 240.0), 4).unwrap();
+            }
+            let velocity = world.linear_velocity(body).unwrap();
+            assert!(
+                velocity.iter().all(|v| v.abs() < 1e-5),
+                "separated triangle acquired velocity: {velocity:?}, winding {triangle:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_concave_mesh_contacts_floor_and_rotates() {
+        let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
+        let floor = vec![
+            [-3.0, -0.1, -3.0],
+            [3.0, -0.1, -3.0],
+            [3.0, 0.1, -3.0],
+            [-3.0, 0.1, -3.0],
+            [-3.0, -0.1, 3.0],
+            [3.0, -0.1, 3.0],
+            [3.0, 0.1, 3.0],
+            [-3.0, 0.1, 3.0],
+        ];
+        world
+            .add_hull(
+                &floor,
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        world
+            .add_hull(
+                &[
+                    [0.4, 0.1, 0.6],
+                    [0.6, 0.1, 0.6],
+                    [0.6, 0.5, 0.6],
+                    [0.4, 0.5, 0.6],
+                    [0.4, 0.1, 0.8],
+                    [0.6, 0.1, 0.8],
+                    [0.6, 0.5, 0.8],
+                    [0.4, 0.5, 0.8],
+                ],
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let (vertices, triangles) = concave_plate();
+        assert!(triangles.len() > 256);
+        let mesh = world
+            .add_triangle_mesh(
+                &vertices,
+                &triangles,
+                BodyConfig {
+                    position: [0.15, 1.5, 0.0],
+                    rotation: [0.2, 0.0, 0.0, 1.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            world.set_bullet(mesh, true),
+            Err(PhysicsError::InvalidInput(
+                "bullet is unsupported for triangle meshes"
+            ))
+        );
+        assert_eq!(
+            world.update_body(mesh, BodyConfig::default(), false),
+            Err(PhysicsError::InvalidInput(
+                "triangle mesh bodies do not support body updates"
+            ))
+        );
+        let initial = world.pose(mesh).unwrap();
+        for _ in 0..180 {
+            world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        }
+        let final_pose = world.pose(mesh).unwrap();
+        let lowest_vertex = vertices
+            .iter()
+            .map(|vertex| final_pose.position[1] + rotate_point(final_pose.rotation, *vertex)[1])
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            (0.1..0.15).contains(&lowest_vertex),
+            "mesh lost its floor gap or hit the concavity post: y={lowest_vertex}, {final_pose:?}"
+        );
+        let velocity = world.linear_velocity(mesh).unwrap();
+        assert!(
+            velocity.iter().all(|component| component.abs() < 0.1),
+            "mesh did not settle on the floor: {velocity:?}"
+        );
+        let rotation_delta = initial
+            .rotation
+            .iter()
+            .zip(final_pose.rotation)
+            .map(|(before, after)| (before - after).abs())
+            .sum::<f32>();
+        assert!(
+            rotation_delta > 0.05,
+            "mesh did not rotate in response to contact: {initial:?} -> {final_pose:?}"
         );
     }
 

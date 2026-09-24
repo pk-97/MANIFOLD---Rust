@@ -8,6 +8,10 @@
 
 #define B3_MAX_CLIP_POINTS 64
 
+// Two-sided surface contact for a moving mesh against a convex hull.
+void b3CollideHullAndMovingTriangle( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1, b3Vec3 v2,
+									  b3Vec3 v3, b3SATCache* cache );
+
 typedef struct b3FaceQuery
 {
 	float separation;

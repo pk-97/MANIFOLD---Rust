@@ -147,6 +147,93 @@ uint64_t manifold_box3d_body_create(
 	return b3StoreBodyId( body_id );
 }
 
+uint64_t manifold_box3d_mesh_body_create(
+	uint32_t world_id,
+	const float* vertices,
+	int vertex_count,
+	const int32_t* indices,
+	int triangle_count,
+	int kind,
+	float px,
+	float py,
+	float pz,
+	float qx,
+	float qy,
+	float qz,
+	float qw,
+	float mass,
+	float friction,
+	float restitution,
+	const float* center,
+	const float* inertia,
+	uintptr_t* mesh_out )
+{
+	b3BodyType body_type = box3d_body_type( kind );
+	if ( body_type == b3_bodyTypeCount || vertices == NULL || indices == NULL || center == NULL || inertia == NULL || mesh_out == NULL ||
+		vertex_count < 3 || triangle_count < 1 )
+	{
+		return 0;
+	}
+
+	b3BodyDef body_definition = b3DefaultBodyDef();
+	body_definition.type = body_type;
+	body_definition.position = (b3Pos){ px, py, pz };
+	body_definition.rotation = box3d_quat( qx, qy, qz, qw );
+	b3BodyId body_id = b3CreateBody( b3LoadWorldId( world_id ), &body_definition );
+	if ( body_id.index1 == 0 )
+	{
+		return 0;
+	}
+
+	b3MeshDef mesh_definition = { 0 };
+	mesh_definition.vertices = (b3Vec3*)vertices;
+	mesh_definition.indices = (int32_t*)indices;
+	mesh_definition.vertexCount = vertex_count;
+	mesh_definition.triangleCount = triangle_count;
+	mesh_definition.useMedianSplit = true;
+	mesh_definition.identifyEdges = true;
+	mesh_definition.preserveSmallTriangles = true;
+	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
+	if ( mesh == NULL || mesh->triangleCount != triangle_count )
+	{
+		if ( mesh != NULL )
+		{
+			b3DestroyMesh( mesh );
+		}
+		b3DestroyBody( body_id );
+		if ( mesh != NULL )
+		{
+			return UINT64_MAX;
+		}
+		return 0;
+	}
+
+	b3ShapeDef shape_definition = b3DefaultShapeDef();
+	shape_definition.density = 0.0f;
+	shape_definition.baseMaterial.friction = friction;
+	shape_definition.baseMaterial.restitution = restitution;
+	b3ShapeId shape_id = b3CreateMeshShape( body_id, &shape_definition, mesh, b3Vec3_one );
+	if ( shape_id.index1 == 0 )
+	{
+		b3DestroyMesh( mesh );
+		b3DestroyBody( body_id );
+		return 0;
+	}
+
+	b3MassData mass_data = {
+		.mass = mass,
+		.center = { center[0], center[1], center[2] },
+		.inertia = {
+			{ inertia[0], inertia[1], inertia[2] },
+			{ inertia[3], inertia[4], inertia[5] },
+			{ inertia[6], inertia[7], inertia[8] },
+		},
+	};
+	b3Body_SetMassData( body_id, mass_data );
+	*mesh_out = (uintptr_t)mesh;
+	return b3StoreBodyId( body_id );
+}
+
 int manifold_box3d_body_update(
 	uint64_t body_value,
 	int kind,
@@ -267,5 +354,13 @@ void manifold_box3d_destroy_hull( uintptr_t hull_value )
 	if ( hull_value != 0 )
 	{
 		b3DestroyHull( (b3HullData*)hull_value );
+	}
+}
+
+void manifold_box3d_destroy_mesh( uintptr_t mesh_value )
+{
+	if ( mesh_value != 0 )
+	{
+		b3DestroyMesh( (b3MeshData*)mesh_value );
 	}
 }

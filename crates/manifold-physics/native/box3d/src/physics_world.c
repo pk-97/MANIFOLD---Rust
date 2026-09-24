@@ -648,7 +648,10 @@ static void b3CollideTask( int startIndex, int endIndex, int workerIndex, void* 
 		// Contact recycling optimization. Please cite this library if you use this optimization.
 		// This is inspired by persistent contact manifolds used in some physics engines, such as PhysX.
 		// However, this allows larger relative motion and has fewer tuning parameters (just one).
-		if ( ( isFast == false || isMeshContact == false ) && recycleDistance > 0.0f &&
+		// A moving mesh changes triangle normals and supporting features. The
+		// recycled terrain manifold keeps its old normal, so recompute it instead.
+		if ( ( isMeshContact == false || isStaticA ) &&
+			 ( isFast == false || isMeshContact == false ) && recycleDistance > 0.0f &&
 			 ( contact->flags & b3_relativeTransformValid ) && ( contact->flags & b3_contactRecycleFlag ) )
 		{
 			float angleA = b3DotQuat( transformA.q, contact->cachedRotationA );

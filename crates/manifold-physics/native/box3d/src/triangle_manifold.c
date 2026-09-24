@@ -900,8 +900,8 @@ b3AtomicInt b3_triangleConvexCalls;
 b3AtomicInt b3_triangleCacheHits;
 
 // Computes the manifold in the local space of the hull
-void b3CollideHullAndTriangle( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1, b3Vec3 v2, b3Vec3 v3,
-							   int triangleFlags, b3SATCache* cache )
+static void b3CollideHullAndTriangleInternal( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1,
+											b3Vec3 v2, b3Vec3 v3, int triangleFlags, b3SATCache* cache, bool twoSided )
 {
 	manifold->pointCount = 0;
 	manifold->feature = b3_featureNone;
@@ -915,6 +915,18 @@ void b3CollideHullAndTriangle( b3LocalManifold* manifold, int capacity, const b3
 	float linearSlop = B3_LINEAR_SLOP;
 
 	float offset = b3PlaneSeparation( trianglePlane, hullA->center );
+	if ( twoSided )
+	{
+		// A moving scan is a surface, not one-sided terrain. Orient the local
+		// triangle toward the hull and re-evaluate axes as that side changes.
+		*cache = (b3SATCache){ 0 };
+		if ( offset < 0.0f )
+		{
+			B3_SWAP( v2, v3 );
+			trianglePlane = b3MakePlaneFromPoints( v1, v2, v3 );
+			offset = -offset;
+		}
+	}
 	if ( cache->type == b3_backsideAxis )
 	{
 		// Use hysteresis to avoid jitter on wavy meshes
@@ -1189,7 +1201,7 @@ void b3CollideHullAndTriangle( b3LocalManifold* manifold, int capacity, const b3
 	// Don't allow a hull face opposed to the triangle face.
 	b3Vec3 hullNormal = hullPlanes[faceQueryB.faceIndex].normal;
 	bool pushingUp = b3Dot( hullNormal, trianglePlane.normal ) < 0.0f;
-	if ( faceQueryB.separation > faceQueryA.separation + linearSlop && pushingUp )
+	if ( faceQueryB.separation > faceQueryA.separation + linearSlop && ( twoSided || pushingUp ) )
 	{
 		clippedFaceSeparation = b3CollideHullFace( manifold, capacity, &triangle, hullA, faceQueryB, cache );
 	}
@@ -1249,4 +1261,16 @@ void b3CollideHullAndTriangle( b3LocalManifold* manifold, int capacity, const b3
 			manifold->points[0].pair = b3FeaturePair_single;
 		}
 	}
+}
+
+void b3CollideHullAndTriangle( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1, b3Vec3 v2, b3Vec3 v3,
+							   int triangleFlags, b3SATCache* cache )
+{
+	b3CollideHullAndTriangleInternal( manifold, capacity, hullA, v1, v2, v3, triangleFlags, cache, false );
+}
+
+void b3CollideHullAndMovingTriangle( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1, b3Vec3 v2,
+									  b3Vec3 v3, b3SATCache* cache )
+{
+	b3CollideHullAndTriangleInternal( manifold, capacity, hullA, v1, v2, v3, 0, cache, true );
 }

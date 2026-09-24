@@ -84,6 +84,7 @@ typedef struct b3ContactEdge
 typedef struct b3MeshContact
 {
 	b3Array( b3TriangleCache ) triangleCache;
+	// Query bounds in the mesh frame, including motion of a dynamic mesh.
 	b3AABB queryBounds;
 } b3MeshContact;
 

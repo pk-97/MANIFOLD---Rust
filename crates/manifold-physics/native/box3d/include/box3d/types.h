@@ -2071,6 +2071,9 @@ typedef struct b3MeshDef
 
 	/// Compute triangle adjacency information using shared edges
 	bool identifyEdges;
+
+	/// MANIFOLD: retain every positive-area scan triangle, including sub-slop detail.
+	bool preserveSmallTriangles;
 } b3MeshDef;
 
 /// 64-bit mesh version. Useful for validating serialized data.

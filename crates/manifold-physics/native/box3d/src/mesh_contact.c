@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "contact.h"
+#include "body.h"
 #include "manifold.h"
 #include "physics_world.h"
 #include "qsort.h"
@@ -74,14 +75,17 @@ static int b3QueryHeightFieldTriangles( int* indices, int capacity, const b3Heig
 	return context.count;
 }
 
-static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTransform xfA, const b3AABB* bounds )
+static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTransform xfA, const b3AABB* bounds,
+						   b3Arena arena )
 {
 	B3_ASSERT( shapeA->type == b3_meshShape || shapeA->type == b3_heightShape );
 
 	b3MeshContact* meshContact = &contact->meshContact;
 
-	// If the dynamic body didn't move out of the cached query bounds we are done!
-	if ( b3AABB_Contains( meshContact->queryBounds, *bounds ) )
+	// Cache in the mesh frame: the mesh itself may move against a fixed floor.
+	b3Transform meshTransform = b3ToRelativeTransform( xfA, b3Pos_zero );
+	b3AABB localBounds = b3AABB_Transform( b3InvertTransform( meshTransform ), *bounds );
+	if ( b3AABB_Contains( meshContact->queryBounds, localBounds ) )
 	{
 		if ( shapeA->type == b3_meshShape )
 		{
@@ -98,30 +102,26 @@ static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTr
 	// Enlarge to the query bounds to absorb small movement
 	float radius = B3_MAX_AABB_MARGIN + B3_SPECULATIVE_DISTANCE;
 	b3Vec3 extension = { radius, radius, radius };
-	meshContact->queryBounds.lowerBound = b3Sub( bounds->lowerBound, extension );
-	meshContact->queryBounds.upperBound = b3Add( bounds->upperBound, extension );
+	meshContact->queryBounds.lowerBound = b3Sub( localBounds.lowerBound, extension );
+	meshContact->queryBounds.upperBound = b3Add( localBounds.upperBound, extension );
 
 	// Query triangles
-	int triangleCapacity = B3_MAX_MESH_CONTACT_TRIANGLES;
-
-	int triangleIndices[B3_MAX_MESH_CONTACT_TRIANGLES];
-
-	// Bounds are in world space. Convert to the local mesh frame. The broadphase bounds are float,
-	// so the demoted mesh transform is the matching float world frame (exact in float mode).
-	b3Transform meshTransform = b3ToRelativeTransform( xfA, b3Pos_zero );
-	b3AABB localBounds = b3AABB_Transform( b3InvertTransform( meshTransform ), meshContact->queryBounds );
+	// Exact scan meshes must not silently lose contacts after the first 256 triangles.
+	// Reuse the world's arena; its capacity persists between simulation steps.
+	int triangleCapacity = shapeA->type == b3_meshShape ? shapeA->mesh.data->triangleCount : B3_MAX_MESH_CONTACT_TRIANGLES;
+	int* triangleIndices = b3Bump( &arena, triangleCapacity * sizeof( int ) );
 	int triangleCount;
 	if ( shapeA->type == b3_meshShape )
 	{
-		triangleCount = b3QueryMeshTriangles( triangleIndices, triangleCapacity, &shapeA->mesh, localBounds );
+		triangleCount = b3QueryMeshTriangles( triangleIndices, triangleCapacity, &shapeA->mesh, meshContact->queryBounds );
 	}
 	else
 	{
 		B3_ASSERT( shapeA->type == b3_heightShape );
-		triangleCount = b3QueryHeightFieldTriangles( triangleIndices, triangleCapacity, shapeA->heightField, localBounds );
+		triangleCount = b3QueryHeightFieldTriangles( triangleIndices, triangleCapacity, shapeA->heightField, meshContact->queryBounds );
 	}
 
-	if ( triangleCount == triangleCapacity )
+	if ( shapeA->type == b3_heightShape && triangleCount == triangleCapacity )
 	{
 		static bool s_once = false;
 		if ( s_once == false )
@@ -135,7 +135,7 @@ static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTr
 	B3_VALIDATE( b3IsSorted( triangleIndices, triangleCount ) );
 
 	// Create new contact cache and match with old one
-	b3ContactCache contactCache[B3_MAX_MESH_CONTACT_TRIANGLES];
+	b3ContactCache* contactCache = b3Bump( &arena, triangleCount * sizeof( b3ContactCache ) );
 
 	int index2 = 0;
 	for ( int index1 = 0; index1 < triangleCount; ++index1 )
@@ -532,7 +532,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 
 	b3TaskContext* context = b3Array_Get( world->taskContexts, workerIndex );
 
-	b3RefreshCache( contact, shapeA, xfA, &shapeB->aabb );
+	b3RefreshCache( contact, shapeA, xfA, &shapeB->aabb, arena );
 
 	// Collide with triangles and build manifolds
 	b3MeshContact* meshContact = &contact->meshContact;
@@ -574,6 +574,8 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	b3TriangleCache* triangleCaches = meshContact->triangleCache.data;
 
 	const b3HullData* hullB = shapeB->type == b3_hullShape ? shapeB->hull : NULL;
+	bool movingMeshHull = hullB != NULL && shapeA->type == b3_meshShape &&
+		b3Array_Get( world->bodies, shapeA->bodyId )->type != b3_staticBody;
 
 	for ( int index = 0; index < triangleCount && totalPointCount + 3 < pointBufferCapacity; ++index )
 	{
@@ -618,8 +620,15 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 					cache->satCache = (b3SATCache){ 0 };
 				}
 
-				b3CollideHullAndTriangle( manifold, pointCapacity, hullB, vertices[0], vertices[1], vertices[2],
-										  triangle.flags, &cache->satCache );
+				if ( movingMeshHull )
+				{
+					b3CollideHullAndMovingTriangle( manifold, pointCapacity, hullB, vertices[0], vertices[1], vertices[2], &cache->satCache );
+				}
+				else
+				{
+					b3CollideHullAndTriangle( manifold, pointCapacity, hullB, vertices[0], vertices[1], vertices[2],
+											  triangle.flags, &cache->satCache );
+				}
 				context->satCallCount += 1;
 				context->satCacheHitCount += cache->satCache.hit;
 				break;
@@ -647,7 +656,7 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 			manifold->i2 = triangle.i2;
 			manifold->i3 = triangle.i3;
 
-			if ( manifold->feature == b3_featureTriangleFace || B3_FORCE_GHOST_COLLISIONS )
+			if ( movingMeshHull || manifold->feature == b3_featureTriangleFace || B3_FORCE_GHOST_COLLISIONS )
 			{
 				(void)b3AddEdge( &foundEdges, triangle.i1, triangle.i2 );
 				(void)b3AddEdge( &foundEdges, triangle.i2, triangle.i3 );
