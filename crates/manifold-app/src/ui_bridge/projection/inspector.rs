@@ -633,7 +633,7 @@ pub fn sync_inspector_data(
                                             source: None,
                                             source_options,
                                             source_missing: false,
-                                            target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::Emissive,
+                                            target_map: super::material::default_skin_target(def.as_ref(), material),
                                         }));
                                         ObjectRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::ObjectKnownRow {

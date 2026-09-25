@@ -552,9 +552,9 @@ pub(super) fn dispatch_project(
         }
         // BUG-hlw8 "+ Plane" button: mirrors `SceneSetupAddObject` above but
         // dispatches `AddSceneLayerPlaneCommand`, which builds a grouped plane
-        // mesh + unlit material + transform + empty `node.layer_source` wired
-        // to `base_color_map`. Width/height come from the project's configured
-        // output resolution (height fixed at 1.0, width = aspect) so the
+        // mesh + unlit material + transform. Skin assignment adds the source
+        // on demand so an unassigned plane is visible. Width/height come from
+        // the project's output resolution (height fixed at 1.0, width = aspect) so the
         // skinned layer composite is undistorted on the sheet.
         ProjectAction::SceneSetupAddLayerPlane(layer_id, render_scene_node_id, next_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -1623,7 +1623,7 @@ mod tests {
 
     /// BUG-hlw8: the "+ Plane" button dispatches `AddSceneLayerPlaneCommand`
     /// through the same `dispatch_project` entry point, bumping the scene's
-    /// `objects` count by one and stamping the new grouped plane + skin into
+    /// `objects` count by one and stamping the new grouped plane into
     /// the graph.
     #[test]
     fn scene_setup_add_layer_plane_dispatches_add_scene_layer_plane_command() {
@@ -1664,13 +1664,23 @@ mod tests {
                 n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID
                     && n.group.as_ref().is_some_and(|g| {
                         g.nodes.iter().any(|n| n.type_id == "node.plane_mesh")
-                            && g.nodes.iter().any(|n| n.type_id == "node.layer_source")
                     })
             })
             .expect("the new layer plane group is present");
         let body = added_group.group.as_ref().expect("is a group");
         assert!(body.nodes.iter().any(|n| n.type_id == "node.plane_mesh"));
-        assert!(body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
+        assert!(!body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(plane) =
+            vm.objects.last().unwrap()
+        else {
+            panic!("added plane must be editable");
+        };
+        assert!(plane.skin.is_none(), "unassigned plane must not sample transparent skin");
+        assert_eq!(
+            super::super::projection::material::default_skin_target(Some(&def), &plane.material),
+            manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
+        );
         let scene_object = body
             .nodes
             .iter()
