@@ -5,7 +5,7 @@ struct Uniforms {
     exposure: f32,
     paper_white: f32,
     max_nits: f32,
-    mode: u32,  // 0 = SDR curve, 1 = EDR soft shoulder
+    mode: u32,  // 0 = faithful SDR clamp, 1 = EDR soft shoulder
     curve: u32,
     _pad0: f32,
     _pad1: f32,
@@ -37,7 +37,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let scene = src.rgb * u.exposure;
     var mapped: vec3<f32>;
     if (u.mode == 0u) {
-        mapped = tonemap_sdr(scene, u.curve);
+        // Match the former HDR-display-to-SDR export: preserve the authored
+        // linear image, clipping only values SDR cannot represent. Applying
+        // an artistic curve here changes midtones/colour after master grading.
+        mapped = clamp(scene, vec3<f32>(0.0), vec3<f32>(1.0));
     } else {
         mapped = edr_soft_shoulder(scene, u.max_nits);
     }

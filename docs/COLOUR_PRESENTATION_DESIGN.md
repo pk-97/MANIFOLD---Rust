@@ -68,7 +68,9 @@ double the whole engine's memory, and is not a measured performance claim.
 Rejected: changing only the drawable, which leaves clipping in the offscreen buffer.
 
 **D5. Reuse tone mapping formulas.** PresentationPipeline uses extracted shared
-WGSL curve functions from TonemapPipeline. SDR uses the project-selected curve;
+WGSL functions from TonemapPipeline. SDR preserves authored linear values in
+[0, 1] and clips out-of-range values, matching the former HDR-display SDR export.
+The September 25 correction removes the extra artistic curve after master grading;
 EDR preserves values below a soft shoulder at current headroom. Display-mapped
 values remain linear; macOS performs display colour conversion. No unconditional
 sRGB encode in the rendering pipeline and no tone mapping of UI palette colours.
@@ -111,7 +113,7 @@ generic colour-framework dependency, or serialized project migration is introduc
 | HDR values survive main-window storage | Shared float format; checked target constructor; GPU pixel proof |
 | GPU wrappers cannot lie about drawable storage | Native pixel-format assertion |
 | Master FX do not depend on attached displays | SceneLinear mode at the common compositor call site |
-| Display mapping uses the existing curves once | Shared WGSL; GPU SDR parity proof |
+| SDR preserves authored colour without another curve | Shared presentation shader; GPU colour-preservation proof |
 | Capture RGB is sRGB and alpha remains linear | Typed encoder; numerical, channel-order and metadata tests |
 | Invalid headroom/byte lengths fail visibly | Checked constructors and native diagnostics |
 

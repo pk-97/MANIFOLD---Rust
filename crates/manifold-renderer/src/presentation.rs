@@ -445,38 +445,6 @@ mod gpu_tests {
         read_pixel(&readback)
     }
 
-    fn run_tonemap_sdr(
-        device: &manifold_gpu::GpuDevice,
-        input: [f32; 4],
-        curve: TonemapCurve,
-    ) -> [f32; 4] {
-        let source = make_texture(
-            device,
-            GpuTextureFormat::Rgba16Float,
-            GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
-            "tonemap-proof-source",
-        );
-        let tonemap = TonemapPipeline::new(device, W, H);
-        let readback = device.create_buffer_shared(ROW_BYTES as u64);
-        let mut native = device.create_encoder("tonemap-proof");
-        enc_upload(&mut native, &source, input);
-        {
-            let mut renderer = RendererGpuEncoder::new(&mut native, device);
-            tonemap.apply(
-                &mut renderer,
-                &source,
-                &TonemapSettings {
-                    mode: TonemapMode::Sdr,
-                    curve,
-                    ..TonemapSettings::default()
-                },
-            );
-        }
-        native.copy_texture_to_buffer(&tonemap.output.texture, &readback, W, H, ROW_BYTES);
-        native.commit_and_wait_completed();
-        read_pixel(&readback)
-    }
-
     fn run_tonemap_mode(
         device: &manifold_gpu::GpuDevice,
         input: [f32; 4],
@@ -560,7 +528,7 @@ mod gpu_tests {
     }
 
     #[test]
-    fn presentation_sdr_matches_production_tonemap_for_each_curve() {
+    fn presentation_sdr_preserves_authored_colour_without_an_extra_curve() {
         let device = crate::test_device();
         for curve in [
             TonemapCurve::AcesNarkowicz,
@@ -569,11 +537,13 @@ mod gpu_tests {
             TonemapCurve::KhronosPbrNeutral,
         ] {
             let presentation = run_presentation(&device, [1.7, 0.6, 0.2, 0.75], sdr(), curve);
-            let tonemap = run_tonemap_sdr(&device, [1.7, 0.6, 0.2, 0.75], curve);
+            // Legacy SDR encoding of the linear HDR image: clip highlights,
+            // preserve midtones, colour ratios below white, and alpha.
+            let expected = [1.0, 0.6, 0.2, 0.75];
             for channel in 0..4 {
                 assert!(
-                    (presentation[channel] - tonemap[channel]).abs() < 0.002,
-                    "{curve:?} channel {channel} differs: presentation={presentation:?} tonemap={tonemap:?}"
+                    (presentation[channel] - expected[channel]).abs() < 0.002,
+                    "{curve:?} channel {channel} differs: presentation={presentation:?} expected={expected:?}"
                 );
             }
         }
