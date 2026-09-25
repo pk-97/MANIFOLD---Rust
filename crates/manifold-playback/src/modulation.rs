@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
-use manifold_core::audio_mod::{TriggerAction, WrapMode, random_step_value};
+use manifold_core::audio_mod::{AudioFeatureKind, TriggerAction, WrapMode, random_step_value};
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
 use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
@@ -689,10 +689,10 @@ fn evaluate_instance_audio_mods(
         // handles never distort whether/when a mod fires (BUG: range_min >=
         // 0.5 fired once and never re-armed; range_max <= 0.5 never fired at
         // all). `out_norm` stays the range-mapped value for Continuous, which
-        // is exactly what the range map is for. The `is_trigger_gate` arm
-        // below is the one exception (BUG-242): it edge-detects the
-        // sensitivity-scaled RAW level instead, decoupled from this
-        // envelope, so a shape's release can't swallow a second onset.
+        // is exactly what the range map is for. Trigger-gate cards edge-detect
+        // the sensitivity-scaled RAW level (BUG-242), and Step/Random actions
+        // on Kick/Transients use a local unsmoothed condition below, so an
+        // envelope release cannot swallow a second detector onset.
         let conditioned = shape.condition(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
         let out_norm = shape.map_range(conditioned);
 
@@ -707,8 +707,9 @@ fn evaluate_instance_audio_mods(
         // `is_trigger_gate` arm fires on the sensitivity-scaled RAW edge
         // (BUG-242), so its meter shows THAT, not the shaped envelope the
         // gate ignores — tuning sensitivity against a smoothed meter lied
-        // about where the fire threshold sat. Every other arm keeps
-        // `conditioned`, the signal they actually read.
+        // about where the fire threshold sat. Continuous and non-impulse
+        // action arms keep `conditioned`; impulse Step/Random arms use the
+        // local unsmoothed condition computed below.
         if is_trigger_gate {
             // section 9 U1: the mod's target is a trigger-gate card (e.g.
             // `clip_trigger`) — never write the toggle's value (R2's
@@ -747,7 +748,26 @@ fn evaluate_instance_audio_mods(
             continue;
         }
 
-        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), conditioned);
+        // Kick and Transients are already decaying detector impulses. Step and
+        // Random must see each detector onset directly, while Continuous and
+        // non-impulse actions retain the shape's attack/release feel. Reuse the
+        // core condition path with a local follower so sensitivity, rate of
+        // change, inversion, curves, and non-finite sanitization stay identical
+        // without replacing the displayed continuous signal's smoothing state.
+        let impulse_action = !is_trigger
+            && matches!(m.action, TriggerAction::Step { .. } | TriggerAction::Random)
+            && matches!(m.source.feature.kind, AudioFeatureKind::Kick | AudioFeatureKind::Transients);
+        let action_conditioned = if impulse_action {
+            let mut action_shape = shape;
+            action_shape.attack_ms = 0.0;
+            action_shape.release_ms = 0.0;
+            let mut action_smoothed = 0.0;
+            let mut action_prev_raw = prev_raw_before_condition;
+            action_shape.condition(raw, dt_s, &mut action_smoothed, &mut action_prev_raw)
+        } else {
+            conditioned
+        };
+        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), action_conditioned);
 
         if is_trigger {
             // section 8 D5b: a fire-button target wants a monotonic count, not a
@@ -790,9 +810,11 @@ fn evaluate_instance_audio_mods(
                 // the step. `None` defaults to Transient here, NOT `Both`
                 // like gate cards (D3: a step mod with no audio intent is
                 // meaningless — arming it required opening an audio drawer).
-                // Detection runs on `conditioned` (pre-range-map) so trim
-                // handles never distort firing.
-                let audio_edge = m.trigger_edge.advance(conditioned, 0.5);
+                // Detection runs on the conditioned (pre-range-map) signal so
+                // trim handles never distort firing. Detector impulses use the
+                // local unsmoothed condition above; other sources retain the
+                // configured follower.
+                let audio_edge = m.trigger_edge.advance(action_conditioned, 0.5);
                 let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
                 let fires =
                     (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
@@ -845,9 +867,11 @@ fn evaluate_instance_audio_mods(
                 // above are mutually exclusive per mod (is_trigger `continue`s
                 // before this match), so there's no shared-meaning collision.
                 // D3 event-source gating: same shape as the Step arm above.
-                // Detection runs on `conditioned` (pre-range-map) so trim
-                // handles never distort firing.
-                let audio_edge = m.trigger_edge.advance(conditioned, 0.5);
+                // Detection runs on the conditioned (pre-range-map) signal so
+                // trim handles never distort firing. Detector impulses use the
+                // local unsmoothed condition above; other sources retain the
+                // configured follower.
+                let audio_edge = m.trigger_edge.advance(action_conditioned, 0.5);
                 let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
                 let fires =
                     (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
@@ -1693,8 +1717,19 @@ mod tests {
 
     /// A snapshot with one send whose Full-band transient reads `level`.
     fn snapshot_full_transient(level: f32) -> AudioFeatureSnapshot {
+        snapshot_feature(AudioFeatureKind::Transients, AudioBand::Full, level)
+    }
+
+    fn snapshot_feature(kind: AudioFeatureKind, band: AudioBand, level: f32) -> AudioFeatureSnapshot {
         let mut s = AudioFeatureSnapshot { sends: vec![SendFeatures::default()] };
-        s.sends[0].bands[AudioBand::Full.index()].transients = level;
+        let feature_band = if kind == AudioFeatureKind::Kick { AudioBand::Low } else { band };
+        let band_features = &mut s.sends[0].bands[feature_band.index()];
+        match kind {
+            AudioFeatureKind::Transients => band_features.transients = level,
+            AudioFeatureKind::Kick => s.sends[0].bands[AudioBand::Low.index()].kick = level,
+            AudioFeatureKind::Amplitude => band_features.amplitude = level,
+            _ => panic!("test snapshot helper only supports impulse and amplitude features"),
+        }
         s
     }
 
@@ -1904,16 +1939,150 @@ mod tests {
         param_id: &'static str,
         action: TriggerAction,
     ) {
+        attach_feature_action_mod(
+            project,
+            send_id,
+            param_id,
+            AudioFeatureKind::Transients,
+            action,
+        );
+    }
+
+    fn attach_feature_action_mod(
+        project: &mut Project,
+        send_id: &AudioSendId,
+        param_id: &'static str,
+        kind: AudioFeatureKind,
+        action: TriggerAction,
+    ) {
         let mut m = ParameterAudioMod::new(
             param_id.into(),
             send_id.clone(),
-            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+            AudioFeature::new(kind, if kind == AudioFeatureKind::Kick { AudioBand::Low } else { AudioBand::Full }),
         );
         m.shape = AudioModShape { attack_ms: 0.0, release_ms: 0.0, ..Default::default() };
         m.action = action;
         project.timeline.layers[0].effects.as_mut().unwrap()[0]
             .audio_mods_mut()
             .push(m);
+    }
+
+    #[test]
+    fn impulse_actions_bypass_attack_release_and_keep_held_signals_single_shot() {
+        for kind in [AudioFeatureKind::Kick, AudioFeatureKind::Transients] {
+            for action in [
+                TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp },
+                TriggerAction::Random,
+            ] {
+                let (mut project, send_id) = project_with_audio_send();
+                attach_feature_action_mod(&mut project, &send_id, "amount", kind, action);
+                let m = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0]
+                    .audio_mods.as_mut().unwrap()[0];
+                m.shape.attack_ms = 1000.0;
+                m.shape.release_ms = 1000.0;
+
+                let hot = snapshot_feature(kind, AudioBand::Full, 1.0);
+                let cold = snapshot_feature(kind, AudioBand::Full, 0.0);
+                evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+                assert!(step_value_of(&project).is_some(), "{kind:?} {action:?} must fire through slow attack");
+                let first_step = step_value_of(&project);
+                let first_count = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                    .audio_mods.as_ref().unwrap()[0].fire_count;
+                evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+                assert_eq!(step_value_of(&project), first_step, "{kind:?} {action:?} must not duplicate while held hot");
+                assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                    .audio_mods.as_ref().unwrap()[0].fire_count, first_count,
+                    "{kind:?} {action:?} must not increment while held hot");
+                evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+                evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+                let m = &project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                    .audio_mods.as_ref().unwrap()[0];
+                match action {
+                    TriggerAction::Step { .. } => assert_eq!(m.step_value, Some(0.2), "{kind:?} Step must re-fire after a separated impulse"),
+                    TriggerAction::Random => assert_eq!(m.fire_count, 2, "{kind:?} Random must re-fire after a separated impulse"),
+                    TriggerAction::Continuous => unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn impulse_actions_follow_default_detector_decay_between_realistic_pulses() {
+        let decay_per_tick = 0.85_f32.powi(3);
+        for kind in [AudioFeatureKind::Kick, AudioFeatureKind::Transients] {
+            for action in [
+                TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp },
+                TriggerAction::Random,
+            ] {
+                let (mut project, send_id) = project_with_audio_send();
+                attach_feature_action_mod(&mut project, &send_id, "amount", kind, action);
+                project.timeline.layers[0].effects.as_mut().unwrap()[0]
+                    .audio_mods.as_mut().unwrap()[0].shape = AudioModShape::default();
+                let mut fire_count = 0;
+                for tick in 0..17 {
+                    let level = if tick % 8 == 0 { 1.0 } else { decay_per_tick.powi(tick % 8) };
+                    evaluate_all_audio_mods(
+                        &mut project,
+                        &snapshot_feature(kind, AudioBand::Full, level),
+                        Seconds(1.0 / 60.0),
+                        &mut Vec::new(),
+                        &[],
+                        &mut FireMeterCapture::default(),
+                    );
+                    if tick % 8 == 0 { fire_count += 1; }
+                }
+                let m = &project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                    .audio_mods.as_ref().unwrap()[0];
+                match action {
+                    TriggerAction::Step { .. } => assert_eq!(m.step_value, Some(0.3), "{kind:?} Step should fire on each separated pulse"),
+                    TriggerAction::Random => assert_eq!(m.fire_count, fire_count, "{kind:?} Random should fire on each separated pulse"),
+                    TriggerAction::Continuous => unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn impulse_action_preserves_invert_curve_and_trim_zone() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_feature_action_mod(
+            &mut project,
+            &send_id,
+            "amount",
+            AudioFeatureKind::Kick,
+            TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp },
+        );
+        let m = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods.as_mut().unwrap()[0];
+        m.shape.invert = true;
+        m.shape.curve = manifold_core::macro_bank::MacroCurve::Exponential;
+        m.shape.range_min = 0.2;
+        m.shape.range_max = 0.8;
+        let shaped = snapshot_feature(AudioFeatureKind::Kick, AudioBand::Full, 0.25);
+        let mut meters = FireMeterCapture::default();
+        evaluate_all_audio_mods(&mut project, &shaped, Seconds(0.016), &mut Vec::new(), &[], &mut meters);
+        assert_eq!(step_value_of(&project), Some(0.3));
+        let fx = project.timeline.layers[0].effects.as_ref().unwrap()[0].id.clone();
+        let key = fire_meter_key_for_param(fx.as_str(), "amount");
+        assert_eq!(meters.get(key), Some(0.5625), "action meter must use invert and curve on the unsmoothed level");
+    }
+
+    #[test]
+    fn impulse_only_bypass_preserves_continuous_and_non_impulse_smoothing() {
+        let (mut continuous, send_id) = project_with_audio_send();
+        attach_feature_action_mod(&mut continuous, &send_id, "amount", AudioFeatureKind::Transients, TriggerAction::Continuous);
+        continuous.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods.as_mut().unwrap()[0].shape.attack_ms = 1000.0;
+        evaluate_all_audio_mods(&mut continuous, &snapshot_full_transient(1.0), Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+        assert!(continuous.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value < 0.1);
+
+        let (mut amplitude, send_id) = project_with_audio_send();
+        attach_feature_action_mod(&mut amplitude, &send_id, "amount", AudioFeatureKind::Amplitude, TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp });
+        amplitude.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods.as_mut().unwrap()[0].shape.attack_ms = 1000.0;
+        let snap = snapshot_feature(AudioFeatureKind::Amplitude, AudioBand::Full, 1.0);
+        evaluate_all_audio_mods(&mut amplitude, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+        assert_eq!(step_value_of(&amplitude), None, "non-impulse Step keeps attack smoothing");
     }
 
     /// The layer-0 effect's first (and only, in these tests) audio mod's

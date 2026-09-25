@@ -182,7 +182,7 @@ pub struct ParameterAudioMod {
 
 Raw audio features are jittery driving a slider. The shaper is what makes audio modulation feel musical rather than noisy, and it applies to **every** feature regardless of intelligence level:
 
-- **Attack / release** — envelope-follower smoothing. Slow release on band energy gives a pumping pad; fast attack on onset gives a snappy trigger.
+- **Attack / release** — envelope-follower smoothing. Slow release on band energy gives a pumping pad; fast attack on onset gives a snappy continuous response. Kick and Transients in Step/Random bypass this follower for firing, so short hits and closely spaced hits are not lost to smoothing. Sensitivity, rate-of-change, invert, and curve still shape their edge signal; the drawer meter shows that same signal.
 - **Range** — the trim handles define the zone of the parameter's travel the audio drives, in **every** action mode (2026-07-10): Continuous maps its output into the zone; Step wraps/bounces/clamps against the zone's rails; Random jumps within the zone. Fire detection (Step/Random/trigger targets) runs on the conditioned, *pre*-range-map signal, so trimming the zone never distorts or kills firing. See PARAM_STEP_ACTIONS_DESIGN.md section 5 (Decided — do not reopen)
 - **Curve** — response shaping (lin / exp / log) for feel.
 
