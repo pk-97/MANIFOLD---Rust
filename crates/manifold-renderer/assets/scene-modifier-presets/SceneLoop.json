@@ -994,8 +994,62 @@
         {
           "paramId": "far",
           "min": {
-            "constant": {
-              "value": 1.0
+            "multiply": {
+              "a": {
+                "max": {
+                  "a": {
+                    "constant": {
+                      "value": -1.0
+                    }
+                  },
+                  "b": {
+                    "multiply": {
+                      "a": {
+                        "multiply": {
+                          "a": {
+                            "multiply": {
+                              "a": {
+                                "subtract": {
+                                  "a": {
+                                    "boundsMax": {
+                                      "axis": "z"
+                                    }
+                                  },
+                                  "b": {
+                                    "boundsMin": {
+                                      "axis": "z"
+                                    }
+                                  }
+                                }
+                              },
+                              "b": {
+                                "constant": {
+                                  "value": 2.0
+                                }
+                              }
+                            }
+                          },
+                          "b": {
+                            "constant": {
+                              "value": 4.0
+                            }
+                          }
+                        }
+                      },
+                      "b": {
+                        "constant": {
+                          "value": -1.0
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "b": {
+                "constant": {
+                  "value": -1.0
+                }
+              }
             }
           },
           "max": {
