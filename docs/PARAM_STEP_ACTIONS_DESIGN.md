@@ -386,6 +386,12 @@ entity. No committed affordance is unowned.
    integer-free zone collapses to its rounded center). Default handles
    (0.0/1.0) reproduce the old behavior exactly, so existing projects are
    untouched. Continuous is unchanged — its output *is* the range map.
+   For Kick and Transients in Step/Random (2026-09-25), conditioning bypasses
+   the attack/release follower: those sources already emit detector impulses,
+   and smoothing can hide short hits or prevent rearming between them.
+   Sensitivity, rate-of-change, invert, curve, the pre-range threshold, and
+   hysteresis still apply. The drawer meter reads this same unsmoothed edge
+   signal. Other features retain their envelope-conditioned edges.
 
 ## 6. Forbidden moves (named for this design)
 
