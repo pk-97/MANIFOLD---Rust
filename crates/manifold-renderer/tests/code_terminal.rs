@@ -302,6 +302,66 @@ mod gpu {
         bytes
     }
 
+    fn diagonal_edge_pixel(x: u32, y: u32) -> [f32; 4] {
+        let u = (x as f32 + 0.5) / W as f32;
+        let v = (y as f32 + 0.5) / H as f32;
+        if u + 0.9 * v < 0.82 {
+            [0.18, 0.28, 0.08, 1.0]
+        } else {
+            [0.01, 0.015, 0.02, 1.0]
+        }
+    }
+
+    fn diagonal_edge_source() -> Vec<u8> {
+        (0..H)
+            .flat_map(|y| {
+                (0..W).flat_map(move |x| {
+                    diagonal_edge_pixel(x, y)
+                        .map(f16::from_f32)
+                        .into_iter()
+                        .flat_map(|channel| channel.to_le_bytes())
+                })
+            })
+            .collect()
+    }
+
+    fn bilinear_edge_sample(cell_x: usize, cell_y: usize, columns: usize, rows: usize) -> [f32; 4] {
+        let centre_x = (cell_x as f32 + 0.5) * W as f32 / columns as f32;
+        let centre_y = (cell_y as f32 + 0.5) * H as f32 / rows as f32;
+        let sample_x = centre_x - 0.5;
+        let sample_y = centre_y - 0.5;
+        let x0 = sample_x.floor().clamp(0.0, (W - 1) as f32) as u32;
+        let y0 = sample_y.floor().clamp(0.0, (H - 1) as f32) as u32;
+        let x1 = (x0 + 1).min(W - 1);
+        let y1 = (y0 + 1).min(H - 1);
+        let fx = (sample_x - sample_x.floor()).clamp(0.0, 1.0);
+        let fy = (sample_y - sample_y.floor()).clamp(0.0, 1.0);
+        let p00 = diagonal_edge_pixel(x0, y0);
+        let p10 = diagonal_edge_pixel(x1, y0);
+        let p01 = diagonal_edge_pixel(x0, y1);
+        let p11 = diagonal_edge_pixel(x1, y1);
+        std::array::from_fn(|channel| {
+            let top = p00[channel] + (p10[channel] - p00[channel]) * fx;
+            let bottom = p01[channel] + (p11[channel] - p01[channel]) * fx;
+            top + (bottom - top) * fy
+        })
+    }
+
+    fn edge_crosses_cell(cell_x: usize, cell_y: usize, columns: usize, rows: usize) -> bool {
+        let x0 = (cell_x * W as usize / columns) as u32;
+        let y0 = (cell_y * H as usize / rows) as u32;
+        let x1 = (((cell_x + 1) * W as usize).div_ceil(columns) as u32).min(W) - 1;
+        let y1 = (((cell_y + 1) * H as usize).div_ceil(rows) as u32).min(H) - 1;
+        let first = diagonal_edge_pixel(x0, y0)[0] > 0.1;
+        [
+            diagonal_edge_pixel(x1, y0)[0] > 0.1,
+            diagonal_edge_pixel(x0, y1)[0] > 0.1,
+            diagonal_edge_pixel(x1, y1)[0] > 0.1,
+        ]
+        .into_iter()
+        .any(|bright| bright != first)
+    }
+
     fn fixture(device: &GpuDevice) -> (GpuTexture, Vec<u8>) {
         let mut halves = Vec::with_capacity((W * H * 4) as usize);
         for y in 0..H {
@@ -382,7 +442,7 @@ mod gpu {
                 )
             } else {
                 (
-                    base.canonical_def.clone(),
+                    std::sync::Arc::new(def.clone()),
                     base.bindings.clone(),
                     base.mesh_rules.clone(),
                 )
@@ -902,6 +962,174 @@ mod gpu {
                 output.iter().any(|p| p[0].max(p[1]).max(p[2]) > 0.5),
                 "bright text survives"
             );
+        }
+    }
+
+    #[test]
+    fn code_terminal_whole_glyph() {
+        let device = std::sync::Arc::new(GpuDevice::new());
+        let def = preset();
+        let source = diagonal_edge_source();
+        let controls = Controls {
+            erosion: 1.0,
+            activity: 0.0,
+            detail_reactivity: 0.0,
+            ..Controls::defaults()
+        };
+
+        let mut coverage_def = def.clone();
+        coverage_def
+            .wires
+            .iter_mut()
+            .find(|wire| wire.to_node == 20)
+            .expect("final output wire")
+            .from_node = 3;
+        let (input, _) = fixture(&device);
+        let mut coverage =
+            Harness::new(std::sync::Arc::clone(&device), &coverage_def, &input, false);
+        let raw = coverage
+            .render_with_source(&source, &coverage_def, controls, 0.0, 0)
+            .0;
+        let raw_pixels = f32_pixels(&raw);
+        assert!(
+            raw_pixels.iter().any(|pixel| pixel[0] > 0.1),
+            "raw glyph fixture contains illuminated strokes (max={:.3})",
+            raw_pixels.iter().map(|pixel| pixel[0]).fold(0.0, f32::max)
+        );
+
+        let palette_colour = |palette: f32, sample: [f32; 4]| {
+            let exposed = [sample[0] * 2.5, sample[1] * 2.5, sample[2] * 2.5];
+            match palette as u32 {
+                0 => exposed,
+                1 => {
+                    let light = (exposed[0] * 0.2126 + exposed[1] * 0.7152 + exposed[2] * 0.0722)
+                        .clamp(0.0, 1.0);
+                    [0.24 * light, light, 0.48 * light]
+                }
+                2 => {
+                    let light = (exposed[0] * 0.2126 + exposed[1] * 0.7152 + exposed[2] * 0.0722)
+                        .clamp(0.0, 1.0);
+                    [light, 0.55 * light, 0.13 * light]
+                }
+                _ => unreachable!("CodeTerminal palette selector"),
+            }
+        };
+
+        let mut wrote_artifacts = false;
+        for fused in [false, true] {
+            let (input, _) = fixture(&device);
+            let mut harness = Harness::new(std::sync::Arc::clone(&device), &def, &input, fused);
+            for palette in [0.0, 1.0, 2.0] {
+                let output = harness.render_with_source(
+                    &source,
+                    &def,
+                    Controls {
+                        colour: palette,
+                        ..controls
+                    },
+                    0.0,
+                    palette as i64 + if fused { 10 } else { 0 },
+                );
+                let (rendered, cells, columns, rows) = output;
+                assert_eq!(
+                    cells,
+                    coverage.terminal_cells().0,
+                    "raw and rendered cells agree"
+                );
+                let rendered_pixels = f32_pixels(&rendered);
+                let mut contour_stroke_pixels = 0;
+                let mut max_error = 0.0_f32;
+                for y in 0..H as usize {
+                    for x in 0..W as usize {
+                        let index = y * W as usize + x;
+                        let raw_glyph = raw_pixels[index][0];
+                        let pixel = rendered_pixels[index];
+                        let cell_x = (((x as f32 + 0.5) * columns as f32 / W as f32).floor()
+                            as usize)
+                            .min(columns - 1);
+                        let cell_y = (((y as f32 + 0.5) * rows as f32 / H as f32).floor() as usize)
+                            .min(rows - 1);
+                        let sample = bilinear_edge_sample(cell_x, cell_y, columns, rows);
+                        let luma = (sample[0] * 0.2126 + sample[1] * 0.7152 + sample[2] * 0.0722)
+                            .clamp(0.0, 1.0);
+                        let weight = luma.sqrt();
+                        let expected_glyph =
+                            raw_glyph * (1.0 - weight) + raw_glyph.max(0.0).powf(0.35) * weight;
+                        let colour = palette_colour(palette, sample);
+                        let expected = [
+                            expected_glyph * colour[0],
+                            expected_glyph * colour[1],
+                            expected_glyph * colour[2],
+                        ];
+                        for channel in 0..3 {
+                            max_error = max_error.max((pixel[channel] - expected[channel]).abs());
+                        }
+                        if raw_glyph > 0.1 && edge_crosses_cell(cell_x, cell_y, columns, rows) {
+                            contour_stroke_pixels += 1;
+                        }
+                    }
+                }
+                assert!(
+                    contour_stroke_pixels > 100,
+                    "diagonal edge crosses enough glyph coverage ({contour_stroke_pixels})"
+                );
+                assert!(
+                    max_error < 0.035,
+                    "palette {palette} {fusion} whole-glyph oracle error {max_error:.4}",
+                    fusion = if fused { "fused" } else { "unfused" }
+                );
+                if !wrote_artifacts && !fused && palette == 0.0 {
+                    // Negative control: the original per-pixel illumination
+                    // must lose strokes that the whole-cell render retains.
+                    let mut clipped_def = def.clone();
+                    clipped_def
+                        .wires
+                        .iter_mut()
+                        .find(|wire| wire.to_node == 26 && wire.to_port == "in")
+                        .expect("illumination input")
+                        .from_node = 0;
+                    let (clipped_input, _) = fixture(&device);
+                    let mut clipped = Harness::new(
+                        std::sync::Arc::clone(&device),
+                        &clipped_def,
+                        &clipped_input,
+                        false,
+                    );
+                    let clipped_raw = clipped
+                        .render_with_source(
+                            &source,
+                            &clipped_def,
+                            Controls {
+                                colour: palette,
+                                ..controls
+                            },
+                            0.0,
+                            0,
+                        )
+                        .0;
+                    let lost_strokes = rendered_pixels
+                        .iter()
+                        .zip(f32_pixels(&clipped_raw))
+                        .filter(|(whole, cut)| whole[1] > cut[1] + 0.1)
+                        .count();
+                    assert!(
+                        lost_strokes > 20,
+                        "fixture exposes clipped strokes: {lost_strokes}"
+                    );
+                    if let Ok(dir) = std::env::var("MANIFOLD_TERMINAL_WHOLE_GLYPH_DIR") {
+                        let dir = std::path::PathBuf::from(dir);
+                        std::fs::create_dir_all(&dir).expect("create whole-glyph artifact dir");
+                        std::fs::write(
+                            dir.join("code-terminal-whole-glyph-source.png"),
+                            encode_rgba8_png(&readback_srgb_rgba8(&device, &input, W, H), W, H),
+                        )
+                        .expect("write whole-glyph source artifact");
+                        harness.write_png(&dir.join("code-terminal-whole-glyph-output.png"));
+                        clipped.write_png(&dir.join("code-terminal-clipped-output.png"));
+                    }
+                    wrote_artifacts = true;
+                }
+            }
         }
     }
 

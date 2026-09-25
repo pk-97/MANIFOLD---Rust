@@ -892,7 +892,7 @@ The effect presets are listed in section 5.
 | ChromaticAberration | `radial_offset_field` + `math` → `chromatic_displace` → `mix` |
 | ColorCompass | 4× `color_sample` → `math` → `smoothing` → `affine_transform` — texture-to-scalar bridge closing the loop into image transform |
 | ColorGrade | `contrast` → `saturation` → `hue_saturation` → `colorize` → `gain` → `clamp_texture` → `mix` |
-| CodeTerminal | Source → `terminal_stream.reaction` drives selective text updates and spatial measurements; Fine source detail briefly cycles data characters via Detail Reactivity, then settles; contours shape indentation and natural line endings; Single/tmux layouts give shell, code, logs and inspection distinct source-triggered edit rhythms; `glyph_atlas` → `render_glyph_grid` renders them. Source/green/amber ink retains a readable floor, then luminance/noise-ordered erosion uses `smoothstep` → `masked_mix`. |
+| CodeTerminal | Source → `terminal_stream.reaction` drives selective text updates and spatial measurements; Fine source detail briefly cycles data characters via Detail Reactivity, then settles; contours shape indentation and natural line endings; Single/tmux layouts give shell, code, logs and inspection distinct source-triggered edit rhythms; `glyph_atlas` → `render_glyph_grid` renders them. Source colour and brightness are sampled on the character grid so Source/green/amber ink illuminates whole glyphs at image contours; luminance/noise-ordered whole-cell erosion uses `smoothstep` → `masked_mix`. |
 | DepthOfField | `depth_estimate_midas` / `box_mask` / `ellipse_mask` + CoC math → `gaussian_blur_variable_width` ×2 → `masked_mix` |
 | Dither | `dither_pattern` → `dither` |
 | EdgeGlow | `edge_detect` standalone |
