@@ -2533,11 +2533,11 @@ impl InteractionOverlay {
 
         for orig in &trim.originals {
             let original_end = orig.start_beat + orig.duration_beats;
-            // Video clips clamp to their own original start (in_point can't go
-            // negative); generators extend left freely. (Unity lines 548-551.)
+            // Source media can reveal previously trimmed material until its
+            // in-point reaches zero; generators extend left freely.
             let mut new_start = orig.start_beat + raw_delta;
             if !orig.is_generator {
-                new_start = new_start.max(orig.start_beat);
+                new_start = new_start.max(orig.start_beat - Beats(orig.in_point.0 / spb));
             }
             new_start = new_start.min(original_end - min_duration);
             new_start = new_start.max(Beats::ZERO);
@@ -4686,9 +4686,43 @@ mod p1_4_gesture_integrity_tests {
     }
 
     #[test]
+    fn trim_left_reveals_source_across_separate_gestures() {
+        for command in [false, true] {
+            let mut panel = build_viewport();
+            let mut host = GestureTestHost::new(&["layer-0"])
+                .with_clip("clip_a", 0, 4.0, 8.0);
+            let mut state = UIState::new();
+            state.select_clips(vec![ClipId::new("clip_a")]);
+            let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+            overlay.set_modifiers(Modifiers { command, ..Modifiers::NONE });
+            let trimmed_start = if command { 6.375 } else { 6.0 };
+
+            // Commit the inward trim, then start fresh gestures to reveal
+            // part of it and finally drag beyond the beginning of the source.
+            for (requested, expected) in [(trimmed_start, trimmed_start), (5.0, 5.0), (2.0, 4.0)] {
+                let clip = host.find_clip_by_id("clip_a").unwrap();
+                let trim = InteractionOverlay::build_trim_drag(clip.clip_id.clone(), &clip, &state, &host);
+                let press = trim_left_pos(&panel, clip.start_beat.as_f32());
+                overlay.drag.start(TimelineDrag::TrimLeft(trim), press);
+                overlay.on_drag(
+                    Vec2::new(panel.beat_to_pixel(Beats(requested)), press.y),
+                    &mut host, &mut state, &mut panel,
+                );
+                overlay.on_end_drag(&mut host);
+                let clip = host.find_clip_by_id("clip_a").unwrap();
+                assert!((clip.start_beat.0 - expected).abs() < 1e-5);
+                assert!((clip.duration_beats.0 - (12.0 - expected)).abs() < 1e-5);
+                let expected_in = (expected - 4.0) * f64::from(host.get_seconds_per_beat());
+                assert!((clip.in_point.0 - expected_in).abs() < 1e-5);
+            }
+            assert_eq!(host.committed_batches, vec![1, 1, 1]);
+        }
+    }
+
+    #[test]
     fn trim_left_drag_on_generator_clamps_to_beat_zero() {
         // BUG: generator clips are allowed to extend their left-trim freely
-        // (unlike video clips, which floor at their own original start), but
+        // (unlike source media, which stops at source time zero), but
         // that freedom must still stop at beat 0 — dragging far enough left
         // must not push start_beat negative.
         let mut panel = build_viewport();
