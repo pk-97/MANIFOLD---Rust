@@ -19158,6 +19158,11 @@
           "name": "selection",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "shape",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Region Mask",
@@ -19181,12 +19186,22 @@
             "1"
           ],
           "type": "enum"
+        },
+        {
+          "default": "0",
+          "label": "Shape",
+          "name": "shape",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Rasterize a categorical region-label texture into a grayscale coverage mask using observed tracker records. All unions observed labels; Largest chooses the observed track with greatest measured area, ties by lowest track ID.",
+      "purpose": "Rasterize a categorical region-label texture into a grayscale coverage mask using observed tracker records. Shape 0 preserves the observed label silhouette; shape 1 uses the selected observed track boxes with non-additive union coverage, and intermediate values blend them. All unions observed labels/boxes; Largest chooses the observed track with greatest measured area, ties by lowest track ID.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Turns observed tracked region labels into a pixel-accurate mask that preserves holes.",
+      "summary": "Turns observed tracked region labels into a pixel-accurate mask with optional box filling.",
       "type_id": "node.region_mask"
     },
     {
@@ -35677,6 +35692,13 @@
           "max": "1",
           "min": "0",
           "name": "Retention"
+        },
+        {
+          "default": "0",
+          "id": "shape",
+          "max": "1",
+          "min": "0",
+          "name": "Shape"
         },
         {
           "default": "0",

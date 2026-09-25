@@ -531,6 +531,41 @@ fn source_bytes(pixels: &[[f32; 4]]) -> Vec<u8> {
 }
 
 #[test]
+fn blob_v2_mask_shape_blends_to_tracking_boxes() {
+    let device = Arc::new(GpuDevice::new());
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut effect = effect("MaskBlob");
+    set_param(&mut effect, "expand", 0.0);
+    set_param(&mut effect, "feather", 0.0);
+    let mut runtime = build(&device, &registry, &effect);
+    let input = input_texture(&device, "blob-v2-shape-input");
+    let source = ring_scene(0, [1.0, 1.0, 1.0], false);
+    let mut captures = Vec::new();
+    for (phase, shape) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+        set_param(&mut effect, "shape", shape);
+        let mut output = Vec::new();
+        for frame in 0..6 {
+            output = render_fixture(
+                &device,
+                &mut runtime,
+                &effect,
+                &input,
+                (phase * 6 + frame) as i64,
+                &source,
+            );
+        }
+        assert_finite_and_bounded("mask-shape", &output);
+        let hole = region_mean(&output, 68, 70, 88, 90);
+        assert!((hole - shape).abs() < 0.02, "shape={shape}: hole={hole}");
+        assert!(region_mean(&output, 0, 0, 20, 20) < 0.01);
+        captures.push(output);
+    }
+    write_png_bytes(&device, &captures[0], "blob_v2_shape_silhouette");
+    write_png_bytes(&device, &captures[1], "blob_v2_shape_half");
+    write_png_bytes(&device, &captures[2], "blob_v2_shape_boxes");
+}
+
+#[test]
 fn blob_v2_mask_demo() {
     let device = Arc::new(GpuDevice::new());
     let registry = PrimitiveRegistry::with_builtin();

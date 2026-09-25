@@ -1219,6 +1219,16 @@ mod tests {
             .collect();
         assert!(params.contains("detection_mode"));
         assert!(params.contains("selection"));
+        let shape = metadata["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|param| param["id"] == "shape")
+            .expect("shape control");
+        assert_eq!(shape["defaultValue"], 0.0);
+        assert_eq!(shape["min"], 0.0);
+        assert_eq!(shape["max"], 1.0);
+        assert_eq!(shape["wholeNumbers"], false);
         assert!(params.contains("amount"));
         assert!(!params.contains("connect"));
         let bindings = metadata["bindings"].as_array().unwrap();
@@ -1226,6 +1236,12 @@ mod tests {
             binding["id"] == "detection_mode" && binding["target"]["nodeId"] == "detection_mode"
         }));
         assert!(!bindings.iter().any(|binding| binding["id"] == "connect"));
+        assert!(bindings.iter().any(|binding| {
+            binding["id"] == "shape"
+                && binding["target"]["nodeId"] == "region_mask"
+                && binding["target"]["param"] == "shape"
+                && binding["convert"]["type"] == "Float"
+        }));
     }
 
     #[test]

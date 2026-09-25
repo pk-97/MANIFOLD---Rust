@@ -163,6 +163,7 @@ pub(super) fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<Stri
         .cloned()
         .collect();
     let mask_tail_params = json!([
+        {"id":"shape","name":"Shape","min":0.0,"max":1.0,"defaultValue":0.0,"wholeNumbers":false,"isToggle":false,"isTrigger":false,"formatString":"F2"},
         {"id":"selection","name":"Selection","min":0.0,"max":1.0,"defaultValue":0.0,"wholeNumbers":true,"isToggle":false,"isTrigger":false,"valueLabels":["All","Largest"],"formatString":"F0"},
         {"id":"expand","name":"Expand","min":-32.0,"max":32.0,"defaultValue":0.0,"wholeNumbers":true,"isToggle":false,"isTrigger":false,"formatString":"F0"},
         {"id":"feather","name":"Feather","min":0.0,"max":8.0,"defaultValue":1.0,"wholeNumbers":false,"isToggle":false,"isTrigger":false,"formatString":"F2"},
@@ -171,6 +172,7 @@ pub(super) fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<Stri
     ]);
     params.extend(mask_tail_params.as_array().unwrap().iter().cloned());
     let mask_tail_bindings = json!([
+        {"id":"shape","label":"Shape","defaultValue":0.0,"target":{"kind":"node","nodeId":"region_mask","param":"shape"},"convert":{"type":"Float"}},
         {"id":"selection","label":"Selection","defaultValue":0.0,"target":{"kind":"node","nodeId":"region_mask","param":"selection"},"convert":{"type":"EnumRound"}},
         {"id":"expand","label":"Expand","defaultValue":0.0,"target":{"kind":"node","nodeId":"expand_x","param":"radius"},"convert":{"type":"IntRound"}},
         {"id":"expand","label":"Expand","defaultValue":0.0,"target":{"kind":"node","nodeId":"expand_y","param":"radius"},"convert":{"type":"IntRound"}},
@@ -183,7 +185,7 @@ pub(super) fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<Stri
     bindings.extend(mask_tail_bindings.as_array().unwrap().iter().cloned());
 
     let tail_nodes = json!([
-        {"id":7,"nodeId":"region_mask","typeId":"node.region_mask","handle":"region_mask","params":{"selection":{"type":"Enum","value":0}},"title":"Region Mask"},
+        {"id":7,"nodeId":"region_mask","typeId":"node.region_mask","handle":"region_mask","params":{"selection":{"type":"Enum","value":0},"shape":{"type":"Float","value":0.0}},"title":"Region Mask"},
         {"id":8,"nodeId":"expand_x","typeId":"node.mask_extrema","handle":"expand_x","params":{"radius":{"type":"Float","value":0.0},"axis":{"type":"Enum","value":0}},"title":"Expand Horizontal"},
         {"id":9,"nodeId":"expand_y","typeId":"node.mask_extrema","handle":"expand_y","params":{"radius":{"type":"Float","value":0.0},"axis":{"type":"Enum","value":1}},"title":"Expand Vertical"},
         {"id":10,"nodeId":"feather_h","typeId":"node.gaussian_blur","handle":"feather_h","params":{"kernel_size":{"type":"Enum","value":1},"axis":{"type":"Enum","value":0},"step":{"type":"Float","value":1.0},"radius_mode":{"type":"Enum","value":2},"radius":{"type":"Float","value":1.0},"address_mode":{"type":"Enum","value":0}},"title":"Feather Horizontal"},

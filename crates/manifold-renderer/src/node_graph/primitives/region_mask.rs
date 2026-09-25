@@ -2,8 +2,8 @@
 //!
 //! Labels are categorical data. The shader therefore uses integer texel loads
 //! and rounds the uploaded `label / 255` red channel before comparing it with
-//! the track records. Track boxes are never used for coverage; only observed
-//! labels select pixels.
+//! the track records. `shape` blends that observed-label silhouette with the
+//! selected observed track boxes, using a non-additive union for box coverage.
 
 use std::borrow::Cow;
 
@@ -32,23 +32,36 @@ fn read_selection(ctx: &EffectNodeContext<'_, '_>) -> u32 {
     }
 }
 
+fn clamp_shape(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn read_shape(ctx: &EffectNodeContext<'_, '_>) -> f32 {
+    clamp_shape(ctx.scalar_or_param("shape", 0.0))
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RegionMaskUniforms {
     selection: u32,
+    shape: f32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
     name: RegionMask,
     type_id: "node.region_mask",
-    purpose: "Rasterize a categorical region-label texture into a grayscale coverage mask using observed tracker records. All unions observed labels; Largest chooses the observed track with greatest measured area, ties by lowest track ID.",
+    purpose: "Rasterize a categorical region-label texture into a grayscale coverage mask using observed tracker records. Shape 0 preserves the observed label silhouette; shape 1 uses the selected observed track boxes with non-additive union coverage, and intermediate values blend them. All unions observed labels/boxes; Largest chooses the observed track with greatest measured area, ties by lowest track ID.",
     inputs: {
         labels: Texture2D required,
         tracks: Channels[ID: U32, LABEL: U32, OBSERVED: U32, AGE: F32, X: F32, Y: F32, WIDTH: F32, HEIGHT: F32, CX: F32, CY: F32, VX: F32, VY: F32, AREA: F32, PAD0: U32, PAD1: U32, PAD2: U32] required,
         selection: ScalarF32 optional,
+        shape: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -62,12 +75,20 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: REGION_MASK_SELECTIONS,
         },
+        ParamDef {
+            name: Cow::Borrowed("shape"),
+            label: "Shape",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Inherit,
-    composition_notes: "Labels are categorical and are read with exact textureLoad plus round(red * 255); never filter or bilinear-sample them. Only OBSERVED tracks contribute. All unions observed labels, while Largest chooses measured AREA with lowest ID as the tie-break. Feed the result into node.mask_extrema and the existing Gaussian/invert/amount mask stages.",
+    composition_notes: "Labels are categorical and are read with exact textureLoad plus round(red * 255); never filter or bilinear-sample them. Only OBSERVED tracks contribute. `shape=0` preserves the label silhouette, `shape=1` fills the selected observed UV bounding boxes with a non-additive union, and intermediate values blend the coverages. All unions observed labels/boxes, while Largest chooses measured AREA with lowest ID as the tie-break. Feed the result into node.mask_extrema and the existing Gaussian/invert/amount mask stages.",
     examples: [],
     picker: { label: "Region Mask", category: Atom },
-    summary: "Turns observed tracked region labels into a pixel-accurate mask that preserves holes.",
+    summary: "Turns observed tracked region labels into a pixel-accurate mask with optional box filling.",
     category: Mask,
     role: Filter,
     aliases: ["region mask", "blob mask", "label mask", "tracked mask"],
@@ -116,13 +137,14 @@ impl Primitive for RegionMask {
         }
 
         let selection = read_selection(ctx);
+        let shape = read_shape(ctx);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = RegionMaskUniforms {
             selection,
+            shape,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -235,16 +257,20 @@ mod tests {
             MatchMode::Exact,
         );
         assert_eq!(RegionMask::TYPE_ID, "node.region_mask");
-        assert_eq!(RegionMask::INPUTS.len(), 3);
+        assert_eq!(RegionMask::INPUTS.len(), 4);
         assert_eq!(RegionMask::INPUTS[0].ty, PortType::Texture2D);
         assert!(RegionMask::INPUTS[0].required);
         assert_eq!(RegionMask::INPUTS[1].ty, PortType::Array(expected));
         assert!(RegionMask::INPUTS[1].required);
         assert_eq!(RegionMask::INPUTS[2].ty, PortType::Scalar(ScalarType::F32));
         assert!(!RegionMask::INPUTS[2].required);
+        assert_eq!(RegionMask::INPUTS[3].ty, PortType::Scalar(ScalarType::F32));
+        assert!(!RegionMask::INPUTS[3].required);
         assert_eq!(RegionMask::OUTPUTS.len(), 1);
         assert_eq!(RegionMask::OUTPUTS[0].ty, PortType::Texture2D);
         assert_eq!(RegionMask::PARAMS[0].enum_values, REGION_MASK_SELECTIONS);
+        assert_eq!(RegionMask::PARAMS[1].name, "shape");
+        assert_eq!(RegionMask::PARAMS[1].default, ParamValue::Float(0.0));
     }
 
     #[test]
@@ -260,6 +286,16 @@ mod tests {
             crate::node_graph::freeze::classify::FusionKind::Pointwise
         );
         assert_eq!(REGION_MASK_SELECTIONS, &["All", "Largest"]);
+    }
+
+    #[test]
+    fn blob_v2_region_mask_shape_clamps_nonfinite_values() {
+        assert_eq!(clamp_shape(f32::NEG_INFINITY), 0.0);
+        assert_eq!(clamp_shape(-1.0), 0.0);
+        assert_eq!(clamp_shape(0.25), 0.25);
+        assert_eq!(clamp_shape(2.0), 1.0);
+        assert_eq!(clamp_shape(f32::INFINITY), 0.0);
+        assert_eq!(clamp_shape(f32::NAN), 0.0);
     }
 
     #[test]
@@ -384,6 +420,7 @@ mod gpu_tests {
         labels: &manifold_gpu::GpuTexture,
         tracks: &manifold_gpu::GpuBuffer,
         selection: u32,
+        shape: f32,
         shader: &str,
         label: &str,
     ) -> Vec<[f32; 4]> {
@@ -396,9 +433,9 @@ mod gpu_tests {
         );
         let uniforms = RegionMaskUniforms {
             selection,
+            shape,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         let pipeline = device.create_compute_pipeline(shader, ENTRY, label);
         let mut encoder = device.create_encoder(label);
@@ -436,12 +473,23 @@ mod gpu_tests {
         tracks: &manifold_gpu::GpuBuffer,
         selection: u32,
     ) -> Vec<[f32; 4]> {
+        dispatch_shape(device, labels, tracks, selection, 0.0)
+    }
+
+    fn dispatch_shape(
+        device: &manifold_gpu::GpuDevice,
+        labels: &manifold_gpu::GpuTexture,
+        tracks: &manifold_gpu::GpuBuffer,
+        selection: u32,
+        shape: f32,
+    ) -> Vec<[f32; 4]> {
         let shader = standalone_for_spec::<RegionMask>().expect("region mask standalone codegen");
         dispatch_shader(
             device,
             labels,
             tracks,
             selection,
+            shape,
             &shader,
             "node.region_mask.blob-v2-standalone",
         )
@@ -533,6 +581,126 @@ mod gpu_tests {
     }
 
     #[test]
+    fn blob_v2_mask_shape_blends_label_silhouette_with_box_union() {
+        let device = crate::test_device();
+        let labels = upload_labels(&device, &[1, 0, 1, 0, 0, 32, 0, 32], 4, 2);
+        let mut tracks = [Track::default(); 32];
+        tracks[0] = Track {
+            id: 7,
+            label: 1,
+            observed: 1,
+            area: 0.2,
+            x: 0.0,
+            y: 0.0,
+            width: 0.75,
+            height: 1.0,
+            ..Track::default()
+        };
+        tracks[1] = Track {
+            id: 3,
+            label: 32,
+            observed: 1,
+            area: 0.2,
+            x: 0.5,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+            ..Track::default()
+        };
+        // Larger retained tracks must not participate; equal observed areas
+        // select the lower ID (the right-hand box).
+        tracks[2] = Track {
+            id: 1,
+            label: 2,
+            observed: 0,
+            area: 1.0,
+            width: 1.0,
+            height: 1.0,
+            ..Track::default()
+        };
+        let track_buffer = upload_tracks(&device, &tracks);
+        let all_half = dispatch_shape(&device, &labels, &track_buffer, 0, 0.5);
+        let all_full = dispatch_shape(&device, &labels, &track_buffer, 0, 1.0);
+        let largest_full = dispatch_shape(&device, &labels, &track_buffer, 1, 1.0);
+
+        for (index, pixel) in all_half.iter().enumerate() {
+            let expected = if [0, 2, 5, 7].contains(&index) { 1.0 } else { 0.5 };
+            assert!((pixel[0] - expected).abs() < 0.01, "All half pixel {index}: {pixel:?}");
+        }
+        for (index, pixel) in all_full.iter().enumerate() {
+            assert!((pixel[0] - 1.0).abs() < 0.01, "All full pixel {index}: {pixel:?}");
+        }
+        for (index, pixel) in largest_full.iter().enumerate() {
+            let expected = if [2, 3, 6, 7].contains(&index) { 1.0 } else { 0.0 };
+            assert!((pixel[0] - expected).abs() < 0.01, "Largest full pixel {index}: {pixel:?}");
+        }
+
+        let standalone = standalone_for_spec::<RegionMask>().expect("region mask standalone codegen");
+        let fused = fused_shader();
+        for selection in [0, 1] {
+            for shape in [0.0, 0.5, 1.0] {
+                let standalone_pixels = dispatch_shader(
+                    &device,
+                    &labels,
+                    &track_buffer,
+                    selection,
+                    shape,
+                    &standalone,
+                    "node.region_mask.shape-parity-standalone",
+                );
+                let fused_pixels = dispatch_shader(
+                    &device,
+                    &labels,
+                    &track_buffer,
+                    selection,
+                    shape,
+                    &fused,
+                    "node.region_mask.shape-parity-fused",
+                );
+                for (index, (standalone, fused)) in
+                    standalone_pixels.iter().zip(&fused_pixels).enumerate()
+                {
+                    for channel in 0..3 {
+                        assert!(
+                            (standalone[channel] - fused[channel]).abs() < 0.002,
+                            "selection={selection} shape={shape} pixel={index} channel={channel}: standalone={} fused={}",
+                            standalone[channel],
+                            fused[channel]
+                        );
+                    }
+                    assert!((standalone[3] - 1.0).abs() < 0.001);
+                    assert!((fused[3] - 1.0).abs() < 0.001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blob_v2_mask_boxes_exclude_unobserved_tracks() {
+        let device = crate::test_device();
+        let labels = upload_labels(&device, &[1, 0, 0, 0], 4, 1);
+        let mut tracks = [Track::default(); 32];
+        tracks[0] = Track {
+            id: 7, label: 1, observed: 1, area: 0.2,
+            width: 0.5, height: 1.0,
+            ..Track::default()
+        };
+        tracks[1] = Track {
+            id: 1, label: 2, observed: 0, area: 1.0,
+            x: 0.5, width: 0.5, height: 1.0,
+            ..Track::default()
+        };
+        let track_buffer = upload_tracks(&device, &tracks);
+        for selection in [0, 1] {
+            let pixels = dispatch_shape(&device, &labels, &track_buffer, selection, 1.0);
+            for (index, pixel) in pixels.iter().enumerate() {
+                let expected = if index < 2 { 1.0 } else { 0.0 };
+                assert!((pixel[0] - expected).abs() < 0.01);
+            }
+        }
+    }
+
+    #[test]
     fn blob_v2_mask_standalone_and_fused_match_fixture() {
         let device = crate::test_device();
         let labels = upload_labels(&device, &[1, 1, 0, 32, 32, 0, 1, 0], 4, 2);
@@ -569,6 +737,7 @@ mod gpu_tests {
                 &labels,
                 &track_buffer,
                 selection,
+                0.0,
                 &standalone,
                 "node.region_mask.parity-standalone",
             );
@@ -577,6 +746,7 @@ mod gpu_tests {
                 &labels,
                 &track_buffer,
                 selection,
+                0.0,
                 &fused,
                 "node.region_mask.parity-fused",
             );

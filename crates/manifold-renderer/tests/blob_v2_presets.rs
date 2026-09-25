@@ -86,6 +86,7 @@ const MASK_VARIANTS: &[(&str, &[&str])] = &[
             "max_blobs",
             "smoothing",
             "retention",
+            "shape",
             "selection",
             "expand",
             "feather",
