@@ -209,6 +209,40 @@ fn all_stock_files_prepare_through_canonical_host_path() {
 }
 
 #[test]
+fn loop_far_calibration_accepts_small_scenes_without_changing_camera_distance() {
+    let loop_recipe = recipe("SceneLoop");
+    for depth in [0.001_f32, 0.01, 0.124, 0.125, 0.126, 4.0, 2000.0] {
+        let mut host = synthetic_host();
+        host.preset_metadata.as_mut().unwrap().scene_bounds =
+            Some(([0.0; 3], [1.0, 1.0, depth]));
+        let instance = prepare_new_scene_modifier(
+            &host,
+            &loop_recipe,
+            "small_scene_loop".into(),
+            render_scene_ref(&host),
+            SceneTargetSelection::AllObjects,
+        )
+        .unwrap_or_else(|error| panic!("Scene Loop must accept depth {depth}: {error}"));
+        let metadata = instance.graph.preset_metadata.as_ref().unwrap();
+        let far = metadata
+            .params
+            .iter()
+            .find(|param| param.id == "far")
+            .unwrap();
+        // Preserve scene-relative framing, including below the old 1.0 minimum.
+        assert_eq!(far.default_value, depth * 8.0);
+        assert_eq!(far.min, 1.0_f32.min(far.default_value));
+        assert!((far.min..=far.max).contains(&far.default_value));
+        let far_binding = metadata
+            .bindings
+            .iter()
+            .find(|binding| binding.id == "far")
+            .unwrap();
+        assert_eq!(far_binding.default_value, far.default_value);
+    }
+}
+
+#[test]
 fn fresh_calibration_requires_positive_extent_only_on_referenced_axes() {
     let loop_recipe = recipe("SceneLoop");
     let mut host = synthetic_host();

@@ -2,6 +2,24 @@
 use manifold_core::material_inspector as core;
 use manifold_ui::param_surface as ui;
 
+/// An untextured unlit surface (including a new plane) takes its first
+/// layer skin as base colour. Lit materials retain the emissive default.
+pub(crate) fn default_skin_target(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    material: &manifold_renderer::node_graph::scene_vm::MaterialVm,
+) -> manifold_ui::panels::scene_setup_panel::SkinTargetMap {
+    use manifold_renderer::node_graph::scene_vm::MaterialVm;
+    use manifold_ui::panels::scene_setup_panel::SkinTargetMap;
+    if let (Some(def), MaterialVm::Known(row)) = (def, material)
+        && node_at(def, &row.scope_path, row.node_doc_id)
+            .is_some_and(|(node, _)| node.type_id == "node.unlit_material")
+    {
+        SkinTargetMap::BaseColor
+    } else {
+        SkinTargetMap::Emissive
+    }
+}
+
 fn feature(value: core::MaterialFeature) -> ui::MaterialFeature {
     match value {
         core::MaterialFeature::Coat => ui::MaterialFeature::Coat,
