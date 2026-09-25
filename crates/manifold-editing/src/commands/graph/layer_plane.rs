@@ -2,20 +2,19 @@
 //! (BUG-4gba): one undoable composite edit that (1) bumps
 //! `render_scene`'s `objects` count by one, (2) builds a new group named
 //! "Layer Plane N" containing a `node.plane_mesh` (width/height from the
-//! caller) + a Mask/cutout `node.unlit_material` + a `node.transform_3d` +
-//! an EMPTY `node.layer_source` ("Skin", wired to `base_color_map`) + a
+//! caller) + a Mask/cutout `node.unlit_material` + a `node.transform_3d` + a
 //! `node.scene_object`, wired to a `system.group_output` boundary exposing
-//! the object, (3) wires the group's `object` output to the new
-//! `object_k` port on `render_scene`. Undo restores the pre-edit
+//! the object, (3) wires the group's `object` output to the new `object_k`
+//! port on `render_scene`. Undo restores the pre-edit
 //! `(nodes, wires, preset_metadata)` verbatim — the same whole-level
 //! snapshot shape `AddSceneObjectCommand` uses.
 //!
-//! The layer plane is the "video on a sheet in 3D" gesture: the empty
-//! `layer` param on the skin renders transparent black until the user
-//! picks a source in the scene panel's Skin row (which discovers a
-//! `node.layer_source` wired to `base_color_map` — no new UI). The caller
-//! (app-side) computes width/height from the canvas aspect; the command
-//! just takes the two f32s.
+//! The layer plane is the "video on a sheet in 3D" gesture: it is immediately
+//! visible with its unlit tint because `base_color_map` has no producer on
+//! creation. When the user picks a source in the scene panel's Skin row, the
+//! existing skin command creates and wires a `node.layer_source` to that port.
+//! The caller (app-side) computes width/height from the canvas aspect; the
+//! command just takes the two f32s.
 //!
 //! `next_index` (the new object's 0-based slot, `k` in `object_k`) is
 //! resolved by the caller from the LIVE `objects` param value shown on the
@@ -43,10 +42,9 @@ use super::{
 /// [`AddSceneObjectCommand`] (same target/scope/render-scene/index/
 /// centroid + P1 metadata + catalog default + whole-level snapshot undo),
 /// with two divergences: the mesh is a `node.plane_mesh` sized by
-/// `width`/`height` (port-shadowed scalars, set as params here), and the
-/// group carries a `node.layer_source` ("Skin") wired to the
-/// `scene_object`'s `base_color_map` — the layer-skin pairing so the
-/// plane can wear another layer's live output.
+/// `width`/`height` (port-shadowed scalars, set as params here), and a skin
+/// source is added lazily by `SetSceneObjectSkinSourceCommand` when the user
+/// picks a layer for the `scene_object`'s `base_color_map`.
 #[derive(Debug)]
 pub struct AddSceneLayerPlaneCommand {
     target: GraphTarget,
@@ -168,7 +166,6 @@ impl Command for AddSceneLayerPlaneCommand {
                     let plane_id = fresh();
                     let mat_id = fresh();
                     let transform_id = fresh();
-                    let skin_id = fresh();
                     let scene_object_id = fresh();
                     let out_id = fresh();
                     let group_id = fresh();
@@ -229,19 +226,6 @@ impl Command for AddSceneLayerPlaneCommand {
                         BTreeMap::new(),
                     );
                     let transform_node_id = transform_node.node_id.clone();
-                    // Empty `layer` — transparent black from the skin until the
-                    // user picks a source layer in the scene panel's Skin row.
-                    let skin_node = scene_build_node(
-                        skin_id,
-                        "node.layer_source",
-                        Some("Skin".to_string()),
-                        BTreeMap::from([(
-                            "layer".to_string(),
-                            SerializedParamValue::String {
-                                value: String::new(),
-                            },
-                        )]),
-                    );
                     let handle = format!("Layer Plane {}", k + 1);
                     let scene_object_node = scene_build_node(
                         scene_object_id,
@@ -257,7 +241,6 @@ impl Command for AddSceneLayerPlaneCommand {
                         scene_build_wire(plane_id, "vertices", scene_object_id, "vertices"),
                         scene_build_wire(mat_id, "out", scene_object_id, "material"),
                         scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
-                        scene_build_wire(skin_id, "out", scene_object_id, "base_color_map"),
                         scene_build_wire(scene_object_id, "object", out_id, "object"),
                     ];
 
@@ -281,7 +264,6 @@ impl Command for AddSceneLayerPlaneCommand {
                             plane_node,
                             mat_node,
                             transform_node,
-                            skin_node,
                             scene_object_node,
                             out_node,
                         ],
@@ -397,6 +379,7 @@ impl Command for AddSceneLayerPlaneCommand {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{mirror_catalog_default, project_with_one_generator_layer};
+    use super::super::{SetSceneObjectSkinSourceCommand, SkinTargetMap};
     use super::*;
     use manifold_core::LayerId;
     use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION, GROUP_TYPE_ID};
@@ -460,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn add_layer_plane_builds_group_with_skin_and_undo_restores() {
+    fn add_layer_plane_builds_visible_group_without_skin_and_undo_restores() {
         let (mut project, lid) = generator_project(render_scene_graph(2));
         let before = def_of(&project, &lid).clone();
 
@@ -501,8 +484,8 @@ mod tests {
         let body = group.group.as_deref().expect("is a group node");
         assert_eq!(
             body.nodes.len(),
-            6,
-            "plane + material + transform + layer_source + scene_object + group_output boundary"
+            5,
+            "plane + material + transform + scene_object + group_output boundary"
         );
 
         let plane = body
@@ -530,27 +513,18 @@ mod tests {
             "alpha_mode stamped to Mask (cutout)"
         );
 
-        let skin = body
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.layer_source")
-            .expect("skin node");
-        assert_eq!(skin.handle.as_deref(), Some("Skin"));
-        assert_eq!(
-            skin.params.get("layer"),
-            Some(&SerializedParamValue::String {
-                value: String::new()
-            }),
-            "empty layer param — transparent black until a source is picked"
-        );
-
         assert!(body.nodes.iter().any(|n| n.type_id == "node.transform_3d"));
         assert!(body.nodes.iter().any(|n| n.type_id == "node.scene_object"));
         assert!(body.nodes.iter().any(|n| n.type_id == GROUP_OUTPUT_TYPE_ID));
+        assert!(
+            !body.nodes.iter().any(|n| n.type_id == "node.layer_source"),
+            "a fresh plane has no transparent skin producer"
+        );
 
-        // Five internal wires: plane→vertices, material→material,
-        // transform→transform, layer_source→base_color_map, scene_object→out.
-        assert_eq!(body.wires.len(), 5);
+        // Four internal wires: plane→vertices, material→material,
+        // transform→transform, scene_object→out. A Skin command adds the
+        // base_color_map producer after the user picks a source layer.
+        assert_eq!(body.wires.len(), 4);
         let scene_object_id = body
             .nodes
             .iter()
@@ -559,7 +533,6 @@ mod tests {
             .id;
         let plane_id = plane.id;
         let mat_id = mat.id;
-        let skin_id = skin.id;
         assert!(body.wires.iter().any(|w| w.from_node == plane_id
             && w.from_port == "vertices"
             && w.to_node == scene_object_id
@@ -568,10 +541,12 @@ mod tests {
             && w.from_port == "out"
             && w.to_node == scene_object_id
             && w.to_port == "material"));
-        assert!(body.wires.iter().any(|w| w.from_node == skin_id
-            && w.from_port == "out"
-            && w.to_node == scene_object_id
-            && w.to_port == "base_color_map"));
+        assert!(
+            !body
+                .wires
+                .iter()
+                .any(|w| w.to_node == scene_object_id && w.to_port == "base_color_map")
+        );
         assert!(
             body.wires
                 .iter()
@@ -594,6 +569,127 @@ mod tests {
             def_of(&project, &lid),
             &before,
             "undo restores the pre-add graph exactly"
+        );
+    }
+
+    #[test]
+    fn skin_source_attaches_to_plane_base_color_and_undoes() {
+        let (mut project, lid) = generator_project(render_scene_graph(0));
+        let target = GraphTarget::Generator(lid.clone());
+
+        let mut add = AddSceneLayerPlaneCommand::new(
+            target.clone(),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            mirror_catalog_default(),
+        );
+        add.execute(&mut project);
+
+        let (group_id, scene_object_id) = {
+            let def = def_of(&project, &lid);
+            let group = def
+                .nodes
+                .iter()
+                .find(|n| n.handle.as_deref() == Some("Layer Plane 1"))
+                .expect("plane group");
+            let body = group.group.as_deref().expect("plane group body");
+            let scene_object_id = body
+                .nodes
+                .iter()
+                .find(|n| n.type_id == "node.scene_object")
+                .expect("scene object")
+                .id;
+            (group.id, scene_object_id)
+        };
+
+        let mut set = SetSceneObjectSkinSourceCommand::new(
+            target.clone(),
+            vec![group_id],
+            scene_object_id,
+            None,
+            SkinTargetMap::BaseColor,
+            Some("layer-a".to_string()),
+            mirror_catalog_default(),
+        );
+        set.execute(&mut project);
+
+        let skin_id = {
+            let def = def_of(&project, &lid);
+            let group = def.nodes.iter().find(|n| n.id == group_id).unwrap();
+            let body = group.group.as_deref().unwrap();
+            let skin = body
+                .nodes
+                .iter()
+                .find(|n| n.type_id == "node.layer_source")
+                .expect("skin source created on assignment");
+            assert_eq!(
+                skin.params.get("layer"),
+                Some(&SerializedParamValue::String {
+                    value: "layer-a".to_string()
+                })
+            );
+            assert!(body.wires.iter().any(|w| {
+                w.from_node == skin.id
+                    && w.from_port == "out"
+                    && w.to_node == scene_object_id
+                    && w.to_port == "base_color_map"
+            }));
+            skin.id
+        };
+
+        let mut clear = SetSceneObjectSkinSourceCommand::new(
+            target.clone(),
+            vec![group_id],
+            scene_object_id,
+            Some(skin_id),
+            SkinTargetMap::BaseColor,
+            None,
+            mirror_catalog_default(),
+        );
+        clear.execute(&mut project);
+        {
+            let def = def_of(&project, &lid);
+            let group = def.nodes.iter().find(|n| n.id == group_id).unwrap();
+            let body = group.group.as_deref().unwrap();
+            assert!(!body.nodes.iter().any(|n| n.id == skin_id));
+            assert!(
+                !body
+                    .wires
+                    .iter()
+                    .any(|w| w.to_node == scene_object_id && w.to_port == "base_color_map")
+            );
+        }
+
+        clear.undo(&mut project);
+        {
+            let def = def_of(&project, &lid);
+            let group = def.nodes.iter().find(|n| n.id == group_id).unwrap();
+            let body = group.group.as_deref().unwrap();
+            assert!(body.nodes.iter().any(|n| n.id == skin_id));
+            assert!(body.wires.iter().any(|w| {
+                w.from_node == skin_id
+                    && w.to_node == scene_object_id
+                    && w.to_port == "base_color_map"
+            }));
+        }
+
+        set.undo(&mut project);
+        let def = def_of(&project, &lid);
+        let group = def.nodes.iter().find(|n| n.id == group_id).unwrap();
+        let body = group.group.as_deref().unwrap();
+        assert!(!body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
+        assert!(
+            !body
+                .wires
+                .iter()
+                .any(|w| w.to_node == scene_object_id && w.to_port == "base_color_map")
         );
     }
 

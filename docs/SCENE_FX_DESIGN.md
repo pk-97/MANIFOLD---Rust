@@ -110,7 +110,10 @@ the stable performable identity.
 
 **D7 — The source picker is a manifest param, not bespoke UI.** `node.layer_source`
 carries a `layer` param (layer id, string) + the panel adds one "Skin" row per
-scene object: source dropdown + target-map dropdown (Emissive default, Base Color).
+scene object: source dropdown + target-map dropdown (Emissive default for lit
+materials, Base Color for unlit materials). A newly added plane starts with its
+visible unlit tint and no layer source; choosing a Skin source creates the node
+and wire. Existing assigned skins retain their authored target map.
 The row splices `layer_source → <map>` through an editing command (precedent:
 `commands/graph/modifiers.rs`). WIDGET_TREE_DESIGN section 5b: no bespoke row
 infrastructure.
