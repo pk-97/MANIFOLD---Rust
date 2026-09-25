@@ -147,7 +147,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Heightfield Shadow | `node.heightfield_shadow` | Map | Casts a soft screen-space shadow across a height map toward a light direction. Multiply it into a Lambert term for relief-lit terrain. |
 | Mask Extrema | `node.mask_extrema` | Filter | Expands or erodes a coverage mask along one image axis. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
-| Region Mask | `node.region_mask` | Filter | Turns observed tracked region labels into a pixel-accurate mask that preserves holes. |
+| Region Mask | `node.region_mask` | Filter | Turns observed tracked region labels into a pixel-accurate mask with optional box filling. |
 | RGB Distance | `node.rgb_distance` | Filter | Measures each pixel's Euclidean RGB distance from a scalar-bindable target colour. |
 | SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
@@ -493,7 +493,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `LightOrbit` | Light Orbit | generator | Geometry | 78 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
-| `MaskBlob` | Mask Blob Detector | effect | Spatial | 15 |
+| `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
 | `MaskBlobColour` | Blob Mask — Colour | effect | Spatial | 17 |
 | `MaskBlobMotion` | Blob Mask — Motion | effect | Spatial | 14 |
 | `MaskCircle` | Mask Circle | effect | Spatial | 8 |
