@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "The source image is drawn entirely with terminal glyphs on black. Source brightness controls character illumination and stroke weight; gaps and spaces never fill. Erosion replaces crisp character cells. Source changes trigger local typing and data-character edits, while still content settles. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
+  "description": "The source image is drawn entirely with terminal glyphs on black. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Erosion replaces crisp character cells. Source changes trigger local typing and data-character edits, while still content settles. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -568,6 +568,49 @@
           "value": 2.5
         }
       }
+    },
+    {
+      "id": 27,
+      "nodeId": "cell_colour",
+      "typeId": "node.block_sample",
+      "handle": "cell_colour",
+      "title": "Character Colour",
+      "params": {
+        "block_size": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 28,
+      "nodeId": "source_alpha",
+      "typeId": "node.exposure",
+      "handle": "source_alpha",
+      "title": "Source Transparency",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 29,
+      "nodeId": "cell_ink",
+      "typeId": "node.mix",
+      "handle": "cell_ink",
+      "title": "Character Ink",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
     }
   ],
   "wires": [
@@ -818,10 +861,46 @@
       "toPort": "mask"
     },
     {
-      "fromNode": 0,
+      "fromNode": 29,
       "fromPort": "out",
       "toNode": 26,
       "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 27,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "columns",
+      "toNode": 27,
+      "toPort": "columns"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "rows",
+      "toNode": 27,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 28,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "b"
     }
   ]
 }
