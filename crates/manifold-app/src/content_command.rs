@@ -23,6 +23,7 @@ pub enum ContentCommand {
     /// legacy optimistic Execute producers, headless UI must execute this too.
     ExecuteOnContent(Box<dyn Command + Send>),
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
+    ObjectModifier(crate::object_modifier_transfer::ObjectModifierAction),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
@@ -278,10 +279,8 @@ pub enum ContentCommand {
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.
     StartExport(Box<ExportConfig>),
-    /// Cancel in-progress export. Polled by the export loop at
-    /// content_export.rs:242. No UI producer yet — the cancel button/hotkey
-    /// is a known UX gap; leave the variant and plumbing ready to wire up.
-    #[allow(dead_code)]
+    /// Cancel in-progress export at the next frame boundary. Sent by the
+    /// export modal's Cancel button or Escape; cleanup runs on this thread.
     CancelExport,
     /// Export the current composited frame as a still image. Captured across
     /// two content ticks (readback submit → read) so the live render never

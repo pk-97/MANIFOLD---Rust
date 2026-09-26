@@ -28,10 +28,6 @@ const PROGRESS_BAR_W: f32 = 140.0;
 const PROGRESS_BAR_H: f32 = 10.0;
 const PROGRESS_BAR_INSET: f32 = 5.0;
 
-// export progress strip, right of centre (mirrors the import
-// status + progress bar above, same visibility-toggle-not-rebuild pattern).
-const EXPORT_STATUS_W: f32 = 220.0;
-
 const ZOOM_BUTTON_W: f32 = 28.0;
 const ZOOM_LABEL_W: f32 = 70.0;
 
@@ -54,11 +50,6 @@ pub struct HeaderPanel {
     import_status: String,
     import_progress: f32,
     import_progress_visible: bool,
-    /// export status text + progress (0.0..1.0), same
-    /// always-emit/toggle-visibility pattern as the import fields above.
-    export_status: String,
-    export_progress: f32,
-    export_progress_visible: bool,
     time_display: String,
     zoom_label: String,
     /// Whether the Audio Setup / Scene Setup docks are open — drives the two
@@ -77,9 +68,6 @@ impl HeaderPanel {
             import_status: String::new(),
             import_progress: 0.0,
             import_progress_visible: false,
-            export_status: String::new(),
-            export_progress: 0.0,
-            export_progress_visible: false,
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             zoom_label: "120 px/beat".into(),
             audio_setup_open: false,
@@ -97,15 +85,6 @@ impl HeaderPanel {
         self.import_status = status.into();
         self.import_progress = progress.clamp(0.0, 1.0);
         self.import_progress_visible = show;
-    }
-
-    /// export progress strip. `show` is `content_state.is_exporting`;
-    /// `status`/`progress` come straight off the content thread's
-    /// `send_export_progress` snapshots (`export_status`/`export_progress`).
-    pub fn set_export_status(&mut self, status: &str, progress: f32, show: bool) {
-        self.export_status = status.into();
-        self.export_progress = progress.clamp(0.0, 1.0);
-        self.export_progress_visible = show;
     }
 
     pub fn set_time_display(&mut self, text: &str) {
@@ -206,40 +185,6 @@ impl HeaderPanel {
     }
 
     fn right_group(&self) -> View {
-        // export progress strip — same fixed-track/inset-fill
-        // pattern as `left_group`'s import progress bar, always emitted and
-        // shown/hidden via `.visible()` so toggling it never rebuilds the
-        // tree (mirrors `progress_toggle_is_in_place` for the import bar).
-        let export_visible = self.export_progress_visible;
-        let export_fill_w = (PROGRESS_BAR_W - 2.0) * self.export_progress;
-        let export_progress = View::panel()
-            .fixed(PROGRESS_BAR_W, PROGRESS_BAR_H)
-            .bg(color::SLIDER_TRACK_PRESSED_C32)
-            .radius(PROGRESS_RADIUS)
-            .visible(export_visible)
-            .pad(Pad::all(1.0))
-            .child(
-                View::panel()
-                    .w(Sizing::Fixed(export_fill_w))
-                    .fill_h()
-                    .bg(PROGRESS_FILL)
-                    .radius(color::HAIRLINE_RADIUS)
-                    .visible(export_visible),
-            );
-        let export_group = View::row(0.0)
-            .fill_h()
-            .cross_align(Align::Center)
-            .child(
-                View::label(self.export_status.as_str())
-                    .w(Sizing::Fixed(EXPORT_STATUS_W))
-                    .fill_h()
-                    .font(color::FONT_LABEL)
-                    .text_color(color::TEXT_DIMMED_C32)
-                    .align_text(TextAlign::Right),
-            )
-            .child(Self::spacer_fixed(PROGRESS_BAR_INSET))
-            .child(export_progress);
-
         // Utility-dock toggles (SCENE_SETUP_PANEL_DESIGN D2): "Audio" and
         // "Scene" sit side by side, both always present (never conditionally
         // hidden — `feedback_no_conditionally_visible_ui`), highlighted when
@@ -292,7 +237,6 @@ impl HeaderPanel {
         View::row(GROUP_SPACING)
             .fill()
             .main_align(Align::End)
-            .child(export_group)
             .child(dock_toggles)
             .child(zoom_cluster)
     }
@@ -475,28 +419,4 @@ mod tests {
         assert_eq!(tree.structure_version(), sv, "progress toggle must not rebuild");
     }
 
-    /// the export progress strip follows the same
-    /// always-emit/toggle-visibility contract as the import bar above, and
-    /// its text is actually reachable via the tree.
-    #[test]
-    fn export_progress_toggle_is_in_place_and_text_updates() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = HeaderPanel::new();
-        panel.build(&mut tree, &layout);
-        let sv = tree.structure_version();
-
-        panel.set_export_status("Exporting 120/600 (20%)", 0.20, true);
-        panel.update(&mut tree);
-
-        assert_eq!(
-            tree.structure_version(),
-            sv,
-            "export progress toggle must not rebuild"
-        );
-        assert_eq!(
-            node_with_text(&tree, "Exporting 120/600 (20%)").text.as_deref(),
-            Some("Exporting 120/600 (20%)")
-        );
-    }
 }

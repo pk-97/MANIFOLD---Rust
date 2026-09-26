@@ -1,0 +1,187 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 470.0,
+          "y": 750.0
+        }
+      },
+      "gesture": {
+        "Press": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 800.0,
+          "y": 750.0
+        }
+      },
+      "gesture": "Hover"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 800.0,
+          "y": 750.0
+        }
+      },
+      "gesture": "Release"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt1"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Copy"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt1"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Duplicate"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt3"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt3"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 850.0,
+          "y": 750.0
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Paste here"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt3"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_point",
+          "label": "Mirror: Amount pt3"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  "Snapshot"
+]

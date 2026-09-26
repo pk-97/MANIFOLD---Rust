@@ -8,8 +8,86 @@ use manifold_core::types::LayerType;
 use manifold_core::Beats;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
+use manifold_ui::panels::picker_core::PickerItem;
+use manifold_ui::{PanelAction, ParamsAction};
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
+
+/// Remember strip positions while placeholders still have their pre-edit
+/// location. This is session UI state; creating a lane never changes its rank.
+pub fn sync_automation_lane_order(project: &Project, selection: &mut SelectionState) {
+    use std::collections::HashSet;
+    let mut live = HashSet::new();
+    for layer in &project.timeline.layers {
+        if let Some(effects) = &layer.effects {
+            for effect in effects {
+                for param in effect.params.iter() {
+                    live.insert((manifold_ui::view::UiGraphTarget::Effect(effect.id.clone()), param.id().to_string().into()));
+                }
+            }
+        }
+        if let Some(generator) = layer.gen_params() {
+            for param in generator.params.iter() {
+                live.insert((manifold_ui::view::UiGraphTarget::Generator(layer.layer_id.clone()), param.id().to_string().into()));
+            }
+        }
+        for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+            layer,
+            selection.chosen_automation_params.get(&layer.layer_id),
+            &selection.automation_lane_order,
+            &HashSet::new(),
+            &selection.pinned_automation_lanes,
+        ) {
+            let key = (lane.target, lane.param_id);
+            if !selection.automation_lane_order.contains(&key) {
+                selection.automation_lane_order.push(key);
+            }
+        }
+    }
+    selection.prune_automation_lane_view(&live);
+}
+
+#[cfg(test)]
+mod automation_order_tests {
+    use super::*;
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    use manifold_core::preset_definition_registry::create_default;
+    use manifold_core::layer::Layer;
+    use manifold_core::PresetTypeId;
+    use manifold_ui::view::UiGraphTarget;
+
+    #[test]
+    fn automation_placeholder_keeps_position_when_materialized_before_another_effect() {
+        let mut project = Project::default();
+        let mut layer = Layer::new_video("Automation".into(), 0);
+        let mirror = create_default(&PresetTypeId::new("Mirror"));
+        let target = UiGraphTarget::Effect(mirror.id.clone());
+        let mut bloom = create_default(&PresetTypeId::new("Bloom"));
+        bloom.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(), enabled: true,
+            points: vec![AutomationPoint { beat: Beats::ZERO, value: 0.2, shape: SegmentShape::Linear }],
+        }]);
+        layer.effects = Some(vec![mirror, bloom]);
+        let mut selection = SelectionState::new();
+        selection.set_chosen_automation_param(layer.layer_id.clone(), target.clone(), "amount".into());
+        project.timeline.layers.push(layer);
+        sync_automation_lane_order(&project, &mut selection);
+        let before = selection.automation_lane_order.clone();
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[1], (target, "amount".into()));
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(), enabled: true,
+            points: vec![AutomationPoint { beat: Beats(4.0), value: 0.6, shape: SegmentShape::Linear }],
+        }]);
+        sync_automation_lane_order(&project, &mut selection);
+        assert_eq!(selection.automation_lane_order, before);
+        let lanes = crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+            &project.timeline.layers[0], selection.chosen_automation_params.values().next(),
+            &selection.automation_lane_order, &selection.hidden_automation_lanes, &selection.pinned_automation_lanes,
+        );
+        assert_eq!(lanes.iter().map(|lane| (lane.target.clone(), lane.param_id.clone())).collect::<Vec<_>>(), before);
+    }
+}
 
 /// Sync structural project data (layers, tracks) into UI panels.
 /// Call once at init and whenever the project structure changes.
@@ -20,6 +98,11 @@ pub fn sync_project_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
+    // Keep the chooser catalog beside the manifest projection. It is rebuilt
+    // only with structural project data, so opening/searching the popup does
+    // not walk or allocate from the project on the input hot path.
+    ui.automation_chooser_candidates = automation_chooser_candidates(project);
+    ui.pinned_automation_lanes.clone_from(&selection.pinned_automation_lanes);
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
@@ -27,15 +110,21 @@ pub fn sync_project_data(
         // `automation_lane_count` from `selection.automation_mode_visible` — the
         // one flag that grows a track when lanes are visible
         // (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
-        let layout_layers = crate::ui_translate::layers_to_ui_for_layout(
+        let layout_layers = crate::ui_translate::layers_to_ui_for_layout_with_view(
             &project.timeline.layers,
             selection.automation_mode_visible,
             &selection.chosen_automation_params,
+            &selection.automation_lane_order,
+            &selection.hidden_automation_lanes,
+            &selection.pinned_automation_lanes,
         );
         let lane_heights: Vec<Vec<f32>> = project.timeline.layers.iter().map(|layer| {
             if !selection.automation_mode_visible || layer.is_collapsed || layer.is_group() { return Vec::new(); }
-            crate::ui_translate::layer_automation_lanes_to_ui(
+            crate::ui_translate::layer_automation_lanes_to_ui_with_view(
                 layer, selection.chosen_automation_params.get(&layer.layer_id),
+                &selection.automation_lane_order,
+                &selection.hidden_automation_lanes,
+                &selection.pinned_automation_lanes,
             ).iter().map(|lane| selection.automation_lane_height(&lane.target, &lane.param_id)).collect()
         }).collect();
         ui.viewport.set_automation_lane_layout(&lane_heights);
@@ -216,7 +305,13 @@ pub fn sync_project_data(
                     continue;
                 }
                 let chosen = selection.chosen_automation_params.get(&layer.layer_id);
-                for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer, chosen) {
+                for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+                    layer,
+                    chosen,
+                    &selection.automation_lane_order,
+                    &selection.hidden_automation_lanes,
+                    &selection.pinned_automation_lanes,
+                ) {
                     viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
                 }
             }
@@ -233,6 +328,61 @@ pub fn sync_project_data(
         ui.viewport
             .set_beats_per_bar(project.settings.time_signature_numerator as u32);
     }
+}
+
+fn automation_chooser_candidates(
+    project: &Project,
+) -> Vec<crate::ui_root::AutomationChooserCandidate> {
+    let mut candidates = Vec::new();
+    for layer in project.timeline.layers.iter().filter(|layer| !layer.is_group()) {
+        if let Some(effects) = &layer.effects {
+            for (effect_index, effect) in effects.iter().enumerate() {
+                let effect_name = manifold_core::preset_type_registry::display_name(effect.effect_type());
+                for param in effect.params.iter() {
+                    let param_id = param.id().to_string();
+                    let key = format!("{}:effect:{effect_index}:{param_id}", layer.layer_id);
+                    candidates.push(crate::ui_root::AutomationChooserCandidate {
+                        layer_id: layer.layer_id.clone(),
+                        item: PickerItem {
+                            label: format!("{effect_name} · {}", param.spec.name),
+                            type_id: key,
+                            category: Some(format!("Effect · {effect_name} {}", effect_index + 1)),
+                            search_text: Some(format!("{effect_name} {} {param_id}", param.spec.name)),
+                            source: None,
+                            thumbnail: None,
+                        },
+                        action: PanelAction::Params(ParamsAction::ShowAutomationAddress(
+                            manifold_ui::view::UiGraphTarget::Effect(effect.id.clone()),
+                            param.id().to_string().into(),
+                        )),
+                    });
+                }
+            }
+        }
+        if let Some(generator) = layer.gen_params() {
+            let generator_name = manifold_core::preset_type_registry::display_name(generator.effect_type());
+            for param in generator.params.iter() {
+                let param_id = param.id().to_string();
+                let key = format!("{}:generator:{param_id}", layer.layer_id);
+                candidates.push(crate::ui_root::AutomationChooserCandidate {
+                    layer_id: layer.layer_id.clone(),
+                    item: PickerItem {
+                        label: format!("{generator_name} · {}", param.spec.name),
+                        type_id: key,
+                        category: Some(format!("Generator · {generator_name}")),
+                        search_text: Some(format!("{generator_name} {} {param_id}", param.spec.name)),
+                        source: None,
+                        thumbnail: None,
+                    },
+                    action: PanelAction::Params(ParamsAction::ShowAutomationAddress(
+                        manifold_ui::view::UiGraphTarget::Generator(layer.layer_id.clone()),
+                        param.id().to_string().into(),
+                    )),
+                });
+            }
+        }
+    }
+    candidates
 }
 
 /// Display title for a timeline clip in the viewport: **type · instance ·
@@ -343,6 +493,9 @@ pub fn sync_clip_positions(
         manifold_core::LayerId,
         (manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId),
     >,
+    lane_order: &[manifold_ui::ui_state::AutomationLaneKey],
+    hidden_lanes: &std::collections::HashSet<manifold_ui::ui_state::AutomationLaneKey>,
+    pinned_lanes: &[manifold_ui::ui_state::AutomationLaneKey],
 ) {
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
@@ -382,7 +535,13 @@ pub fn sync_clip_positions(
                 continue;
             }
             let chosen = chosen_automation_params.get(&layer.layer_id);
-            for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer, chosen) {
+            for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+                layer,
+                chosen,
+                lane_order,
+                hidden_lanes,
+                pinned_lanes,
+            ) {
                 viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
             }
         }

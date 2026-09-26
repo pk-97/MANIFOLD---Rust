@@ -76,6 +76,10 @@ impl ParamCardPanel {
                             ),
                         )];
                     }
+                    if self.chevron_btn_id == Some(id) {
+                        self.set_collapsed(!self.is_collapsed());
+                        return vec![PanelAction::Params(ParamsAction::SectionFoldToggled)];
+                    }
                     if self.header_bg_id == Some(id)
                         || self.name_label_id == Some(id)
                         || self.border_id == Some(id)
@@ -83,6 +87,36 @@ impl ParamCardPanel {
                         return vec![PanelAction::Params(ParamsAction::ModifierCardClicked(
                             m.instance_id.clone(),
                         ))];
+                    }
+                }
+                if let Some(m) = &self.object_modifier {
+                    if self.chevron_btn_id == Some(id) {
+                        self.set_collapsed(!self.is_collapsed());
+                        return vec![PanelAction::Params(ParamsAction::SectionFoldToggled)];
+                    }
+                    if self.cog_btn_id == Some(id) {
+                        return vec![PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(
+                            m.layer_id.clone(),
+                        ))];
+                    }
+                    if self.modifier_remove_btn_id == Some(id) {
+                        return vec![PanelAction::Project(
+                            crate::panels::ProjectAction::SceneSetupRemoveModifier(
+                                m.layer_id.clone(),
+                                m.group_node_id.unwrap_or(m.object_id),
+                                m.node_doc_id,
+                            ),
+                        )];
+                    }
+                    if self.header_bg_id == Some(id)
+                        || self.name_label_id == Some(id)
+                        || self.border_id == Some(id)
+                    {
+                        // Scene Setup owns selection for object cards. The
+                        // host captures the stable address on pointer/click;
+                        // no inspector modifier/effect selection action is
+                        // valid for this card species.
+                        return Vec::new();
                     }
                 }
                 let ei = self.effect_index;
@@ -343,6 +377,8 @@ impl ParamCardPanel {
                     m.layer_id.clone(),
                     m.instance_id.clone(),
                 ))
+            } else if let Some(m) = &self.object_modifier {
+                PanelAction::Root(RootAction::ObjectModifierCardRightClicked(m.clone()))
             } else {
                 PanelAction::Params(ParamsAction::CardRightClicked(target.clone()))
             };

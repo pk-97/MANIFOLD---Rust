@@ -226,6 +226,12 @@ impl Application {
         is_graph_editor: bool,
         position: PhysicalPosition<f64>,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if is_primary {
+                self.primary_cursor_moved(window_id, position);
+            }
+            return;
+        }
         // An active text session's drag claims pointer motion ahead of
         // everything else (P5b) — but only actually consumes it while a
         // drag is armed (`text_input_pointer_move` returns `false`
@@ -250,6 +256,12 @@ impl Application {
         button: MouseButton,
         state: ElementState,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if is_primary {
+                self.primary_mouse_input(window_id, is_primary, button, state);
+            }
+            return;
+        }
         // An active text session claims the press/release ahead of normal
         // dispatch (P5b/D16): inside the field it places the caret/word and
         // consumes the event; outside it commits first and then falls
@@ -293,6 +305,9 @@ impl Application {
         is_graph_editor: bool,
         delta: MouseScrollDelta,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            return;
+        }
         if is_graph_editor {
             // The editor's zoom is self-contained; the primary scroll block
             // below is `is_primary`-gated and would never run for the editor
@@ -398,6 +413,20 @@ impl Application {
         self.apply_pending_cursor(window_id);
     }
 
+    /// Menus retain their source focus; direct presses choose the card host.
+    fn update_card_keyboard_focus(&mut self) {
+        let ui = &mut self.ws.ui_root;
+        if ui.background_input_blocked() { return; }
+        let in_inspector = ui.layout.inspector().contains(self.cursor_pos);
+        let in_objects = ui.scene_setup_panel.is_open()
+            && ui.layout.scene_setup().contains(self.cursor_pos);
+        if !in_inspector && self.input_handler.inspector_has_focus {
+            ui.inspector.clear_effect_selection(&mut ui.tree);
+        }
+        ui.object_cards_have_focus = in_objects;
+        self.input_handler.inspector_has_focus = in_inspector || in_objects;
+    }
+
     /// `MouseInput` in the timeline/inspector window (`is_primary`) or the output
     /// window (the `else` — double-click toggles borderless presentation).
     pub(crate) fn primary_mouse_input(
@@ -420,17 +449,19 @@ impl Application {
                         ElementState::Pressed => {
                             self.mouse_pressed = true;
 
-                            // Track which panel has focus for context-sensitive shortcuts.
-                            // Matches Unity's InputHandler.inspectorHasFocus.
-                            // Any click outside inspector clears focus and effect selection
-                            // — layer headers, timeline tracks, transport bar, etc.
-                            let inspector_rect = self.ws.ui_root.layout.inspector();
-                            let in_inspector = inspector_rect.contains(self.cursor_pos);
-                            if !in_inspector && self.input_handler.inspector_has_focus {
+                            self.update_card_keyboard_focus();
+
+                            if self.ws.ui_root.object_cards_have_focus
+                                && !self.ws.ui_root.background_input_blocked()
+                                && let Some(node) = self.ws.ui_root.tree.hit_test(self.cursor_pos)
+                            {
                                 let ui = &mut self.ws.ui_root;
-                                ui.inspector.clear_effect_selection(&mut ui.tree);
+                                if ui.scene_setup_panel.select_outliner_node(node)
+                                    || ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree)
+                                {
+                                    self.needs_rebuild = true;
+                                }
                             }
-                            self.input_handler.inspector_has_focus = in_inspector;
 
                             if self.ws.ui_root.background_input_blocked() {
                                 // A modal is open: its full-screen scrim owns
@@ -594,6 +625,7 @@ impl Application {
                 }
                 MouseButton::Right => {
                     if state == ElementState::Pressed {
+                        self.update_card_keyboard_focus();
                         self.ws.ui_root.right_click(self.cursor_pos);
                     }
                 }
@@ -2312,6 +2344,13 @@ impl Application {
     ) {
         use manifold_ui::panels::PanelAction;
         use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
+        let action = match action {
+            BrowserPopupAction::ActionSelected(action) => {
+                self.ws.ui_root.pending_keyboard_actions.push(action);
+                return;
+            }
+            action => action,
+        };
         if let BrowserPopupAction::Selected {
             type_id,
             mode,
@@ -2335,7 +2374,7 @@ impl Application {
                     layer_id,
                     manifold_ui::types::PresetTypeId::from_string(type_id),
                 )),
-                BrowserPopupMode::Node => return,
+                BrowserPopupMode::Node | BrowserPopupMode::Actions => return,
             };
             self.ws.ui_root.pending_keyboard_actions.push(panel_action);
         }
@@ -2354,6 +2393,15 @@ impl Application {
         is_graph_editor: bool,
         logical_key: Key,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if matches!(logical_key, Key::Named(NamedKey::Escape))
+                && self.ws.ui_root.export_progress.request_cancel()
+            {
+                self.send_content_cmd(crate::content_command::ContentCommand::CancelExport);
+                self.ws.ui_root.overlay_dirty = true;
+            }
+            return;
+        }
         if is_primary && self.perform_handle_key(&logical_key) {
             return;
         }
@@ -2389,7 +2437,7 @@ impl Application {
             // "restore and close batch", never commit-then-undo) that must
             // be rolled back before anything else touches the project.
             if matches!(logical_key, Key::Named(NamedKey::Escape))
-                && matches!(
+                && (self.overlay.has_pending_automation_press() || matches!(
                     self.overlay.drag_mode(),
                     DragMode::Move
                         | DragMode::TrimLeft
@@ -2397,16 +2445,18 @@ impl Application {
                         | DragMode::AutomationPoint
                         | DragMode::AutomationSegmentBend
                         | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationMarquee
                         | DragMode::AutomationGroupMove
                         | DragMode::AutomationDraw
-                )
+                ))
                 && let Some(content_tx) = self.content_tx.as_ref()
             {
-                let automation_cancel = matches!(
+                let automation_cancel = self.overlay.has_pending_automation_press() || matches!(
                     self.overlay.drag_mode(),
                     DragMode::AutomationPoint
                         | DragMode::AutomationSegmentBend
                         | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationMarquee
                         | DragMode::AutomationGroupMove
                         | DragMode::AutomationDraw
                 );

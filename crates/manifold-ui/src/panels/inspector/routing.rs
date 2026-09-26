@@ -1,6 +1,74 @@
 use super::*;
 
 impl InspectorCompositePanel {
+    pub fn selection_has_group(&self) -> bool {
+        let selected = self.selection_for_tab(self.last_effect_tab).0;
+        self.rack_groups[Self::scope_idx(self.last_effect_tab)].iter().any(|group| group.member_ids.iter().any(|id| selected.contains(id)))
+    }
+
+    pub fn selected_effect_ids(&self) -> Vec<EffectId> {
+        let (selected, cards) = self.selection_for_tab(self.last_effect_tab);
+        cards.iter().filter(|card| selected.contains(card.effect_id())).map(|card| card.effect_id().clone()).collect()
+    }
+
+    pub fn select_modifier_ids(&mut self, layer: &LayerId, ids: &[manifold_foundation::NodeId]) {
+        if self.modifier_scope_id.as_ref() != Some(layer) { return; }
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+        self.selected_modifier_ids.clear();
+        self.selected_modifier_ids.extend(ids.iter().cloned());
+        self.last_clicked_modifier = ids.last().cloned();
+    }
+
+    pub fn select_modifier_for_context_menu(&mut self, layer: &LayerId, id: &manifold_foundation::NodeId) {
+        if self.modifier_scope_id.as_ref() != Some(layer) { return; }
+        if !self.selected_modifier_ids.contains(id)
+            && let Some(index) = self.modifier_cards.iter().position(|card| card.modifier_info().is_some_and(|info| info.instance_id == *id)) {
+            self.select_modifier(index);
+        }
+    }
+
+    pub fn select_effect_ids(&mut self, tab: InspectorTab, ids: &[EffectId]) {
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+        self.selected_modifier_ids.clear();
+        self.selection_set_mut(tab).extend(ids.iter().cloned());
+        self.last_effect_tab = tab;
+    }
+
+    pub fn inspected_layer_id(&self) -> Option<&LayerId> {
+        self.inspecting_layer_id.as_ref()
+    }
+
+    pub fn select_effect_for_context_menu(&mut self, index: usize) {
+        let tab = self.active_tab;
+        let Some(card_index) = self.cards_for_tab(tab).iter().position(|card| card.effect_index() == index) else { return; };
+        let id = self.cards_for_tab(tab)[card_index].effect_id();
+        if !self.selection_for_tab(tab).0.contains(id) {
+            self.select_effect(tab, card_index);
+        }
+        self.last_effect_tab = tab;
+    }
+
+
+    pub fn select_rack_group(&mut self, group_id: &EffectGroupId, additive: bool) {
+        let tab = self.active_tab;
+        let Some(members) = self.rack_groups[Self::scope_idx(tab)].iter()
+            .find(|group| group.id == *group_id).map(|group| group.member_ids.clone()) else { return; };
+        self.selected_modifier_ids.clear();
+        if !additive {
+            self.selected_master_ids.clear();
+            self.selected_layer_ids.clear();
+        }
+        let selection = self.selection_set_mut(tab);
+        if additive && members.iter().all(|id| selection.contains(id)) {
+            selection.retain(|id| !members.contains(id));
+        } else {
+            selection.extend(members);
+        }
+        self.last_effect_tab = tab;
+    }
+
     /// Get the selection set and cards vec for a given tab.
     pub(super) fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
         let set = match tab {
@@ -405,6 +473,16 @@ impl InspectorCompositePanel {
     }
 
     pub(super) fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers, tree: &UITree) -> Vec<PanelAction> {
+        if let Some(nodes) = self.group_nodes.iter().find(|nodes| nodes.collapse == node_id) {
+            let group = self.rack_groups[Self::scope_idx(self.active_tab)].iter().find(|group| group.id == nodes.group_id);
+            return group.map(|group| vec![PanelAction::Params(ParamsAction::EffectGroupCollapsed {
+                tab: self.active_tab, layer_id: self.inspecting_layer_id.clone(),
+                group_id: group.id.clone(), collapsed: !group.collapsed,
+            })]).unwrap_or_default();
+        }
+        if self.group_nodes.iter().any(|nodes| nodes.header == node_id) {
+            return Vec::new(); // Selection is established on press, before drag capture.
+        }
         // Tab strip — selecting a tab mirrors the timeline selection.
         if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
             return vec![PanelAction::Root(RootAction::SelectInspectorTab(*tab))];
@@ -555,6 +633,10 @@ impl InspectorCompositePanel {
         modifiers: Modifiers,
         tree: &UITree,
     ) -> Vec<PanelAction> {
+        if let Some(group_id) = self.group_nodes.iter().find(|nodes| nodes.header == node_id).map(|nodes| nodes.group_id.clone()) {
+            self.select_rack_group(&group_id, modifiers.ctrl || modifiers.command);
+            return vec![PanelAction::Params(ParamsAction::EffectSelectionChanged)];
+        }
         let target = self.find_target_for_node(node_id);
         self.pressed_target = target;
         // Record which tab this interaction targets (survives drag_end)

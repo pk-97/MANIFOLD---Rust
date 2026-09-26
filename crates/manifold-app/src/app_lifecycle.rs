@@ -258,6 +258,13 @@ impl Application {
 
     /// Start offline video export — opens file save dialog, then encodes.
     pub(crate) fn start_export(&mut self) {
+        if self.ws.ui_root.export_progress.is_open() || self.content_tx.is_none() {
+            return;
+        }
+        if self.text_input.active {
+            let (field, text) = self.text_input.commit();
+            self.handle_text_input_commit(field, &text);
+        }
         let project = &self.local_project;
         let (w, h) = (
             project.settings.output_width.max(1) as u32,
@@ -351,6 +358,11 @@ impl Application {
             h,
             config.output_path
         );
+        self.ws.ui_root.export_progress.begin(
+            path.file_name().map(|name| name.to_string_lossy()).as_deref().unwrap_or("Video"),
+        );
+        self.ws.ui_root.overlay_dirty = true;
+        self.needs_rebuild = true;
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
 

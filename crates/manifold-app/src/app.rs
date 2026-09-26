@@ -2608,6 +2608,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 embedded_presets_fingerprint: 0,
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
+                modifier_selection_update: None,
+                object_modifier_selection_update: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
@@ -2903,6 +2905,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // From Unity FileDragDrop.cs — polls for OS-level file drops.
             // In winit, this is event-driven instead of polled.
             WindowEvent::DroppedFile(path) => {
+                if self.ws.ui_root.export_progress.is_open() {
+                    return;
+                }
                 let ext = path
                     .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())

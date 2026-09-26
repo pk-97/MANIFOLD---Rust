@@ -3,7 +3,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "▾ Modifier Group"
+          "name": "inspector.effect_group.header"
         }
       },
       "check": "Exists"
@@ -178,7 +178,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "▾ Modifier Group"
+          "name": "inspector.effect_group.header"
         }
       },
       "check": "Exists"
@@ -215,7 +215,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "▾ Modifier Group"
+          "name": "inspector.effect_group.header"
         }
       },
       "check": "Exists"
@@ -409,7 +409,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "▾ Modifier Group"
+          "name": "inspector.effect_group.header"
         }
       },
       "check": "Exists"

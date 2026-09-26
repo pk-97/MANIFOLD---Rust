@@ -7,6 +7,7 @@ pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
 pub mod drawer;
 pub mod dropdown;
+pub mod export_progress;
 pub mod footer;
 pub mod graph_editor;
 pub mod graph_palette;

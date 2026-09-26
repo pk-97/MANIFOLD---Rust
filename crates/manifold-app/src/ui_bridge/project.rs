@@ -68,7 +68,7 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
-        ProjectAction::ExportVideo | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
+        ProjectAction::ExportVideo | ProjectAction::CancelExport | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }
@@ -958,21 +958,12 @@ pub(super) fn dispatch_project(
         // composites `InsertMeshModifierCommand`/`RemoveMeshModifierCommand`/
         // `MoveMeshModifierCommand`.
         ProjectAction::SceneSetupAddModifier(layer_id, group_node_id, type_id) => {
-            if let Some(default) = generator_catalog_default(project, layer_id) {
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let cmd = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
-                    target,
-                    Vec::new(),
-                    *group_node_id,
-                    type_id.clone(),
-                    None,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(type_id),
-                    default,
-                );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            }
+            ContentCommand::send(content_tx, ContentCommand::ObjectModifier(
+                crate::object_modifier_transfer::ObjectModifierAction::Add {
+                    layer_id: layer_id.clone(), owner_id: *group_node_id,
+                    type_id: type_id.clone(), after: None,
+                },
+            ));
             DispatchResult::structural()
         }
         ProjectAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
@@ -985,9 +976,7 @@ pub(super) fn dispatch_project(
                     *modifier_node_id,
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
@@ -1007,9 +996,7 @@ pub(super) fn dispatch_project(
                     *new_position as usize,
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
