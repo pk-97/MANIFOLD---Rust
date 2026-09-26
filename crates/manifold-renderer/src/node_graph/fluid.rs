@@ -11,7 +11,7 @@ use manifold_fluids::{
     WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
 };
 use manifold_physics::input::{
-    HistoryWrite, InputHistory, Timestamped, input_span, input_span_before,
+    AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span, input_span_before,
 };
 use manifold_physics::{FieldInput, FieldValue};
 
@@ -22,7 +22,9 @@ use super::vector_field::ContinuousField;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
 mod domain;
+mod impulses;
 mod roles;
+use impulses::{IMPULSE_CAPACITY, ImpulseSum};
 pub use domain::FluidDomainLayout;
 
 pub const TICK: f64 = 1.0 / 60.0;
@@ -299,6 +301,7 @@ struct Request {
     start_tick: u64,
     count: usize,
     history: Vec<Sample>,
+    impulses: Vec<AppliedEvent<FieldValue>>,
     role_setup: Arc<roles::Setup>,
     role_history: Vec<roles::Controls>,
     recycle: Vec<MeshVertex>,
@@ -310,6 +313,9 @@ struct Request {
 struct Reply {
     epoch: u64,
     tick: u64,
+    /// Exclusive boundary of native ticks begun, including a failed tick.
+    started_tick: u64,
+    impulses: Vec<AppliedEvent<FieldValue>>,
     history: Vec<Sample>,
     role_history: Vec<roles::Controls>,
     vertices: Vec<MeshVertex>,
@@ -323,6 +329,8 @@ fn cancelled_reply(request: Request) -> Reply {
     Reply {
         epoch: request.epoch,
         tick: request.start_tick,
+        started_tick: request.start_tick,
+        impulses: request.impulses,
         history: request.history,
         role_history: request.role_history,
         vertices: request.recycle,
@@ -363,6 +371,7 @@ impl Worker {
                 let mut pose = request.initial.obstacle;
                 let mut setup_error = None;
                 let mut completed_count = 0usize;
+                let mut started_tick = request.start_tick;
                 if cache_epoch != Some(request.epoch) {
                     writer = None;
                     world = None;
@@ -446,6 +455,7 @@ impl Worker {
                             break;
                         }
                         let tick = request.start_tick + index as u64;
+                        started_tick = tick + 1;
                         let step = FluidRuntime::step_at(&request.history, tick);
                         native.set_gravity([0.0, step.current.gravity, 0.0]).map_err(|e| e.to_string())?;
                         native.set_emitter(domain.bounds(step.current.emitter),
@@ -460,14 +470,16 @@ impl Worker {
                         native_roles.apply(native, &request.role_setup, &request.history,
                             &request.role_history, tick, domain)?;
                         let field = FluidRuntime::field_at(&request.history, tick, domain);
-                        stats = if field.is_empty() {
+                        let begin = request.impulses.partition_point(|event| event.applied.tick < tick);
+                        let end = request.impulses.partition_point(|event| event.applied.tick <= tick);
+                        let impulse = ImpulseSum { events: &request.impulses[begin..end], origin: domain.min };
+                        stats = if field.is_empty() && impulse.events.is_empty() {
                             native.step(Seconds(TICK))
                         } else {
-                            native.step_with_fields(Seconds(TICK), &[FieldInput {
-                                field: &field,
-                                acceleration: 1.0,
-                                delta_velocity: 0.0,
-                            }])
+                            native.step_with_fields(Seconds(TICK), &[
+                                FieldInput { field: &field, acceleration: 1.0, delta_velocity: 0.0 },
+                                FieldInput { field: &impulse, acceleration: 0.0, delta_velocity: 1.0 },
+                            ])
                         }.map_err(|e| e.to_string())?;
                         completed_count += 1;
                         pose = step.next.obstacle;
@@ -508,6 +520,7 @@ impl Worker {
                     Ok(())
                 })();
                 let reply = Reply { epoch: request.epoch, tick: request.start_tick + completed_count as u64,
+                    started_tick, impulses: request.impulses,
                     history: request.history,
                     role_history: request.role_history,
                     vertices: request.recycle, whitewater: request.recycle_whitewater,
@@ -533,6 +546,10 @@ pub struct FluidRuntime {
     worker: Option<Worker>,
     settings: Option<FluidSettings>,
     history: InputHistory<Sample>,
+    impulses: EventQueue<FieldValue>,
+    applied_impulses: Vec<AppliedEvent<FieldValue>>,
+    spare_impulses: Option<Vec<AppliedEvent<FieldValue>>>,
+    impulse_outstanding: usize,
     role_setup: Arc<roles::Setup>,
     role_history: roles::History,
     last_transport: Option<f64>,
@@ -564,6 +581,10 @@ impl Default for FluidRuntime {
             settings: None,
             history: InputHistory::with_capacity(HISTORY_CAPACITY)
                 .expect("FLIP history capacity must be at least two"),
+            impulses: impulses::new_queue(),
+            applied_impulses: Vec::with_capacity(IMPULSE_CAPACITY),
+            spare_impulses: Some(Vec::with_capacity(IMPULSE_CAPACITY)),
+            impulse_outstanding: 0,
             role_setup: Arc::new(roles::Setup::default()),
             role_history: roles::History::default(),
             last_transport: None,
@@ -622,7 +643,16 @@ impl FluidRuntime {
         self.role_history.clear();
         self.target_time = 0.0;
         self.completed_tick = 0;
-        self.epoch = self.epoch.wrapping_add(1);
+        self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
+        if self.epoch > 1 {
+            self.impulses.reset(self.epoch, Seconds::ZERO)
+                .expect("fluid reset uses a strictly newer epoch");
+        }
+        self.applied_impulses.clear();
+        if let Some(events) = &mut self.spare_impulses {
+            events.clear();
+        }
+        self.impulse_outstanding = 0;
         self.cancel_epoch.store(self.epoch, Ordering::Release);
         self.initialized = false;
         self.failure = None;
@@ -898,6 +928,7 @@ impl FluidRuntime {
 
     fn accept(&mut self, reply: Reply) -> Result<(), String> {
         self.busy = false;
+        self.accept_impulse_batch(reply.epoch, reply.started_tick, reply.impulses);
         self.spare_role_history = Some(reply.role_history);
         if reply.epoch != self.epoch {
             self.spare = Some(reply.vertices);
@@ -977,6 +1008,14 @@ impl FluidRuntime {
                 target_tick,
                 self.initialized,
             )?;
+            let impulses = if self.cache_mode == CacheMode::Live {
+                self.prepare_impulse_batch(self.completed_tick, count)?
+            } else {
+                // Legacy cache playback can seek; it has no live impulse clock.
+                let mut events = self.spare_impulses.take().expect("recycled impulse batch");
+                events.clear();
+                events
+            };
             let mut history = self
                 .spare_history
                 .take()
@@ -999,6 +1038,7 @@ impl FluidRuntime {
                 },
                 count,
                 history,
+                impulses,
                 role_setup: Arc::clone(&self.role_setup),
                 role_history,
                 recycle: self.spare.take().expect("one recycled mesh per request"),
@@ -1015,6 +1055,7 @@ impl FluidRuntime {
                 self.spare = Some(request.recycle);
                 self.spare_whitewater = Some(request.recycle_whitewater);
                 self.spare_history = Some(request.history);
+                self.spare_impulses = Some(request.impulses);
                 self.spare_role_history = Some(request.role_history);
                 let message = "Water worker disconnected".to_owned();
                 self.failure = Some(message.clone());
@@ -1230,6 +1271,8 @@ mod tests {
             let init = request_receiver.recv().unwrap();
             reply_sender
                 .send(Reply {
+                    started_tick: 0,
+                    impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                     epoch: init.epoch,
                     tick: init.start_tick + init.count as u64,
                     history: init.history,
@@ -1262,6 +1305,8 @@ mod tests {
                         counts.push(request.count);
                         reply_sender
                             .send(Reply {
+                                started_tick: 0,
+                                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                                 epoch: request.epoch,
                                 tick: request.start_tick + request.count as u64,
                                 history: request.history,
@@ -1307,6 +1352,8 @@ mod tests {
         let init = request_receiver.recv().unwrap();
         reply_sender
             .send(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: init.epoch,
                 tick: init.start_tick,
                 history: init.history,
@@ -1333,6 +1380,8 @@ mod tests {
         assert_eq!(hitch.count, 17);
         reply_sender
             .send(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: hitch.epoch,
                 tick: hitch.start_tick + hitch.count as u64,
                 history: hitch.history,
@@ -1389,6 +1438,8 @@ mod tests {
             .unwrap();
         runtime
             .accept(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: runtime.epoch,
                 tick: 7,
                 history: Vec::new(),
@@ -1409,6 +1460,8 @@ mod tests {
         runtime.clear();
         runtime
             .accept(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: old_epoch,
                 tick: 8,
                 history: Vec::new(),
@@ -1821,6 +1874,8 @@ mod tests {
         runtime.spare_history = None;
         runtime
             .accept(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: old,
                 tick: 123,
                 history: Vec::new(),
@@ -1863,6 +1918,8 @@ mod tests {
         let epoch = runtime.epoch;
         runtime
             .accept(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: epoch.wrapping_add(1),
                 tick: 1,
                 history: Vec::new(),
@@ -1882,6 +1939,8 @@ mod tests {
 
         runtime
             .accept(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch,
                 tick: 1,
                 history: Vec::new(),
@@ -1909,6 +1968,8 @@ mod tests {
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
         runtime
             .accept(Reply {
+                started_tick: 0,
+                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch,
                 tick: 2,
                 history: Vec::new(),
@@ -1943,6 +2004,8 @@ mod tests {
         assert!(
             runtime
                 .accept(Reply {
+                    started_tick: 0,
+                    impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                     epoch,
                     tick: 0,
                     history: Vec::new(),

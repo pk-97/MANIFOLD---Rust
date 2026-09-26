@@ -1,7 +1,7 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
 use manifold_core::Seconds;
 use manifold_physics::{
-    input::{input_span, input_span_before, HistoryWrite, InputHistory, Timestamped},
+    input::{input_span, input_span_before, AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped},
     BodyConfig, BodyHandle, BodyKind, FieldInput, FieldValue, PhysicsWorld, VectorField,
 };
 use std::sync::Arc;
@@ -10,7 +10,9 @@ use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
 
 mod targeted_fields;
+mod impulses;
 
+pub use impulses::{ResolvedRigidImpulse, RigidImpulseTargets};
 use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 
 thread_local! {
@@ -121,6 +123,8 @@ impl Drop for PhysicsStepScope {
 pub const MAX_BODIES: usize = 64;
 pub const MAX_COPIES: usize = 4_000;
 pub(crate) const AUTHORED_HISTORY_CAPACITY: usize = 256;
+const IMPULSE_CAPACITY: usize = 256;
+const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
 pub const BODY_PORTS: [&str; MAX_BODIES] = [
     "body_0", "body_1", "body_2", "body_3", "body_4", "body_5", "body_6", "body_7", "body_8",
     "body_9", "body_10", "body_11", "body_12", "body_13", "body_14", "body_15", "body_16",
@@ -362,6 +366,12 @@ pub struct RigidSimulation {
     /// Whole fixed ticks still owed after the last preview work batch.
     pub pending_time: Seconds,
     last_overload_warning: Option<std::time::Instant>,
+    impulse_queue: Option<EventQueue<ResolvedRigidImpulse>>,
+    impulse_receipts: Vec<AppliedEvent<ResolvedRigidImpulse>>,
+    impulse_tick_events: Vec<AppliedEvent<ResolvedRigidImpulse>>,
+    impulse_epoch: Option<u64>,
+    impulse_failure: Option<String>,
+    impulse_overflow_latched: bool,
 }
 
 impl Default for RigidSimulation {
@@ -398,6 +408,12 @@ impl Default for RigidSimulation {
             physics_ms: 0.0,
             pending_time: Seconds::ZERO,
             last_overload_warning: None,
+            impulse_queue: None,
+            impulse_receipts: Vec::with_capacity(IMPULSE_CAPACITY),
+            impulse_tick_events: Vec::with_capacity(IMPULSE_CAPACITY),
+            impulse_epoch: None,
+            impulse_failure: None,
+            impulse_overflow_latched: false,
         }
     }
 }
@@ -641,6 +657,15 @@ impl RigidSimulation {
         };
         let prototype_activation_changed = prototype.as_ref().map(|body| body.enabled)
             != self.copy_description.as_ref().map(|body| body.enabled);
+        let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset;
+        if !rebuild {
+            if let Some(error) = &self.impulse_failure {
+                return Err(error.clone());
+            }
+            if self.impulse_overflow_latched {
+                return Err("Physics: impulse history is full; restart the simulation or bake the scene".into());
+            }
+        }
         if SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get) {
             // A topology edit or seek rebuilds at the next full graph frame;
             // old trajectories cannot safely be spliced into a new world.
@@ -666,7 +691,16 @@ impl RigidSimulation {
                 return Ok(());
             }
         }
-        let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset;
+        let next_impulse_epoch = if rebuild {
+            Some(
+                self.impulse_epoch
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or("Physics: impulse epoch exhausted")?,
+            )
+        } else {
+            None
+        };
         if rebuild {
             self.copy_poses.fill(Transform::default());
             let prototype_added = self.copy_description.is_none() && prototype.is_some();
@@ -739,6 +773,9 @@ impl RigidSimulation {
                     });
                 }
             }
+            self.reset_impulse_runtime(
+                next_impulse_epoch.expect("rebuild has a planned impulse epoch"),
+            )?;
             self.world = Some(world);
             self.handles = handles;
             self.bullet_enabled.fill(false);
@@ -815,7 +852,7 @@ impl RigidSimulation {
         )?;
         self.authored_time = authored_time;
         let accumulated = self.accumulator + elapsed_simulation;
-        const TICK: f64 = 1.0 / 60.0;
+        const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
         let preview_budget = PREVIEW_STEP_BUDGET.with(std::cell::Cell::get);
         let steps = if speed == 0.0 && preview_budget.is_some() {
@@ -891,116 +928,128 @@ impl RigidSimulation {
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for _ in 0..steps {
-            let tick_gravity = self.interpolated_gravity(self.physics_time);
-            let span = input_span(self.authored_samples.iter(), Seconds(self.physics_time))
-                .expect("authored input history is seeded before stepping");
-            let field_before = span.before.acceleration_field.clone();
-            let field_after = span.after.acceleration_field.clone();
-            let field_alpha = span.alpha;
-            let sampled_field = crate::node_graph::vector_field::ContinuousField {
-                before: field_before.as_ref(),
-                after: field_after.as_ref(),
-                alpha: field_alpha,
-                origin: [0.0; 3],
-            };
-            let targeted_indices = self
-                .targeted_fields
-                .is_connected()
-                .then_some((span.before_index, span.after_index, span.alpha));
-            self.world
-                .as_mut()
-                .expect("world constructed above")
-                .set_gravity(tick_gravity)
-                .map_err(|e| e.to_string())?;
-            let dynamic_microsteps = self.configure_fast_bodies(
-                &bodies,
-                prototype.as_ref(),
-                tick_gravity,
-                if sampled_field.is_empty() {
-                    None
-                } else {
-                    Some(&sampled_field)
-                },
-                targeted_indices,
-                TICK,
-            )?;
-            let (animated_microsteps, animated_speed) =
-                self.animated_microsteps(&bodies, prototype.as_ref(), TICK);
-            let microsteps = animated_microsteps.max(dynamic_microsteps);
-            self.world
-                .as_mut()
-                .expect("world constructed above")
-                .set_max_linear_speed(animated_speed.max(400.0))
-                .map_err(|e| e.to_string())?;
-            let microstep_time = TICK / microsteps as f64;
-            let solver_substeps = 4;
-            for microstep in 1..=microsteps {
-                let target_time = self.physics_time + microstep_time * microstep as f64;
-                let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
-                for (i, body) in bodies.iter().enumerate() {
-                    let Some(body) = body else { continue };
-                    if (body.fragment_parent.is_some() && !self.fragment_active[i])
-                        || self.fragment_parent_released[i]
-                    {
-                        continue;
+            let result = (|| -> Result<(), String> {
+                let tick_gravity = self.interpolated_gravity(self.physics_time);
+                let span = input_span(self.authored_samples.iter(), Seconds(self.physics_time))
+                    .expect("authored input history is seeded before stepping");
+                let field_before = span.before.acceleration_field.clone();
+                let field_after = span.after.acceleration_field.clone();
+                let field_alpha = span.alpha;
+                let sampled_field = crate::node_graph::vector_field::ContinuousField {
+                    before: field_before.as_ref(),
+                    after: field_after.as_ref(),
+                    alpha: field_alpha,
+                    origin: [0.0; 3],
+                };
+                let targeted_indices = self
+                    .targeted_fields
+                    .is_connected()
+                    .then_some((span.before_index, span.after_index, span.alpha));
+                self.world
+                    .as_mut()
+                    .expect("world constructed above")
+                    .set_gravity(tick_gravity)
+                    .map_err(|e| e.to_string())?;
+                self.begin_impulse_tick()?;
+                self.apply_impulse_tick()?;
+                let dynamic_microsteps = self.configure_fast_bodies(
+                    &bodies,
+                    prototype.as_ref(),
+                    tick_gravity,
+                    if sampled_field.is_empty() {
+                        None
+                    } else {
+                        Some(&sampled_field)
+                    },
+                    targeted_indices,
+                    TICK,
+                )?;
+                let (animated_microsteps, animated_speed) =
+                    self.animated_microsteps(&bodies, prototype.as_ref(), TICK);
+                let microsteps = animated_microsteps.max(dynamic_microsteps);
+                self.world
+                    .as_mut()
+                    .expect("world constructed above")
+                    .set_max_linear_speed(animated_speed.max(400.0))
+                    .map_err(|e| e.to_string())?;
+                let microstep_time = TICK / microsteps as f64;
+                let solver_substeps = 4;
+                for microstep in 1..=microsteps {
+                    let target_time = self.physics_time + microstep_time * microstep as f64;
+                    let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
+                    for (i, body) in bodies.iter().enumerate() {
+                        let Some(body) = body else { continue };
+                        if (body.fragment_parent.is_some() && !self.fragment_active[i])
+                            || self.fragment_parent_released[i]
+                        {
+                            continue;
+                        }
+                        if body.enabled && body.kind == 2 {
+                            targets[i] = Some(
+                                self.interpolated_body(i, target_time, body.clone())
+                                    .unwrap_or_else(|| body.clone()),
+                            );
+                        }
                     }
-                    if body.enabled && body.kind == 2 {
-                        targets[i] = Some(
-                            self.interpolated_body(i, target_time, body.clone())
-                                .unwrap_or_else(|| body.clone()),
-                        );
-                    }
-                }
-                let copy_target = prototype
-                    .as_ref()
-                    .filter(|prototype| prototype.enabled && prototype.kind == 2)
-                    .map(|prototype| {
-                        self.interpolated_prototype(target_time, prototype.clone())
-                            .unwrap_or_else(|| prototype.clone())
-                    });
-                let world = self.world.as_mut().expect("world constructed above");
-                for (i, target) in targets.into_iter().enumerate() {
-                    let Some(target) = target else { continue };
-                    let Some(handle) = self.handles[i] else {
-                        continue;
-                    };
-                    world
-                        .set_animated_target(handle, target.config(), Seconds(microstep_time))
-                        .map_err(|e| e.to_string())?;
-                }
-                if let Some(prototype) = copy_target {
-                    for index in 0..self.active_copy_count {
-                        let Some(handle) = self.copy_handles[index] else {
+                    let copy_target = prototype
+                        .as_ref()
+                        .filter(|prototype| prototype.enabled && prototype.kind == 2)
+                        .map(|prototype| {
+                            self.interpolated_prototype(target_time, prototype.clone())
+                                .unwrap_or_else(|| prototype.clone())
+                        });
+                    let world = self.world.as_mut().expect("world constructed above");
+                    for (i, target) in targets.into_iter().enumerate() {
+                        let Some(target) = target else { continue };
+                        let Some(handle) = self.handles[i] else {
                             continue;
                         };
-                        let target = copy_transform_for_layout(
-                            prototype.clone(),
-                            prototype.transform.pos,
-                            index,
-                            self.active_copy_count,
-                            self.latched_copy_columns,
-                            self.latched_copy_spacing,
-                            self.latched_copy_layout,
-                        );
                         world
                             .set_animated_target(handle, target.config(), Seconds(microstep_time))
                             .map_err(|e| e.to_string())?;
                     }
+                    if let Some(prototype) = copy_target {
+                        for index in 0..self.active_copy_count {
+                            let Some(handle) = self.copy_handles[index] else {
+                                continue;
+                            };
+                            let target = copy_transform_for_layout(
+                                prototype.clone(),
+                                prototype.transform.pos,
+                                index,
+                                self.active_copy_count,
+                                self.latched_copy_columns,
+                                self.latched_copy_spacing,
+                                self.latched_copy_layout,
+                            );
+                            world
+                                .set_animated_target(handle, target.config(), Seconds(microstep_time))
+                                .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    self.apply_sampled_fields(
+                        Seconds(microstep_time),
+                        &sampled_field,
+                        targeted_indices,
+                    )?;
+                    let world = self.world.as_mut().expect("world constructed above");
+                    world
+                        .step(Seconds(microstep_time), solver_substeps)
+                        .map_err(|e| e.to_string())?;
                 }
-                self.apply_sampled_fields(
-                    Seconds(microstep_time),
-                    &sampled_field,
-                    targeted_indices,
-                )?;
-                let world = self.world.as_mut().expect("world constructed above");
-                world
-                    .step(Seconds(microstep_time), solver_substeps)
-                    .map_err(|e| e.to_string())?;
+                completed += 1;
+                self.physics_time += TICK;
+                self.apply_due_authored_edits()?;
+                self.process_fragment_releases(self.physics_time, &bodies)?;
+                Ok(())
+            })();
+            // Delivery records survive a failed native step too. Starting a
+            // tick consumes its inputs, but does not assert successful physics.
+            self.finish_impulse_tick();
+            if let Err(error) = result {
+                self.impulse_failure = Some(error.clone());
+                return Err(error);
             }
-            completed += 1;
-            self.physics_time += TICK;
-            self.apply_due_authored_edits()?;
-            self.process_fragment_releases(self.physics_time, &bodies)?;
             // A native tick cannot be preempted. Yield before starting another.
             if preview_budget.is_some_and(|budget| physics_start.elapsed() >= budget) {
                 break;
