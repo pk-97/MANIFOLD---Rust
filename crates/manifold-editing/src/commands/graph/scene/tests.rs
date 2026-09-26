@@ -12,6 +12,8 @@ use manifold_core::layer::Layer;
 use manifold_core::scene_exposure::SceneParamMetadata;
 use manifold_core::types::LayerType;
 
+mod force_targets;
+
 /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
 /// the given counts — the fixture `AddSceneObjectCommand`/
 /// `AddSceneLightCommand` operate against.

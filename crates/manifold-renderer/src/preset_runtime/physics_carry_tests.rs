@@ -5,6 +5,7 @@ use std::{borrow::Cow, cell::Cell};
 
 thread_local! {
     static POSE: Cell<Option<Transform>> = const { Cell::new(None) };
+    static PEER_POSE: Cell<Option<Transform>> = const { Cell::new(None) };
 }
 
 struct PoseObserver(EffectNodeType);
@@ -19,12 +20,20 @@ impl EffectNode for PoseObserver {
         crate::node_graph::depth_rule::DepthRule::Terminal
     }
     fn inputs(&self) -> &[NodeInput] {
-        static INPUTS: [NodeInput; 1] = [NodePort {
-            name: Cow::Borrowed("pose"),
-            ty: PortType::Transform,
-            kind: PortKind::Input,
-            required: true,
-        }];
+        static INPUTS: [NodeInput; 2] = [
+            NodePort {
+                name: Cow::Borrowed("pose"),
+                ty: PortType::Transform,
+                kind: PortKind::Input,
+                required: true,
+            },
+            NodePort {
+                name: Cow::Borrowed("peer_pose"),
+                ty: PortType::Transform,
+                kind: PortKind::Input,
+                required: false,
+            },
+        ];
         &INPUTS
     }
     fn outputs(&self) -> &[NodeOutput] {
@@ -35,6 +44,7 @@ impl EffectNode for PoseObserver {
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         POSE.set(ctx.inputs.transform("pose"));
+        PEER_POSE.set(ctx.inputs.transform("peer_pose"));
     }
 }
 
@@ -43,6 +53,10 @@ fn runtime(height: f32, fused: bool) -> PresetRuntime {
 }
 
 fn runtime_with_field(height: f32, fused: bool, field: bool) -> PresetRuntime {
+    runtime_with_field_port(height, fused, field.then_some("acceleration_field"))
+}
+
+fn runtime_with_field_port(height: f32, fused: bool, field_port: Option<&str>) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.pose", || {
         Box::new(PoseObserver(EffectNodeType::new("test.pose")))
@@ -68,7 +82,7 @@ fn runtime_with_field(height: f32, fused: bool, field: bool) -> PresetRuntime {
         ]
     }))
     .unwrap();
-    if field {
+    if let Some(field_port) = field_port {
         def.nodes.push(
             serde_json::from_value(serde_json::json!({
                 "id":7,"nodeId":"field","typeId":"node.uniform_vector_field","params":{
@@ -83,14 +97,39 @@ fn runtime_with_field(height: f32, fused: bool, field: bool) -> PresetRuntime {
                 from_node: 7,
                 from_port: "out".into(),
                 to_node: 3,
-                to_port: "acceleration_field".into(),
+                to_port: field_port.into(),
             });
+    }
+    if field_port == Some("body_acceleration_0") {
+        for node in [
+            serde_json::json!({"id":8,"nodeId":"peer_body","typeId":"node.rigid_body"}),
+            serde_json::json!({"id":9,"nodeId":"peer_start","typeId":"node.transform_3d","params":{
+                "pos_x":{"type":"Float","value":10.0},
+                "pos_y":{"type":"Float","value":height}
+            }}),
+        ] {
+            def.nodes.push(serde_json::from_value(node).unwrap());
+        }
+        for (from_node, from_port, to_node, to_port) in [
+            (9, "transform", 8, "transform"),
+            (8, "body", 3, "body_1"),
+            (3, "pose_1", 4, "peer_pose"),
+        ] {
+            def.wires
+                .push(manifold_core::effect_graph_def::EffectGraphWire {
+                    from_node,
+                    from_port: from_port.into(),
+                    to_node,
+                    to_port: to_port.into(),
+                });
+        }
     }
     PresetRuntime::from_def_for_render(def, &registry, None, fused).unwrap()
 }
 
 fn frame(runtime: &mut PresetRuntime, seconds: f64) -> Transform {
     POSE.set(None);
+    PEER_POSE.set(None);
     runtime.execute_frame(FrameTime {
         seconds: Seconds(seconds),
         beats: Beats(seconds * 2.0),
@@ -157,6 +196,62 @@ fn physics_shared_field_graph_is_frame_rate_independent_and_survives_rebuild() {
             );
         }
     }
+}
+
+#[test]
+fn physics_targeted_field_graph_preserves_recipients_across_rebuild_and_frame_rates() {
+    let mut reference = runtime_with_field_port(5.0, false, Some("body_acceleration_0"));
+    let mut expected = Transform::default();
+    for tick in 0..=30 {
+        expected = frame(&mut reference, tick as f64 / 60.0);
+    }
+    assert!(
+        expected.pos[0] > 0.4,
+        "targeted field must reach the selected body"
+    );
+    let peer = PEER_POSE.get().expect("second body must be live");
+    assert_eq!(
+        peer.pos[0], 10.0,
+        "unselected body must receive no horizontal force"
+    );
+    assert!(peer.pos[1] < 5.0, "unselected body must still simulate");
+    for fps in [24, 30] {
+        let mut edited = runtime_with_field_port(5.0, false, Some("body_acceleration_0"));
+        for tick in 0..=fps / 2 {
+            if tick > 0 {
+                let mut rebuilt =
+                    runtime_with_field_port(5.0, tick % 2 == 0, Some("body_acceleration_0"));
+                rebuilt.carry_generator_state_from(&mut edited);
+                edited = rebuilt;
+            }
+            let actual = frame(&mut edited, tick as f64 / fps as f64);
+            assert_eq!(PEER_POSE.get().unwrap().pos[0], 10.0);
+            if tick == fps / 2 {
+                for axis in 0..3 {
+                    assert!(
+                        (actual.pos[axis] - expected.pos[axis]).abs() < 1e-5,
+                        "{fps} FPS/rebuild changed selected body: {actual:?} vs {expected:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn physics_targeted_field_graph_without_recipient_stays_pending() {
+    let mut runtime = runtime_with_field_port(5.0, false, Some("body_acceleration_9"));
+    POSE.set(None);
+    runtime.execute_frame(FrameTime {
+        seconds: Seconds::ZERO,
+        beats: Beats::ZERO,
+        delta: Seconds(1.0 / 30.0),
+        frame_count: 0,
+    });
+    assert!(
+        POSE.get().is_none(),
+        "a missing recipient must not silently advance the world"
+    );
 }
 
 #[test]

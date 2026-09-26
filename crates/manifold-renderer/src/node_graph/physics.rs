@@ -1,13 +1,17 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
 use manifold_core::Seconds;
 use manifold_physics::{
-    input::{input_span, input_span_before, InputHistory, Timestamped},
+    input::{input_span, input_span_before, HistoryWrite, InputHistory, Timestamped},
     BodyConfig, BodyHandle, BodyKind, FieldInput, FieldValue, PhysicsWorld, VectorField,
 };
 use std::sync::Arc;
 
 use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
+
+mod targeted_fields;
+
+use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 
 thread_local! {
     // A preview budget only yields work; it never discards simulation time.
@@ -87,6 +91,7 @@ impl Drop for PhysicsStepScope {
 
 pub const MAX_BODIES: usize = 64;
 pub const MAX_COPIES: usize = 4_000;
+pub(crate) const AUTHORED_HISTORY_CAPACITY: usize = 256;
 pub const BODY_PORTS: [&str; MAX_BODIES] = [
     "body_0", "body_1", "body_2", "body_3", "body_4", "body_5", "body_6", "body_7", "body_8",
     "body_9", "body_10", "body_11", "body_12", "body_13", "body_14", "body_15", "body_16",
@@ -319,6 +324,7 @@ pub struct RigidSimulation {
     authored_time: f64,
     physics_time: f64,
     authored_samples: InputHistory<AuthoredPoseSample>,
+    targeted_fields: TargetedFieldHistory,
     reset_count: Option<f32>,
     pub poses: [Transform; MAX_BODIES],
     pub copy_poses: Vec<Transform>,
@@ -353,8 +359,9 @@ impl Default for RigidSimulation {
             accumulator: 0.0,
             authored_time: 0.0,
             physics_time: 0.0,
-            authored_samples: InputHistory::with_capacity(256)
+            authored_samples: InputHistory::with_capacity(AUTHORED_HISTORY_CAPACITY)
                 .expect("the fixed authored history capacity is valid"),
+            targeted_fields: TargetedFieldHistory::default(),
             reset_count: None,
             poses: [Transform::default(); MAX_BODIES],
             copy_poses: vec![Transform::default(); MAX_COPIES],
@@ -480,6 +487,58 @@ impl RigidSimulation {
         reset_count: f32,
         acceleration_field: Option<FieldValue>,
     ) -> Result<(), String> {
+        self.advance_with_targeted_fields(
+            bodies,
+            prototype,
+            copy_count,
+            copy_spacing,
+            copy_columns,
+            layout,
+            gravity,
+            now,
+            speed,
+            reset_count,
+            acceleration_field,
+            &[],
+        )
+    }
+
+    /// Advance with optional per-body and copy acceleration fields. Entries
+    /// zero through `MAX_BODIES - 1` target ordinary bodies; the final entry
+    /// targets every active copy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_with_targeted_fields(
+        &mut self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        copy_count: f32,
+        copy_spacing: f32,
+        copy_columns: f32,
+        layout: f32,
+        gravity: [f32; 3],
+        now: Seconds,
+        speed: f32,
+        reset_count: f32,
+        acceleration_field: Option<FieldValue>,
+        targeted_fields_input: &[Option<FieldValue>],
+    ) -> Result<(), String> {
+        if !targeted_fields_input.is_empty() && targeted_fields_input.len() != TARGET_SLOTS {
+            return Err(format!(
+                "Physics: targeted fields require exactly {TARGET_SLOTS} entries"
+            ));
+        }
+        let cleared_targeted_fields: [Option<FieldValue>; TARGET_SLOTS];
+        let has_targeted_field = targeted_fields_input.iter().any(Option::is_some);
+        let targeted_fields = if has_targeted_field
+            || (!targeted_fields_input.is_empty() && self.targeted_fields.is_connected())
+        {
+            Some(targeted_fields_input)
+        } else if self.targeted_fields.is_connected() {
+            cleared_targeted_fields = std::array::from_fn(|_| None);
+            Some(cleared_targeted_fields.as_slice())
+        } else {
+            None
+        };
         if !now.0.is_finite()
             || !speed.is_finite()
             || !(0.0..=4.0).contains(&speed)
@@ -560,12 +619,14 @@ impl RigidSimulation {
                 let elapsed = now.0 - self.last_time.unwrap_or(now).0;
                 let elapsed_simulation = elapsed * f64::from(speed);
                 let authored_time = self.authored_time + elapsed_simulation;
+                self.ensure_targeted_history(targeted_fields)?;
                 self.record_authored_sample(
                     authored_time,
                     bodies.clone(),
                     prototype.clone(),
                     gravity,
                     acceleration_field.clone(),
+                    targeted_fields,
                 )?;
                 self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
@@ -679,6 +740,7 @@ impl RigidSimulation {
             self.authored_time = 0.0;
             self.physics_time = 0.0;
             self.authored_samples.clear();
+            self.targeted_fields.clear();
             self.authored_samples
                 .record(
                     AuthoredPoseSample {
@@ -691,6 +753,11 @@ impl RigidSimulation {
                     Seconds::ZERO,
                 )
                 .map_err(|error| format!("Physics: failed to seed input history: {error}"))?;
+            if let Some(targeted_fields) = targeted_fields {
+                self.ensure_targeted_history(Some(targeted_fields))?;
+                self.targeted_fields
+                    .record(targeted_fields, HistoryWrite::Replaced)?;
+            }
             for (index, body) in bodies.iter().enumerate() {
                 let Some(body) = body.as_ref().filter(|body| {
                     body.enabled && body.fragment_parent.is_none() && body.release_count > 0.0
@@ -705,12 +772,14 @@ impl RigidSimulation {
         let elapsed_simulation = elapsed * f64::from(speed);
         let stationary_edit = elapsed_simulation == 0.0;
         let authored_time = self.authored_time + elapsed_simulation;
+        self.ensure_targeted_history(targeted_fields)?;
         self.record_authored_sample(
             authored_time,
             bodies.clone(),
             prototype.clone(),
             gravity,
             acceleration_field.clone(),
+            targeted_fields,
         )?;
         self.authored_time = authored_time;
         let accumulated = self.accumulator + elapsed_simulation;
@@ -791,21 +860,21 @@ impl RigidSimulation {
         let mut completed = 0;
         for _ in 0..steps {
             let tick_gravity = self.interpolated_gravity(self.physics_time);
-            let (field_before, field_after, field_alpha) = {
-                let span = input_span(self.authored_samples.iter(), Seconds(self.physics_time))
-                    .expect("authored input history is seeded before stepping");
-                (
-                    span.before.acceleration_field.clone(),
-                    span.after.acceleration_field.clone(),
-                    span.alpha,
-                )
-            };
+            let span = input_span(self.authored_samples.iter(), Seconds(self.physics_time))
+                .expect("authored input history is seeded before stepping");
+            let field_before = span.before.acceleration_field.clone();
+            let field_after = span.after.acceleration_field.clone();
+            let field_alpha = span.alpha;
             let sampled_field = crate::node_graph::vector_field::ContinuousField {
                 before: field_before.as_ref(),
                 after: field_after.as_ref(),
                 alpha: field_alpha,
                 origin: [0.0; 3],
             };
+            let targeted_indices = self
+                .targeted_fields
+                .is_connected()
+                .then_some((span.before_index, span.after_index, span.alpha));
             self.world
                 .as_mut()
                 .expect("world constructed above")
@@ -820,6 +889,7 @@ impl RigidSimulation {
                 } else {
                     Some(&sampled_field)
                 },
+                targeted_indices,
                 TICK,
             )?;
             let (animated_microsteps, animated_speed) =
@@ -885,19 +955,12 @@ impl RigidSimulation {
                             .map_err(|e| e.to_string())?;
                     }
                 }
-                if !sampled_field.is_empty() {
-                    world
-                        .apply_fields(
-                            &self.field_handles,
-                            &[FieldInput {
-                                field: &sampled_field,
-                                acceleration: 1.0,
-                                delta_velocity: 0.0,
-                            }],
-                            Seconds(microstep_time),
-                        )
-                        .map_err(|e| e.to_string())?;
-                }
+                self.apply_sampled_fields(
+                    Seconds(microstep_time),
+                    &sampled_field,
+                    targeted_indices,
+                )?;
+                let world = self.world.as_mut().expect("world constructed above");
                 world
                     .step(Seconds(microstep_time), solver_substeps)
                     .map_err(|e| e.to_string())?;
@@ -1239,6 +1302,7 @@ impl RigidSimulation {
         prototype: Option<RigidBody>,
         gravity: [f32; 3],
         acceleration_field: Option<FieldValue>,
+        targeted_fields: Option<&[Option<FieldValue>]>,
     ) -> Result<(), String> {
         if self.authored_samples.is_exhausted() {
             return Err(
@@ -1252,10 +1316,12 @@ impl RigidSimulation {
                 && same_optional_body(last.prototype.as_ref(), prototype.as_ref())
                 && last.gravity == gravity
                 && last.acceleration_field == acceleration_field
+                && targeted_fields.is_none_or(|fields| self.targeted_fields.fields_equal(fields))
         }) {
             return Ok(());
         }
-        self.authored_samples
+        let write = self
+            .authored_samples
             .record(
                 AuthoredPoseSample {
                     time,
@@ -1266,8 +1332,23 @@ impl RigidSimulation {
                 },
                 Seconds(self.physics_time),
             )
-            .map(|_| ())
-            .map_err(|error| format!("Physics: input history rejected authored sample: {error}"))
+            .map_err(|error| format!("Physics: input history rejected authored sample: {error}"))?;
+        if let Some(fields) = targeted_fields {
+            self.targeted_fields
+                .record(fields, write)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_targeted_history(
+        &mut self,
+        targeted_fields: Option<&[Option<FieldValue>]>,
+    ) -> Result<(), String> {
+        if targeted_fields.is_some() && !self.targeted_fields.is_connected() {
+            self.targeted_fields
+                .ensure_aligned(self.authored_samples.len())?;
+        }
+        Ok(())
     }
 
     fn configure_fast_bodies(
@@ -1276,11 +1357,18 @@ impl RigidSimulation {
         prototype: Option<&RigidBody>,
         gravity: [f32; 3],
         acceleration_field: Option<&dyn VectorField>,
+        targeted_indices: Option<(usize, usize, f32)>,
         tick: f64,
     ) -> Result<usize, String> {
         // Box3D skips bullet targets during the bullet pass. When two fast
         // individual Dynamics share a world, use smaller outer steps instead
         // of making each invisible to the other's continuous pass.
+        let targeted_span = match targeted_indices {
+            Some((before, after, alpha)) => {
+                Some(self.targeted_fields.span(before, after, alpha)?)
+            }
+            None => None,
+        };
         let world = self.world.as_mut().expect("world constructed above");
         let mut fast_count = 0;
         let mut fast_steps = 1;
@@ -1298,7 +1386,14 @@ impl RigidSimulation {
                     continue;
                 }
                 let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-                let acceleration = summed_acceleration(world, handle, gravity, acceleration_field)?;
+                let targeted = targeted_span.as_ref().map(|span| span.field(index));
+                let acceleration = summed_acceleration(
+                    world,
+                    handle,
+                    gravity,
+                    acceleration_field,
+                    targeted.as_ref().filter(|field| !field.is_empty()).map(|field| field as &dyn VectorField),
+                )?;
                 if needs_bullet(body, velocity, acceleration, tick) {
                     fast_count += 1;
                     let extent = body_min_extent(body);
@@ -1324,7 +1419,14 @@ impl RigidSimulation {
                 continue;
             }
             let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-            let acceleration = summed_acceleration(world, handle, gravity, acceleration_field)?;
+            let targeted = targeted_span.as_ref().map(|span| span.field(index));
+            let acceleration = summed_acceleration(
+                world,
+                handle,
+                gravity,
+                acceleration_field,
+                targeted.as_ref().filter(|field| !field.is_empty()).map(|field| field as &dyn VectorField),
+            )?;
             let enabled = fast_count < 2 && needs_bullet(body, velocity, acceleration, tick);
             if self.bullet_enabled[index] != enabled {
                 world
@@ -1339,7 +1441,14 @@ impl RigidSimulation {
                     continue;
                 };
                 let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-                let acceleration = summed_acceleration(world, handle, gravity, acceleration_field)?;
+                let targeted = targeted_span.as_ref().map(|span| span.field(MAX_BODIES));
+                let acceleration = summed_acceleration(
+                    world,
+                    handle,
+                    gravity,
+                    acceleration_field,
+                    targeted.as_ref().filter(|field| !field.is_empty()).map(|field| field as &dyn VectorField),
+                )?;
                 let enabled = needs_bullet(prototype, velocity, acceleration, tick);
                 if self.copy_bullet_enabled[index] != enabled {
                     world
@@ -1352,6 +1461,38 @@ impl RigidSimulation {
             self.copy_bullet_enabled[..self.active_copy_count].fill(false);
         }
         Ok(if fast_count >= 2 { fast_steps } else { 1 })
+    }
+
+    fn apply_sampled_fields(
+        &mut self,
+        dt: Seconds,
+        global: &crate::node_graph::vector_field::ContinuousField<'_>,
+        indices: Option<(usize, usize, f32)>,
+    ) -> Result<(), String> {
+        let Some((before, after, alpha)) = indices else {
+            if global.is_empty() {
+                return Ok(());
+            }
+            return self.world.as_mut().expect("world constructed above")
+                .apply_fields(&self.field_handles, &[FieldInput {
+                    field: global, acceleration: 1.0, delta_velocity: 0.0,
+                }], dt).map_err(|error| error.to_string());
+        };
+        let span = self.targeted_fields.span(before, after, alpha)?;
+        let fields: [_; TARGET_SLOTS] = std::array::from_fn(|index| span.field(index));
+        let inputs: [[FieldInput<'_>; 2]; TARGET_SLOTS] = std::array::from_fn(|index| [
+            FieldInput { field: global, acceleration: 1.0, delta_velocity: 0.0 },
+            FieldInput { field: &fields[index], acceleration: 1.0, delta_velocity: 0.0 },
+        ]);
+        let recipients = self.handles.iter().enumerate().filter_map(|(index, handle)| {
+            handle.map(|handle| (handle, inputs[index].as_slice()))
+        }).chain(self.copy_handles[..self.active_copy_count].iter().flatten()
+            .map(|&handle| (handle, inputs[MAX_BODIES].as_slice())));
+        // Validate the complete batch before any body receives a force. Copies
+        // share one input slice and one linear validation pass.
+        self.world.as_mut().expect("world constructed above")
+            .apply_fields_by_target(recipients, dt)
+            .map_err(|error| error.to_string())
     }
 
     fn animated_microsteps(
@@ -1510,10 +1651,12 @@ impl RigidSimulation {
     }
 
     fn prune_authored_samples(&mut self) -> Result<(), String> {
-        self.authored_samples
+        let removed = self
+            .authored_samples
             .prune_before(Seconds(self.physics_time + 1.0e-12))
-            .map(|_| ())
-            .map_err(|error| format!("Physics: failed to prune input history: {error}"))
+            .map_err(|error| format!("Physics: failed to prune input history: {error}"))?;
+        self.targeted_fields.prune(removed)?;
+        Ok(())
     }
 }
 
@@ -1561,6 +1704,7 @@ fn summed_acceleration(
     handle: BodyHandle,
     gravity: [f32; 3],
     field: Option<&dyn VectorField>,
+    targeted_field: Option<&dyn VectorField>,
 ) -> Result<[f32; 3], String> {
     let mut acceleration = gravity;
     if let Some(field) = field {
@@ -1569,6 +1713,17 @@ fn summed_acceleration(
             .map_err(|error| error.to_string())?
             .position;
         let sample = field.sample(position);
+        for axis in 0..3 {
+            acceleration[axis] += sample[axis];
+        }
+    }
+    if let Some(field) = targeted_field {
+        let sample = field.sample(
+            world
+                .pose(handle)
+                .map_err(|error| error.to_string())?
+                .position,
+        );
         for axis in 0..3 {
             acceleration[axis] += sample[axis];
         }
@@ -2205,6 +2360,240 @@ mod tests {
         }
     }
 
+    fn target_slots(index: usize, field: FieldValue) -> [Option<FieldValue>; TARGET_SLOTS] {
+        let mut fields = std::array::from_fn(|_| None);
+        fields[index] = Some(field);
+        fields
+    }
+
+    fn advance_targeted(
+        simulation: &mut RigidSimulation,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        now: f64,
+        gravity: [f32; 3],
+        targeted_fields: &[Option<FieldValue>],
+    ) {
+        simulation
+            .advance_with_targeted_fields(
+                bodies,
+                prototype,
+                1.0,
+                1.25,
+                16.0,
+                0.0,
+                gravity,
+                Seconds(now),
+                1.0,
+                0.0,
+                None,
+                targeted_fields,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn targeted_field_moves_selected_body_only() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(body([0.0, 8.0, 0.0]));
+        bodies[1] = Some(body([10.0, 8.0, 0.0]));
+        let fields = target_slots(0, FieldValue::uniform([0.0, -4.0, 0.0]).unwrap());
+        let mut simulation = RigidSimulation::default();
+        advance_targeted(&mut simulation, bodies.clone(), None, 0.0, [0.0; 3], &fields);
+        assert_eq!(
+            simulation.targeted_fields.span(0, 0, 0.0).unwrap().field(0).sample([0.0; 3]),
+            [0.0, -4.0, 0.0],
+            "the seeded target must align with the first authored sample",
+        );
+        advance_targeted(&mut simulation, bodies, None, 1.0, [0.0; 3], &fields);
+
+        assert!(simulation.poses[0].pos[1] < 8.0);
+        assert_eq!(simulation.poses[1].pos, [10.0, 8.0, 0.0]);
+    }
+
+    #[test]
+    fn targeted_field_adds_to_global_acceleration() {
+        let bodies = one_body([0.0, 8.0, 0.0]);
+        let fields = target_slots(0, FieldValue::uniform([0.0, -2.0, 0.0]).unwrap());
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance_with_targeted_fields(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0, -3.0, 0.0],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(FieldValue::uniform([0.0, -1.0, 0.0]).unwrap()),
+                &fields,
+            )
+            .unwrap();
+        simulation
+            .advance_with_targeted_fields(
+                bodies,
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0, -3.0, 0.0],
+                Seconds(1.0),
+                1.0,
+                0.0,
+                Some(FieldValue::uniform([0.0, -1.0, 0.0]).unwrap()),
+                &fields,
+            )
+            .unwrap();
+        let velocity = simulation
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(simulation.handles[0].unwrap())
+            .unwrap();
+        assert!((velocity[1] + 6.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn targeted_copy_field_maps_to_all_active_copies() {
+        let prototype = body([0.0, 8.0, 0.0]);
+        let fields = target_slots(MAX_BODIES, FieldValue::uniform([0.0, -4.0, 0.0]).unwrap());
+        let mut simulation = RigidSimulation::default();
+        for time in [0.0, 1.0] {
+            simulation.advance_with_targeted_fields(
+                std::array::from_fn(|_| None), Some(prototype.clone()),
+                4.0, 2.0, 2.0, 0.0, [0.0; 3], Seconds(time), 1.0, 0.0, None, &fields,
+            ).unwrap();
+        }
+        assert_eq!(simulation.active_copy_count, 4);
+        for pose in &simulation.copy_poses[..4] {
+            assert!(pose.pos[1] < 7.0, "every copy must receive the field");
+        }
+    }
+
+    #[test]
+    fn targeted_field_ignores_static_body() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            kind: 0,
+            transform: Transform {
+                pos: [0.0, 8.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let fields = target_slots(0, FieldValue::uniform([0.0, -4.0, 0.0]).unwrap());
+        let mut simulation = RigidSimulation::default();
+        advance_targeted(&mut simulation, bodies.clone(), None, 0.0, [0.0; 3], &fields);
+        advance_targeted(&mut simulation, bodies, None, 1.0, [0.0; 3], &fields);
+        assert_eq!(simulation.poses[0].pos, [0.0, 8.0, 0.0]);
+    }
+
+    #[test]
+    fn all_none_target_input_stays_unallocated_and_connected_storage_is_reused() {
+        let bodies = one_body([0.0, 8.0, 0.0]);
+        let empty: [Option<FieldValue>; TARGET_SLOTS] = std::array::from_fn(|_| None);
+        let mut simulation = RigidSimulation::default();
+        advance_targeted(&mut simulation, bodies.clone(), None, 0.0, [0.0; 3], &empty);
+        assert!(!simulation.targeted_fields.is_connected());
+        assert_eq!(simulation.targeted_fields.capacity(), 0);
+
+        let fields = target_slots(0, FieldValue::uniform([0.0, -4.0, 0.0]).unwrap());
+        advance_targeted(&mut simulation, bodies.clone(), None, 0.0, [0.0; 3], &fields);
+        let capacity = simulation.targeted_fields.capacity();
+        let storage_ptr = simulation.targeted_fields.storage_ptr();
+        advance_targeted(&mut simulation, bodies.clone(), None, 0.5, [0.0; 3], &fields);
+        simulation
+            .advance_with_targeted_fields(
+                bodies,
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(0.5),
+                1.0,
+                1.0,
+                None,
+                &fields,
+            )
+            .unwrap();
+        assert_eq!(simulation.targeted_fields.capacity(), capacity);
+        assert_eq!(simulation.targeted_fields.storage_ptr(), storage_ptr);
+    }
+
+    fn run_targeted_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
+        let bodies = one_body([0.0, 8.0, 0.0]);
+        let fields = target_slots(0, FieldValue::uniform([1.0, -4.0, 0.5]).unwrap());
+        let mut simulation = RigidSimulation::default();
+        advance_targeted(&mut simulation, bodies.clone(), None, 0.0, [0.0; 3], &fields);
+        for frame in 1..=fps {
+            advance_targeted(
+                &mut simulation,
+                bodies.clone(),
+                None,
+                frame as f64 / fps as f64,
+                [0.0; 3],
+                &fields,
+            );
+        }
+        let velocity = simulation
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(simulation.handles[0].unwrap())
+            .unwrap();
+        (simulation.poses[0].pos, velocity)
+    }
+
+    #[test]
+    fn targeted_field_trace_is_render_partition_invariant() {
+        let traces = [24, 30, 60].map(run_targeted_trace);
+        for trace in traces.iter().skip(1) {
+            for (actual, expected) in trace.0.iter().zip(traces[0].0) {
+                assert!((actual - expected).abs() < 1.0e-5);
+            }
+            for (actual, expected) in trace.1.iter().zip(traces[0].1) {
+                assert!((actual - expected).abs() < 1.0e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn targeted_fields_preserve_pending_intervals_on_first_connection_and_paused_edits() {
+        let bodies = one_body([0.0, 8.0, 0.0]);
+        let empty: [Option<FieldValue>; TARGET_SLOTS] = std::array::from_fn(|_| None);
+        let old = target_slots(0, FieldValue::uniform([2.0, 0.0, 0.0]).unwrap());
+        let new = target_slots(0, FieldValue::uniform([-4.0, 0.0, 0.0]).unwrap());
+        for initial in [&empty, &old] {
+            let mut expected = RigidSimulation::default();
+            advance_targeted(&mut expected, bodies.clone(), None, 0.0, [0.0; 3], initial);
+            advance_targeted(&mut expected, bodies.clone(), None, 0.5, [0.0; 3], initial);
+            advance_targeted(&mut expected, bodies.clone(), None, 0.5, [0.0; 3], &new);
+            let mut queued = RigidSimulation::default();
+            advance_targeted(&mut queued, bodies.clone(), None, 0.0, [0.0; 3], initial);
+            let identity = queued.handles[0];
+            {
+                let _budget = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+                advance_targeted(&mut queued, bodies.clone(), None, 0.5, [0.0; 3], initial);
+                assert!(queued.pending_time.0 > 0.0);
+                advance_targeted(&mut queued, bodies.clone(), None, 0.5, [0.0; 3], &new);
+            }
+            advance_targeted(&mut queued, bodies.clone(), None, 0.5, [0.0; 3], &new);
+            assert_eq!(queued.pending_time, Seconds::ZERO);
+            assert_eq!(queued.handles[0], identity);
+            assert_eq!(queued.poses, expected.poses, "edit rewrote an unfinished interval");
+            for simulation in [&mut queued, &mut expected] {
+                advance_targeted(simulation, bodies.clone(), None, 0.75, [0.0; 3], &new);
+            }
+            assert_eq!(queued.poses, expected.poses, "edited endpoint was lost");
+        }
+    }
+
     fn varying_gravity(sample: usize) -> [f32; 3] {
         let phase = sample as f32 * 0.09;
         [
@@ -2332,10 +2721,10 @@ mod tests {
             .unwrap();
         simulation.authored_samples = InputHistory::with_capacity(2).unwrap();
         simulation
-            .record_authored_sample(0.0, bodies.clone(), None, gravity, None)
+            .record_authored_sample(0.0, bodies.clone(), None, gravity, None, None)
             .unwrap();
         simulation
-            .record_authored_sample(FRAME, bodies.clone(), None, gravity, None)
+            .record_authored_sample(FRAME, bodies.clone(), None, gravity, None, None)
             .unwrap();
         let accepted_len = simulation.authored_samples.len();
         let accepted_pose = simulation.poses;
@@ -2353,7 +2742,7 @@ mod tests {
         assert_eq!(simulation.pending_time, accepted_debt);
 
         let retry = simulation
-            .record_authored_sample(FRAME, bodies.clone(), None, gravity, None)
+            .record_authored_sample(FRAME, bodies.clone(), None, gravity, None, None)
             .unwrap_err();
         assert!(retry.contains("exhausted"));
         assert_eq!(simulation.authored_samples.len(), accepted_len);

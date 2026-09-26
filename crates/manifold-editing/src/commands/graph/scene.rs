@@ -1311,9 +1311,16 @@ impl Command for RemoveSceneObjectCommand {
                     .iter()
                     .copied()
                     .collect::<std::collections::HashSet<_>>();
+                let field_port = if physics.copies {
+                    "copies_acceleration".to_string()
+                } else {
+                    format!("body_acceleration_{}", physics.body_slot)
+                };
                 nodes.retain(|node| !owned.contains(&node.id));
                 wires.retain(|wire| {
-                    !owned.contains(&wire.from_node) && !owned.contains(&wire.to_node)
+                    !(owned.contains(&wire.from_node)
+                        || owned.contains(&wire.to_node)
+                        || (wire.to_node == physics.world_id && wire.to_port == field_port))
                 });
             } else {
                 collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
@@ -2904,13 +2911,16 @@ fn physics_copies_scene_object_match(
 }
 
 fn first_free_physics_body_slot(wires: &[EffectGraphWire], world_id: u32) -> Option<u32> {
-    (0..PHYSICS_BODY_SLOTS).find(|slot| {
-        let body_port = format!("body_{slot}");
-        let pose_port = format!("pose_{slot}");
-        !wires.iter().any(|wire| {
-            (wire.to_node == world_id && wire.to_port == body_port)
-                || (wire.from_node == world_id && wire.from_port == pose_port)
-        })
+    (0..PHYSICS_BODY_SLOTS).find(|slot| physics_body_slot_available(wires, world_id, *slot))
+}
+
+fn physics_body_slot_available(wires: &[EffectGraphWire], world_id: u32, slot: u32) -> bool {
+    let body_port = format!("body_{slot}");
+    let pose_port = format!("pose_{slot}");
+    let field_port = format!("body_acceleration_{slot}");
+    !wires.iter().any(|wire| {
+        (wire.to_node == world_id && (wire.to_port == body_port || wire.to_port == field_port))
+            || (wire.from_node == world_id && wire.from_port == pose_port)
     })
 }
 
@@ -4118,6 +4128,11 @@ impl Command for DisableSceneObjectPhysicsCommand {
                 ));
                 def.nodes.retain(|node| node.id != binding.body_id);
             }
+            // A removed body must not leave a force attached to a reusable slot.
+            def.wires.retain(|wire| {
+                !(wire.to_node == binding.world_id
+                    && wire.to_port == format!("body_acceleration_{}", binding.body_slot))
+            });
             let body_node_id = if parts.group_id.is_some() {
                 // The body is inside the group; use its stable NodeId before
                 // removing the node so the exposure sweep can prune it.
@@ -4375,18 +4390,6 @@ impl Command for SplitSceneObjectCommand {
             .copied()
             .unwrap_or_else(|| max_node_id_over(&def.nodes).saturating_add(1));
         let mut free_slots = Vec::new();
-        let mut occupied = std::collections::HashSet::new();
-        for wire in &def.wires {
-            if wire.to_node == world_id
-                && wire
-                    .to_port
-                    .strip_prefix("body_")
-                    .and_then(|s| s.parse::<u32>().ok())
-                    .is_some_and(|slot| slot < PHYSICS_BODY_SLOTS)
-            {
-                occupied.insert(wire.to_port.clone());
-            }
-        }
         if let Some(binding) = existing_binding.as_ref() {
             free_slots.push(binding.body_slot);
         }
@@ -4397,7 +4400,7 @@ impl Command for SplitSceneObjectCommand {
             {
                 continue;
             }
-            if !occupied.contains(&format!("body_{slot}")) {
+            if physics_body_slot_available(&def.wires, world_id, slot) {
                 free_slots.push(slot);
             }
             if free_slots.len() == 8 {
@@ -4458,10 +4461,22 @@ impl Command for SplitSceneObjectCommand {
             if self.object_index >= source_count {
                 return None;
             }
+            let inherited_fields: Vec<_> =
+                existing_binding.as_ref().map_or_else(Vec::new, |binding| {
+                    let field_port = format!("body_acceleration_{}", binding.body_slot);
+                    def.wires
+                        .iter()
+                        .filter(|wire| {
+                            wire.to_node == binding.world_id && wire.to_port == field_port
+                        })
+                        .cloned()
+                        .collect()
+                });
             if let Some(binding) = existing_binding.as_ref() {
                 def.wires.retain(|wire| {
                     !(wire.to_node == binding.world_id
-                        && wire.to_port == format!("body_{}", binding.body_slot)
+                        && (wire.to_port == format!("body_{}", binding.body_slot)
+                            || wire.to_port == format!("body_acceleration_{}", binding.body_slot))
                         || wire.from_node == binding.world_id
                             && wire.from_port == format!("pose_{}", binding.body_slot)
                             && wire.to_node == parts.producer_id)
@@ -4587,6 +4602,14 @@ impl Command for SplitSceneObjectCommand {
                         clone_id,
                         "pose",
                     ));
+                }
+                for source in &inherited_fields {
+                    let mut field = source.clone();
+                    if field.from_node == parts.producer_id {
+                        field.from_node = clone_id;
+                    }
+                    field.to_port = format!("body_acceleration_{body_slot}");
+                    def.wires.push(field);
                 }
                 def.wires.push(scene_build_wire(
                     clone_id,
@@ -4782,6 +4805,9 @@ fn remap_physics_wire(
     if wire.to_node == world_id && wire.to_port == format!("body_{old_slot}") {
         to_port = format!("body_{new_slot}");
     }
+    if wire.to_node == world_id && wire.to_port == format!("body_acceleration_{old_slot}") {
+        to_port = format!("body_acceleration_{new_slot}");
+    }
     if wire.to_node == render_id
         && let Some(old_index) = wire
             .to_port
@@ -4879,7 +4905,11 @@ fn append_physics_duplicate(
         nodes.push(clones.remove(old_id)?);
     }
     for wire in wires.clone() {
-        if owned.contains(&wire.from_node) || owned.contains(&wire.to_node) {
+        if owned.contains(&wire.from_node)
+            || owned.contains(&wire.to_node)
+            || (wire.to_node == physics.world_id
+                && wire.to_port == format!("body_acceleration_{}", physics.body_slot))
+        {
             wires.push(remap_physics_wire(
                 &wire,
                 &node_map,

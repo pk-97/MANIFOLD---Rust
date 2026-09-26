@@ -185,6 +185,8 @@ pub(super) fn prepare(
             }
             let parent_input = input(def, world, &format!("body_{parent_slot}"))
                 .ok_or_else(|| invalid("shatter", "parent body is missing"))?;
+            let parent_acceleration =
+                input(def, world, &format!("body_acceleration_{parent_slot}"));
             let parent = node(def, parent_input.0)?.clone();
             wire(def, release.clone(), parent.id, "release_count");
             let authored_pose = input(def, parent.id, "transform")
@@ -192,8 +194,20 @@ pub(super) fn prepare(
             let used: BTreeSet<usize> = def
                 .wires
                 .iter()
-                .filter(|w| w.to_node == world)
-                .filter_map(|w| w.to_port.strip_prefix("body_").and_then(|s| s.parse().ok()))
+                .filter_map(|w| {
+                    if w.to_node == world {
+                        w.to_port
+                            .strip_prefix("body_acceleration_")
+                            .or_else(|| w.to_port.strip_prefix("body_"))
+                            .and_then(|slot| slot.parse().ok())
+                    } else if w.from_node == world {
+                        w.from_port
+                            .strip_prefix("pose_")
+                            .and_then(|slot| slot.parse().ok())
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             let slots: Vec<_> = (0..crate::node_graph::physics::MAX_BODIES)
                 .filter(|slot| !used.contains(slot))
@@ -337,6 +351,14 @@ pub(super) fn prepare(
                         world,
                         &format!("body_{body_slot}"),
                     );
+                    if let Some(parent_acceleration) = &parent_acceleration {
+                        wire(
+                            def,
+                            parent_acceleration.clone(),
+                            world,
+                            &format!("body_acceleration_{body_slot}"),
+                        );
+                    }
                     let object_copy = clone_node(
                         def,
                         &original,
@@ -539,6 +561,127 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn shatter_fans_parent_acceleration_and_reserves_targeted_slots() {
+        let mut owner = fixture();
+        owner.nodes.push(
+            serde_json::from_value(serde_json::json!({
+                "id": 900,
+                "nodeId": "shatter-field",
+                "typeId": "node.uniform_vector_field"
+            }))
+            .unwrap(),
+        );
+        let mut reserved_pose_target = owner
+            .nodes
+            .iter()
+            .find(|node| node.id == 111)
+            .unwrap()
+            .clone();
+        reserved_pose_target.id = 901;
+        reserved_pose_target.node_id = NodeId::new("reserved-pose-target");
+        reserved_pose_target.handle = None;
+        owner.nodes.push(reserved_pose_target);
+        owner.wires.extend([
+            EffectGraphWire {
+                from_node: 900,
+                from_port: "out".into(),
+                to_node: 40,
+                to_port: "body_acceleration_1".into(),
+            },
+            // A dangling field target occupies slot 6 before allocation.
+            EffectGraphWire {
+                from_node: 900,
+                from_port: "out".into(),
+                to_node: 40,
+                to_port: "body_acceleration_6".into(),
+            },
+            // A pose route also reserves its target slot even when it is not
+            // paired with an authored body input.
+            EffectGraphWire {
+                from_node: 40,
+                from_port: "pose_7".into(),
+                to_node: 901,
+                to_port: "transform".into(),
+            },
+        ]);
+
+        let prepared = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
+        let fragment_ids: BTreeSet<_> = prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.type_id == "node.rigid_body" && node.params.contains_key("fragment_parent")
+            })
+            .map(|node| node.id)
+            .collect();
+        let fragment_body_wires: Vec<_> = prepared
+            .def
+            .wires
+            .iter()
+            .filter(|wire| {
+                fragment_ids.contains(&wire.from_node)
+                    && wire.to_node == 40
+                    && wire.to_port.starts_with("body_")
+            })
+            .collect();
+        let fragment_slots: BTreeSet<_> = fragment_body_wires
+            .iter()
+            .map(|wire| {
+                wire.to_port
+                    .strip_prefix("body_")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(fragment_ids.len(), 16);
+        assert_eq!(fragment_body_wires.len(), 16);
+        assert_eq!(fragment_slots, (8..24).collect());
+        for body_wire in fragment_body_wires {
+            let slot = body_wire.to_port.strip_prefix("body_").unwrap();
+            assert!(prepared.def.wires.iter().any(|wire| {
+                wire.from_node == 900
+                    && wire.from_port == "out"
+                    && wire.to_node == 40
+                    && wire.to_port == format!("body_acceleration_{slot}")
+            }));
+        }
+        let field_wires: Vec<_> = prepared
+            .def
+            .wires
+            .iter()
+            .filter(|wire| wire.from_node == 900 && wire.from_port == "out" && wire.to_node == 40)
+            .collect();
+        assert_eq!(
+            field_wires.len(),
+            18,
+            "parent, reserved, and fragment routes"
+        );
+        assert_eq!(
+            field_wires
+                .iter()
+                .filter(|wire| wire.to_port == "body_acceleration_1")
+                .count(),
+            1,
+            "the parent route remains a single authored connection"
+        );
+        assert!(prepared.def.wires.iter().any(|wire| {
+            wire.from_node == 40
+                && wire.from_port == "pose_7"
+                && wire.to_node == 901
+                && wire.to_port == "transform"
+        }));
+        assert!(
+            !prepared
+                .def
+                .wires
+                .iter()
+                .any(|wire| wire.from_node == 900 && wire.to_port == "acceleration_field")
+        );
     }
 
     #[test]

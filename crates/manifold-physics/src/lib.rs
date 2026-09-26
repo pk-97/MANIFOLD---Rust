@@ -625,34 +625,46 @@ impl PhysicsWorld {
             return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
         }
         for input in fields {
-            if !input.acceleration.is_finite() {
-                return Err(PhysicsError::InvalidInput(
-                    "field acceleration must be finite",
-                ));
-            }
-            if !input.delta_velocity.is_finite() {
-                return Err(PhysicsError::InvalidInput(
-                    "field delta velocity must be finite",
-                ));
-            }
+            validate_field_input(*input)?;
         }
+        self.apply_fields_by_target(bodies.iter().copied().map(|body| (body, fields)), dt)
+    }
+
+    /// Apply a possibly different set of sampled fields to each target body.
+    /// All targets are sampled and validated before any native application is
+    /// submitted, so a later invalid target leaves earlier targets unchanged.
+    pub fn apply_fields_by_target<'slice, 'field, I>(
+        &mut self,
+        targets: I,
+        dt: Seconds,
+    ) -> Result<(), PhysicsError>
+    where
+        'field: 'slice,
+        I: IntoIterator<Item = (BodyHandle, &'slice [FieldInput<'field>])>,
+    {
+        let dt_f32 = dt.0 as f32;
+        if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
+            return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
+        }
+
         // A shared scene field commonly targets thousands of copies. Validate
         // uniqueness in linear time using storage prepared with body creation.
         self.field_seen.fill(false);
-        for handle in bodies {
-            self.body_record(*handle)?;
-            let seen = &mut self.field_seen[handle.index as usize];
-            if *seen {
-                return Err(PhysicsError::InvalidInput("duplicate field body handle"));
-            }
-            *seen = true;
-        }
-
         self.field_scratch.clear();
         let result = (|| {
             let _lock = native_lock();
-            for handle in bodies {
-                let native = self.body_record(*handle)?.native;
+            for (handle, fields) in targets {
+                for input in fields {
+                    validate_field_input(*input)?;
+                }
+                self.body_record(handle)?;
+                let seen = &mut self.field_seen[handle.index as usize];
+                if *seen {
+                    return Err(PhysicsError::InvalidInput("duplicate field body handle"));
+                }
+                *seen = true;
+
+                let native = self.body_record(handle)?.native;
                 let mut center = [0.0; 3];
                 let mut mass = 0.0;
                 let mut body_type = 0;
@@ -1144,6 +1156,20 @@ fn triangle_mesh_mass_properties(
         ));
     }
     Ok((center, inertia))
+}
+
+fn validate_field_input(input: FieldInput<'_>) -> Result<(), PhysicsError> {
+    if !input.acceleration.is_finite() {
+        return Err(PhysicsError::InvalidInput(
+            "field acceleration must be finite",
+        ));
+    }
+    if !input.delta_velocity.is_finite() {
+        return Err(PhysicsError::InvalidInput(
+            "field delta velocity must be finite",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_vec3(value: [f32; 3], name: &'static str) -> Result<(), PhysicsError> {
@@ -2326,6 +2352,226 @@ mod tests {
         assert!(world.apply_fields(&[bodies[0], bodies[0]], &[], Seconds(1.0 / 60.0)).is_err());
         world.apply_fields(&bodies, &[], Seconds(1.0 / 60.0)).unwrap();
         assert_eq!(world.field_seen.capacity(), seen_capacity);
+    }
+
+    #[test]
+    fn scene_physics_targeted_fields_apply_distinct_inputs_per_recipient() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let first = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [-2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let second = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let x = UniformField::new([1.0, 0.0, 0.0]).unwrap();
+        let y = UniformField::new([0.0, 1.0, 0.0]).unwrap();
+        let first_fields = [FieldInput {
+            field: &x,
+            acceleration: 0.0,
+            delta_velocity: 1.0,
+        }];
+        let second_fields = [FieldInput {
+            field: &y,
+            acceleration: 0.0,
+            delta_velocity: 2.0,
+        }];
+        world
+            .apply_fields_by_target(
+                [
+                    (first, first_fields.as_slice()),
+                    (second, second_fields.as_slice()),
+                ],
+                Seconds(1.0 / 60.0),
+            )
+            .unwrap();
+        assert_eq!(world.linear_velocity(first).unwrap(), [1.0, 0.0, 0.0]);
+        assert_eq!(world.linear_velocity(second).unwrap(), [0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn scene_physics_targeted_fields_combine_global_and_recipient_inputs() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let first = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        let second = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 0.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let global = UniformField::new([1.0, 0.0, 0.0]).unwrap();
+        let target = UniformField::new([0.0, 1.0, 0.0]).unwrap();
+        let global_input = FieldInput {
+            field: &global,
+            acceleration: 0.0,
+            delta_velocity: 1.0,
+        };
+        let target_input = FieldInput {
+            field: &target,
+            acceleration: 0.0,
+            delta_velocity: 2.0,
+        };
+        let first_fields = [global_input, target_input];
+        let second_fields = [global_input];
+        world
+            .apply_fields_by_target(
+                [
+                    (first, first_fields.as_slice()),
+                    (second, second_fields.as_slice()),
+                ],
+                Seconds(1.0 / 60.0),
+            )
+            .unwrap();
+        assert_eq!(world.linear_velocity(first).unwrap(), [1.0, 2.0, 0.0]);
+        assert_eq!(world.linear_velocity(second).unwrap(), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn scene_physics_targeted_fields_reject_later_invalid_sample_atomically() {
+        struct NonFiniteOnPositiveX;
+
+        impl VectorField for NonFiniteOnPositiveX {
+            fn sample(&self, position: [f32; 3]) -> [f32; 3] {
+                if position[0] < 0.0 {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [f32::NAN, 0.0, 0.0]
+                }
+            }
+        }
+
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let first = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [-2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let second = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let valid = UniformField::new([1.0, 0.0, 0.0]).unwrap();
+        let invalid = NonFiniteOnPositiveX;
+        let first_fields = [FieldInput {
+            field: &valid,
+            acceleration: 1.0,
+            delta_velocity: 0.0,
+        }];
+        let second_fields = [FieldInput {
+            field: &invalid,
+            acceleration: 1.0,
+            delta_velocity: 0.0,
+        }];
+        assert!(world
+            .apply_fields_by_target(
+                [
+                    (first, first_fields.as_slice()),
+                    (second, second_fields.as_slice()),
+                ],
+                Seconds(1.0 / 60.0),
+            )
+            .is_err());
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        assert_eq!(world.linear_velocity(first).unwrap(), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn scene_physics_targeted_fields_reject_duplicate_and_foreign_recipients_atomically() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let first = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        let second = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 0.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let field = UniformField::new([1.0, 0.0, 0.0]).unwrap();
+        let inputs = [FieldInput {
+            field: &field,
+            acceleration: 0.0,
+            delta_velocity: 1.0,
+        }];
+        assert!(world
+            .apply_fields_by_target(
+                [(first, inputs.as_slice()), (first, inputs.as_slice())],
+                Seconds(1.0 / 60.0),
+            )
+            .is_err());
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        assert_eq!(world.linear_velocity(first).unwrap(), [0.0, 0.0, 0.0]);
+
+        let mut foreign_world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let foreign = foreign_world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        assert!(world
+            .apply_fields_by_target(
+                [(second, inputs.as_slice()), (foreign, inputs.as_slice())],
+                Seconds(1.0 / 60.0),
+            )
+            .is_err());
+        assert_eq!(world.linear_velocity(second).unwrap(), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn scene_physics_targeted_fields_reuse_prepared_storage_and_validate_empty_legacy_calls() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let initial_capacity = world.field_scratch.capacity();
+        let mut bodies = Vec::new();
+        for index in 0..20 {
+            bodies.push(
+                world
+                    .add_hull(
+                        &cube(0.5),
+                        BodyConfig {
+                            position: [index as f32 * 2.0, 3.0, 0.0],
+                            ..BodyConfig::default()
+                        },
+                    )
+                    .unwrap(),
+            );
+        }
+        assert!(bodies.len() > initial_capacity);
+        let prepared_capacity = world.field_scratch.capacity();
+        let seen_capacity = world.field_seen.capacity();
+        let targets = bodies.iter().copied().map(|body| (body, &[][..]));
+        world
+            .apply_fields_by_target(targets, Seconds(1.0 / 60.0))
+            .unwrap();
+        assert_eq!(world.field_scratch.capacity(), prepared_capacity);
+        assert_eq!(world.field_seen.capacity(), seen_capacity);
+        let valid_field = UniformField::new([1.0, 0.0, 0.0]).unwrap();
+        assert!(world
+            .apply_fields(&[], &[FieldInput {
+                field: &valid_field,
+                acceleration: f32::NAN,
+                delta_velocity: 0.0,
+            }], Seconds(1.0 / 60.0))
+            .is_err());
     }
 
     #[test]

@@ -4,12 +4,81 @@ use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{BODY_PORTS, MAX_COPIES, POSE_PORTS, RigidSimulation};
 use crate::node_graph::primitive::Primitive;
+use manifold_physics::FieldValue;
 use std::borrow::Cow;
 
 const ZERO_INSTANCE: InstanceTransform = InstanceTransform {
     pos_scale: [0.0; 4],
     rot_pad: [0.0; 4],
 };
+
+const TARGETED_ACCELERATION_PORTS: [&str; 65] = [
+    "body_acceleration_0",
+    "body_acceleration_1",
+    "body_acceleration_2",
+    "body_acceleration_3",
+    "body_acceleration_4",
+    "body_acceleration_5",
+    "body_acceleration_6",
+    "body_acceleration_7",
+    "body_acceleration_8",
+    "body_acceleration_9",
+    "body_acceleration_10",
+    "body_acceleration_11",
+    "body_acceleration_12",
+    "body_acceleration_13",
+    "body_acceleration_14",
+    "body_acceleration_15",
+    "body_acceleration_16",
+    "body_acceleration_17",
+    "body_acceleration_18",
+    "body_acceleration_19",
+    "body_acceleration_20",
+    "body_acceleration_21",
+    "body_acceleration_22",
+    "body_acceleration_23",
+    "body_acceleration_24",
+    "body_acceleration_25",
+    "body_acceleration_26",
+    "body_acceleration_27",
+    "body_acceleration_28",
+    "body_acceleration_29",
+    "body_acceleration_30",
+    "body_acceleration_31",
+    "body_acceleration_32",
+    "body_acceleration_33",
+    "body_acceleration_34",
+    "body_acceleration_35",
+    "body_acceleration_36",
+    "body_acceleration_37",
+    "body_acceleration_38",
+    "body_acceleration_39",
+    "body_acceleration_40",
+    "body_acceleration_41",
+    "body_acceleration_42",
+    "body_acceleration_43",
+    "body_acceleration_44",
+    "body_acceleration_45",
+    "body_acceleration_46",
+    "body_acceleration_47",
+    "body_acceleration_48",
+    "body_acceleration_49",
+    "body_acceleration_50",
+    "body_acceleration_51",
+    "body_acceleration_52",
+    "body_acceleration_53",
+    "body_acceleration_54",
+    "body_acceleration_55",
+    "body_acceleration_56",
+    "body_acceleration_57",
+    "body_acceleration_58",
+    "body_acceleration_59",
+    "body_acceleration_60",
+    "body_acceleration_61",
+    "body_acceleration_62",
+    "body_acceleration_63",
+    "copies_acceleration",
+];
 
 fn read_copy_layout(ctx: &EffectNodeContext<'_, '_>) -> f32 {
     let wired = ctx
@@ -135,6 +204,71 @@ copies: RigidBody optional,
 gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional,
 copy_count: ScalarF32 optional, copy_spacing: ScalarF32 optional, copy_columns: ScalarF32 optional, copy_layout: ScalarF32 optional,
 acceleration_field: VectorField optional,
+body_acceleration_0: VectorField optional,
+body_acceleration_1: VectorField optional,
+body_acceleration_2: VectorField optional,
+body_acceleration_3: VectorField optional,
+body_acceleration_4: VectorField optional,
+body_acceleration_5: VectorField optional,
+body_acceleration_6: VectorField optional,
+body_acceleration_7: VectorField optional,
+body_acceleration_8: VectorField optional,
+body_acceleration_9: VectorField optional,
+body_acceleration_10: VectorField optional,
+body_acceleration_11: VectorField optional,
+body_acceleration_12: VectorField optional,
+body_acceleration_13: VectorField optional,
+body_acceleration_14: VectorField optional,
+body_acceleration_15: VectorField optional,
+body_acceleration_16: VectorField optional,
+body_acceleration_17: VectorField optional,
+body_acceleration_18: VectorField optional,
+body_acceleration_19: VectorField optional,
+body_acceleration_20: VectorField optional,
+body_acceleration_21: VectorField optional,
+body_acceleration_22: VectorField optional,
+body_acceleration_23: VectorField optional,
+body_acceleration_24: VectorField optional,
+body_acceleration_25: VectorField optional,
+body_acceleration_26: VectorField optional,
+body_acceleration_27: VectorField optional,
+body_acceleration_28: VectorField optional,
+body_acceleration_29: VectorField optional,
+body_acceleration_30: VectorField optional,
+body_acceleration_31: VectorField optional,
+body_acceleration_32: VectorField optional,
+body_acceleration_33: VectorField optional,
+body_acceleration_34: VectorField optional,
+body_acceleration_35: VectorField optional,
+body_acceleration_36: VectorField optional,
+body_acceleration_37: VectorField optional,
+body_acceleration_38: VectorField optional,
+body_acceleration_39: VectorField optional,
+body_acceleration_40: VectorField optional,
+body_acceleration_41: VectorField optional,
+body_acceleration_42: VectorField optional,
+body_acceleration_43: VectorField optional,
+body_acceleration_44: VectorField optional,
+body_acceleration_45: VectorField optional,
+body_acceleration_46: VectorField optional,
+body_acceleration_47: VectorField optional,
+body_acceleration_48: VectorField optional,
+body_acceleration_49: VectorField optional,
+body_acceleration_50: VectorField optional,
+body_acceleration_51: VectorField optional,
+body_acceleration_52: VectorField optional,
+body_acceleration_53: VectorField optional,
+body_acceleration_54: VectorField optional,
+body_acceleration_55: VectorField optional,
+body_acceleration_56: VectorField optional,
+body_acceleration_57: VectorField optional,
+body_acceleration_58: VectorField optional,
+body_acceleration_59: VectorField optional,
+body_acceleration_60: VectorField optional,
+body_acceleration_61: VectorField optional,
+body_acceleration_62: VectorField optional,
+body_acceleration_63: VectorField optional,
+copies_acceleration: VectorField optional,
  },
  outputs: {
 pose_0: Transform,
@@ -217,14 +351,18 @@ ParamDef { name: Cow::Borrowed("copy_columns"), label: "Copy Columns", ty: Param
 ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Grid", "Pile"] },
  ],
  depth_rule: Terminal,
- composition_notes: "Connect body_N to its matching pose_N consumer. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Preview batches use the project frame interval as a CPU work budget and retain all unprocessed ticks. Preview may lag under overload; the Physics Lag HUD shows remaining work. Export/offline renders process every pending tick. Both paths use identical fixed steps. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
+ composition_notes: "Connect body_N to its matching pose_N consumer and body_acceleration_N to that body's optional acceleration field. The global acceleration_field is added to every body, then the matching targeted field is added to body_N; copies_acceleration is added to every reset-latched copy. A targeted field without its matching body or copies prototype is an error and holds outputs pending. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Preview batches use the project frame interval as a CPU work budget and retain all unprocessed ticks. Preview may lag under overload; the Physics Lag HUD shows remaining work. Export/offline renders process every pending tick. Both paths use identical fixed steps. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Physics World", category: Atom },
- summary: "Simulate colliding objects together under gravity and an optional continuous acceleration field, with speed and reset controls.",
+ summary: "Simulate colliding objects together under gravity, global and per-body acceleration fields, with speed and reset controls.",
  category: Geometry3D, role: Filter,
  aliases: ["physics", "box3d", "rigid simulation"],
  boundary_reason: NonGpu,
- extra_fields: { simulation: RigidSimulation = RigidSimulation::default(), upload: InstanceUploadState = InstanceUploadState::default(), },
+ extra_fields: {
+     simulation: RigidSimulation = RigidSimulation::default(),
+     upload: InstanceUploadState = InstanceUploadState::default(),
+     targeted_acceleration_fields: Vec<Option<FieldValue>> = vec![None; TARGETED_ACCELERATION_PORTS.len()],
+ },
 }
 impl PhysicsWorldNode {
     /// CPU pose upload is an IO boundary, so the atom codegen sweep cannot warm it.
@@ -245,6 +383,7 @@ impl Primitive for PhysicsWorldNode {
 
     fn clear_state(&mut self) {
         self.simulation = RigidSimulation::default();
+        self.targeted_acceleration_fields.fill(None);
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let mut bodies = std::array::from_fn(|_| None);
@@ -265,6 +404,33 @@ impl Primitive for PhysicsWorldNode {
             body_inputs_pending |=
                 !ctx.inputs.slot_content_ready(slot) || acceleration_field.is_none();
         }
+        for (index, port) in TARGETED_ACCELERATION_PORTS.iter().enumerate() {
+            self.targeted_acceleration_fields[index] = None;
+            let matching_body_wired = if index < BODY_PORTS.len() {
+                ctx.inputs.slot(BODY_PORTS[index]).is_some()
+            } else {
+                ctx.inputs.slot("copies").is_some()
+            };
+            let Some(slot) = ctx.inputs.slot(port) else {
+                continue;
+            };
+            if !matching_body_wired {
+                ctx.error(format!(
+                    "Physics World `{port}` requires its matching body input to be wired"
+                ));
+                body_inputs_pending = true;
+                continue;
+            }
+            if !ctx.inputs.slot_content_ready(slot) {
+                body_inputs_pending = true;
+                continue;
+            }
+            let Some(field) = ctx.inputs.vector_field(port) else {
+                body_inputs_pending = true;
+                continue;
+            };
+            self.targeted_acceleration_fields[index] = Some(field);
+        }
         if body_inputs_pending {
             self.simulation.hold_pending(ctx.time.seconds);
             ctx.mark_outputs_pending();
@@ -281,7 +447,7 @@ impl Primitive for PhysicsWorldNode {
         let copy_spacing = ctx.scalar_or_param("copy_spacing", 1.25);
         let copy_columns = ctx.scalar_or_param("copy_columns", 16.0);
         let copy_layout = read_copy_layout(ctx);
-        let result = self.simulation.advance_with_fields(
+        let result = self.simulation.advance_with_targeted_fields(
             bodies.clone(),
             prototype,
             copy_count,
@@ -293,6 +459,7 @@ impl Primitive for PhysicsWorldNode {
             speed,
             reset,
             acceleration_field,
+            &self.targeted_acceleration_fields,
         );
         if crate::node_graph::physics::authored_sample_only() {
             if let Err(error) = result {
@@ -351,6 +518,44 @@ impl Primitive for PhysicsWorldNode {
         if let Err(error) = result {
             ctx.error(error.to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::ports::PortType;
+    use crate::node_graph::primitive::PrimitiveSpec;
+
+    #[test]
+    fn targeted_acceleration_ports_pair_with_all_body_slots_and_copies() {
+        let node = PhysicsWorldNode::new();
+        assert_eq!(TARGETED_ACCELERATION_PORTS.len(), BODY_PORTS.len() + 1);
+        assert_eq!(
+            node.targeted_acceleration_fields.len(),
+            TARGETED_ACCELERATION_PORTS.len()
+        );
+        for port in TARGETED_ACCELERATION_PORTS {
+            let descriptor = PhysicsWorldNode::INPUTS
+                .iter()
+                .find(|candidate| candidate.name == port)
+                .unwrap_or_else(|| panic!("missing input descriptor for {port}"));
+            assert_eq!(descriptor.ty, PortType::VectorField);
+            assert!(!descriptor.required);
+        }
+    }
+
+    #[test]
+    fn clear_state_drops_retained_targeted_fields() {
+        let mut node = PhysicsWorldNode::new();
+        node.targeted_acceleration_fields[0] =
+            Some(FieldValue::uniform([1.0, 2.0, 3.0]).expect("finite test field"));
+        node.clear_state();
+        assert!(
+            node.targeted_acceleration_fields
+                .iter()
+                .all(Option::is_none)
+        );
     }
 }
 
