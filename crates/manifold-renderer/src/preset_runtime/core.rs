@@ -76,6 +76,7 @@ pub struct PresetRuntime {
     pub plan: ExecutionPlan,
     /// Plan-aligned physics input ancestry, built once with the graph.
     pub(super) physics_sample_steps: Option<Vec<bool>>,
+    pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
     pub(super) last_physics_frame_time: Option<FrameTime>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
@@ -1303,10 +1304,14 @@ impl PresetRuntime {
                 return None;
             }
         };
+        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
+            super::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
+        });
         let mut runtime = Self {
             graph,
             plan,
             physics_sample_steps,
+            physics_input_snapshot,
             last_physics_frame_time: None,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
@@ -1839,6 +1844,7 @@ impl PresetRuntime {
         // The `with_gpu` variant passes `state: None, owner_key: 0`,
         // which makes those primitives panic.
         self.refresh_plan_if_forced_outputs_changed();
+        self.sample_physics_history(frame_time);
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -1847,6 +1853,7 @@ impl PresetRuntime {
             &mut self.state_store,
             ctx.owner_key,
         );
+        self.last_physics_frame_time = Some(frame_time);
 
         // The chain output is in the slot pre-bound to the last
         // effect's output resource.
@@ -2027,7 +2034,7 @@ impl PresetRuntime {
             return;
         }
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(time, None);
+        self.sample_physics_history(time);
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
         self.last_physics_frame_time = Some(time);
@@ -2109,7 +2116,7 @@ impl PresetRuntime {
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(frame_time, Some(frame_context));
+        self.sample_physics_history(frame_time);
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,

@@ -1,6 +1,69 @@
 //! CPU ancestry sampling for native rigid-body and fluid simulation inputs.
 
 use super::*;
+use crate::node_graph::ParamValues;
+
+#[cfg(test)]
+#[path = "physics_sampling_inputs_tests.rs"]
+mod input_tests;
+
+/// The last observed external inputs to the stateless physics ancestry. Keys
+/// and storage are prepared with the graph; capturing another frame only
+/// replaces values (String/Table values retain their existing Arc storage).
+pub(super) struct PhysicsInputSnapshot {
+    values: Vec<Option<ParamValues>>,
+    clock_steps: Vec<usize>,
+}
+
+impl PhysicsInputSnapshot {
+    pub(super) fn prepare(graph: &Graph, plan: &ExecutionPlan, steps: &[bool]) -> Self {
+        assert_eq!(steps.len(), plan.steps().len());
+        let mut clock_steps = Vec::new();
+        let values = plan
+            .steps()
+            .iter()
+            .zip(steps)
+            .enumerate()
+            .map(|(index, (step, &sampled))| {
+                if !sampled {
+                    return None;
+                }
+                let node = graph.get_node(step.node).expect("compiled physics node exists");
+                if node.node.type_id().as_str() == GENERATOR_INPUT_TYPE_ID {
+                    clock_steps.push(index);
+                }
+                Some(node.params.clone())
+            })
+            .collect();
+        Self { values, clock_steps }
+    }
+
+    fn capture(&mut self, graph: &Graph, plan: &ExecutionPlan) {
+        for (step, values) in plan.steps().iter().zip(&mut self.values) {
+            let Some(values) = values else { continue };
+            let node = graph.get_node(step.node).expect("compiled physics node exists");
+            assert_eq!(
+                values.len(), node.params.len(),
+                "physics parameter shape requires rebuild"
+            );
+            for (name, value) in values {
+                value.clone_from(
+                    node.params.get(name.as_ref()).expect("prepared physics parameter exists"),
+                );
+            }
+        }
+    }
+
+    fn set_sample_time(&mut self, time: FrameTime) {
+        for &index in &self.clock_steps {
+            let params = self.values[index].as_mut().expect("sampled clock has inputs");
+            *params.get_mut("time").expect("generator input has time") =
+                ParamValue::Float(time.seconds.0 as f32);
+            *params.get_mut("beat").expect("generator input has beat") =
+                ParamValue::Float(time.beats.0 as f32);
+        }
+    }
+}
 
 /// The retained CPU ancestry of every physics world. Historical sampling
 /// evaluates this closure only; GPU nodes and stateful upstream nodes cannot
@@ -83,30 +146,31 @@ pub(super) fn physics_sample_steps(
 }
 
 impl PresetRuntime {
-    /// Re-evaluate only stateless CPU producers feeding Physics World at a
-    /// stable 240 Hz wall-clock grid. Four authored samples per solver tick
-    /// preserve supported nonlinear LFO/beat motion independently of render
-    /// frame partitioning, including when preview still owes native ticks.
-    pub(super) fn sample_physics_history(
-        &mut self,
-        current: FrameTime,
-        frame_context: Option<FrameContextInputs>,
-    ) {
-        let (Some(previous), Some(_)) = (
-            self.last_physics_frame_time,
+    /// Sample stateless authored motion on the existing 240 Hz grid, holding
+    /// external parameters at their last observed values. Today's parameters
+    /// must not be substituted into an earlier tick. The final left-limit
+    /// sample closes the old interval before the full frame applies edits at
+    /// the same timestamp; InputHistory preserves that discontinuity.
+    pub(super) fn sample_physics_history(&mut self, current: FrameTime) {
+        let (Some(inputs), Some(steps)) = (
+            self.physics_input_snapshot.as_mut(),
             self.physics_sample_steps.as_ref(),
         ) else {
             return;
         };
+        let Some(previous) = self.last_physics_frame_time else {
+            inputs.capture(&self.graph, &self.plan);
+            return;
+        };
         let gap = current.seconds.0 - previous.seconds.0;
-        if gap <= 0.0 {
+        if !gap.is_finite() || gap <= 0.0 {
+            inputs.capture(&self.graph, &self.plan);
             return;
         }
         const SAMPLE_RATE: f64 = 240.0;
         let mut grid = (previous.seconds.0 * SAMPLE_RATE).floor() + 1.0;
         let mut last_time = previous.seconds.0;
-        let _scope = crate::node_graph::physics::PhysicsAuthoredSampleScope::new();
-        while grid / SAMPLE_RATE < current.seconds.0 - 1.0e-9 {
+        while grid / SAMPLE_RATE < current.seconds.0 {
             let time = grid / SAMPLE_RATE;
             let alpha = (time - previous.seconds.0) / gap;
             let beat = previous.beats.0 + (current.beats.0 - previous.beats.0) * alpha;
@@ -116,25 +180,30 @@ impl PresetRuntime {
                 delta: Seconds(time - last_time),
                 frame_count: current.frame_count,
             };
-            if let Some(context) = frame_context {
-                self.set_frame_context(FrameContextInputs {
-                    time: time as f32,
-                    beat: beat as f32,
-                    ..context
-                });
-            }
+            inputs.set_sample_time(sample);
             self.executor.execute_physics_sample_frame(
                 &mut self.graph,
                 &self.plan,
                 sample,
-                self.physics_sample_steps.as_ref().expect("checked above"),
+                steps,
+                &inputs.values,
             );
             last_time = time;
             grid += 1.0;
         }
-        if let Some(context) = frame_context {
-            self.set_frame_context(context);
-        }
+        let closing = FrameTime {
+            delta: Seconds(current.seconds.0 - last_time),
+            ..current
+        };
+        inputs.set_sample_time(closing);
+        self.executor.execute_physics_sample_frame(
+            &mut self.graph,
+            &self.plan,
+            closing,
+            steps,
+            &inputs.values,
+        );
+        inputs.capture(&self.graph, &self.plan);
     }
 }
 

@@ -610,10 +610,14 @@ impl PresetRuntime {
         let seeded_forced_epoch = graph.forced_outputs_epoch();
         let physics_sample_steps = super::core::physics_sample_steps(&graph, &plan)
             .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
+        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
+            super::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
+        });
         let mut g = Self {
             graph,
             plan,
             physics_sample_steps,
+            physics_input_snapshot,
             last_physics_frame_time: None,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,

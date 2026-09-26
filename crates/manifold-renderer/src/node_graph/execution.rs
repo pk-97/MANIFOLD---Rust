@@ -19,7 +19,7 @@ use crate::layer_skin::LayerSkinRegistry;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::content_revision::{ContentVersion, StorageRevision};
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
+use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId, ParamValues};
 use crate::node_graph::execution_plan::{CompiledMeshRevisionRule, ExecutionPlan, ExecutionStep, ResourceId};
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevision};
 use crate::node_graph::graph::Graph;
@@ -83,6 +83,12 @@ pub(crate) fn resolve_dims(
 /// entry: `(input resource, watched aspect, value seen at the output's
 /// last commit)`.
 type MeshDepSnapshot = (ResourceId, crate::node_graph::mesh_change::MeshAspect, u64);
+
+#[derive(Clone, Copy)]
+struct PhysicsSample<'a> {
+    steps: &'a [bool],
+    params: &'a [Option<ParamValues>],
+}
 
 pub struct Executor {
     backend: Box<dyn Backend>,
@@ -871,7 +877,8 @@ impl Executor {
     /// not provide a GPU encoder or state store, does not run late captures,
     /// and leaves acquired resources bound for the following full frame.
     ///
-    /// `sample_steps` is indexed exactly like [`ExecutionPlan::steps`]. The
+    /// `sample_steps` and `sample_params` slices are indexed exactly like
+    /// [`ExecutionPlan::steps`]. The
     /// caller owns ancestry analysis because physics sampling must follow the
     /// graph's scalar/transform inputs without making the executor infer a
     /// second liveness policy.
@@ -881,14 +888,38 @@ impl Executor {
         plan: &ExecutionPlan,
         time: FrameTime,
         sample_steps: &[bool],
+        sample_params: &[Option<ParamValues>],
     ) {
         assert_eq!(
             sample_steps.len(),
             plan.steps().len(),
             "physics sample mask must align with execution plan steps",
         );
+        assert_eq!(
+            sample_params.len(),
+            plan.steps().len(),
+            "physics sample params must align with execution plan steps",
+        );
+        assert!(
+            sample_steps
+                .iter()
+                .zip(sample_params)
+                .all(|(&selected, params)| !selected || params.is_some()),
+            "physics sample params must be present for every selected step",
+        );
         let _scope = PhysicsAuthoredSampleScope::new();
-        self.execute_frame_inner(graph, plan, time, None, None, 0, Some(sample_steps));
+        self.execute_frame_inner(
+            graph,
+            plan,
+            time,
+            None,
+            None,
+            0,
+            Some(PhysicsSample {
+                steps: sample_steps,
+                params: sample_params,
+            }),
+        );
     }
 
     /// Build the per-frame live-step bitset that drives mux short-
@@ -1266,13 +1297,13 @@ impl Executor {
         mut gpu: Option<&mut GpuEncoder<'_>>,
         mut state: Option<&mut StateStore>,
         owner_key: OwnerKey,
-        sample_steps: Option<&[bool]>,
+        sample: Option<PhysicsSample<'_>>,
     ) {
-        let partial_sample = sample_steps.is_some();
-        if let Some(sample_steps) = sample_steps {
-            assert_eq!(sample_steps.len(), plan.steps().len());
+        let partial_sample = sample.is_some();
+        if let Some(sample) = sample {
+            debug_assert_eq!(sample.steps.len(), plan.steps().len());
             self.live_steps.clear();
-            self.live_steps.extend_from_slice(sample_steps);
+            self.live_steps.extend_from_slice(sample.steps);
         } else {
             self.compute_live_steps(graph, plan);
         }
@@ -1883,9 +1914,16 @@ impl Executor {
                         // graph editor and the chain validator catches
                         // missing wires at preset-load instead of at
                         // runtime via a sub-rect render bug.
+                        let context_params = sample
+                            .map(|sample| {
+                                sample.params[idx]
+                                    .as_ref()
+                                    .expect("selected physics sample step must have retained params")
+                            })
+                            .unwrap_or(&inst.params);
                         let mut ctx = EffectNodeContext::with_state(
                             time,
-                            &inst.params,
+                            context_params,
                             inputs,
                             outputs,
                             gpu.as_deref_mut(),
@@ -2445,17 +2483,22 @@ impl Default for Executor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::sync::{Arc, Mutex};
 
     use manifold_core::{Beats, Seconds};
 
     use crate::node_graph::EffectNode;
     use crate::node_graph::compile;
-    use crate::node_graph::effect_node::EffectNodeType;
+    use crate::node_graph::effect_node::{EffectNodeType, ParamValues};
     use crate::node_graph::parameters::ParamDef;
     use crate::node_graph::ports::{
         NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
     };
+
+    thread_local! {
+        static PHYSICS_SAMPLE_SCALAR_VALUES: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+    }
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -3485,9 +3528,10 @@ mod tests {
         let plan = compile(&g).unwrap();
         assert_eq!(plan.steps().len(), 2);
         let mask: Vec<bool> = plan.steps().iter().map(|step| step.node == first).collect();
+        let params = vec![Some(ParamValues::default()); plan.steps().len()];
 
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask);
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
         assert_eq!(*first_evals.lock().unwrap(), 1);
         assert_eq!(*second_evals.lock().unwrap(), 0);
 
@@ -3505,7 +3549,118 @@ mod tests {
         g.add_node(Box::new(PureCountingNode::new(false, Arc::new(Mutex::new(0)))));
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[]);
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[], &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "physics sample params must align")]
+    fn physics_sample_rejects_misaligned_params() {
+        let mut g = Graph::new();
+        g.add_node(Box::new(crate::node_graph::primitives::Value::new()));
+        let plan = compile(&g).unwrap();
+        let mask = vec![true; plan.steps().len()];
+        let mut exec = Executor::with_mock();
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &[]);
+    }
+
+    #[test]
+    fn physics_sample_rejects_selected_missing_params() {
+        let mut g = Graph::new();
+        g.add_node(Box::new(crate::node_graph::primitives::Value::new()));
+        let plan = compile(&g).unwrap();
+        let mask = vec![true; plan.steps().len()];
+        let params = vec![None; plan.steps().len()];
+        let mut exec = Executor::with_mock();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
+        }));
+        assert!(result.is_err());
+        assert_eq!(exec.backend().slot_count(), 0, "validation must precede resource acquisition");
+    }
+
+    #[test]
+    fn physics_sample_uses_retained_params_without_mutating_live_graph() {
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::primitives::Value;
+
+        struct ScalarSink {
+            type_id: EffectNodeType,
+        }
+
+        impl EffectNode for ScalarSink {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                crate::node_graph::depth_rule::DepthRule::Terminal
+            }
+
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+
+            fn inputs(&self) -> &[NodeInput] {
+                static INPUTS: [NodeInput; 1] = [NodePort {
+                    name: std::borrow::Cow::Borrowed("in"),
+                    ty: PortType::Scalar(ScalarType::F32),
+                    kind: PortKind::Input,
+                    required: true,
+                }];
+                &INPUTS
+            }
+
+            fn outputs(&self) -> &[NodeOutput] {
+                &[]
+            }
+
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+
+            fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+                if let Some(ParamValue::Float(value)) = ctx.inputs.scalar("in") {
+                    PHYSICS_SAMPLE_SCALAR_VALUES.with(|values| values.borrow_mut().push(value));
+                }
+            }
+        }
+
+        PHYSICS_SAMPLE_SCALAR_VALUES.with(|values| values.borrow_mut().clear());
+        let mut g = Graph::new();
+        let value = g.add_node(Box::new(Value::new()));
+        let sink = g.add_node(Box::new(ScalarSink {
+            type_id: EffectNodeType::new("test.physics_sample_scalar_sink"),
+        }));
+        g.set_param(value, "value", ParamValue::Float(2.5)).unwrap();
+        g.connect((value, "out"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let live_params = g.get_node(value).unwrap().params.clone();
+        let live_epoch = g.get_node(value).unwrap().param_epoch;
+        let mut retained = live_params.clone();
+        retained.insert(
+            std::borrow::Cow::Borrowed("value"),
+            ParamValue::Float(1.25),
+        );
+        let sample_params: Vec<_> = plan
+            .steps()
+            .iter()
+            .map(|step| {
+                if step.node == value {
+                    Some(retained.clone())
+                } else {
+                    Some(ParamValues::default())
+                }
+            })
+            .collect();
+        let mask = vec![true; plan.steps().len()];
+
+        let mut exec = Executor::with_mock();
+        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &sample_params);
+        let sampled = PHYSICS_SAMPLE_SCALAR_VALUES.with(|values| values.borrow().clone());
+        assert_eq!(sampled.as_slice(), &[1.25]);
+        assert_eq!(g.get_node(value).unwrap().params, live_params);
+        assert_eq!(g.get_node(value).unwrap().param_epoch, live_epoch);
+
+        exec.execute_frame(&mut g, &plan, frame_time());
+        let values = PHYSICS_SAMPLE_SCALAR_VALUES.with(|values| values.borrow().clone());
+        assert_eq!(values.as_slice(), &[1.25, 2.5]);
     }
 
     // ─── Memoized-dataflow (constant-subgraph hoisting) ───
