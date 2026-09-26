@@ -2065,7 +2065,8 @@ mod automation_clipboard_host_tests {
         }).collect::<Vec<_>>();
         h.ui_root.inspector.configure_master_effects(&surfaces(&h.project.settings.master_effects));
         h.ui_root.inspector.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
-        assert!(h.ui_root.inspector.select_all_effects());
+        let ids = h.project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>();
+        h.ui_root.inspector.select_effect_ids(InspectorTab::Master, &ids);
         assert!(h.host().handle_effect_copy());
         let before = serde_json::to_vec(&h.project.settings).unwrap();
         assert!(h.host().handle_effect_paste());
@@ -2276,7 +2277,7 @@ mod automation_clipboard_host_tests {
             enabled: true, collapsed: false, supports_envelopes: true, has_graph_mod: false,
             layer_id: None, relight: Default::default(),
         };
-        h.ui_root.inspector.configure_modifier_cards(&[surface.clone()], Some(&layer_id), true, Vec::new());
+        h.ui_root.inspector.configure_modifier_cards(std::slice::from_ref(&surface), Some(&layer_id), true, Vec::new());
         assert!(h.ui_root.inspector.select_all_modifiers());
         let before = serde_json::to_vec(&h.project).expect("project serializes");
         let mut input = crate::input_handler::InputHandler::new();

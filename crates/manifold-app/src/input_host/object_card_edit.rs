@@ -57,7 +57,7 @@ impl AppInputHost<'_> {
                 };
                 ContentCommand::send(self.content_tx, ContentCommand::ObjectModifier(
                     ObjectModifierAction::Paste {
-                        layer_id, owner_id, after: selected.map(|address| address.node_doc_id), clipboard,
+                        layer_id, owner_id, after: selected.map(|address| address.node_doc_id), clipboard: Box::new(clipboard),
                     },
                 ));
             }

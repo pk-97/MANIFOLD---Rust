@@ -107,7 +107,7 @@ pub(crate) enum ObjectModifierAction {
         layer_id: LayerId,
         owner_id: u32,
         after: Option<u32>,
-        clipboard: ObjectModifierClipboard,
+        clipboard: Box<ObjectModifierClipboard>,
     },
     Duplicate {
         layer_id: LayerId,
@@ -116,10 +116,12 @@ pub(crate) enum ObjectModifierAction {
     },
 }
 
-fn owner_level<'a>(
-    graph: &'a EffectGraphDef,
+type ObjectModifierLevel<'a> = (Vec<u32>, &'a [EffectGraphNode], &'a [EffectGraphWire]);
+
+fn owner_level(
+    graph: &EffectGraphDef,
     owner_id: u32,
-) -> Result<(Vec<u32>, &'a [EffectGraphNode], &'a [EffectGraphWire]), String> {
+) -> Result<ObjectModifierLevel<'_>, String> {
     let owner = graph
         .nodes
         .iter()
@@ -639,7 +641,7 @@ pub(crate) fn build_action(
             layer_id,
             owner_id,
             after,
-            clipboard,
+            *clipboard,
             "Paste Object Modifier",
         ),
         ObjectModifierAction::Duplicate {
@@ -949,7 +951,7 @@ mod tests {
                 layer_id: destination_layer.clone(),
                 owner_id: destination_owner,
                 after: None,
-                clipboard,
+                clipboard: Box::new(clipboard),
             },
         )
         .unwrap();
@@ -1040,7 +1042,7 @@ mod tests {
                     layer_id,
                     owner_id,
                     after: None,
-                    clipboard,
+                    clipboard: Box::new(clipboard),
                 },
             )
             .unwrap_err()
