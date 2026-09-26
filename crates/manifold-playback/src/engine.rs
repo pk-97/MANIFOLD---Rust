@@ -16,6 +16,10 @@ use crate::session_state::SessionRuntime;
 use ahash::{AHashMap, AHashSet};
 use std::collections::HashMap;
 
+pub mod trigger_delivery;
+
+use trigger_delivery::{TriggerDeliveryFailure, TriggerDeliveryQueue};
+
 // ─── Playback notification trait ───
 
 /// Callback interface for playback events that affect the compositor/UI.
@@ -208,12 +212,12 @@ pub struct PlaybackEngine {
     sync_heal_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
     modulation_timing_scratch: Vec<(Beats, Beats)>,
-    /// section 8 param triggers: which instances' own `audio_trigger` config fired
-    /// this tick, from the most recent `evaluate_modulation` call. Drained by
-    /// [`Self::take_trigger_pulses`] each tick (P2 plumbs this into the
-    /// renderer's per-layer `audio_count`); reused as scratch between ticks to
-    /// avoid a per-tick allocation.
-    pending_trigger_pulses: Vec<crate::modulation::TriggerPulse>,
+    /// section 8 param triggers: reusable scratch for the most recent
+    /// `evaluate_modulation` call. Captured pulses move into
+    /// `trigger_delivery` immediately after evaluation and remain there until
+    /// the renderer consumes them.
+    modulation_trigger_scratch: Vec<crate::modulation::TriggerPulse>,
+    trigger_delivery: TriggerDeliveryQueue,
     /// PARAM_STEP_ACTIONS D5: last clip identity started on each layer
     /// (`timeline.layers` index → `ClipId`), the engine-side mirror of what
     /// `GeneratorRenderer::acquire_clip` tracks downstream per `LayerId`
@@ -229,7 +233,7 @@ pub struct PlaybackEngine {
     /// `evaluate_modulation` call — may span more than one `sync_clips_to_time`
     /// call (e.g. `play()`'s direct sync followed by the next tick's own sync)
     /// because it is only drained (never cleared) at tick's end, mirroring
-    /// `pending_trigger_pulses`'/`take_trigger_pulses`'s drain-queue shape so
+    /// the modulation scratch's drain-queue shape so
     /// an edge produced by an out-of-tick sync is never silently lost before
     /// modulation gets to see it. Zero per-frame allocation: capacity
     /// survives the clear-and-reassign at the end of `tick_playing`/
@@ -348,7 +352,10 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             sync_heal_scratch: Vec::with_capacity(2),
             modulation_timing_scratch: Vec::with_capacity(64),
-            pending_trigger_pulses: Vec::new(),
+            modulation_trigger_scratch: Vec::with_capacity(
+                trigger_delivery::DEFAULT_TRIGGER_DELIVERY_CAPACITY,
+            ),
+            trigger_delivery: TriggerDeliveryQueue::new(),
             last_active_clip_id: AHashMap::with_capacity(32),
             clip_edge_layers: Vec::with_capacity(8),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
@@ -538,6 +545,7 @@ impl PlaybackEngine {
 
     pub fn initialize(&mut self, mut project: Project) {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
+        self.reset_trigger_delivery();
         // A project boundary invalidates every runtime-only preview. Restore
         // any preview-owned bases on the old project before it is replaced.
         self.clear_automation_previews();
@@ -604,6 +612,7 @@ impl PlaybackEngine {
     }
 
     pub fn shutdown(&mut self) {
+        self.reset_trigger_delivery();
         self.clear_automation_previews();
         self.stop_all_clips();
         self.project = None;
@@ -640,6 +649,7 @@ impl PlaybackEngine {
 
     pub fn stop(&mut self) {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
+        self.reset_trigger_delivery();
         self.queue_finished_automation();
         self.current_state = PlaybackState::Stopped;
         self.stop_all_clips();
@@ -775,6 +785,7 @@ impl PlaybackEngine {
 
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
+        self.reset_trigger_delivery();
         self.queue_finished_automation();
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
@@ -888,12 +899,52 @@ impl PlaybackEngine {
         result
     }
 
-    /// section 8 param triggers: drain this tick's fired `audio_trigger` pulses
-    /// (P1's evaluator output) for the caller to fold into the renderer's
-    /// per-layer `audio_count` (P2). Leaves the scratch Vec's capacity intact
-    /// for reuse next tick.
-    pub fn take_trigger_pulses(&mut self) -> Vec<crate::modulation::TriggerPulse> {
-        std::mem::take(&mut self.pending_trigger_pulses)
+    fn reset_trigger_delivery(&mut self) {
+        // A lifecycle boundary cancels pulses accepted under the old project /
+        // playhead. Epoch exhaustion is latched and surfaced to the caller;
+        // there is no wrapping reset that could make old captures ambiguous.
+        let _ = self.trigger_delivery.reset();
+    }
+
+    fn capture_trigger_pulses(&mut self, pulses: &mut Vec<crate::modulation::TriggerPulse>) {
+        let was_failed = self.trigger_delivery.failure().is_some();
+        if let Err(error) = self
+            .trigger_delivery
+            .append_batch(pulses, self.current_time, Beats(self.current_beat))
+        {
+            if !was_failed && let Some(log_error) = &self.log_error {
+                log_error(&format!("[PlaybackEngine] trigger delivery stopped: {error}"));
+            }
+            pulses.clear();
+        }
+    }
+
+    /// Run a renderer consumer against every retained trigger pulse exactly
+    /// once. A latched delivery failure blocks consumption so the retained
+    /// prefix remains available for diagnosis.
+    pub fn with_trigger_pulses<R>(
+        &mut self,
+        consume: impl FnOnce(
+            &[trigger_delivery::CapturedTriggerPulse],
+            &mut [Box<dyn ClipRenderer>],
+            Option<&Project>,
+        ) -> R,
+    ) -> Option<R> {
+        if self.trigger_delivery.failure().is_some() {
+            return None;
+        }
+        let result = consume(
+            self.trigger_delivery.as_slice(),
+            self.renderers.as_mut_slice(),
+            self.project.as_ref(),
+        );
+        self.trigger_delivery.clear_retaining_capacity();
+        Some(result)
+    }
+
+    /// Return a latched delivery failure, if trigger capture has stopped.
+    pub fn trigger_delivery_failure(&self) -> Option<TriggerDeliveryFailure> {
+        self.trigger_delivery.failure()
     }
 
     /// Reclaim the ready_clips buffer from a consumed TickResult.
@@ -1001,7 +1052,8 @@ impl PlaybackEngine {
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
-        let mut pulses = std::mem::take(&mut self.pending_trigger_pulses);
+        let mut pulses = std::mem::take(&mut self.modulation_trigger_scratch);
+        pulses.clear();
         // PARAM_STEP_ACTIONS D5: drain (not clear-at-top) the clip-edge queue
         // accumulated by every `sync_clips_to_time` call since the last time
         // modulation consumed it — this tick's own step 4 sync, plus any
@@ -1028,7 +1080,8 @@ impl PlaybackEngine {
             false
         };
         self.modulation_timing_scratch = timing;
-        self.pending_trigger_pulses = pulses;
+        self.capture_trigger_pulses(&mut pulses);
+        self.modulation_trigger_scratch = pulses;
         clip_edges.clear();
         self.clip_edge_layers = clip_edges;
         // Automation folds into the same compositor-dirty path modulation
@@ -1143,7 +1196,8 @@ impl PlaybackEngine {
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
-        let mut pulses = std::mem::take(&mut self.pending_trigger_pulses);
+        let mut pulses = std::mem::take(&mut self.modulation_trigger_scratch);
+        pulses.clear();
         // PARAM_STEP_ACTIONS D5: see the matching comment in `tick_playing` —
         // same drain-queue shape, so a scrub-while-stopped's own sync (step 1
         // above, when dirty) still reaches modulation this tick.
@@ -1175,7 +1229,8 @@ impl PlaybackEngine {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
         self.modulation_timing_scratch = timing;
-        self.pending_trigger_pulses = pulses;
+        self.capture_trigger_pulses(&mut pulses);
+        self.modulation_trigger_scratch = pulses;
         clip_edges.clear();
         self.clip_edge_layers = clip_edges;
 
@@ -3174,11 +3229,223 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::audio_features::{
+        AudioFeatureHop, AudioFeatureSnapshot, AudioHopBatch, AudioHopStamp, SendFeatures,
+    };
+    use manifold_core::audio_mod::{
+        AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, ParameterAudioMod,
+    };
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::TriggerFireMode;
+    use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
     use manifold_core::layer::Layer;
+    use manifold_core::params::Param;
     use manifold_core::preset_definition_registry::create_default;
     use manifold_core::project::Project;
     use manifold_core::{Beats, PresetTypeId};
+
+    fn trigger_delivery_tick(engine: &mut PlaybackEngine) {
+        let result = engine.tick(TickContext::default());
+        engine.reclaim_tick_result(result);
+    }
+
+    fn trigger_delivery_audio_snapshot(transient: f32) -> AudioFeatureSnapshot {
+        let mut snapshot = AudioFeatureSnapshot {
+            sends: vec![SendFeatures::default()],
+            ..Default::default()
+        };
+        snapshot.sends[0].bands[AudioBand::Full.index()].transients = transient;
+        snapshot
+    }
+
+    fn trigger_delivery_retained_snapshot(
+        transient: f32,
+        end_sample: u64,
+    ) -> AudioFeatureSnapshot {
+        let mut snapshot = trigger_delivery_audio_snapshot(transient);
+        let mut batch = AudioHopBatch::with_capacity(1);
+        batch.begin(23);
+        batch
+            .push(AudioFeatureHop {
+                stamp: AudioHopStamp {
+                    epoch: 23,
+                    end_sample,
+                    sample_rate: 48_000,
+                    timeline_time: None,
+                },
+                dt: Seconds(512.0 / 48_000.0),
+                features: snapshot.sends[0],
+            })
+            .unwrap();
+        snapshot.hop_batches.push(batch);
+        snapshot
+    }
+
+    fn trigger_delivery_project() -> Project {
+        let mut project = Project::default();
+        let send = AudioSend::new("TriggerDelivery");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+
+        let mut effect =
+            manifold_core::effects::PresetInstance::new(PresetTypeId::new("TriggerDeliveryFx"));
+        effect.params.push(Param::bundled(ParamSpecDef {
+            id: "fire".to_string(),
+            name: "Fire".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: true,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: true,
+            wraps: false,
+            section: None,
+            card_visible: true,
+            material_role: None,
+        }));
+        let mut modulation = ParameterAudioMod::new(
+            "fire".into(),
+            send_id,
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        modulation.trigger_mode = Some(TriggerFireMode::Transient);
+        modulation.shape = AudioModShape {
+            attack_ms: 0.0,
+            release_ms: 0.0,
+            ..Default::default()
+        };
+        effect.audio_mods_mut().push(modulation);
+        project.settings.master_effects.push(effect);
+        project
+    }
+
+    #[test]
+    fn trigger_delivery_engine_retains_evaluations_until_once_only_consume() {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(trigger_delivery_project());
+
+        *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.99, 512);
+        trigger_delivery_tick(&mut engine);
+        *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.0, 1024);
+        trigger_delivery_tick(&mut engine);
+        *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.99, 1536);
+        trigger_delivery_tick(&mut engine);
+
+        let delivered = engine
+            .with_trigger_pulses(|pulses, _, _| {
+                (
+                    pulses.len(),
+                    pulses
+                        .iter()
+                        .map(|pulse| pulse.sequence)
+                        .collect::<Vec<_>>(),
+                    pulses
+                        .iter()
+                        .map(|pulse| pulse.pulse.audio_stamp)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap();
+        assert_eq!(delivered.0, 2);
+        assert_eq!(delivered.1, [0, 1]);
+        assert_eq!(
+            delivered
+                .2
+                .iter()
+                .map(|stamp| stamp.unwrap().end_sample)
+                .collect::<Vec<_>>(),
+            [512, 1536]
+        );
+        assert_eq!(
+            engine.with_trigger_pulses(|pulses, _, _| pulses.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn trigger_delivery_pause_resume_and_clock_nudges_preserve_pending_input() {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(trigger_delivery_project());
+        engine.play();
+        *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.99, 512);
+        trigger_delivery_tick(&mut engine);
+        let captured = engine.trigger_delivery.as_slice().to_vec();
+        assert_eq!(captured.len(), 1);
+        let scratch_capacity = engine.modulation_trigger_scratch.capacity();
+        engine.pause();
+        engine.set_time(Seconds(0.1));
+        engine.set_beat(Beats(0.2));
+        trigger_delivery_tick(&mut engine);
+        assert_eq!(engine.trigger_delivery.as_slice(), captured);
+        engine.play();
+        engine.with_trigger_pulses(|pulses, _, _| assert_eq!(pulses, captured));
+        assert!(engine.trigger_delivery.as_slice().is_empty());
+        assert_eq!(engine.modulation_trigger_scratch.capacity(), scratch_capacity);
+    }
+
+    #[test]
+    fn trigger_delivery_transport_and_project_boundaries_cancel_the_old_epoch() {
+        for boundary in 0..4 {
+            let mut engine = PlaybackEngine::new(Vec::new());
+            engine.initialize(trigger_delivery_project());
+            *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.99, 512);
+            trigger_delivery_tick(&mut engine);
+            let old_epoch = engine.trigger_delivery.as_slice()[0].epoch;
+            match boundary {
+                0 => engine.stop(),
+                1 => { engine.seek_to(Seconds(0.25)); }
+                2 => engine.initialize(trigger_delivery_project()),
+                _ => engine.shutdown(),
+            }
+            assert_eq!(engine.with_trigger_pulses(|pulses, _, _| pulses.len()), Some(0));
+            if boundary == 3 {
+                engine.initialize(trigger_delivery_project());
+            }
+            *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.0, 1024);
+            trigger_delivery_tick(&mut engine);
+            *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.99, 1536);
+            trigger_delivery_tick(&mut engine);
+            let pulses = engine.trigger_delivery.as_slice();
+            assert_eq!(pulses.len(), 1, "boundary {boundary}");
+            assert!(pulses[0].epoch > old_epoch, "boundary {boundary}");
+            assert_eq!(pulses[0].sequence, 0);
+        }
+    }
+
+    #[test]
+    fn trigger_delivery_engine_blocks_overflowed_consumption_until_stop() {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(trigger_delivery_project());
+        engine.trigger_delivery = TriggerDeliveryQueue::with_capacity(1);
+        engine.reset_trigger_delivery();
+        for (transient, sample) in [(0.99, 512), (0.0, 1024), (0.99, 1536)] {
+            *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(transient, sample);
+            trigger_delivery_tick(&mut engine);
+        }
+        let failure = engine.trigger_delivery_failure().unwrap();
+        assert_eq!(failure.kind, trigger_delivery::TriggerDeliveryError::CapacityOverflow);
+        assert_eq!(engine.trigger_delivery.as_slice().len(), 1);
+        assert!(engine.modulation_trigger_scratch.is_empty());
+        assert_eq!(engine.with_trigger_pulses(|_, _, _| panic!("failed prefix consumed")), None::<()>);
+        engine.stop();
+        assert!(engine.trigger_delivery_failure().is_none());
+        for (transient, sample) in [(0.0, 2048), (0.99, 2560)] {
+            *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(transient, sample);
+            trigger_delivery_tick(&mut engine);
+        }
+        engine.with_trigger_pulses(|pulses, _, _| {
+            assert_eq!(pulses.len(), 1);
+            assert!(pulses[0].epoch > failure.epoch);
+        }).unwrap();
+    }
 
     #[test]
     fn transport_epoch_tracks_small_seeks_but_not_clock_nudges() {

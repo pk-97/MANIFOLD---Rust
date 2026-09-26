@@ -1,3 +1,5 @@
+mod trigger_targets;
+
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -1023,6 +1025,7 @@ pub struct ContentPipeline {
     /// `trigger_count`. Bumped by [`Self::apply_trigger_pulses`], read into
     /// `CompositorFrame.master_trigger_count` each frame.
     master_trigger_count: u32,
+    trigger_targets: trigger_targets::TriggerTargets,
     /// Whether the node-output preview applies its smart (semantic) encoding.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
@@ -1135,6 +1138,7 @@ impl ContentPipeline {
                 .map(|v| v != "0")
                 .unwrap_or(true),
             master_trigger_count: 0,
+            trigger_targets: Default::default(),
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
@@ -1931,10 +1935,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         Arc::clone(&self.shared_output)
     }
 
-    /// section 8 P2: fold this tick's audio-trigger fires into the renderer's
-    /// per-layer (or master) `audio_count`. `pulses` is
-    /// `PlaybackEngine::take_trigger_pulses`'s output for this tick — pure
-    /// bookkeeping, no GPU work. A `Some(layer_id)` pulse targets its modifier
+    /// Fold retained audio-trigger fires into the legacy renderer counters.
+    /// Source stamps remain available at this handoff; timed physics inputs
+    /// must resolve their fields before entering the native event queues.
+    /// This compatibility counter path does not assign simulation ticks.
+    /// A `Some(layer_id)` pulse targets its modifier
     /// when the firing owner and gate match; legacy gates bump the layer's
     /// `GeneratorRenderer` counter (a no-op if the layer's generator was
     /// deleted the same tick); `None` (D5: master/global chains have no
@@ -1943,7 +1948,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// live borrows of `self` (e.g. `self.texture_pool.as_ref()`).
     fn apply_trigger_pulses(
         master_trigger_count: &mut u32,
-        pulses: &[manifold_playback::modulation::TriggerPulse],
+        targets: &trigger_targets::TriggerTargets,
+        pulses: &[manifold_playback::engine::trigger_delivery::CapturedTriggerPulse],
         renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
     ) {
         if pulses.is_empty() {
@@ -1952,7 +1958,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut gen_renderer = renderers
             .iter_mut()
             .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>());
-        for pulse in pulses {
+        for captured in pulses {
+            let pulse = &captured.pulse;
+            if !targets.accepts(pulse) {
+                continue;
+            }
             match &pulse.layer_id {
                 Some(layer_id) => {
                     if let Some(gr) = gen_renderer.as_deref_mut() {
@@ -2173,10 +2183,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut atlas_filled_this_frame = false;
         let texture_pool = self.texture_pool.as_ref();
 
-        // section 8 P2: drain this tick's audio-trigger fires (P1's evaluator
-        // output) before the split borrow below — `take_trigger_pulses`
-        // needs `&mut engine` in full, same as `split_renderer_project`.
-        let trigger_pulses = engine.take_trigger_pulses();
+        // Consume every accepted fire before generators render. The engine
+        // retains events across skipped renders and keeps its allocated
+        // storage after consumption. A failed queue preserves its prefix;
+        // the content snapshot exposes the failure and export rejects it.
+        engine.with_trigger_pulses(|pulses, renderers, project| {
+            if let Some(first) = pulses.first() {
+                self.trigger_targets.refresh(project, data_version, first.epoch);
+            }
+            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers);
+        });
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
@@ -2184,15 +2200,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             p.settings.tonemap_enabled.then_some(p.settings.tonemap_curve)
         });
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
-
-        // Fold this tick's fires into the renderer's per-layer/master
-        // audio_count BEFORE generators render, so the same frame's
-        // trigger_count already reflects the fire (no one-frame lag).
-        Self::apply_trigger_pulses(
-            &mut self.master_trigger_count,
-            &trigger_pulses,
-            renderers.as_mut_slice(),
-        );
 
         // ── Generators (separate CB, committed first) ─────────────────
         // Generators must commit before the compositor because the parallel
@@ -4168,6 +4175,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         type_id: &manifold_core::PresetTypeId,
     ) -> Vec<manifold_renderer::node_graph::OuterParamRouting> {
         self.compositor.outer_routings_for(type_id)
+    }
+}
+
+#[cfg(test)]
+mod trigger_delivery_tests {
+    use manifold_core::{Beats, PresetTypeId, Seconds};
+    use manifold_playback::engine::trigger_delivery::CapturedTriggerPulse;
+    use manifold_playback::modulation::TriggerPulse;
+
+    #[test]
+    fn trigger_delivery_retained_fires_each_reach_the_master_counter() {
+        let mut project = manifold_core::project::Project::default();
+        let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        instance.params.push(manifold_core::params::Param::bundled(
+            manifold_core::effect_graph_def::ParamSpecDef {
+                id: "gate".into(), is_trigger_gate: true, ..Default::default()
+            }
+        ));
+        let owner_id = instance.id.clone();
+        project.settings.master_effects.push(instance);
+        let mut targets = super::trigger_targets::TriggerTargets::default();
+        targets.refresh(Some(&project), 1, 3);
+        let pulses: Vec<_> = [0.25, 0.125, 0.25].into_iter().enumerate().map(|(index, time)| {
+            CapturedTriggerPulse {
+                pulse: TriggerPulse {
+                    layer_id: None,
+                    owner_id: owner_id.clone(),
+                    param_key: manifold_core::audio_trigger::fire_meter_key_for_param("", "gate"),
+                    audio_stamp: Some(manifold_core::audio_features::AudioHopStamp {
+                        epoch: 1,
+                        end_sample: (index as u64 + 1) * 256,
+                        sample_rate: 48_000,
+                        timeline_time: Some(Seconds(time)),
+                    }),
+                },
+                epoch: 3,
+                sequence: index as u64,
+                accepted_time: Seconds(1.0),
+                accepted_beat: Beats(2.0),
+            }
+        }).collect();
+        let mut count = 10;
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        assert_eq!(count, 13);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &[], &mut []);
+        assert_eq!(count, 13);
+        project.settings.master_effects.clear();
+        targets.refresh(Some(&project), 2, 3);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        assert_eq!(count, 13);
     }
 }
 

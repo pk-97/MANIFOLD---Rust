@@ -981,6 +981,13 @@ impl ContentThread {
             });
         }
         let tick_result = self.engine.tick(ctx);
+        if let Some(error) = self.engine.trigger_delivery_failure() {
+            self.engine.reclaim_tick_result(tick_result);
+            return Some(ExportFrameFailure {
+                message: format!("Export stopped at frame {frame_idx}: {error}"),
+                gpu: false,
+            });
+        }
         if let Some(message) = self.engine.project()
             .and_then(manifold_playback::modulation::audio_control_capture_error)
         {

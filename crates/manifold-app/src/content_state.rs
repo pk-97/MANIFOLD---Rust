@@ -262,6 +262,8 @@ pub struct ContentState {
     /// Most recent rejected graph-edit diagnostic. Persistent across snapshots
     /// so the UI can observe it once without relying on `data_version`.
     pub graph_edit_diagnostic: Option<GraphEditDiagnostic>,
+    /// Latched trigger delivery failure; Stop, seek or project load resets it.
+    pub trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     /// Most recent authoritative selection update for newly created scene
     /// modifier cards. Persistent across snapshots for sequence-gated UI use.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
@@ -581,6 +583,7 @@ impl Default for ContentState {
             warmup: None,
             undo_redo_event: None,
             graph_edit_diagnostic: None,
+            trigger_delivery_failure: None,
             edit_selection_update: None,
             modifier_selection_update: None,
             object_modifier_selection_update: None,
