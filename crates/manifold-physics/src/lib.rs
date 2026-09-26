@@ -6,6 +6,11 @@
 //! non-`Sync` marker so it may move between threads but cannot be shared there.
 
 pub use manifold_foundation::Seconds;
+pub mod interaction;
+pub use interaction::{
+    FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
+    VectorField, VortexField,
+};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -129,6 +134,18 @@ mod ffi {
             time_step: f32,
         ) -> i32;
         pub fn manifold_box3d_body_pose(body: u64, position: *mut f32, rotation: *mut f32) -> i32;
+        pub fn manifold_box3d_body_field_state(
+            body: u64,
+            center_out: *mut f32,
+            mass_out: *mut f32,
+            type_out: *mut i32,
+            enabled_out: *mut i32,
+        ) -> i32;
+        pub fn manifold_box3d_body_apply_field(
+            body: u64,
+            force: *const f32,
+            impulse: *const f32,
+        ) -> i32;
         pub fn manifold_box3d_destroy_mesh(mesh: usize);
     }
 }
@@ -230,6 +247,12 @@ struct BodyRecord {
     owned_geometry: OwnedGeometry,
 }
 
+struct FieldApplication {
+    native: u64,
+    force: [f32; 3],
+    impulse: [f32; 3],
+}
+
 enum OwnedGeometry {
     Hulls(Vec<usize>),
     Mesh(usize),
@@ -240,6 +263,7 @@ pub struct PhysicsWorld {
     native: u32,
     provenance: u64,
     bodies: Vec<BodyRecord>,
+    field_scratch: Vec<FieldApplication>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
 }
@@ -303,6 +327,7 @@ impl PhysicsWorld {
             native,
             provenance: if provenance == 0 { 1 } else { provenance },
             bodies: Vec::new(),
+            field_scratch: Vec::new(),
             _not_sync: PhantomData,
         })
     }
@@ -421,6 +446,8 @@ impl PhysicsWorld {
             native,
             owned_geometry: OwnedGeometry::Hulls(owned_hulls),
         });
+        self.field_scratch
+            .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -503,6 +530,8 @@ impl PhysicsWorld {
             native,
             owned_geometry: OwnedGeometry::Mesh(owned_mesh),
         });
+        self.field_scratch
+            .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -565,6 +594,126 @@ impl PhysicsWorld {
         let _lock = native_lock();
         unsafe { ffi::manifold_box3d_world_step(self.native, dt_f32, substeps) };
         Ok(())
+    }
+
+    /// Apply sampled acceleration and one-shot delta-velocity fields to bodies.
+    /// Acceleration is submitted as a force and delta velocity as an impulse,
+    /// both scaled by each body's native mass. Field sampling happens at the
+    /// current world-space center of mass before any application is made.
+    pub fn apply_fields(
+        &mut self,
+        bodies: &[BodyHandle],
+        fields: &[FieldInput<'_>],
+        dt: Seconds,
+    ) -> Result<(), PhysicsError> {
+        let dt_f32 = dt.0 as f32;
+        if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
+            return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
+        }
+        for input in fields {
+            if !input.acceleration.is_finite() {
+                return Err(PhysicsError::InvalidInput(
+                    "field acceleration must be finite",
+                ));
+            }
+            if !input.delta_velocity.is_finite() {
+                return Err(PhysicsError::InvalidInput(
+                    "field delta velocity must be finite",
+                ));
+            }
+        }
+        for (index, handle) in bodies.iter().enumerate() {
+            self.body_record(*handle)?;
+            if bodies[..index].contains(handle) {
+                return Err(PhysicsError::InvalidInput("duplicate field body handle"));
+            }
+        }
+
+        self.field_scratch.clear();
+        let result = (|| {
+            let _lock = native_lock();
+            for handle in bodies {
+                let native = self.body_record(*handle)?.native;
+                let mut center = [0.0; 3];
+                let mut mass = 0.0;
+                let mut body_type = 0;
+                let mut enabled = 0;
+                let state_result = unsafe {
+                    ffi::manifold_box3d_body_field_state(
+                        native,
+                        center.as_mut_ptr(),
+                        &mut mass,
+                        &mut body_type,
+                        &mut enabled,
+                    )
+                };
+                if state_result != 0 {
+                    return Err(PhysicsError::NativeFailure);
+                }
+                if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
+                    continue;
+                }
+                if !center.iter().all(|component| component.is_finite())
+                    || !mass.is_finite()
+                    || mass <= 0.0
+                {
+                    return Err(PhysicsError::NativeFailure);
+                }
+
+                let mut acceleration = [0.0; 3];
+                let mut delta_velocity = [0.0; 3];
+                for input in fields {
+                    let sample = input.field.sample(center);
+                    if !sample.iter().all(|component| component.is_finite()) {
+                        return Err(PhysicsError::InvalidInput("field sample must be finite"));
+                    }
+                    for component in 0..3 {
+                        acceleration[component] += sample[component] * input.acceleration;
+                        delta_velocity[component] += sample[component] * input.delta_velocity;
+                    }
+                    if !acceleration
+                        .iter()
+                        .chain(delta_velocity.iter())
+                        .all(|component| component.is_finite())
+                    {
+                        return Err(PhysicsError::InvalidInput("field result must be finite"));
+                    }
+                }
+
+                let force = acceleration.map(|component| component * mass);
+                let impulse = delta_velocity.map(|component| component * mass);
+                if !force
+                    .iter()
+                    .chain(impulse.iter())
+                    .all(|component| component.is_finite())
+                {
+                    return Err(PhysicsError::InvalidInput(
+                        "mass-scaled field result must be finite",
+                    ));
+                }
+                self.field_scratch.push(FieldApplication {
+                    native,
+                    force,
+                    impulse,
+                });
+            }
+
+            for application in &self.field_scratch {
+                let apply_result = unsafe {
+                    ffi::manifold_box3d_body_apply_field(
+                        application.native,
+                        application.force.as_ptr(),
+                        application.impulse.as_ptr(),
+                    )
+                };
+                if apply_result != 0 {
+                    return Err(PhysicsError::NativeFailure);
+                }
+            }
+            Ok(())
+        })();
+        self.field_scratch.clear();
+        result
     }
 
     pub fn update_body(
@@ -1878,6 +2027,279 @@ mod tests {
         world.step(Seconds(1.0 / 60.0), 4).unwrap();
         let moved = world.pose(handle).unwrap().position[0];
         assert!(moved > start.position[0] && moved < target.position[0]);
+    }
+
+    #[test]
+    fn scene_physics_mass_independent_field_response_matches_gravity() {
+        let dt = Seconds(1.0 / 60.0);
+        let field = UniformField::new([0.0, -9.8, 0.0]).unwrap();
+        let input = FieldInput {
+            field: &field,
+            acceleration: 1.0,
+            delta_velocity: 0.0,
+        };
+        let mut field_world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let light = field_world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [-2.0, 10.0, 0.0],
+                    mass: 1.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let heavy = field_world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 10.0, 0.0],
+                    mass: 4.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        for _ in 0..60 {
+            field_world
+                .apply_fields(&[light, heavy], &[input], dt)
+                .unwrap();
+            field_world.step(dt, 4).unwrap();
+        }
+
+        let mut gravity_world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
+        let gravity_body = gravity_world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [-2.0, 10.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        for _ in 0..60 {
+            gravity_world.step(dt, 4).unwrap();
+        }
+
+        let light_pose = field_world.pose(light).unwrap();
+        let heavy_pose = field_world.pose(heavy).unwrap();
+        let gravity_pose = gravity_world.pose(gravity_body).unwrap();
+        let light_velocity = field_world.linear_velocity(light).unwrap();
+        let heavy_velocity = field_world.linear_velocity(heavy).unwrap();
+        let gravity_velocity = gravity_world.linear_velocity(gravity_body).unwrap();
+        for component in 0..3 {
+            let light_displacement = light_pose.position[component] - [-2.0, 10.0, 0.0][component];
+            let heavy_displacement = heavy_pose.position[component] - [2.0, 10.0, 0.0][component];
+            let gravity_displacement = gravity_pose.position[component] - [-2.0, 10.0, 0.0][component];
+            assert!((light_displacement - heavy_displacement).abs() < 1.0e-4);
+            assert!((light_displacement - gravity_displacement).abs() < 1.0e-4);
+            assert!((light_velocity[component] - heavy_velocity[component]).abs() < 1.0e-4);
+            assert!((light_velocity[component] - gravity_velocity[component]).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn scene_physics_delta_velocity_is_applied_once_across_substeps() {
+        fn run(substeps: u32) -> ([f32; 3], [f32; 3]) {
+            let dt = Seconds(1.0 / 60.0);
+            let field = UniformField::new([1.0, -0.5, 0.0]).unwrap();
+            let input = FieldInput {
+                field: &field,
+                acceleration: 0.0,
+                delta_velocity: 1.0,
+            };
+            let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+            let body = world
+                .add_hull(
+                    &cube(0.5),
+                    BodyConfig {
+                        position: [0.0, 5.0, 0.0],
+                        ..BodyConfig::default()
+                    },
+                )
+                .unwrap();
+            world.apply_fields(&[body], &[input], dt).unwrap();
+            assert_eq!(world.linear_velocity(body).unwrap(), [1.0, -0.5, 0.0]);
+            world.step(dt, substeps).unwrap();
+            (
+                world.pose(body).unwrap().position,
+                world.linear_velocity(body).unwrap(),
+            )
+        }
+
+        let (one_pose, one_velocity) = run(1);
+        let (four_pose, four_velocity) = run(4);
+        for component in 0..3 {
+            assert!((one_pose[component] - four_pose[component]).abs() < 1.0e-4);
+            assert!((one_velocity[component] - four_velocity[component]).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn scene_physics_fields_leave_fixed_animated_and_disabled_bodies_unchanged() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let fixed = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [-4.0, 2.0, 0.0],
+                    mass: 0.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let animated = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    kind: BodyKind::Animated,
+                    position: [0.0, 2.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let disabled = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [4.0, 2.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        world.set_enabled(disabled, false).unwrap();
+        let bodies = [fixed, animated, disabled];
+        let before = bodies.map(|body| (world.pose(body).unwrap(), world.linear_velocity(body).unwrap()));
+        let field = UniformField::new([10.0, -4.0, 2.0]).unwrap();
+        let input = FieldInput {
+            field: &field,
+            acceleration: 1.0,
+            delta_velocity: 1.0,
+        };
+        world
+            .apply_fields(&bodies, &[input], Seconds(1.0 / 60.0))
+            .unwrap();
+        world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        for (body, (before_pose, before_velocity)) in bodies.into_iter().zip(before) {
+            assert_eq!(world.pose(body).unwrap(), before_pose);
+            assert_eq!(world.linear_velocity(body).unwrap(), before_velocity);
+        }
+    }
+
+    #[test]
+    fn scene_physics_field_validation_is_atomic_for_handles_scalars_and_samples() {
+        struct NonFiniteOnPositiveX;
+
+        impl VectorField for NonFiniteOnPositiveX {
+            fn sample(&self, position: [f32; 3]) -> [f32; 3] {
+                if position[0] < 0.0 {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [f32::NAN, 0.0, 0.0]
+                }
+            }
+        }
+
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let first = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [-2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let second = world
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [2.0, 3.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let field = UniformField::new([1.0, 0.0, 0.0]).unwrap();
+        let valid_input = FieldInput {
+            field: &field,
+            acceleration: 1.0,
+            delta_velocity: 0.0,
+        };
+        let before = world.linear_velocity(first).unwrap();
+        assert!(world
+            .apply_fields(
+                &[first, second],
+                &[FieldInput {
+                    field: &NonFiniteOnPositiveX,
+                    ..valid_input
+                }],
+                Seconds(1.0 / 60.0),
+            )
+            .is_err());
+        assert_eq!(world.linear_velocity(first).unwrap(), before);
+
+        assert!(world
+            .apply_fields(
+                &[first, second],
+                &[FieldInput {
+                    acceleration: f32::NAN,
+                    ..valid_input
+                }],
+                Seconds(1.0 / 60.0),
+            )
+            .is_err());
+        assert_eq!(world.linear_velocity(first).unwrap(), before);
+
+        assert!(world
+            .apply_fields(
+                &[first, second],
+                &[FieldInput {
+                    delta_velocity: f32::INFINITY,
+                    ..valid_input
+                }],
+                Seconds(1.0 / 60.0),
+            )
+            .is_err());
+        assert_eq!(world.linear_velocity(first).unwrap(), before);
+
+        assert!(world
+            .apply_fields(&[first, first], &[valid_input], Seconds(1.0 / 60.0))
+            .is_err());
+        assert_eq!(world.linear_velocity(first).unwrap(), before);
+
+        let mut foreign_world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let foreign = foreign_world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        assert!(world
+            .apply_fields(&[first, foreign], &[valid_input], Seconds(1.0 / 60.0))
+            .is_err());
+        assert_eq!(world.linear_velocity(first).unwrap(), before);
+    }
+
+    #[test]
+    fn scene_physics_field_scratch_capacity_is_prepared_for_all_bodies() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let initial_capacity = world.field_scratch.capacity();
+        let mut bodies = Vec::new();
+        for index in 0..20 {
+            bodies.push(
+                world
+                    .add_hull(
+                        &cube(0.5),
+                        BodyConfig {
+                            position: [index as f32 * 2.0, 3.0, 0.0],
+                            ..BodyConfig::default()
+                        },
+                    )
+                    .unwrap(),
+            );
+        }
+        assert!(bodies.len() > initial_capacity);
+        let prepared_capacity = world.field_scratch.capacity();
+        assert!(prepared_capacity >= bodies.len());
+        world
+            .apply_fields(&bodies, &[], Seconds(1.0 / 60.0))
+            .unwrap();
+        assert_eq!(world.field_scratch.capacity(), prepared_capacity);
     }
 
     #[test]

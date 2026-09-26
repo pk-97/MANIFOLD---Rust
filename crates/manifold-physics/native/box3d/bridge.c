@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h>
 
 _Static_assert( sizeof( b3Vec3 ) == sizeof( float ) * 3, "unexpected b3Vec3 layout" );
 _Static_assert( sizeof( b3Quat ) == sizeof( float ) * 4, "unexpected b3Quat layout" );
@@ -574,6 +575,77 @@ int manifold_box3d_body_pose( uint64_t body_value, float* position_out, float* r
 	rotation_out[1] = rotation.v.y;
 	rotation_out[2] = rotation.v.z;
 	rotation_out[3] = rotation.s;
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_field_state(
+	uint64_t body_value,
+	float* center_out,
+	float* mass_out,
+	int* type_out,
+	int* enabled_out )
+{
+	if ( center_out == NULL || mass_out == NULL || type_out == NULL || enabled_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3Pos center = b3Body_GetWorldCenterOfMass( body_id );
+	center_out[0] = (float)center.x;
+	center_out[1] = (float)center.y;
+	center_out[2] = (float)center.z;
+	*mass_out = b3Body_GetMass( body_id );
+	switch ( b3Body_GetType( body_id ) )
+	{
+		case b3_staticBody: *type_out = 0; break;
+		case b3_dynamicBody: *type_out = 1; break;
+		case b3_kinematicBody: *type_out = 2; break;
+		default: return BOX3D_BRIDGE_ERROR;
+	}
+	*enabled_out = b3Body_IsEnabled( body_id ) ? 1 : 0;
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_apply_field(
+	uint64_t body_value,
+	const float* force,
+	const float* impulse )
+{
+	if ( force == NULL || impulse == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	for ( int i = 0; i < 3; ++i )
+	{
+		if ( !isfinite( force[i] ) || !isfinite( impulse[i] ) )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) || b3Body_GetType( body_id ) != b3_dynamicBody )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3Vec3 force_value = { force[0], force[1], force[2] };
+	if ( force[0] != 0.0f || force[1] != 0.0f || force[2] != 0.0f )
+	{
+		b3Body_ApplyForceToCenter( body_id, force_value, true );
+	}
+
+	b3Vec3 impulse_value = { impulse[0], impulse[1], impulse[2] };
+	if ( impulse[0] != 0.0f || impulse[1] != 0.0f || impulse[2] != 0.0f )
+	{
+		b3Body_ApplyLinearImpulseToCenter( body_id, impulse_value, true );
+	}
 	return BOX3D_BRIDGE_OK;
 }
 
