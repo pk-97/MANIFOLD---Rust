@@ -99,6 +99,24 @@ under the names), in `app_render.rs`. A clip is exactly one of:
 - **generator/video** → thumbnail cell blit (this feature),
 - **other / no thumbnail yet** → nothing (the gradient body shows).
 
+Audio waveforms use the same preview-well boundary as thumbnails, leaving the
+name strip clear. `WaveformRenderer` derives low/mid/high envelopes from source
+audio with fixed 250 Hz / 2 kHz splits and independent channel analysis. The
+original peak envelope bounds the drawing; blue, amber and white show the band
+contributions inside it. The display curve is fixed across zoom and scroll.
+Each pixel pools its whole source interval, preserving short peaks, with coverage
+antialiasing at the silhouette and band boundaries.
+
+`AudioWaveformCache` shares immutable analysis by source path; clip IDs retain
+their own trim and tempo-map windows. Analysis runs in the existing background
+decode jobs and stores compact peak/RMS resolution levels. It is runtime data,
+so existing projects regenerate the new waveforms on loading without reimport or
+serialization changes. `ClipContentGpu` includes the analysis fingerprint in its
+texture key, so replacing a source with equal-length audio repaints. Numeric
+coverage lives in `waveform_renderer` / `waveform_painter` tests and the
+`clip_waveform` GPU proofs; `ui_color_swatches::clip_waveform_sheet` produces the
+three-zoom preview, optionally using `WAVEFORM_AUDIO_FILE` for real music.
+
 The blit samples the clip's atlas cell (letterbox-corrected for project aspect, as
 the node-thumbnail draw already does) into the clip's interior rect, scissor-clipped,
 respecting the rounded corners the same way the waveform does. Generator vs video is
