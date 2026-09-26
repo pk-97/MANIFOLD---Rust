@@ -151,6 +151,7 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_select_all() {
                 return true;
             }
+            if host.select_all_automation() { return true; }
             host.select_all_clips();
             return true;
         }

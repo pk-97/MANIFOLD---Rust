@@ -328,6 +328,13 @@ impl Application {
                 out.push_back(Input::Modifiers(Modifiers::NONE));
                 out.push_back(Input::Move(from));
                 match gesture {
+                    Gesture::Press { modifiers } => {
+                        out.push_back(Input::Modifiers(modifiers));
+                        out.push_back(Input::Button(MouseButton::Left, ElementState::Pressed));
+                    }
+                    Gesture::Release => {
+                        out.push_back(Input::Button(MouseButton::Left, ElementState::Released));
+                    }
                     Gesture::Click { modifiers } => {
                         out.push_back(Input::Modifiers(modifiers));
                         click_events(&mut out, MouseButton::Left);

@@ -103,55 +103,18 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ) else {
                 return DispatchResult::handled();
             };
-            let Some(instance) = ctx.project.preset_instance(&target) else {
-                return DispatchResult::handled();
-            };
-            if !instance.params.contains(param_id.as_ref()) {
-                return DispatchResult::handled();
-            }
-            // Resolve the owning layer from the stable target, including a
-            // scene card bound to a different layer than the active inspector.
-            let owner = ctx.project.timeline.layers.iter().find(|layer| match &target {
-                manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
-                manifold_core::GraphTarget::Effect(id) => layer.effects.as_ref()
-                    .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
-                // Modifier controls resolve to their generator owner above.
-                manifold_core::GraphTarget::SceneModifier { .. } => false,
-            });
-            let Some(owner) = owner.filter(|layer| !layer.is_group()) else {
-                return DispatchResult::handled();
-            };
-            let owner_id = owner.layer_id.clone();
-            let mut expand = Vec::new();
-            let mut next = Some(owner_id.clone());
-            while let Some(id) = next {
-                let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(&id) else { break; };
-                if layer.is_collapsed { expand.push(id); }
-                next = layer.parent_layer_id.clone();
-            }
-            let ui_target = crate::editing_host::to_ui_graph_target(&target);
-            let min_height = ctx.ui.layout.track_header_height()
-                + manifold_ui::color::AUTOMATION_LANE_STRIP_HEIGHT + 60.0;
-            if ctx.ui.layout.timeline_body().height < min_height {
-                let content = ctx.ui.layout.content_area();
-                ctx.ui.layout.update_split_from_drag(content.y_max() - min_height);
-            }
-            ctx.ui.pending_automation_reveal = Some((ui_target.clone(), param_id.clone()));
-            ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
-            ctx.selection.automation_mode_visible = true;
-            ctx.selection.clear_automation_selection();
-            if !expand.is_empty() {
-                // Expand uses the existing non-undoable view-state command
-                // convention; the authoritative project remains content-owned.
-                ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
-                    for id in expand {
-                        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&id) {
-                            layer.is_collapsed = false;
-                        }
-                    }
-                })));
-            }
-            DispatchResult::structural()
+            show_automation_target(&target, param_id, ctx)
+        }
+        ParamsAction::ShowAutomationAddress(ui_target, param_id) => {
+            let target = crate::editing_host::to_graph_target(ui_target);
+            show_automation_target(&target, param_id, ctx)
+        }
+        ParamsAction::OpenAutomationChooser(_layer_id) => {
+            // The root owns the searchable popup session. Keep this action
+            // view-only here so opening the chooser can never mutate a lane or
+            // a parameter; the root intercept supplies the manifest-backed
+            // entries and dispatches ShowAutomation for the chosen address.
+            DispatchResult::handled()
         }
         // ── Macros panel collapse ─────────────────────────────────
         ParamsAction::MacrosCollapseToggle => {
@@ -1022,6 +985,62 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
 
         // ── Macro mapping ─────────────────────────────────────────
     }
+}
+
+fn show_automation_target(
+    target: &manifold_core::GraphTarget,
+    param_id: &manifold_core::effects::ParamId,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
+    let Some(instance) = ctx.project.preset_instance(target) else {
+        return DispatchResult::handled();
+    };
+    if !instance.params.contains(param_id.as_ref()) {
+        return DispatchResult::handled();
+    }
+    // Resolve the owning layer from the stable target, including a scene card
+    // bound to a different layer than the active inspector.
+    let owner = ctx.project.timeline.layers.iter().find(|layer| match target {
+        manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
+        manifold_core::GraphTarget::Effect(id) => layer.effects.as_ref()
+            .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
+        manifold_core::GraphTarget::SceneModifier { .. } => false,
+    });
+    let Some(owner) = owner.filter(|layer| !layer.is_group()) else {
+        return DispatchResult::handled();
+    };
+    let owner_id = owner.layer_id.clone();
+    let mut expand = Vec::new();
+    let mut next = Some(owner_id.clone());
+    while let Some(id) = next {
+        let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(&id) else { break; };
+        if layer.is_collapsed { expand.push(id); }
+        next = layer.parent_layer_id.clone();
+    }
+    let ui_target = crate::editing_host::to_ui_graph_target(target);
+    ctx.selection
+        .hidden_automation_lanes
+        .remove(&(ui_target.clone(), param_id.clone()));
+    let min_height = ctx.ui.layout.track_header_height()
+        + manifold_ui::color::AUTOMATION_LANE_STRIP_HEIGHT + 60.0;
+    if ctx.ui.layout.timeline_body().height < min_height {
+        let content = ctx.ui.layout.content_area();
+        ctx.ui.layout.update_split_from_drag(content.y_max() - min_height);
+    }
+    ctx.ui.pending_automation_reveal = Some((ui_target.clone(), param_id.clone()));
+    ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
+    ctx.selection.automation_mode_visible = true;
+    ctx.selection.clear_automation_selection();
+    if !expand.is_empty() {
+        ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
+            for id in expand {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&id) {
+                    layer.is_collapsed = false;
+                }
+            }
+        })));
+    }
+    DispatchResult::structural()
 }
 
 #[cfg(test)]

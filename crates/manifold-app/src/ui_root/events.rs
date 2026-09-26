@@ -291,10 +291,15 @@ impl UIRoot {
                 _ => {}
             }
 
-            // Stash for `InteractionOverlay` (tracks-area events) — but never
-            // an event an overlay already consumed: a popup floating over the
-            // timeline must not leak its clicks to the clips beneath it.
-            let stash = !overlay_consumed[event_idx] && self.should_stash_for_tracks(event);
+            // A popup must not leak its clicks to the timeline. The release
+            // of a press that started on the timeline still finishes or
+            // cancels that owned gesture, even when released over a popup.
+            let owned_release = matches!(event, UIEvent::PointerUp { .. }) && self.tracks_press_active;
+            let stash = (!overlay_consumed[event_idx] || owned_release)
+                && self.should_stash_for_tracks(event);
+            if matches!(event, UIEvent::PointerDown { .. }) {
+                self.tracks_press_active = stash;
+            }
             if manifold_ui::input::input_trace_enabled()
                 && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
             {
@@ -317,6 +322,9 @@ impl UIRoot {
             // into `fire_gesture_end_hooks` would reintroduce BUG-075.
             if matches!(event, UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. }) {
                 self.drag_owner = None;
+            }
+            if matches!(event, UIEvent::PointerUp { .. }) {
+                self.tracks_press_active = false;
             }
         }
 

@@ -23,7 +23,7 @@
   {
     "Assert": {
       "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: Amount pt1" } },
-      "check": { "RectWithin": { "x": 607.0, "y": 670.6, "width": 14.0, "height": 14.0 } }
+      "check": { "RectWithin": { "x": 607.0, "y": 675.6, "width": 14.0, "height": 14.0 } }
     }
   }
 ]

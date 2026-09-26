@@ -810,6 +810,52 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
         );
+        self.mark_dirty();
+    }
+
+    fn insert_automation_point_on_curve(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        beat: Beats,
+    ) -> Option<f32> {
+        let graph_target = to_graph_target(target);
+        let param_id_str = param_id.as_ref();
+        let can_insert = self
+            .project
+            .preset_instance(&graph_target)
+            .and_then(|inst| inst.automation_lanes.as_ref())
+            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id.as_ref() == param_id_str))
+            .is_some_and(|lane| {
+                lane.points.windows(2).any(|pair| pair[0].beat.0 < pair[1].beat.0)
+                    && !lane.points.iter().any(|point| point.beat == beat)
+            });
+        if !can_insert {
+            return None;
+        }
+        let mut local_cmd = AddAutomationPointCommand::new_on_curve(
+            graph_target.clone(),
+            param_id_str,
+            beat,
+        );
+        local_cmd.execute(self.project);
+        if !local_cmd.was_applied() {
+            return None;
+        }
+        let value = self
+            .project
+            .preset_instance(&graph_target)
+            .and_then(|inst| inst.automation_lanes.as_ref())
+            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id.as_ref() == param_id_str))
+            .map(|lane| lane.value_at(beat));
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::Execute(Box::new(local_cmd)),
+        );
+        if value.is_some() {
+            self.mark_dirty();
+        }
+        value
     }
 
     fn set_automation_point_preview(
@@ -891,6 +937,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
         );
+        self.mark_dirty();
     }
 
     // ── Automation lane editing — segment gestures (P4 Unit B) ───────
@@ -1059,31 +1106,53 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     ) {
         let target = to_graph_target(target);
         let Some(points) = points else {
+            let mut mutated = false;
             if let Some(inst) = self.project.preset_instance_mut(&target)
                 && let Some(lanes) = inst.automation_lanes.as_mut()
             {
+                let old_len = lanes.len();
                 lanes.retain(|lane| lane.param_id != *param_id);
-                if lanes.is_empty() { inst.automation_lanes = None; }
+                mutated = lanes.len() != old_len;
+                if mutated && lanes.is_empty() { inst.automation_lanes = None; }
+            }
+            if mutated {
+                self.mark_dirty();
             }
             return;
         };
         let param_id_str = param_id.as_ref();
+        let mut created = false;
         if let Some(inst) = self.project.preset_instance_mut(&target) {
             let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
-            let converted = || points.iter().map(|&(beat, value, shape)| {
-                AutomationPoint { beat, value, shape: to_segment_shape(shape) }
-            });
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id_str) {
                 Some(lane) => {
-                    lane.points.clear();
-                    lane.points.extend(converted());
+                    let same_points = lane.points.len() == points.len()
+                        && lane.points.iter().zip(points).all(|(existing, &(beat, value, shape))| {
+                            existing.beat == beat
+                                && existing.value == value
+                                && existing.shape == to_segment_shape(shape)
+                        });
+                    if !same_points {
+                        lane.points.clear();
+                        lane.points.extend(points.iter().map(|&(beat, value, shape)| {
+                            AutomationPoint { beat, value, shape: to_segment_shape(shape) }
+                        }));
+                    }
                 }
-                None => lanes.push(manifold_core::effects::AutomationLane {
-                    param_id: param_id.clone(),
-                    enabled: true,
-                    points: converted().collect(),
-                }),
+                None => {
+                    lanes.push(manifold_core::effects::AutomationLane {
+                        param_id: param_id.clone(),
+                        enabled: true,
+                        points: points.iter().map(|&(beat, value, shape)| {
+                            AutomationPoint { beat, value, shape: to_segment_shape(shape) }
+                        }).collect(),
+                    });
+                    created = true;
+                }
             }
+        }
+        if created {
+            self.mark_dirty();
         }
     }
 
