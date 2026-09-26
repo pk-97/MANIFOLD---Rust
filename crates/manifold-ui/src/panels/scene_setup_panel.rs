@@ -891,6 +891,7 @@ pub struct ScenePanel {
     panel_w: f32,
     host: ChromeHost,
     scroll: ScrollContainer,
+    reveal_properties: bool,
     pub(crate) content_parent: NodeId,
     bg_id: NodeId,
     close_id: NodeId,
@@ -1039,6 +1040,7 @@ impl Default for ScenePanel {
             panel_w: PANEL_W_MIN,
             host: ChromeHost::new(),
             scroll: ScrollContainer::new(),
+            reveal_properties: false,
             content_parent: NodeId::PLACEHOLDER,
             bg_id: NodeId::PLACEHOLDER,
             close_id: NodeId::PLACEHOLDER,
@@ -1385,6 +1387,13 @@ impl ScenePanel {
         }
         let sb_x = x + self.panel_w - SCROLLBAR_W - 2.0;
         self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
+        if self.reveal_properties {
+            if let Some((_, node, _)) = self.object_name_ids.first() {
+                let bounds = tree.get_bounds(*node);
+                self.scroll.reveal_rect(tree, bounds);
+            }
+            self.reveal_properties = false;
+        }
         self.rebuild_object_modifier_drag_overlay(tree);
     }
 
@@ -1494,6 +1503,7 @@ impl ScenePanel {
     /// push through, unlike `handle_event`'s click arm).
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
         self.selection.insert(layer_id, sel);
+        self.reveal_properties = true;
     }
 
     /// Capture the destination before a keyboard shortcut can overtake the

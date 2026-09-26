@@ -59,7 +59,6 @@ impl AppInputHost<'_> {
 
     pub(super) fn paste_effect_selection(&mut self) -> bool {
         if !self.ui_root.effect_clipboard.has_content() { return false; }
-        let tab = self.ui_root.inspector.last_effect_tab();
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.get_selected_effect_indices();
         let (pasted, groups) = self.ui_root.effect_clipboard.paste_payload();
@@ -74,10 +73,10 @@ impl AppInputHost<'_> {
             }
             (effects.get(insert_at).map(|effect| effect.id.clone()), if groups.is_empty() { selected_group } else { None })
         }) else { return true; };
-        ContentCommand::send(self.content_tx, ContentCommand::ExecuteOnContent(Box::new(
-            PasteEffectsCommand::new(target, pasted, groups, before, destination_group),
-        )));
-        self.ui_root.inspector.select_effect_ids(tab, &ids);
+        ContentCommand::send(self.content_tx, ContentCommand::ExecuteSelecting(
+            Box::new(PasteEffectsCommand::new(target.clone(), pasted, groups, before, destination_group)),
+            crate::edit_selection::SelectAfterEdit::Effects { target, ids },
+        ));
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true

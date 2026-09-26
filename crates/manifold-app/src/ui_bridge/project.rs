@@ -541,9 +541,9 @@ pub(super) fn dispatch_project(
                         "node.pbr_material",
                     ),
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
+                    Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
+                ));
             }
             DispatchResult::structural()
         }
@@ -578,9 +578,9 @@ pub(super) fn dispatch_project(
                     ),
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
+                    Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
+                ));
             }
             DispatchResult::structural()
         }
@@ -1247,8 +1247,9 @@ pub(crate) fn generator_catalog_default(
     if gt.is_none() {
         return None;
     }
-    let json = manifold_renderer::node_graph::bundled_preset_json(&gt)?;
-    serde_json::from_str(&json).ok()
+    // Use the same migrated definition as the visible parameter manifest.
+    // Re-parsing raw catalog JSON drops scene exposures on the first edit.
+    manifold_renderer::node_graph::bundled_preset_def(&gt).cloned()
 }
 
 /// P4b: translate the UI's SkinTargetMap into the editing command's enum.
@@ -1487,6 +1488,38 @@ mod tests {
         })
     }
 
+    /// Read the value that the scene panel and renderer actually consume.
+    /// Auto-exposed node params live in the generator manifest; unbound params
+    /// remain ordinary graph literals.
+    fn effective_scene_param_value(
+        project: &Project,
+        layer_id: &LayerId,
+        node_doc_id: u32,
+        param_id: &str,
+    ) -> f32 {
+        let def = effective_def(project, layer_id);
+        if let Some(binding_id) =
+            manifold_core::effects::binding_id_for_node_param_in(&def, node_doc_id, param_id)
+        {
+            let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
+            let instance = layer
+                .gen_params()
+                .expect("bound scene control has generator params");
+            assert!(
+                instance.params.contains(binding_id.as_str()),
+                "bound scene control slot {binding_id} exists"
+            );
+            return instance.get_base_param(binding_id.as_str());
+        }
+
+        let node = find_node_recursive(&def.nodes, node_doc_id)
+            .unwrap_or_else(|| panic!("scene node {node_doc_id} remains in effective graph"));
+        match node.params.get(param_id) {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("unbound scene param {param_id} should be a Float, got {other:?}"),
+        }
+    }
+
     fn objects_param(project: &Project, layer_id: &LayerId, render_scene_id: u32) -> f32 {
         let graph = effective_def(project, layer_id);
         let scene = graph
@@ -1550,9 +1583,11 @@ mod tests {
     #[test]
     fn scene_setup_add_object_dispatches_add_scene_object_command() {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let original_metadata = effective_def(&project, &layer_id).preset_metadata.unwrap();
         let before = objects_param(&project, &layer_id, render_scene_id);
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let action =
             ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before as u32);
@@ -1566,6 +1601,19 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
+        let unchanged = objects_param(&project, &layer_id, render_scene_id);
+        assert_eq!(unchanged, before, "UI dispatch waits for content");
+        let crate::content_command::ContentCommand::ExecuteSelecting(mut command, request) = content_rx.try_recv().expect("queued insertion") else { panic!("content-owned insertion"); };
+        let pending = request.capture(&project);
+        command.execute(&mut project);
+        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
+        let updated = effective_def(&project, &layer_id);
+        let metadata = updated.preset_metadata.as_ref().unwrap();
+        for binding in &original_metadata.bindings {
+            assert!(metadata.bindings.contains(binding), "existing control lost: {}", binding.id);
+            assert!(project.timeline.layers[0].gen_params().unwrap().params.contains(&binding.id));
+        }
+
         assert!(
             result.structural_change,
             "adding an object is a structural graph edit"
@@ -1700,8 +1748,9 @@ mod tests {
     fn scene_setup_add_layer_plane_dispatches_add_scene_layer_plane_command() {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let before = objects_param(&project, &layer_id, render_scene_id);
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let action = ProjectAction::SceneSetupAddLayerPlane(
             layer_id.clone(),
@@ -1718,6 +1767,13 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
+        let unchanged = objects_param(&project, &layer_id, render_scene_id);
+        assert_eq!(unchanged, before, "UI dispatch waits for content");
+        let crate::content_command::ContentCommand::ExecuteSelecting(mut command, request) = content_rx.try_recv().expect("queued insertion") else { panic!("content-owned insertion"); };
+        let pending = request.capture(&project);
+        command.execute(&mut project);
+        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
+
         assert!(
             result.structural_change,
             "adding a layer plane is a structural graph edit"
@@ -1808,16 +1864,7 @@ mod tests {
             "framing the camera is a param write"
         );
 
-        let def_after = effective_def(&project, &layer_id);
-        let cam = def_after
-            .nodes
-            .iter()
-            .find(|n| n.id == cam_id)
-            .expect("camera node still present");
-        let get = |pid: &str| match cam.params.get(pid) {
-            Some(SerializedParamValue::Float { value }) => *value,
-            other => panic!("{pid} should be a float param, got {other:?}"),
-        };
+        let get = |pid: &str| effective_scene_param_value(&project, &layer_id, cam_id, pid);
         let radius = vm
             .scene_bounds
             .map(|(mn, mx)| (0..3).map(|a| (mx[a] - mn[a]) * 0.5).fold(1.0f32, f32::max))
@@ -1921,8 +1968,9 @@ mod tests {
     fn scene_setup_duplicate_object_keeps_nested_transform_editable() {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let before = objects_param(&project, &layer_id, render_scene_id) as u32;
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let add = ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before);
         dispatch_project(
@@ -1935,6 +1983,13 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
+        let unchanged = objects_param(&project, &layer_id, render_scene_id);
+        assert_eq!(unchanged, before as f32, "UI dispatch waits for content");
+        let crate::content_command::ContentCommand::ExecuteSelecting(mut command, request) = content_rx.try_recv().expect("queued insertion") else { panic!("content-owned insertion"); };
+        let pending = request.capture(&project);
+        command.execute(&mut project);
+        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
+
         let source_index = before;
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
@@ -2222,27 +2277,9 @@ mod tests {
             "the twist modifier's params are exposed, targeting its bare NodeId"
         );
     }
-    /// BUG-229 diagnosis (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1, orchestrator
-    /// addition): Peter reported "the params ... for cameras, world, lights ... do
-    /// nothing." Before this test, `SceneSetupParamChanged` had zero dispatch-level
-    /// coverage for these three families — only Add/Remove/rename were proven
-    /// through `dispatch_project`; the value-write path itself was unverified past
-    /// the panel's own click/drag unit tests (which only assert an action gets
-    /// *built*, never that it changes anything). Value-level, not dispatch-log-level,
-    /// per the escalation brief: reads the def's actual `params` map after dispatch.
-    ///
-    /// Result: for a FRESH `SceneStarter` layer (no per-instance override yet — the
-    /// common real case, since a scene layer never diverges until you scrub
-    /// something), the write DOES land — `SetGraphNodeParamCommand` + the traced
-    /// `RowAddr` (root scope, `node_doc_id` off the same `SceneVm::from_def` state_sync
-    /// walks) are correct for all three families. This rules out the
-    /// addressing/dispatch layer as BUG-229's root cause. The live "does nothing"
-    /// symptom therefore lives above this layer — most likely in the bespoke
-    /// per-family click/drag routing (`build_light_numeric_row`/
-    /// `build_camera_numeric_row`/the World rows' equivalents) that C-P1 deletes
-    /// wholesale in favor of the card's proven `build_param_row` click path. Logged
-    /// as BUG-229 in `docs/BUG_BACKLOG.md` with this finding; not fixed this session
-    /// (see design doc status — C-P1's full row-swap was not completed).
+    /// BUG-229 dispatch regression oracle: scene-panel writes must update the
+    /// effective control value, including generator-manifest slots created by
+    /// scene exposure migration.
     #[test]
     fn scene_setup_param_changed_writes_light_intensity_to_def() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
@@ -2284,24 +2321,14 @@ mod tests {
             "a param scrub is not a structural graph edit"
         );
 
-        let after_def = effective_def(&project, &layer_id);
-        let node = after_def
-            .nodes
-            .iter()
-            .find(|n| n.id == light_node_id)
-            .unwrap();
-        match node.params.get("intensity") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert_eq!(
-                    *value, 7.77,
-                    "light intensity should have changed in the def"
-                )
-            }
-            other => panic!("expected Float, got {other:?}"),
-        }
+        assert_eq!(
+            effective_scene_param_value(&project, &layer_id, light_node_id, "intensity"),
+            7.77,
+            "light intensity should have changed in its effective control value"
+        );
     }
 
-    /// BUG-229 diagnosis, camera twin of the light test above.
+    /// BUG-229 effective-value oracle, camera twin of the light test above.
     #[test]
     fn scene_setup_param_changed_writes_camera_orbit_to_def() {
         let (mut project, layer_id, _render_scene_id) = scene_layer_project();
@@ -2337,21 +2364,14 @@ mod tests {
             "a param scrub is not a structural graph edit"
         );
 
-        let after_def = effective_def(&project, &layer_id);
-        let node = after_def
-            .nodes
-            .iter()
-            .find(|n| n.id == camera_node_id)
-            .unwrap();
-        match node.params.get("orbit") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert_eq!(*value, 2.5, "camera orbit should have changed in the def")
-            }
-            other => panic!("expected Float, got {other:?}"),
-        }
+        assert_eq!(
+            effective_scene_param_value(&project, &layer_id, camera_node_id, "orbit"),
+            2.5,
+            "camera orbit should have changed in its effective control value"
+        );
     }
 
-    /// BUG-229 diagnosis, fog/atmosphere twin. SceneStarter ships with NO fog node
+    /// BUG-229 effective-value oracle, fog/atmosphere twin. SceneStarter ships with NO fog node
     /// by default (`AtmosphereVm::None`) — add one first through the SAME
     /// `SceneSetupAddFog` dispatch the panel's "+ Fog" button uses, exactly like a
     /// real session would, then scrub `fog_density` through it.
@@ -2405,18 +2425,11 @@ mod tests {
             "a param scrub is not a structural graph edit"
         );
 
-        let after_def = effective_def(&project, &layer_id);
-        let node = after_def
-            .nodes
-            .iter()
-            .find(|n| n.id == fog_node_id)
-            .unwrap();
-        match node.params.get("fog_density") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert_eq!(*value, 0.42, "fog density should have changed in the def")
-            }
-            other => panic!("expected Float, got {other:?}"),
-        }
+        assert_eq!(
+            effective_scene_param_value(&project, &layer_id, fog_node_id, "fog_density"),
+            0.42,
+            "fog density should have changed in its effective control value"
+        );
     }
 
     fn dispatch_modifier_action(

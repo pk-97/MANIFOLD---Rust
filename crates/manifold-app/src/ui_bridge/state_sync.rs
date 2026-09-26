@@ -142,6 +142,7 @@ pub fn push_state(
             if ui.last_modifier_selection_sequence != Some(update.sequence) {
                 ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
                 ui.inspector.apply_selection_visuals(tree);
+                ui.inspector.reveal_pending_selection(tree);
                 ui.last_modifier_selection_sequence = Some(update.sequence);
             }
         } else {

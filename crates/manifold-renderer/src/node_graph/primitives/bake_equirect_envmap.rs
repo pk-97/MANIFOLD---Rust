@@ -102,7 +102,7 @@ crate::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("intensity"),
-            label: "Environment Intensity",
+            label: "Intensity",
             ty: ParamType::Float,
             // 1.0 = the legacy studio look unchanged (every existing preset
             // wiring this node is unaffected). 0 = a black environment, so PBR

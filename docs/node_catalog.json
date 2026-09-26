@@ -1386,7 +1386,7 @@
         },
         {
           "default": "1",
-          "label": "Environment Intensity",
+          "label": "Intensity",
           "name": "intensity",
           "range": [
             "0",
@@ -1977,7 +1977,7 @@
           "default": "0.5",
           "label": "Angle",
           "name": "angle",
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -27269,7 +27269,7 @@
           "default": "1",
           "label": "Angle",
           "name": "angle",
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -29474,8 +29474,8 @@
         {
           "default": "0",
           "id": "15_angle",
-          "max": "1",
-          "min": "0",
+          "max": "6.2831855",
+          "min": "-6.2831855",
           "name": "Angle"
         },
         {
@@ -29712,8 +29712,8 @@
         {
           "default": "0",
           "id": "80_angle",
-          "max": "1",
-          "min": "0",
+          "max": "6.2831855",
+          "min": "-6.2831855",
           "name": "Angle"
         },
         {
@@ -29754,8 +29754,8 @@
         {
           "default": "0",
           "id": "22_angle",
-          "max": "1",
-          "min": "0",
+          "max": "6.2831855",
+          "min": "-6.2831855",
           "name": "Angle"
         },
         {
@@ -29992,8 +29992,8 @@
         {
           "default": "0",
           "id": "82_angle",
-          "max": "1",
-          "min": "0",
+          "max": "6.2831855",
+          "min": "-6.2831855",
           "name": "Angle"
         },
         {
@@ -30034,8 +30034,8 @@
         {
           "default": "0",
           "id": "29_angle",
-          "max": "1",
-          "min": "0",
+          "max": "6.2831855",
+          "min": "-6.2831855",
           "name": "Angle"
         },
         {
@@ -30272,8 +30272,8 @@
         {
           "default": "0",
           "id": "84_angle",
-          "max": "1",
-          "min": "0",
+          "max": "6.2831855",
+          "min": "-6.2831855",
           "name": "Angle"
         },
         {
@@ -32395,7 +32395,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -33849,7 +33849,7 @@
           "id": "1_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -35069,7 +35069,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -36400,7 +36400,7 @@
           "id": "32_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "0",
@@ -37991,7 +37991,7 @@
           "id": "3_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -41703,7 +41703,7 @@
           "id": "3_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -47148,7 +47148,7 @@
           "id": "3_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -48025,7 +48025,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -49480,7 +49480,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -50174,7 +50174,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -50694,7 +50694,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",
@@ -51214,7 +51214,7 @@
           "id": "2_intensity",
           "max": "4",
           "min": "0",
-          "name": "Environment Intensity"
+          "name": "Intensity"
         },
         {
           "default": "1",

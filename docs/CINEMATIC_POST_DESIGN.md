@@ -1,7 +1,7 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
 **Status:** SHIPPED (closed 2026-07-16) — P0–P6 all landed; as-built record in section 7. Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down (VD-020-CINEMATIC closed); any look issue from here is filed as a new BUG_BACKLOG entry, never reopened as a gate. OPEN: BUG-136 (cinematic-motion-blur-no-visible-effect) — see section 7's escalation note. · 2026-07-12**
-**D10 upgrade:** Layered half-resolution gathers, transparent silhouette coverage, aperture/quality controls and Smooth broad blur (2026-09-26). Initial photoscan captures did not validate app compositing: BUG-imds exposed a straight/premultiplied alpha mismatch on Japanese wisteria. Contracts and validation are in D10 below.
+**D10 upgrade:** Layered DoF and Smooth blur (2026-09-26). BUG-imds exposed an alpha mismatch missed by initial photoscan captures. App-path repairs, contracts and validation: D10 below.
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
