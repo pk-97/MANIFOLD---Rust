@@ -262,6 +262,17 @@ fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) 
         .collect()
 }
 
+/// The modal prevents authoring commands while export owns the content loop.
+#[cfg(target_os = "macos")]
+fn poll_export_cancel(cmd_rx: &Receiver<ContentCommand>) -> bool {
+    while let Ok(cmd) = cmd_rx.try_recv() {
+        if matches!(cmd, ContentCommand::CancelExport) {
+            return true;
+        }
+    }
+    false
+}
+
 impl ContentThread {
     /// Run the offline video export loop.
     ///
@@ -276,6 +287,20 @@ impl ContentThread {
     /// Port of Unity VideoExporter.ExportCoroutine() (offline / generator-only path).
     #[cfg(target_os = "macos")]
     pub(crate) fn run_export(
+        &mut self,
+        config: manifold_media::export_config::ExportConfig,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) {
+        self.send_export_phase(state_tx, true, 0.0, "Preparing export...", false);
+        self.run_export_inner(config, cmd_rx, state_tx);
+        self.send_export_phase(state_tx, false, 1.0, "Export finished", true);
+    }
+
+    /// Run the export body. The public wrapper owns the whole-run lifecycle
+    /// notifications, including the terminal pulse after playback restore.
+    #[cfg(target_os = "macos")]
+    fn run_export_inner(
         &mut self,
         config: manifold_media::export_config::ExportConfig,
         cmd_rx: &Receiver<ContentCommand>,
@@ -400,6 +425,7 @@ impl ContentThread {
         }
 
         // Restore playback state (once, after all sections).
+        self.send_export_phase(state_tx, true, 1.0, "Restoring playback...", false);
 
         // Restore unconditionally: the saved output dimensions can match the
         // export dimensions while the saved live render scale differs.
@@ -432,6 +458,30 @@ impl ContentThread {
         self.engine.set_export_mode(false);
     }
 
+    #[cfg(target_os = "macos")]
+    fn send_export_phase(
+        &self,
+        state_tx: &Sender<ContentState>,
+        is_exporting: bool,
+        export_progress: f32,
+        status: &str,
+        export_run_finished: bool,
+    ) {
+        let state = ContentState {
+            is_exporting,
+            export_progress,
+            export_status: Arc::from(status),
+            export_run_finished,
+            current_beat: self.engine.current_beat(),
+            current_time: self.engine.current_time(),
+            is_playing: self.engine.is_playing(),
+            ..ContentState::default()
+        };
+        if let Err(e) = state_tx.send(state) {
+            log::error!("[ContentThread] Export phase channel disconnected: {e}");
+        }
+    }
+
     /// Run one export pass for a single (possibly section) range — the original
     /// single-export body from timing through finalize. The caller owns playback
     /// save/restore and the export-mode / resize lifecycle; this does the
@@ -448,6 +498,12 @@ impl ContentThread {
     ) -> bool {
         use manifold_core::tempo::TempoMapConverter;
         use manifold_media::audio_muxer::AudioMuxer;
+
+        let status = match progress_prefix {
+            Some(prefix) => format!("{prefix} — Preparing export..."),
+            None => "Preparing export...".into(),
+        };
+        self.send_export_phase(state_tx, true, 0.0, &status, false);
 
         // Re-fetch the project (the caller's borrow ended before entering
         // export mode). Defensive: the caller already resolved it.
@@ -712,12 +768,7 @@ impl ContentThread {
         let mut gpu_failed = false;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                if matches!(cmd, ContentCommand::CancelExport) {
-                    cancelled = true;
-                    break;
-                }
-            }
+            cancelled = poll_export_cancel(cmd_rx);
             if cancelled {
                 session.cancel();
                 break;
@@ -758,49 +809,66 @@ impl ContentThread {
         }
 
         // 6. Finalize
-        let failed = cancelled || encode_error.is_some();
+        let mut failed = cancelled || encode_error.is_some();
         let mut finalize_failed = false;
+        let frames_encoded = session.frames_encoded();
+        if failed {
+            session.cancel();
+        } else {
+            // Finalization can block in the native encoder/audio muxer. Honor a
+            // request both before and after it, before reporting this file done.
+            let status = match progress_prefix {
+                Some(prefix) => format!("{prefix} — Finalizing video..."),
+                None => "Finalizing video...".into(),
+            };
+            self.send_export_phase(state_tx, true, 1.0, &status, false);
+            cancelled = poll_export_cancel(cmd_rx);
+            if cancelled {
+                session.cancel();
+            } else {
+                let result = session.finalize(ffmpeg_path.as_deref());
+                cancelled = poll_export_cancel(cmd_rx);
+                if !cancelled {
+                    match result {
+                        Ok(result) => {
+                            log::info!(
+                                "[ContentThread] Export complete: {} frames, {:.2}s -> {}",
+                                result.frames_encoded,
+                                result.duration_seconds,
+                                result.output_path,
+                            );
+                            self.send_export_finished(
+                                state_tx,
+                                true,
+                                format!("Export complete: {} frames", result.frames_encoded),
+                                &result.output_path,
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("[ContentThread] Export finalization failed: {e}");
+                            self.send_export_finished(
+                                state_tx,
+                                false,
+                                format!("Export failed: {e}"),
+                                &export_config.output_path,
+                            );
+                            finalize_failed = true;
+                        }
+                    }
+                }
+            }
+            failed = cancelled;
+        }
         if failed {
             if cancelled {
                 log::info!(
                     "[ContentThread] Export cancelled at frame {}",
-                    session.frames_encoded()
+                    frames_encoded
                 );
             }
-            session.cancel();
-            // Clean up partial file
             let _ = std::fs::remove_file(&export_config.output_path);
             let temp_video = format!("{}.video_only.mp4", export_config.output_path);
             let _ = std::fs::remove_file(&temp_video);
-        } else {
-            // FFmpeg was already resolved (and its presence verified when
-            // audio muxing is needed) before the frame loop started — BUG-130.
-            match session.finalize(ffmpeg_path.as_deref()) {
-                Ok(result) => {
-                    log::info!(
-                        "[ContentThread] Export complete: {} frames, {:.2}s -> {}",
-                        result.frames_encoded,
-                        result.duration_seconds,
-                        result.output_path,
-                    );
-                    self.send_export_finished(
-                        state_tx,
-                        true,
-                        format!("Export complete: {} frames", result.frames_encoded),
-                        &result.output_path,
-                    );
-                }
-                Err(e) => {
-                    log::error!("[ContentThread] Export finalization failed: {e}");
-                    self.send_export_finished(
-                        state_tx,
-                        false,
-                        format!("Export failed: {e}"),
-                        &export_config.output_path,
-                    );
-                    finalize_failed = true;
-                }
-            }
         }
 
         // Remove the temporary audio mixdown WAV (already muxed into the final
@@ -1010,9 +1078,8 @@ impl ContentThread {
     /// `export_progress` / `export_status` were deleted un-consumed by the
     /// 2026-07-09 ContentState orphan purge (UI_PROJECTION_LAYER_DESIGN.md
     /// P0) — this call kept running as a transport keep-alive into a void.
-    /// Restored here WITH their UI consumer (the header export status
-    /// strip, `app_render.rs`), per I1's "fields land with their consumer
-    /// or not at all".
+    /// Consumed as notifications by the export modal (`ui_root/export.rs`),
+    /// without replacing the full playback snapshot with default fields.
     #[cfg(target_os = "macos")]
     fn send_export_progress(
         &self,

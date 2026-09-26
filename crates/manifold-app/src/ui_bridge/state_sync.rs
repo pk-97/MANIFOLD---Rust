@@ -112,28 +112,10 @@ pub fn push_state(
                 .extend_from_slice(&content_state.midi_device_names);
         }
 
-        // D17 "export-complete green sweep" (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
-        // `export_finished` was written by the content thread but never read —
-        // see the `FIXME(dead-code-audit)` on `ExportFinishedEvent` in
-        // `content_state.rs`. `content_state` here is a cached snapshot
-        // re-pushed every UI frame, not an edge-triggered event, so key on the
-        // event's own identity to fire the toast exactly once per real export.
-        if let Some(ev) = &content_state.export_finished {
-            let key = format!("{}|{}|{}", ev.success, ev.message, ev.output_path);
-            if ui.last_export_toast_key.as_deref() != Some(key.as_str()) {
-                if ev.success {
-                    ui.toast.show_with_accent(ev.message.clone(), color::GREEN_BASE);
-                } else {
-                    ui.toast.show_with_accent(ev.message.clone(), color::RED_BASE);
-                }
-                ui.last_export_toast_key = Some(key);
-            }
-        }
-
         // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
         // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
-        // handlers used to show directly (`app_render.rs`). Same re-fire guard
-        // as the export toast above; keyed on `data_version` (bumped by every
+        // handlers used to show directly (`app_render.rs`). Keyed on
+        // `data_version` (bumped by every
         // undo/redo) rather than the description, so undoing the same command
         // twice in a row (rare, but possible via redo-then-undo) still fires.
         if let Some(ev) = &content_state.undo_redo_event {

@@ -68,7 +68,7 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
-        ProjectAction::ExportVideo | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
+        ProjectAction::ExportVideo | ProjectAction::CancelExport | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }

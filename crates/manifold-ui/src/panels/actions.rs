@@ -218,6 +218,7 @@ pub enum ProjectAction {
     SaveProjectAs,
     ExportVideo,
     ExportFrame,
+    CancelExport,
     ToggleHdr,
     ToggleSplitSections,
     ExportXml,
