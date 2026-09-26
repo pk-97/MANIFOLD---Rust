@@ -1338,6 +1338,7 @@ impl ContentThread {
                 .engine
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator),
+            sdr_preview: Some(self.content_pipeline.sdr_preview()),
             rt_quality: self
                 .engine
                 .project()
@@ -2153,6 +2154,32 @@ mod tests {
             "expected data_version to bump, got {}",
             state.data_version
         );
+
+        let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
+        handle.join().expect("content thread joined");
+    }
+
+    #[test]
+    fn paused_sdr_preview_publishes_runtime_snapshot() {
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        thread.rendering_paused = true;
+
+        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(64);
+        let (state_tx, state_rx) = crossbeam_channel::bounded(4);
+        let cmd_tx_for_test = cmd_tx.clone();
+        let handle = std::thread::spawn(move || {
+            thread.run(cmd_tx, cmd_rx, state_tx);
+        });
+
+        cmd_tx_for_test
+            .send(ContentCommand::SetSdrPreview(true))
+            .expect("command channel open");
+        let state = state_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("runtime preview snapshot published while paused");
+        assert_eq!(state.sdr_preview, Some(true));
+        assert_eq!(state.data_version, 0, "preview must not create an edit");
+        assert!(!state.editing_is_dirty, "preview must not dirty the project");
 
         let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
         handle.join().expect("content thread joined");

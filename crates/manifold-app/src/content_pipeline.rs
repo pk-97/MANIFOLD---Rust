@@ -725,7 +725,10 @@ pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
     /// Content-thread owner of independent destination policies.
     pub presentation: DisplayPresentationState,
-    presentation_curve: manifold_core::TonemapCurve,
+    /// Optional project SDR rendering curve. HDR destinations never apply it.
+    sdr_curve: Option<manifold_core::TonemapCurve>,
+    /// Workspace-only viewing preference; never serialized into the project.
+    sdr_preview: bool,
     sdr_output: Option<manifold_renderer::render_target::RenderTarget>,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
@@ -1087,7 +1090,8 @@ impl ContentPipeline {
         Self {
             compositor,
             presentation: DisplayPresentationState::default(),
-            presentation_curve: manifold_core::TonemapCurve::AcesNarkowicz,
+            sdr_curve: None,
+            sdr_preview: false,
             sdr_output: None,
             pq_encoder: None,
             #[cfg(target_os = "macos")]
@@ -2160,7 +2164,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
-        self.presentation_curve = project.map_or(manifold_core::TonemapCurve::AcesNarkowicz, |p| p.settings.tonemap_curve);
+        self.sdr_curve = project.and_then(|p| {
+            p.settings.tonemap_enabled.then_some(p.settings.tonemap_curve)
+        });
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
         // Fold this tick's fires into the renderer's per-layer/master
@@ -3078,7 +3084,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if let Some(ref surface) = self.output_surface
                 && !self.output_present_suspended
                 && let Some(ref pipeline) = self.presentation_pipeline
-                && let Some(plan) = self.presentation.plan(DisplayDestination::Output, self.presentation_curve)
+                && let Some(plan) = self.display_presentation_plan(DisplayDestination::Output)
                 && let Some(drawable) = surface.next_drawable()
             {
                 let target = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Rgba16Float);
@@ -3110,7 +3116,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if let (Some(target), Some(pipeline), Some(plan)) = (
                 self.preview_textures[self.write_surface_index].as_ref(),
                 self.presentation_pipeline.as_ref(),
-                self.presentation.plan(DisplayDestination::Workspace, self.presentation_curve),
+                self.display_presentation_plan(DisplayDestination::Workspace),
             ) {
                 pipeline.encode(
                     &mut native_enc,
@@ -3237,6 +3243,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Format-convert the upscaled output (Rgba16Float → sRGB Bgra8Unorm)
         // into a recording pool texture. Compute dispatch in the SAME command
         // buffer — the recording thread has zero GPU work.
+        let sdr_recording_plan = self.sdr_presentation_plan();
         let recording_fence = if !export_mode {
             if let Some(ref mut session) = self.recording_session {
                 if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
@@ -3260,7 +3267,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         &mut native_enc,
                         LinearSceneFrame::new(src).expect("recording source is linear float"),
                         LinearPresentationTarget::new(mapped).expect("SDR mapped target is float"),
-                        DisplayPlan::new(DisplayCapabilities::sdr(), self.presentation_curve),
+                        sdr_recording_plan,
                         (0.0, 0.0, src.width as f32, src.height as f32),
                         manifold_gpu::GpuLoadAction::Clear,
                     );
@@ -3632,7 +3639,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             depth: self.node_preview_depth_pipeline.as_ref(),
             raw: self.preview_pipeline.as_ref(),
             presentation: self.presentation_pipeline.as_ref(),
-            plan: self.presentation.plan(DisplayDestination::GraphEditor, self.presentation_curve),
+            plan: self.display_presentation_plan(DisplayDestination::GraphEditor),
         }
     }
 
@@ -3885,6 +3892,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.compositor.output_texture()
     }
 
+    /// Change only the workspace viewing mode. External output, graph previews,
+    /// the shared master image and all export settings retain their own policy.
+    pub(crate) fn set_sdr_preview(&mut self, enabled: bool) -> bool {
+        let changed = self.sdr_preview != enabled;
+        self.sdr_preview = enabled;
+        changed
+    }
+
+    pub(crate) fn sdr_preview(&self) -> bool {
+        self.sdr_preview
+    }
+
+    /// Shared SDR policy for export, recording and the explicit SDR preview.
+    pub(crate) fn sdr_presentation_plan(&self) -> DisplayPlan {
+        DisplayPlan::new(DisplayCapabilities::sdr(), self.sdr_curve)
+    }
+
+    pub(crate) fn display_presentation_plan(
+        &self,
+        destination: DisplayDestination,
+    ) -> Option<DisplayPlan> {
+        if destination == DisplayDestination::Workspace && self.sdr_preview {
+            Some(self.sdr_presentation_plan())
+        } else {
+            self.presentation.plan(destination, self.sdr_curve)
+        }
+    }
+
     /// Map the canonical HDR frame to linear SDR for the video encoder.
     /// Allocation occurs only on first use or a resolution change.
     pub fn sdr_export_output_texture(&mut self) -> &manifold_gpu::GpuTexture {
@@ -3901,7 +3936,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             &mut enc,
             LinearSceneFrame::new(source).expect("content output is linear float"),
             LinearPresentationTarget::new(target).expect("SDR mapped output is float"),
-            DisplayPlan::new(DisplayCapabilities::sdr(), self.presentation_curve),
+            self.sdr_presentation_plan(),
             (0.0, 0.0, source.width as f32, source.height as f32),
             manifold_gpu::GpuLoadAction::Clear,
         );

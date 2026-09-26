@@ -373,12 +373,25 @@ pub fn push_state(
             .set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
                 project.settings.tonemap_curve,
             ));
+        ui.settings_popup
+            .set_tonemap_enabled(project.settings.tonemap_enabled);
         ui.settings_popup.set_hdr(project.settings.export_hdr);
         ui.settings_popup
             .set_split_sections(project.settings.split_at_markers);
 
         // RT Quality panel — feed the current settings
         ui.rt_quality_panel.configure(project.settings.rt_quality);
+    }
+
+    // Runtime-only presentation state rides every ContentState, including
+    // paused command snapshots; it must not wait for a project-version change.
+    if let Some(sdr_preview) = content_state.sdr_preview
+        && ui.settings_popup.set_sdr_preview(sdr_preview)
+    {
+        // The runtime preview does not bump the project version. Request the
+        // established overlay visual rebuild so its segment active styling
+        // reflects the new snapshot even while paused.
+        ui.overlay_dirty = true;
     }
 
     // Footer stats

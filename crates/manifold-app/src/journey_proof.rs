@@ -52,9 +52,13 @@ use manifold_core::layer::Layer;
 use manifold_core::marker::TimelineMarker;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
+use manifold_core::TonemapCurve;
 use manifold_core::{AudioBand, AudioFeature, AudioFeatureKind, AudioSend, ParameterAudioMod};
 use manifold_core::{BeatDivision, Beats, Bpm, DriverWaveform, PresetTypeId, Seconds};
 use manifold_media::export_config::ExportConfig;
+use manifold_renderer::presentation::{
+    CurrentHeadroom, DisplayCapabilities, DisplayDestination, DisplayPlan, PotentialHeadroom,
+};
 
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
@@ -105,11 +109,110 @@ fn run_headless_export_states(
 /// frame export, and is how we observe the `ExportFinishedEvent` outside
 /// `run_export`'s own borrow of `state_tx`.
 fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, String> {
+    run_headless_export_with_options(project, cfg, None, false, false, false).map(|result| result.path)
+}
+
+struct ObservedExport {
+    path: PathBuf,
+    sdr: Option<Vec<u8>>,
+    hdr: Option<Vec<u8>>,
+}
+
+/// Run one export with the explicit first-frame production SDR readback hook.
+/// The hook is test-only and observes the mapped texture selected by the real
+/// encoder; it does not render a second frame or add another export.
+fn run_headless_export_with_sdr_observation(
+    project: Project,
+    cfg: ExportConfig,
+    workspace_capabilities: Option<DisplayCapabilities>,
+    sdr_preview: bool,
+) -> Result<(PathBuf, Vec<u8>), String> {
+    let result = run_headless_export_with_options(
+        project,
+        cfg,
+        workspace_capabilities,
+        true,
+        false,
+        sdr_preview,
+    )?;
+    result.sdr
+        .map(|readback| (result.path, readback))
+        .ok_or_else(|| "colour proof observer produced no first-frame SDR readback".to_string())
+}
+
+fn run_headless_export_with_hdr_observation(
+    project: Project,
+    cfg: ExportConfig,
+    workspace_capabilities: Option<DisplayCapabilities>,
+    sdr_preview: bool,
+) -> Result<(PathBuf, Vec<u8>), String> {
+    let result = run_headless_export_with_options(
+        project,
+        cfg,
+        workspace_capabilities,
+        false,
+        true,
+        sdr_preview,
+    )?;
+    result.hdr
+        .map(|readback| (result.path, readback))
+        .ok_or_else(|| "colour proof observer produced no first-frame HDR readback".to_string())
+}
+
+fn run_headless_export_with_options(
+    project: Project,
+    cfg: ExportConfig,
+    workspace_capabilities: Option<DisplayCapabilities>,
+    capture_sdr_readback: bool,
+    capture_hdr_readback: bool,
+    sdr_preview: bool,
+) -> Result<ObservedExport, String> {
+    let expected_sdr_plan = DisplayPlan::new(
+        DisplayCapabilities::sdr(),
+        project.settings.tonemap_enabled.then_some(project.settings.tonemap_curve),
+    );
     let mut ct = headless_content_thread(project, cfg.width, cfg.height);
 
+    if let Some(capabilities) = workspace_capabilities {
+        assert!(
+            !ct.handle_command(ContentCommand::UpdateDisplayCapabilities {
+                destination: DisplayDestination::Workspace,
+                capabilities,
+            }),
+            "display-capability update must not request shutdown"
+        );
+        assert_eq!(
+            ct.content_pipeline
+                .presentation
+                .capabilities(DisplayDestination::Workspace),
+            Some(capabilities),
+            "real content command must update workspace presentation state before export"
+        );
+    }
+
+    assert!(
+        !ct.handle_command(ContentCommand::SetSdrPreview(sdr_preview)),
+        "SDR preview command must not request shutdown"
+    );
+    assert_eq!(
+        ct.content_pipeline.sdr_preview(),
+        sdr_preview,
+        "real SetSdrPreview command must update runtime presentation state"
+    );
     let (cmd_tx, cmd_rx): (Sender<ContentCommand>, Receiver<ContentCommand>) =
         crossbeam_channel::unbounded();
     let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (observation_tx, observation_rx) = crossbeam_channel::unbounded();
+    let _observation_guard = if capture_sdr_readback || capture_hdr_readback {
+        Some(crate::content_export::install_export_observer_with_export_readbacks(
+            observation_tx,
+            None,
+            capture_sdr_readback,
+            capture_hdr_readback,
+        ))
+    } else {
+        None
+    };
 
     let drain = std::thread::Builder::new()
         .name("journey-proof-drain".into())
@@ -143,6 +246,17 @@ fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, S
 
     ct.run_export(cfg, &cmd_rx, &state_tx);
 
+    // Rendering synchronizes the project's curve into the pipeline. Inspect
+    // the plan afterward so this checks the selected curve, not its initial Off state.
+    assert_eq!(ct.content_pipeline.sdr_presentation_plan(), expected_sdr_plan);
+    if sdr_preview {
+        assert_eq!(
+            ct.content_pipeline.display_presentation_plan(DisplayDestination::Workspace),
+            Some(expected_sdr_plan),
+            "SDR preview must use the exact shared SDR export presentation plan"
+        );
+    }
+
     // Keep cmd_tx alive across the call above (run_export only ever reads
     // it); drop explicitly afterward so the drain thread's `recv()` can't
     // hang if `run_export` somehow returned without sending a finished event.
@@ -150,8 +264,27 @@ fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, S
     drop(state_tx);
 
     let finished = drain.join().map_err(|_| "journey-proof drain thread panicked".to_string())?;
+    let (sdr_readback, hdr_readback) = if capture_sdr_readback || capture_hdr_readback {
+        let mut sdr = None;
+        let mut hdr = None;
+        for observation in observation_rx.try_iter() {
+            if sdr.is_none() {
+                sdr = observation.sdr_mapped_rgba16f;
+            }
+            if hdr.is_none() {
+                hdr = observation.hdr_scene_rgba16f;
+            }
+        }
+        (sdr, hdr)
+    } else {
+        (None, None)
+    };
     match finished {
-        Some(ev) if ev.success => Ok(PathBuf::from(ev.output_path)),
+        Some(ev) if ev.success => Ok(ObservedExport {
+            path: PathBuf::from(ev.output_path),
+            sdr: sdr_readback,
+            hdr: hdr_readback,
+        }),
         Some(ev) => Err(format!("export failed: {}", ev.message)),
         None => Err("export produced no ExportFinishedEvent".to_string()),
     }
@@ -298,6 +431,113 @@ fn ffprobe_audio_start_seconds(path: &Path) -> Result<f64, String> {
         .map_err(|e| format!("parse ffprobe audio start {s:?}: {e}"))
 }
 
+fn ffprobe_hdr_stream(path: &Path) -> Result<String, String> {
+    let ffprobe = resolve_ffprobe().ok_or_else(|| "ffprobe not found".to_string())?;
+    let output = std::process::Command::new(&ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,pix_fmt,color_primaries,color_transfer,color_space",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("spawn ffprobe HDR metadata: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe HDR metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("ffprobe HDR metadata was not UTF-8: {e}"))
+}
+
+fn max_finite_half(readback: &[u8]) -> f32 {
+    let mut max = 0.0f32;
+    for (component, bytes) in readback.chunks_exact(2).enumerate() {
+        // Rgba16Float readback is interleaved; alpha is not a scene highlight.
+        if component % 4 == 3 {
+            continue;
+        }
+        let value = half::f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]])).to_f32();
+        assert!(value.is_finite(), "HDR source RGB readback contains non-finite value");
+        max = max.max(value);
+    }
+    max
+}
+
+/// Decode one already-produced HDR frame to planar 16-bit RGB. The command
+/// deliberately applies only a pixel-format conversion: no tonemap or color
+/// conversion filter is inserted before the rawvideo sink.
+fn decode_hdr_first_frame(path: &Path, width: u32, height: u32) -> Result<Vec<u16>, String> {
+    let ffmpeg = manifold_media::audio_muxer::AudioMuxer::resolve_ffmpeg("")
+        .ok_or_else(|| "ffmpeg not found".to_string())?;
+    let output = std::process::Command::new(&ffmpeg)
+        .args([
+            "-v",
+            "error",
+            "-i",
+            path.to_str().ok_or_else(|| format!("non-UTF-8 path: {}", path.display()))?,
+            "-frames:v",
+            "1",
+            "-vf",
+            "format=gbrp16le",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gbrp16le",
+            "pipe:1",
+        ])
+        .output()
+        .map_err(|e| format!("spawn ffmpeg HDR decode: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ffmpeg HDR decode failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let expected = width as usize * height as usize * 3 * 2;
+    if output.stdout.len() != expected {
+        return Err(format!(
+            "HDR raw decode returned {} bytes, expected {expected}",
+            output.stdout.len()
+        ));
+    }
+    Ok(output
+        .stdout
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .collect())
+}
+
+fn mean_u16_distance(a: &[u16], b: &[u16]) -> f64 {
+    assert_eq!(a.len(), b.len(), "decoded HDR frame length mismatch");
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| f64::from(a.abs_diff(*b)) / 65535.0)
+        .sum::<f64>()
+        / a.len() as f64
+}
+
+fn pq_code_to_nits(code: u16) -> f32 {
+    let p = f32::from(code) / 65535.0;
+    let m1 = 2610.0f32 / 16384.0;
+    let m2 = 78.84375f32;
+    let c1 = 0.8359375f32;
+    let c2 = 2413.0f32 / 128.0;
+    let c3 = 18.6875f32;
+    let p_m = p.powf(1.0 / m2);
+    ((p_m - c1) / (c2 - c3 * p_m)).max(0.0).powf(1.0 / m1) * 10000.0
+}
+
+fn max_decoded_pq_nits(codes: &[u16]) -> f32 {
+    codes.iter().copied().map(pq_code_to_nits).fold(0.0, f32::max)
+}
+
 // ─── Fixture builders ───────────────────────────────────────────────────────
 
 const CLICK_BPM: f32 = 120.0;
@@ -313,6 +553,10 @@ const CLICK_FPS: f32 = 24.0;
 /// primitive involved; this harness only sets an existing param's audio-mod
 /// binding, same as any performer would from the inspector.
 const DRIVEN_PARAM: &str = "brightness";
+
+const COLOUR_PROOF_BPM: f32 = 120.0;
+const COLOUR_PROOF_BEATS: f64 = 2.0;
+const COLOUR_PROOF_FPS: f32 = 4.0;
 
 pub(crate) fn star_field_generator_layer(index: i32) -> Layer {
     let mut layer = Layer::new("Stars".to_string(), LayerType::Generator, index);
@@ -478,6 +722,77 @@ fn lfo_project() -> Project {
     project
 }
 
+/// A small, deterministic existing generator with a broad-area image. Plasma
+/// stays entirely in the normal generator registry and produces enough varied
+/// colour for the selected scene curves to remain visible after H.264.
+fn colour_export_project(curve: Option<TonemapCurve>) -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(COLOUR_PROOF_BPM);
+    project.settings.tonemap_enabled = curve.is_some();
+    if let Some(curve) = curve {
+        project.settings.tonemap_curve = curve;
+    }
+
+    let mut layer = Layer::new_generator(
+        "Colour proof".to_string(),
+        PresetTypeId::from_string("Plasma".to_string()),
+        0,
+    );
+    let params = layer
+        .gen_params_mut()
+        .expect("Plasma generator must carry parameters");
+    for (id, value) in [("complexity", 1.0), ("contrast", 1.0), ("speed", 0.0)] {
+        assert!(params.set_base_param(id, value), "Plasma parameter {id} exists");
+        assert_eq!(
+            params.get_param(id),
+            value,
+            "Plasma fixture must target an existing `{id}` manifest parameter"
+        );
+    }
+    let mut grade = manifold_core::preset_definition_registry::create_default(
+        &PresetTypeId::COLOR_GRADE,
+    );
+    // Export restores effective values from the authored bases every frame.
+    // Seed the base so this fixture actually exercises HDR master highlights.
+    assert!(grade.set_base_param("gain", 2.0));
+    assert_eq!(
+        grade.get_param("gain"),
+        2.0,
+        "ColorGrade fixture must target the existing `gain` manifest parameter"
+    );
+    project.settings.master_effects.push(grade);
+    layer.clips.push(TimelineClip::new_generator(
+        Beats::ZERO,
+        Beats(COLOUR_PROOF_BEATS),
+    ));
+    project.timeline.layers.push(layer);
+    project.reconcile_param_manifests();
+    project
+}
+
+fn tiny_colour_export_config(output_path: &Path) -> ExportConfig {
+    ExportConfig {
+        output_path: output_path.to_string_lossy().into_owned(),
+        width: 64,
+        height: 64,
+        fps: COLOUR_PROOF_FPS,
+        hdr: false,
+        start_beat: 0.0,
+        end_beat: 0.0,
+        audio_path: None,
+        audio_start_beat: 0.0,
+        audio_encoder_delay: 0.0,
+        split_at_markers: false,
+    }
+}
+
+fn tiny_hdr_colour_export_config(output_path: &Path) -> ExportConfig {
+    ExportConfig {
+        hdr: true,
+        ..tiny_colour_export_config(output_path)
+    }
+}
+
 // ─── Proofs ─────────────────────────────────────────────────────────────────
 
 #[cfg(all(test, feature = "journey-proofs"))]
@@ -519,6 +834,73 @@ mod tests {
     fn mean_at(series: &[f32], indices: &[usize]) -> f32 {
         let sum: f32 = indices.iter().map(|&i| series[i]).sum();
         sum / indices.len() as f32
+    }
+
+    fn mean_rgb_distance(a: &[PathBuf], b: &[PathBuf]) -> Result<f32, String> {
+        if a.len() != b.len() {
+            return Err(format!("frame-count mismatch: {} vs {}", a.len(), b.len()));
+        }
+        let mut total = 0.0;
+        let mut count = 0usize;
+        for (a, b) in a.iter().zip(b) {
+            let a = image::open(a)
+                .map_err(|e| format!("decode {}: {e}", a.display()))?
+                .to_rgb8();
+            let b = image::open(b)
+                .map_err(|e| format!("decode {}: {e}", b.display()))?
+                .to_rgb8();
+            if a.dimensions() != b.dimensions() {
+                return Err(format!(
+                    "pixel-dimension mismatch: {:?} vs {:?}",
+                    a.dimensions(),
+                    b.dimensions()
+                ));
+            }
+            for (a, b) in a.pixels().zip(b.pixels()) {
+                total += a
+                    .0
+                    .iter()
+                    .zip(b.0)
+                    .map(|(a, b)| (f32::from(*a) - f32::from(b)).abs() / 255.0)
+                    .sum::<f32>();
+                count += 3;
+            }
+        }
+        Ok(total / count as f32)
+    }
+
+    fn encoded_rgb_error(path: &Path, mapped_rgba16f: &[u8]) -> Result<(f32, u8), String> {
+        let image = image::open(path)
+            .map_err(|e| format!("decode {}: {e}", path.display()))?
+            .to_rgb8();
+        let expected_bytes = image.width() as usize * image.height() as usize * 8;
+        if mapped_rgba16f.len() != expected_bytes {
+            return Err(format!(
+                "mapped SDR readback has {} bytes, expected {expected_bytes} for {}×{}",
+                mapped_rgba16f.len(),
+                image.width(),
+                image.height()
+            ));
+        }
+
+        let mut sum = 0.0f32;
+        let mut max = 0u8;
+        let mut samples = 0usize;
+        for (pixel, halves) in image.pixels().zip(mapped_rgba16f.chunks_exact(8)) {
+            for (channel, offset) in [0usize, 2, 4].into_iter().enumerate() {
+                let linear = half::f16::from_bits(u16::from_le_bytes([
+                    halves[offset],
+                    halves[offset + 1],
+                ]))
+                .to_f32();
+                let expected = manifold_renderer::headless_readback::linear_to_srgb8(linear);
+                let error = pixel.0[channel].abs_diff(expected);
+                sum += f32::from(error);
+                max = max.max(error);
+                samples += 1;
+            }
+        }
+        Ok((sum / samples as f32, max))
     }
 
     fn one_beat_generator_project(marker: Option<Beats>) -> Project {
@@ -958,5 +1340,190 @@ mod tests {
         // given identical input frames, but this guards against any residual
         // GPU float nondeterminism) while still failing hard on real drift.
         assert!(max_diff < 0.01, "two runs of the same export diverged: max per-frame luma diff {max_diff}");
+    }
+
+    /// Real SDR/HDR export colour proof. SDR curves are selected only at the
+    /// final presentation/export boundary; the shared SDR preview plan must
+    /// match the encoded output even when the workspace is HDR-capable. Two
+    /// actual HEVC HDR exports additionally prove that the source scene and
+    /// highlight headroom are unchanged by the selected SDR curve or preview.
+    #[test]
+    fn sdr_export_colour_choice_and_display_independence() {
+        let dir = out_dir("sdr_export_colour_choice_and_display_independence");
+        let off_path = dir.join("off.mp4");
+        let aces_path = dir.join("aces.mp4");
+        let agx_path = dir.join("agx.mp4");
+        let aces_hdr_workspace_path = dir.join("aces_hdr_workspace.mp4");
+        let hdr_off_path = dir.join("hdr_off.mp4");
+        let hdr_agx_path = dir.join("hdr_agx.mp4");
+
+        let (off_path, off_mapped) = run_headless_export_with_sdr_observation(
+            colour_export_project(None),
+            tiny_colour_export_config(&off_path),
+            None,
+            false,
+        )
+        .expect("Off SDR export should succeed");
+        let (aces_path, aces_mapped) = run_headless_export_with_sdr_observation(
+            colour_export_project(Some(TonemapCurve::AcesNarkowicz)),
+            tiny_colour_export_config(&aces_path),
+            None,
+            false,
+        )
+        .expect("ACES SDR export should succeed");
+        let (agx_path, agx_mapped) = run_headless_export_with_sdr_observation(
+            colour_export_project(Some(TonemapCurve::Agx)),
+            tiny_colour_export_config(&agx_path),
+            None,
+            true,
+        )
+        .expect("AgX SDR export should succeed");
+
+        let hdr_workspace = DisplayCapabilities::new(
+            PotentialHeadroom::new(4.0).expect("valid HDR potential headroom"),
+            CurrentHeadroom::new(2.0).expect("valid HDR current headroom"),
+        );
+        let (aces_hdr_workspace_path, aces_hdr_workspace_mapped) = run_headless_export_with_sdr_observation(
+            colour_export_project(Some(TonemapCurve::AcesNarkowicz)),
+            tiny_colour_export_config(&aces_hdr_workspace_path),
+            Some(hdr_workspace),
+            true,
+        )
+        .expect("ACES SDR export with HDR workspace capability should succeed");
+
+        let (hdr_off_path, hdr_off_scene) = run_headless_export_with_hdr_observation(
+            colour_export_project(None),
+            tiny_hdr_colour_export_config(&hdr_off_path),
+            None,
+            false,
+        )
+        .expect("Off HDR export should succeed");
+        let (hdr_agx_path, hdr_agx_scene) = run_headless_export_with_hdr_observation(
+            colour_export_project(Some(TonemapCurve::Agx)),
+            tiny_hdr_colour_export_config(&hdr_agx_path),
+            Some(hdr_workspace),
+            true,
+        )
+        .expect("AgX HDR export with SDR preview should succeed");
+
+        let off_frames = extract_frames_to_pngs(&off_path, &dir.join("off_frames"))
+            .expect("extract Off frames");
+        let aces_frames = extract_frames_to_pngs(&aces_path, &dir.join("aces_frames"))
+            .expect("extract ACES frames");
+        let agx_frames = extract_frames_to_pngs(&agx_path, &dir.join("agx_frames"))
+            .expect("extract AgX frames");
+        let aces_hdr_workspace_frames = extract_frames_to_pngs(
+            &aces_hdr_workspace_path,
+            &dir.join("aces_hdr_workspace_frames"),
+        )
+        .expect("extract HDR-workspace ACES frames");
+        let hdr_off_frames = extract_frames_to_pngs(&hdr_off_path, &dir.join("hdr_off_frames"))
+            .expect("extract Off HDR frames");
+        let hdr_agx_frames = extract_frames_to_pngs(&hdr_agx_path, &dir.join("hdr_agx_frames"))
+            .expect("extract AgX HDR frames");
+
+        assert!(
+            off_frames.len() == 4
+                && aces_frames.len() == 4
+                && agx_frames.len() == 4
+                && aces_hdr_workspace_frames.len() == 4
+                && hdr_off_frames.len() == 4
+                && hdr_agx_frames.len() == 4,
+            "colour proof must decode exactly four frames per 1s export: Off={}, ACES={}, AgX={}, HDR workspace ACES={}, HDR Off={}, HDR AgX={}",
+            off_frames.len(),
+            aces_frames.len(),
+            agx_frames.len(),
+            aces_hdr_workspace_frames.len(),
+            hdr_off_frames.len(),
+            hdr_agx_frames.len()
+        );
+        let hdr_off_decoded = decode_hdr_first_frame(&hdr_off_path, 64, 64)
+            .expect("decode first Off HDR frame without SDR tonemap");
+        let hdr_agx_decoded = decode_hdr_first_frame(&hdr_agx_path, 64, 64)
+            .expect("decode first AgX HDR frame without SDR tonemap");
+        let hdr_decoded_delta = mean_u16_distance(&hdr_off_decoded, &hdr_agx_decoded);
+        let hdr_decoded_highlight = max_decoded_pq_nits(&hdr_off_decoded)
+            .max(max_decoded_pq_nits(&hdr_agx_decoded));
+        let hdr_agx_metadata = ffprobe_hdr_stream(&hdr_agx_path).expect("ffprobe AgX HDR metadata");
+        let off_aces = mean_rgb_distance(&off_frames, &aces_frames).expect("compare Off/ACES");
+        let off_agx = mean_rgb_distance(&off_frames, &agx_frames).expect("compare Off/AgX");
+        let aces_agx = mean_rgb_distance(&aces_frames, &agx_frames).expect("compare ACES/AgX");
+        let display_delta = mean_rgb_distance(&aces_frames, &aces_hdr_workspace_frames)
+            .expect("compare SDR exports across workspace capabilities");
+        let off_error = encoded_rgb_error(&off_frames[0], &off_mapped).expect("compare Off to mapped SDR");
+        let aces_error = encoded_rgb_error(&aces_frames[0], &aces_mapped).expect("compare ACES to mapped SDR");
+        let agx_error = encoded_rgb_error(&agx_frames[0], &agx_mapped).expect("compare AgX to mapped SDR");
+        let aces_hdr_workspace_error = encoded_rgb_error(
+            &aces_hdr_workspace_frames[0],
+            &aces_hdr_workspace_mapped,
+        )
+        .expect("compare HDR-workspace ACES to mapped SDR");
+        let hdr_scene_delta = manifold_renderer::headless_readback::mean_abs_half_diff(
+            &hdr_off_scene,
+            &hdr_agx_scene,
+        );
+        let hdr_highlight = max_finite_half(&hdr_off_scene).max(max_finite_half(&hdr_agx_scene));
+        let hdr_metadata = ffprobe_hdr_stream(&hdr_off_path).expect("ffprobe HDR metadata");
+        println!(
+            "[journey-proof] SDR colour distances: Off/ACES={off_aces:.5}, Off/AgX={off_agx:.5}, ACES/AgX={aces_agx:.5}, ACES display/preview delta={display_delta:.5}; mapped-vs-encoded mean/max: Off={:.2}/{}, ACES={:.2}/{}, AgX={:.2}/{}, HDR-workspace ACES={:.2}/{}; HDR source mean delta={hdr_scene_delta:.6}, max={hdr_highlight:.3}; decoded HDR mean delta={hdr_decoded_delta:.6}, highlight={hdr_decoded_highlight:.1} nits; metadata Off={hdr_metadata:?}, AgX={hdr_agx_metadata:?}",
+            off_error.0,
+            off_error.1,
+            aces_error.0,
+            aces_error.1,
+            agx_error.0,
+            agx_error.1,
+            aces_hdr_workspace_error.0,
+            aces_hdr_workspace_error.1,
+        );
+
+        // Per-pixel RGB distance is measured after the real H.264 encode and
+        // PNG extraction, so these margins tolerate codec quantisation while
+        // still failing if the selected project curve is bypassed or collapsed.
+        assert!(off_aces > 0.005, "Off and ACES encoded pixels must differ: {off_aces}");
+        assert!(off_agx > 0.005, "Off and AgX encoded pixels must differ: {off_agx}");
+        assert!(aces_agx > 0.002, "ACES and AgX encoded pixels must differ: {aces_agx}");
+        assert!(
+            display_delta < 0.005,
+            "SDR encoded pixels must not depend on workspace HDR headroom or SDR preview: {display_delta}"
+        );
+        for (name, (mean, max)) in [
+            ("Off", off_error),
+            ("ACES", aces_error),
+            ("AgX", agx_error),
+            ("HDR-workspace ACES", aces_hdr_workspace_error),
+        ] {
+            assert!(mean < 8.0, "{name} encoded RGB mean error is too large: {mean:.2} levels");
+            assert!(max < 64, "{name} encoded RGB max error is too large: {max} levels");
+        }
+        assert!(
+            hdr_scene_delta < 0.01,
+            "SDR curve/preview must not change the canonical HDR export source: {hdr_scene_delta}"
+        );
+        assert!(
+            hdr_highlight > 1.0,
+            "HDR fixture must retain a scene-linear highlight above SDR white: {hdr_highlight}"
+        );
+        assert!(
+            hdr_decoded_delta < 0.01,
+            "decoded HDR RGB must remain unchanged by SDR curve/preview: {hdr_decoded_delta}"
+        );
+        assert!(
+            hdr_decoded_highlight > 210.0,
+            "decoded HDR highlight must remain clearly above 200-nit paper white: {hdr_decoded_highlight:.1} nits"
+        );
+        for (name, metadata) in [("Off", hdr_metadata), ("AgX", hdr_agx_metadata)] {
+            for required in [
+                "codec_name=hevc",
+                "pix_fmt=yuv420p10",
+                "color_primaries=bt2020",
+                "color_transfer=smpte2084",
+                "color_space=bt2020nc",
+            ] {
+                assert!(
+                    metadata.contains(required),
+                    "{name} HDR export metadata missing {required:?}: {metadata}"
+                );
+            }
+        }
     }
 }
