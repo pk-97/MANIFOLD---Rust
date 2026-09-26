@@ -15,6 +15,7 @@ pub mod camera;
 pub mod light;
 pub mod material_inspector;
 pub mod material;
+pub mod mesh_source;
 pub mod render_mode;
 pub mod scene_exposure;
 pub mod scene_object;
@@ -94,6 +95,7 @@ pub use material::{Material, MaterialKind};
 pub use scene_object::SceneObject;
 pub use transform::Transform;
 pub use fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry, MAX_FLUID_ROLES};
+pub use mesh_source::MeshSource;
 pub use viewport_camera::ViewportCamera;
 pub use viewport_overlay::{
     ScreenLine, ViewportOverlayConfig, WorldLine, build_overlay_lines, camera_frustum_lines,

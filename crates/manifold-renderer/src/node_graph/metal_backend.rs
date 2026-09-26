@@ -186,6 +186,9 @@ pub struct MetalBackend {
     /// CPU-only [`FluidRole`] values written via [`Backend::set_fluid_role`].
     /// Prepared geometry remains shared through the payload's `Arc`.
     fluid_roles: AHashMap<Slot, crate::node_graph::fluid_role::FluidRole>,
+    /// CPU-only authored [`MeshSource`](crate::node_graph::mesh_source::MeshSource) values written via
+    /// [`Backend::set_mesh_source`].
+    mesh_sources: AHashMap<Slot, crate::node_graph::mesh_source::MeshSource>,
     /// CPU-only [`SceneObject`] values written via [`Backend::set_object`].
     /// Same shape as `atmospheres` — drained after `node.scene_object`'s
     /// `evaluate`.
@@ -250,6 +253,7 @@ impl MetalBackend {
             render_modes: AHashMap::default(),
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
+            mesh_sources: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -287,6 +291,7 @@ impl MetalBackend {
             render_modes: AHashMap::default(),
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
+            mesh_sources: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -524,6 +529,7 @@ impl MetalBackend {
         self.buffers_array.clear();
         self.textures_3d.clear();
         self.fluid_roles.clear();
+        self.mesh_sources.clear();
         self.bound.clear();
         self.free_by_type.clear();
         self.pinned.clear();
@@ -587,6 +593,7 @@ impl MetalBackend {
             render_modes: AHashMap::default(),
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
+            mesh_sources: AHashMap::default(),
             objects: AHashMap::default(),
         };
         // Immutable slots are dedicated. Preserve compatible images; a changed
@@ -804,6 +811,7 @@ impl Backend for MetalBackend {
         }
         if let Some(slot) = self.bound.remove(&id) {
             self.fluid_roles.remove(&slot);
+            self.mesh_sources.remove(&slot);
             let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
             let key = crate::node_graph::backend::pool_key(ty, format, dims, mipmapped);
             self.free_by_type.entry(key).or_default().push(slot);
@@ -839,6 +847,7 @@ impl Backend for MetalBackend {
         self.pinned.clear();
         self.provided_2d.clear();
         self.fluid_roles.clear();
+        self.mesh_sources.clear();
     }
 
     fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture> {
@@ -944,6 +953,18 @@ impl Backend for MetalBackend {
 
     fn set_fluid_role(&mut self, slot: Slot, value: crate::node_graph::fluid_role::FluidRole) {
         self.fluid_roles.insert(slot, value);
+    }
+
+    fn mesh_source(&self, slot: Slot) -> Option<crate::node_graph::mesh_source::MeshSource> {
+        self.mesh_sources.get(&slot).cloned()
+    }
+
+    fn set_mesh_source(
+        &mut self,
+        slot: Slot,
+        value: crate::node_graph::mesh_source::MeshSource,
+    ) {
+        self.mesh_sources.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<crate::node_graph::scene_object::SceneObject> {

@@ -445,6 +445,26 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
         })
     }).count();
     assert!(changed > 100, "assigned fill must produce visible liquid: {changed} pixels");
+
+    // Edit the original visible source after assignment, using the normal
+    // in-place parameter update. Only liquid can change this image because
+    // the source object is hidden. No role selector is copied or edited.
+    let mut edited: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
+    let group = edited.nodes.iter_mut().find(|node| node.id == object_group_id).unwrap().group.as_mut().unwrap();
+    let cube = group.nodes.iter_mut().find(|node| node.type_id == "node.cube_mesh").unwrap();
+    cube.params.insert("size".into(), SerializedParamValue::Float { value: 1.6 });
+    fluid_runtime.apply_inner_param_overrides(&edited);
+    warmup_mesh_roles(&mut fluid_runtime, &target, &harness.device);
+    let resized = render_frame(&mut fluid_runtime, &target, &harness.device, 1);
+    assert_finite_and_nonempty(&resized, 1);
+    let changed_size = liquid.chunks_exact(8).zip(resized.chunks_exact(8)).filter(|(a, b)| {
+        (0..3).any(|axis| {
+            let i = axis * 2;
+            (f16::from_le_bytes([a[i], a[i + 1]]).to_f32()
+                - f16::from_le_bytes([b[i], b[i + 1]]).to_f32()).abs() > 0.01
+        })
+    }).count();
+    assert!(changed_size > 100, "visible mesh size edit must change assigned liquid geometry: {changed_size} pixels");
     std::fs::write("/tmp/manifold_assigned_fluid.png",
         readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
 }

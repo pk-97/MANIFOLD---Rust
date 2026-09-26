@@ -9,13 +9,14 @@ use std::path::Path;
 use ahash::AHashMap;
 use manifold_physics::TriangleMesh;
 
+use super::{CompoundPreparation, WiredPreparation};
 use crate::generators::mesh_common::MeshVertex;
 use crate::generators::platonic_geometry::{platonic_mesh, platonic_points};
+use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::physics_mesh::{
     MeshSelection, load_compound_materials, prepare_colliders, transform_vertices,
 };
 use crate::node_graph::transform::Transform;
-use super::CompoundPreparation;
 
 /// The two preparation modes exposed by the source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +57,12 @@ pub(crate) fn prepare_geometry(
                 ]
             } else {
                 let mut vertices = if let Some(compound) = compound {
-                    load_compound_materials(path, selection, compound.materials, compound.part_transforms)?
+                    load_compound_materials(
+                        path,
+                        selection,
+                        compound.materials,
+                        compound.part_transforms,
+                    )?
                 } else {
                     selection.load(path)?
                 };
@@ -84,7 +90,12 @@ pub(crate) fn prepare_geometry(
                 vertices
             } else {
                 let mut vertices = if let Some(compound) = compound {
-                    load_compound_materials(path, selection, compound.materials, compound.part_transforms)?
+                    load_compound_materials(
+                        path,
+                        selection,
+                        compound.materials,
+                        compound.part_transforms,
+                    )?
                 } else {
                     selection.load(path)?
                 };
@@ -106,6 +117,79 @@ pub(crate) fn prepare_geometry(
         return Err(format!("{label}: preparation produced no geometry"));
     }
     Ok(meshes)
+}
+
+/// Load every connected visible source independently, applying the same
+/// selectors, fit and fragment operations as rendering before part transforms.
+pub(crate) fn prepare_wired_geometry(
+    wired: &WiredPreparation,
+    source_transform: Transform,
+    mode: GeometryMode,
+    collider_parts: u32,
+) -> Result<Vec<TriangleMesh>, String> {
+    let mut vertices = Vec::new();
+    for (slot, source) in wired.sources.iter().enumerate() {
+        let Some(source) = source else { continue };
+        let mut part =
+            load_source_vertices(source).map_err(|error| format!("mesh part {slot}: {error}"))?;
+        transform_vertices(&mut part, wired.part_transforms[slot])?;
+        vertices.extend(part);
+    }
+    transform_vertices(&mut vertices, source_transform)?;
+    match mode {
+        GeometryMode::CollisionProxy => prepare_colliders(&vertices, collider_parts)
+            .map_err(|error| error.to_string())?
+            .hulls
+            .iter()
+            .map(|points| {
+                manifold_physics::cook_hull_mesh(points).map_err(|error| error.to_string())
+            })
+            .collect(),
+        GeometryMode::ClosedMesh => {
+            let mesh = weld_triangle_list(&vertices)?;
+            manifold_fluids::validate_mesh(&mesh).map_err(|error| {
+                format!("{error}; select Collision Proxy for an approximate closed hull")
+            })?;
+            Ok(vec![mesh])
+        }
+    }
+}
+
+fn load_source_vertices(source: &MeshSource) -> Result<Vec<MeshVertex>, String> {
+    let (shape, radius) = match source {
+        MeshSource::Cube { size } => (1, *size * 3.0_f32.sqrt() / 2.0),
+        MeshSource::Platonic { shape, radius } => (*shape, *radius),
+        MeshSource::Gltf { path, selection } => {
+            if path.is_empty() {
+                return Err("mesh source has no file".into());
+            }
+            if selection.translate.iter().any(|value| !value.is_finite()) {
+                return Err("mesh source offsets must be finite".into());
+            }
+            if !(1..=64).contains(&selection.fragment_count)
+                || selection.fragment_index >= selection.fragment_count
+                || selection.mesh < -1
+                || selection.primitive < -1
+                || selection.material < -2
+            {
+                return Err("mesh source has invalid selectors".into());
+            }
+            return selection.load(Path::new(path.as_ref()));
+        }
+    };
+    if shape >= crate::generators::mesh_common::PLATONIC_SHAPES.len() as u32 {
+        return Err("mesh source has an invalid builtin shape".into());
+    }
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err("mesh source size must be finite and positive".into());
+    }
+    let mut vertices = platonic_mesh(shape).to_vec();
+    for vertex in &mut vertices {
+        for axis in 0..3 {
+            vertex.position[axis] *= radius;
+        }
+    }
+    Ok(vertices)
 }
 
 fn transform_points(points: &[[f32; 3]], transform: Transform) -> Result<Vec<[f32; 3]>, String> {
@@ -210,11 +294,7 @@ pub(super) mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("fixture.bin"), bin).unwrap();
-        fs::write(
-            dir.join("fixture.gltf"),
-            serde_json::to_vec(&doc).unwrap(),
-        )
-        .unwrap();
+        fs::write(dir.join("fixture.gltf"), serde_json::to_vec(&doc).unwrap()).unwrap();
 
         let mut part_transforms = [Transform::default(); 64];
         part_transforms[1].pos[0] = 0.5;
@@ -257,6 +337,45 @@ pub(super) mod tests {
                 ..bytemuck::Zeroable::zeroed()
             })
             .collect()
+    }
+
+    #[test]
+    fn scene_physics_wired_mesh_preserves_each_asset_selector_and_part_transform() {
+        let (path, compound) = write_two_material_cube_fixture();
+        let second_path = path.with_file_name("second.gltf");
+        fs::copy(&path, &second_path).unwrap();
+        let mut wired = WiredPreparation {
+            sources: std::array::from_fn(|_| None),
+            part_transforms: compound.part_transforms,
+        };
+        for (slot, source_path) in [&path, &second_path].into_iter().enumerate() {
+            wired.sources[slot] = Some(MeshSource::Gltf {
+                path: std::sync::Arc::from(source_path.to_str().unwrap()),
+                selection: super::super::default_selection(32).with_material(slot as i32),
+            });
+        }
+        let transform = Transform { pos: [0.0, 2.0, 0.0], ..Transform::default() };
+        let first = prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).unwrap();
+        assert_eq!(first[0].vertices.len(), 8);
+        assert_eq!(first[0].triangles.len(), 12);
+        assert!(first[0].vertices.iter().all(|v| v[1] >= 1.5 && v[1] <= 2.5));
+
+        // A selector offset and its matching local transform cancel exactly.
+        // The first part has different selectors and must stay untouched.
+        if let Some(MeshSource::Gltf { selection, .. }) = &mut wired.sources[1] {
+            selection.translate[0] = 0.25;
+        }
+        wired.part_transforms[1].pos[0] -= 0.25;
+        let moved = prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).unwrap();
+        assert_eq!(first[0].vertices, moved[0].vertices);
+        assert_eq!(first[0].triangles, moved[0].triangles);
+
+        if let Some(MeshSource::Gltf { selection, .. }) = &mut wired.sources[1] {
+            selection.material = 0;
+        }
+        assert!(prepare_wired_geometry(&wired, transform, GeometryMode::ClosedMesh, 32).is_err(),
+            "two copies of one half must not be accepted as the original closed cube");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

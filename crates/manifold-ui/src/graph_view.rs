@@ -226,6 +226,7 @@ pub enum PortKindSnapshot {
     Object,
     RigidBody,
     FluidRole,
+    MeshSource,
 }
 
 /// One wire. Mirror of `manifold_renderer::node_graph::WireSnapshot`.

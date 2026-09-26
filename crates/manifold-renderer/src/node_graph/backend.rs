@@ -30,6 +30,7 @@ use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::physics::RigidBody;
 use crate::node_graph::transform::Transform;
 use crate::node_graph::fluid_role::FluidRole;
+use crate::node_graph::mesh_source::MeshSource;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
@@ -268,6 +269,16 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as [`Backend::set_rigid_body`].
     fn set_fluid_role(&mut self, _slot: Slot, _value: FluidRole) {}
 
+    /// [`MeshSource`] value bound to a slot. CPU-only authored source
+    /// geometry description; preparation and GPU resources stay elsewhere.
+    fn mesh_source(&self, _slot: Slot) -> Option<MeshSource> {
+        None
+    }
+
+    /// Write a [`MeshSource`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as [`Backend::set_fluid_role`].
+    fn set_mesh_source(&mut self, _slot: Slot, _value: MeshSource) {}
+
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
     /// `node.scene_object`'s evaluate and drained by the executor before
@@ -381,6 +392,7 @@ pub struct MockBackend {
     render_modes: AHashMap<Slot, RenderMode>,
     rigid_bodies: AHashMap<Slot, RigidBody>,
     fluid_roles: AHashMap<Slot, FluidRole>,
+    mesh_sources: AHashMap<Slot, MeshSource>,
     /// SceneObject values written via [`Backend::set_object`] — same shape.
     objects: AHashMap<Slot, SceneObject>,
     /// Skip-passthrough aliases installed this frame via
@@ -405,6 +417,7 @@ impl MockBackend {
             render_modes: AHashMap::default(),
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
+            mesh_sources: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
@@ -454,6 +467,7 @@ impl Backend for MockBackend {
     ) {
         if let Some(slot) = self.bound.remove(&id) {
             self.fluid_roles.remove(&slot);
+            self.mesh_sources.remove(&slot);
             let key = pool_key(ty, format, dims, false);
             self.free_by_type.entry(key).or_default().push(slot);
         }
@@ -471,6 +485,7 @@ impl Backend for MockBackend {
         self.bound.clear();
         self.free_by_type.clear();
         self.fluid_roles.clear();
+        self.mesh_sources.clear();
     }
 
     fn texture_2d(&self, _slot: Slot) -> Option<&GpuTexture> {
@@ -551,6 +566,14 @@ impl Backend for MockBackend {
 
     fn set_fluid_role(&mut self, slot: Slot, value: FluidRole) {
         self.fluid_roles.insert(slot, value);
+    }
+
+    fn mesh_source(&self, slot: Slot) -> Option<MeshSource> {
+        self.mesh_sources.get(&slot).cloned()
+    }
+
+    fn set_mesh_source(&mut self, slot: Slot, value: MeshSource) {
+        self.mesh_sources.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<SceneObject> {

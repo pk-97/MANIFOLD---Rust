@@ -1328,6 +1328,9 @@ macro_rules! __primitive_port_type {
     (FluidRole) => {
         $crate::node_graph::ports::PortType::FluidRole
     };
+    (MeshSource) => {
+        $crate::node_graph::ports::PortType::MeshSource
+    };
     (RenderMode) => {
         $crate::node_graph::ports::PortType::RenderMode
     };

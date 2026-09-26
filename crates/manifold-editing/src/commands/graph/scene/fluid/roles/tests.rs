@@ -5,8 +5,7 @@ use crate::commands::graph::test_support::{graph_of, project_with_graph};
 use manifold_core::effect_graph_def::{
     BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
-    PresetMetadata,
-    SerializedParamValue, StringBindingDef,
+    PresetMetadata, SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
@@ -293,10 +292,11 @@ fn scene_physics_assign_role_cube_preserves_size_and_undo_redo() {
         .iter()
         .find(|node| node.type_id == ROLE_SOURCE_TYPE_ID)
         .unwrap();
-    assert_eq!(
-        role.params.get("radius"),
-        Some(&float(2.0 * 3.0_f32.sqrt() / 2.0))
-    );
+    assert_eq!(role.params.get("radius"), Some(&float(1.0)));
+    assert!(body.wires.iter().any(|wire| wire.from_node == 12
+        && wire.from_port == "source"
+        && wire.to_node == role.id
+        && wire.to_port == "mesh_0"));
     assert!(
         after
             .wires
@@ -307,6 +307,61 @@ fn scene_physics_assign_role_cube_preserves_size_and_undo_redo() {
     assert_eq!(graph_of(&project, &effect), &graph);
     command.execute(&mut project);
     assert_eq!(graph_of(&project, &effect), &after);
+}
+
+#[test]
+fn scene_physics_assign_role_platonic_wires_visible_mesh_source() {
+    let mut graph = cube_graph(false);
+    graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 12)
+        .unwrap()
+        .type_id = "node.platonic_solid_mesh".into();
+    let (mut project, effect) = project_with_graph(graph.clone());
+    let mut command = AssignSceneFluidRoleCommand::new(
+        GraphTarget::Effect(effect.clone()),
+        0,
+        0,
+        SceneNodeRef {
+            scope: vec![],
+            node: NodeId::new("fluid"),
+        },
+        1,
+        vec![],
+        graph,
+    );
+    command.execute(&mut project);
+    assert!(
+        command.was_applied(),
+        "rejected: {:?}",
+        command.rejection_reason()
+    );
+    let after = graph_of(&project, &effect);
+    let body = after
+        .nodes
+        .iter()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_ref()
+        .unwrap();
+    let role = body
+        .nodes
+        .iter()
+        .find(|node| node.type_id == ROLE_SOURCE_TYPE_ID)
+        .unwrap();
+    assert!(body.wires.iter().any(|wire| wire.from_node == 12
+        && wire.from_port == "source"
+        && wire.to_node == role.id
+        && wire.to_port == "mesh_0"));
 }
 
 #[test]
@@ -326,7 +381,13 @@ fn scene_physics_assign_role_nested_domain_creates_typed_boundary() {
         .group
         .as_ref()
         .unwrap();
-    assert!(domain.interface.inputs.iter().any(|port| port.port_type == "FluidRole"));
+    assert!(
+        domain
+            .interface
+            .inputs
+            .iter()
+            .any(|port| port.port_type == "FluidRole")
+    );
     assert!(
         domain
             .wires
@@ -407,12 +468,17 @@ fn scene_physics_assign_role_imported_preserves_binding_parent_pose_and_parts() 
         2
     );
     assert_eq!(
-        role.params.get("compound_materials"),
-        Some(&SerializedParamValue::Table {
-            rows: vec![vec![0.0, 2.0], vec![1.0, 5.0]]
-        })
+        body.wires
+            .iter()
+            .filter(|wire| wire.to_node == role.id && wire.to_port.starts_with("mesh_"))
+            .map(|wire| (wire.from_node, wire.to_port.clone()))
+            .collect::<Vec<_>>(),
+        vec![(12, "mesh_0".into()), (19, "mesh_1".into())]
     );
-    assert!(after.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &role.node_id && param == "path")));
+    assert!(!role.params.contains_key("path"));
+    assert!(!role.params.contains_key("compound_materials"));
+    assert!(after.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &NodeId::new("source_a") && param == "path")));
+    assert!(!after.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &role.node_id && param == "path")));
 }
 
 #[test]
@@ -559,7 +625,12 @@ fn scene_physics_assign_role_two_fluids_share_boundary_without_collisions() {
 
 #[test]
 fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
-    for case in ["free", "source_reserved", "target_reserved", "existing_producer"] {
+    for case in [
+        "free",
+        "source_reserved",
+        "target_reserved",
+        "existing_producer",
+    ] {
         let mut graph = imported_compound_graph(true);
         if case == "existing_producer" {
             let body = graph
@@ -570,13 +641,14 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
                 .group
                 .as_mut()
                 .unwrap();
-            body.nodes
-                .push(node(50, "existing_role", ROLE_SOURCE_TYPE_ID, Some("Existing")));
+            body.nodes.push(node(
+                50,
+                "existing_role",
+                ROLE_SOURCE_TYPE_ID,
+                Some("Existing"),
+            ));
         }
-        let reserved = format!(
-            "fluid_role_source_{}",
-            max_node_id_over(&graph.nodes) + 1
-        );
+        let reserved = format!("fluid_role_source_{}", max_node_id_over(&graph.nodes) + 1);
         {
             let source_body = graph
                 .nodes
@@ -592,9 +664,7 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
                     port_type: "FluidRole".into(),
                 });
                 if case == "existing_producer" {
-                    source_body
-                        .wires
-                        .push(wire(50, "role", 15, &reserved));
+                    source_body.wires.push(wire(50, "role", 15, &reserved));
                 }
             }
         }
@@ -649,11 +719,17 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
             graph,
         );
         command.execute(&mut project);
-        assert!(command.was_applied(), "{case}: {:?}", command.rejection_reason());
+        assert!(
+            command.was_applied(),
+            "{case}: {:?}",
+            command.rejection_reason()
+        );
         let after = graph_of(&project, &effect);
-        assert!(original_root_wires
-            .iter()
-            .all(|wire| after.wires.contains(wire)));
+        assert!(
+            original_root_wires
+                .iter()
+                .all(|wire| after.wires.contains(wire))
+        );
         let source_body = after
             .nodes
             .iter()
@@ -662,9 +738,11 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
             .group
             .as_ref()
             .unwrap();
-        assert!(original_source_wires
-            .iter()
-            .all(|wire| source_body.wires.contains(wire)));
+        assert!(
+            original_source_wires
+                .iter()
+                .all(|wire| source_body.wires.contains(wire))
+        );
         let target_body = after
             .nodes
             .iter()
@@ -673,9 +751,11 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
             .group
             .as_ref()
             .unwrap();
-        assert!(original_target_wires
-            .iter()
-            .all(|wire| target_body.wires.contains(wire)));
+        assert!(
+            original_target_wires
+                .iter()
+                .all(|wire| target_body.wires.contains(wire))
+        );
         let allocated = after
             .wires
             .iter()
@@ -684,12 +764,17 @@ fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
             .from_port
             .clone();
         assert_eq!(allocated == reserved, case == "free");
-        assert!(source_body
-            .interface
-            .outputs
-            .iter()
-            .any(|port| port.name == allocated && port.port_type == "FluidRole"));
-        assert!(manifold_core::flatten::flatten_groups(after).is_ok(), "{case}");
+        assert!(
+            source_body
+                .interface
+                .outputs
+                .iter()
+                .any(|port| port.name == allocated && port.port_type == "FluidRole")
+        );
+        assert!(
+            manifold_core::flatten::flatten_groups(after).is_ok(),
+            "{case}"
+        );
     }
 }
 

@@ -11,13 +11,12 @@ use std::sync::{Arc, mpsc};
 use crate::generators::mesh_common::PLATONIC_SHAPES;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
+use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics_mesh::{
-    PART_PORTS, MeshSelection, parse_compound_materials,
-};
+use crate::node_graph::physics_mesh::{MeshSelection, PART_PORTS, parse_compound_materials};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
-use geometry::{GeometryMode, prepare_geometry};
+use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
 
 const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Closed Mesh"];
 const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collider"];
@@ -25,6 +24,23 @@ const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collid
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CompoundPreparation {
     pub(crate) materials: [Option<i32>; 64],
+    pub(crate) part_transforms: [Transform; 64],
+}
+
+pub(crate) const MESH_PORTS: [&str; 64] = [
+    "mesh_0", "mesh_1", "mesh_2", "mesh_3", "mesh_4", "mesh_5", "mesh_6", "mesh_7", "mesh_8",
+    "mesh_9", "mesh_10", "mesh_11", "mesh_12", "mesh_13", "mesh_14", "mesh_15", "mesh_16",
+    "mesh_17", "mesh_18", "mesh_19", "mesh_20", "mesh_21", "mesh_22", "mesh_23", "mesh_24",
+    "mesh_25", "mesh_26", "mesh_27", "mesh_28", "mesh_29", "mesh_30", "mesh_31", "mesh_32",
+    "mesh_33", "mesh_34", "mesh_35", "mesh_36", "mesh_37", "mesh_38", "mesh_39", "mesh_40",
+    "mesh_41", "mesh_42", "mesh_43", "mesh_44", "mesh_45", "mesh_46", "mesh_47", "mesh_48",
+    "mesh_49", "mesh_50", "mesh_51", "mesh_52", "mesh_53", "mesh_54", "mesh_55", "mesh_56",
+    "mesh_57", "mesh_58", "mesh_59", "mesh_60", "mesh_61", "mesh_62", "mesh_63",
+];
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WiredPreparation {
+    pub(crate) sources: [Option<MeshSource>; 64],
     pub(crate) part_transforms: [Transform; 64],
 }
 
@@ -37,6 +53,7 @@ pub(super) struct PreparationKey {
     source_transform: Transform,
     mode: GeometryMode,
     compound: Option<CompoundPreparation>,
+    wired: Option<Box<WiredPreparation>>,
 }
 
 impl PreparationKey {
@@ -48,6 +65,7 @@ impl PreparationKey {
         source_transform: Transform,
         mode: GeometryMode,
         compound: Option<&CompoundPreparation>,
+        wired: Option<&WiredPreparation>,
     ) -> bool {
         self.path == path
             && self.selection == selection
@@ -56,6 +74,7 @@ impl PreparationKey {
             && self.source_transform == source_transform
             && self.mode == mode
             && self.compound.as_ref() == compound
+            && self.wired.as_deref() == wired
     }
 }
 
@@ -66,6 +85,71 @@ crate::primitive! {
     inputs: {
         transform: Transform required,
         source_transform: Transform optional,
+        mesh_0: MeshSource optional,
+        mesh_1: MeshSource optional,
+        mesh_2: MeshSource optional,
+        mesh_3: MeshSource optional,
+        mesh_4: MeshSource optional,
+        mesh_5: MeshSource optional,
+        mesh_6: MeshSource optional,
+        mesh_7: MeshSource optional,
+        mesh_8: MeshSource optional,
+        mesh_9: MeshSource optional,
+        mesh_10: MeshSource optional,
+        mesh_11: MeshSource optional,
+        mesh_12: MeshSource optional,
+        mesh_13: MeshSource optional,
+        mesh_14: MeshSource optional,
+        mesh_15: MeshSource optional,
+        mesh_16: MeshSource optional,
+        mesh_17: MeshSource optional,
+        mesh_18: MeshSource optional,
+        mesh_19: MeshSource optional,
+        mesh_20: MeshSource optional,
+        mesh_21: MeshSource optional,
+        mesh_22: MeshSource optional,
+        mesh_23: MeshSource optional,
+        mesh_24: MeshSource optional,
+        mesh_25: MeshSource optional,
+        mesh_26: MeshSource optional,
+        mesh_27: MeshSource optional,
+        mesh_28: MeshSource optional,
+        mesh_29: MeshSource optional,
+        mesh_30: MeshSource optional,
+        mesh_31: MeshSource optional,
+        mesh_32: MeshSource optional,
+        mesh_33: MeshSource optional,
+        mesh_34: MeshSource optional,
+        mesh_35: MeshSource optional,
+        mesh_36: MeshSource optional,
+        mesh_37: MeshSource optional,
+        mesh_38: MeshSource optional,
+        mesh_39: MeshSource optional,
+        mesh_40: MeshSource optional,
+        mesh_41: MeshSource optional,
+        mesh_42: MeshSource optional,
+        mesh_43: MeshSource optional,
+        mesh_44: MeshSource optional,
+        mesh_45: MeshSource optional,
+        mesh_46: MeshSource optional,
+        mesh_47: MeshSource optional,
+        mesh_48: MeshSource optional,
+        mesh_49: MeshSource optional,
+        mesh_50: MeshSource optional,
+        mesh_51: MeshSource optional,
+        mesh_52: MeshSource optional,
+        mesh_53: MeshSource optional,
+        mesh_54: MeshSource optional,
+        mesh_55: MeshSource optional,
+        mesh_56: MeshSource optional,
+        mesh_57: MeshSource optional,
+        mesh_58: MeshSource optional,
+        mesh_59: MeshSource optional,
+        mesh_60: MeshSource optional,
+        mesh_61: MeshSource optional,
+        mesh_62: MeshSource optional,
+        mesh_63: MeshSource optional,
+
         part_0: Transform optional,
         part_1: Transform optional,
         part_2: Transform optional,
@@ -194,12 +278,13 @@ crate::primitive! {
         geometry: Option<Arc<PreparedFluidGeometry>> = None,
         pending_geometry: Option<mpsc::Receiver<Result<Arc<PreparedFluidGeometry>, String>>> = None,
         preparation_error: Option<String> = None,
+        source_pending: bool = false,
     },
 }
 
 impl Primitive for FluidRoleSource {
     fn warmup_pending(&self) -> bool {
-        self.pending_geometry.is_some()
+        self.source_pending || self.pending_geometry.is_some()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -209,41 +294,6 @@ impl Primitive for FluidRoleSource {
         if let Err(error) = validate_transform(transform, "body transform") {
             return self.fail(ctx, error);
         }
-        let source_transform = ctx.inputs.transform("source_transform").unwrap_or_default();
-        if let Some(value) = ctx.params.get("compound_materials")
-            && !matches!(value, ParamValue::Table(_) | ParamValue::Float(0.0))
-        {
-            return self.fail_setup(
-                ctx,
-                "Fluid role compound_materials must be a [slot, material_index] table".into(),
-            );
-        }
-        let (compound_materials, has_compound) = match parse_compound_materials(ctx) {
-            Ok(value) => value,
-            Err(error) => return self.fail_setup(ctx, error),
-        };
-        let mut compound = has_compound.then(|| CompoundPreparation {
-            materials: compound_materials,
-            part_transforms: [Transform::default(); 64],
-        });
-        if let Err(error) = validate_transform(source_transform, "source transform") {
-            return self.fail_setup(ctx, error);
-        }
-        if let Some(compound) = &mut compound {
-            for (slot, port) in PART_PORTS.iter().enumerate() {
-                if compound.materials[slot].is_some_and(|material| material < -2) {
-                    return self.fail_setup(ctx, format!("compound part {slot}: material index must be >= -2"));
-                }
-                compound.part_transforms[slot] = ctx.inputs.transform(port).unwrap_or_default();
-                if compound.materials[slot].is_some()
-                    && let Err(error) =
-                        validate_transform(compound.part_transforms[slot], "compound part")
-                {
-                    return self.fail_setup(ctx, format!("compound part {slot}: {error}"));
-                }
-            }
-        }
-
         let role = match resolve_index(ctx, "role", 1, FLUID_ROLE_KINDS.len() as u32) {
             Ok(value) => match value {
                 0 => FluidRoleKind::InitialFill,
@@ -286,10 +336,58 @@ impl Primitive for FluidRoleSource {
             Err(error) => return self.fail(ctx, error),
         };
 
-        let path = match ctx.params.get("path") {
-            None | Some(ParamValue::Float(0.0)) => "",
-            Some(ParamValue::String(path)) => path.as_str(),
-            Some(_) => return self.fail_setup(ctx, "Fluid role path must be a string".into()),
+        // Historical samples update live controls against the last prepared
+        // source. Setup edits are discrete and must not recook past geometry.
+        if crate::node_graph::physics::authored_sample_only() {
+            self.publish_role(
+                ctx,
+                role,
+                transform,
+                enabled,
+                velocity,
+                inherit_motion,
+                friction,
+            );
+            return;
+        }
+
+        let source_transform = ctx.inputs.transform("source_transform").unwrap_or_default();
+        if let Err(error) = validate_transform(source_transform, "source transform") {
+            return self.fail_setup(ctx, error);
+        }
+        self.source_pending = false;
+        let wired = match resolve_wired_sources(ctx) {
+            Ok((wired, false)) => wired,
+            Ok((_, true)) => {
+                self.source_pending = true;
+                // Old prepared geometry cannot become ready while the visible
+                // source is loading a different selection.
+                self.last_key = None;
+                self.pending_geometry = None;
+                self.geometry = None;
+                self.preparation_error = None;
+                ctx.mark_outputs_pending();
+                return;
+            }
+            Err(error) => return self.fail_setup(ctx, error),
+        };
+        let compound = if wired.is_none() {
+            match resolve_compound(ctx) {
+                Ok(compound) => compound,
+                Err(error) => return self.fail_setup(ctx, error),
+            }
+        } else {
+            None
+        };
+
+        let path = if wired.is_some() {
+            ""
+        } else {
+            match ctx.params.get("path") {
+                None | Some(ParamValue::Float(0.0)) => "",
+                Some(ParamValue::String(path)) => path.as_str(),
+                Some(_) => return self.fail_setup(ctx, "Fluid role path must be a string".into()),
+            }
         };
         if compound.is_some() && path.is_empty() {
             return self.fail_setup(
@@ -303,19 +401,32 @@ impl Primitive for FluidRoleSource {
             Ok(_) => unreachable!(),
             Err(error) => return self.fail_setup(ctx, error),
         };
-        let shape = match resolve_index(ctx, "shape", 1, PLATONIC_SHAPES.len() as u32) {
-            Ok(value) => value,
-            Err(error) => return self.fail_setup(ctx, error),
-        };
-        let radius = match resolve_f32(ctx, "radius", 1.0) {
-            Ok(value) if value.is_finite() && value > 0.0 => value,
-            Ok(_) => {
-                return self
-                    .fail_setup(ctx, "Fluid role radius must be finite and positive".into());
+        let shape = if wired.is_some() {
+            1
+        } else {
+            match resolve_index(ctx, "shape", 1, PLATONIC_SHAPES.len() as u32) {
+                Ok(value) => value,
+                Err(error) => return self.fail_setup(ctx, error),
             }
-            Err(error) => return self.fail_setup(ctx, error),
         };
-        let selection = match resolve_selection(ctx) {
+        let radius = if wired.is_some() {
+            1.0
+        } else {
+            match resolve_f32(ctx, "radius", 1.0) {
+                Ok(value) if value.is_finite() && value > 0.0 => value,
+                Ok(_) => {
+                    return self
+                        .fail_setup(ctx, "Fluid role radius must be finite and positive".into());
+                }
+                Err(error) => return self.fail_setup(ctx, error),
+            }
+        };
+        let selection_result = if wired.is_some() {
+            resolve_collider_parts(ctx).map(default_selection)
+        } else {
+            resolve_selection(ctx)
+        };
+        let selection = match selection_result {
             Ok(selection) => selection,
             Err(error) => return self.fail_setup(ctx, error),
         };
@@ -327,6 +438,7 @@ impl Primitive for FluidRoleSource {
                 source_transform,
                 mode,
                 compound.as_ref(),
+                wired.as_ref(),
             )
         });
         if setup_changed {
@@ -338,6 +450,7 @@ impl Primitive for FluidRoleSource {
                 source_transform,
                 mode,
                 compound,
+                wired: wired.as_ref().map(|wired| Box::new(wired.clone())),
             });
             self.geometry = None;
             self.preparation_error = None;
@@ -347,15 +460,24 @@ impl Primitive for FluidRoleSource {
             match std::thread::Builder::new()
                 .name("fluid-role-prepare".into())
                 .spawn(move || {
-                    let result = prepare_geometry(
-                        &path_for_worker,
-                        selection,
-                        shape,
-                        radius,
-                        source_transform,
-                        mode,
-                        compound.as_ref(),
-                    )
+                    let result = if let Some(wired) = wired {
+                        prepare_wired_geometry(
+                            &wired,
+                            source_transform,
+                            mode,
+                            selection.collider_parts,
+                        )
+                    } else {
+                        prepare_geometry(
+                            &path_for_worker,
+                            selection,
+                            shape,
+                            radius,
+                            source_transform,
+                            mode,
+                            compound.as_ref(),
+                        )
+                    }
                     .map(|meshes| Arc::new(PreparedFluidGeometry { meshes }));
                     let _ = tx.send(result);
                 }) {
@@ -388,7 +510,31 @@ impl Primitive for FluidRoleSource {
             }
         }
 
-        if self.pending_geometry.is_some()
+        self.publish_role(
+            ctx,
+            role,
+            transform,
+            enabled,
+            velocity,
+            inherit_motion,
+            friction,
+        );
+    }
+}
+
+impl FluidRoleSource {
+    fn publish_role(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        role: FluidRoleKind,
+        transform: Transform,
+        enabled: bool,
+        velocity: [f32; 3],
+        inherit_motion: f32,
+        friction: f32,
+    ) {
+        if self.source_pending
+            || self.pending_geometry.is_some()
             || self.geometry.is_none()
             || self.preparation_error.is_some()
         {
@@ -411,9 +557,7 @@ impl Primitive for FluidRoleSource {
             },
         );
     }
-}
 
-impl FluidRoleSource {
     fn fail(&mut self, ctx: &mut EffectNodeContext<'_, '_>, error: String) {
         ctx.error(error);
         ctx.mark_outputs_pending();
@@ -425,12 +569,95 @@ impl FluidRoleSource {
     }
 
     fn fail_setup(&mut self, ctx: &mut EffectNodeContext<'_, '_>, error: String) {
+        self.source_pending = false;
         self.last_key = None;
         self.pending_geometry = None;
         self.geometry = None;
         self.preparation_error = Some(error.clone());
         self.fail(ctx, error);
     }
+}
+
+fn resolve_wired_sources(
+    ctx: &EffectNodeContext<'_, '_>,
+) -> Result<(Option<WiredPreparation>, bool), String> {
+    let mut wired = WiredPreparation {
+        sources: std::array::from_fn(|_| None),
+        part_transforms: [Transform::default(); 64],
+    };
+    let mut any = false;
+    for (index, port) in MESH_PORTS.iter().enumerate() {
+        let Some(slot) = ctx.inputs.slot(port) else {
+            continue;
+        };
+        any = true;
+        let source = ctx.inputs.mesh_source_slot(slot);
+        if !ctx.inputs.slot_content_ready(slot) || source.is_none() {
+            return Ok((None, true));
+        }
+        wired.sources[index] = source;
+        if let Some(slot) = ctx.inputs.slot(PART_PORTS[index]) {
+            let transform = ctx.inputs.transform(PART_PORTS[index]);
+            if !ctx.inputs.slot_content_ready(slot) || transform.is_none() {
+                return Ok((None, true));
+            }
+            wired.part_transforms[index] = transform.expect("checked above");
+        }
+        validate_transform(wired.part_transforms[index], "mesh part transform")?;
+    }
+    Ok((any.then_some(wired), false))
+}
+
+fn resolve_compound(
+    ctx: &EffectNodeContext<'_, '_>,
+) -> Result<Option<CompoundPreparation>, String> {
+    if let Some(value) = ctx.params.get("compound_materials")
+        && !matches!(value, ParamValue::Table(_) | ParamValue::Float(0.0))
+    {
+        return Err("Fluid role compound_materials must be a [slot, material_index] table".into());
+    }
+    let (materials, has_compound) = parse_compound_materials(ctx)?;
+    let Some(mut compound) = has_compound.then_some(CompoundPreparation {
+        materials,
+        part_transforms: [Transform::default(); 64],
+    }) else {
+        return Ok(None);
+    };
+    for (slot, port) in PART_PORTS.iter().enumerate() {
+        if compound.materials[slot].is_some_and(|material| material < -2) {
+            return Err(format!(
+                "compound part {slot}: material index must be >= -2"
+            ));
+        }
+        compound.part_transforms[slot] = ctx.inputs.transform(port).unwrap_or_default();
+        if compound.materials[slot].is_some() {
+            validate_transform(compound.part_transforms[slot], "compound part")
+                .map_err(|error| format!("compound part {slot}: {error}"))?;
+        }
+    }
+    Ok(Some(compound))
+}
+
+fn default_selection(collider_parts: u32) -> MeshSelection {
+    MeshSelection {
+        mesh: -1,
+        primitive: -1,
+        material: -1,
+        fit: false,
+        recenter: true,
+        translate: [0.0; 3],
+        fragment_count: 1,
+        fragment_index: 0,
+        collider_parts,
+    }
+}
+
+fn resolve_collider_parts(ctx: &EffectNodeContext<'_, '_>) -> Result<u32, String> {
+    let parts = resolve_integer(ctx, "collider_parts", 32)?;
+    if !(1..=64).contains(&parts) {
+        return Err("Fluid role collider_parts must be in 1..=64".into());
+    }
+    Ok(parts as u32)
 }
 
 fn validate_transform(transform: Transform, label: &str) -> Result<(), String> {
@@ -672,7 +899,13 @@ mod tests {
         output_slot: Slot,
         params: &ParamValues,
     ) -> FluidRole {
-        settle_inputs(primitive, backend, &[("transform", transform_slot)], output_slot, params)
+        settle_inputs(
+            primitive,
+            backend,
+            &[("transform", transform_slot)],
+            output_slot,
+            params,
+        )
     }
 
     fn settle_inputs(
@@ -690,6 +923,79 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("fluid role source preparation did not settle");
+    }
+
+    #[test]
+    fn scene_physics_wired_mesh_edits_reprepare_and_history_holds_geometry() {
+        let mut backend = MockBackend::new();
+        let (transform, output) = test_slots(&mut backend);
+        let mesh = backend.acquire(ResourceId(2), PortType::MeshSource, None, (0, 0));
+        let missing = backend.acquire(ResourceId(3), PortType::MeshSource, None, (0, 0));
+        backend.set_mesh_source(mesh, MeshSource::Cube { size: 1.0 });
+        let inputs = [("transform", transform), ("mesh_0", mesh)];
+        let mut primitive = FluidRoleSource::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("geometry"), ParamValue::Enum(1));
+        // Connected geometry shadows legacy source fields completely.
+        params.insert(Cow::Borrowed("path"), ParamValue::Float(42.0));
+        params.insert(Cow::Borrowed("radius"), ParamValue::Float(-1.0));
+        params.insert(Cow::Borrowed("compound_materials"), ParamValue::Bool(false));
+        let first = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
+        let extent = |role: &FluidRole| {
+            role.geometry.meshes[0]
+                .vertices
+                .iter()
+                .map(|point| point[0].abs())
+                .fold(0.0_f32, f32::max)
+        };
+        assert!((extent(&first) - 0.5).abs() < 1.0e-6);
+
+        backend.set_mesh_source(mesh, MeshSource::Cube { size: 2.0 });
+        let larger = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
+        assert!(!Arc::ptr_eq(&first.geometry, &larger.geometry));
+        assert!((extent(&larger) - 1.0).abs() < 1.0e-6);
+
+        params.insert(Cow::Borrowed("velocity_y"), ParamValue::Float(3.0));
+        backend.set_transform(
+            transform,
+            Transform {
+                pos: [2.0, 0.0, 0.0],
+                ..Transform::default()
+            },
+        );
+        backend.set_mesh_source(mesh, MeshSource::Cube { size: 3.0 });
+        {
+            let _sample = crate::node_graph::physics::PhysicsAuthoredSampleScope::new();
+            // Source slots may be unbound in the CPU-only historical pass.
+            let historical = [("transform", transform), ("mesh_0", missing)];
+            assert!(!run_inputs(
+                &mut primitive,
+                &mut backend,
+                &historical,
+                output,
+                &params
+            ));
+            let sampled = backend.fluid_role(output).unwrap();
+            assert!(Arc::ptr_eq(&sampled.geometry, &larger.geometry));
+            assert_eq!(sampled.velocity[1], 3.0);
+            assert_eq!(sampled.transform.pos[0], 2.0);
+        }
+        let newest = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
+        assert!((extent(&newest) - 1.5).abs() < 1.0e-6);
+        assert!(!Arc::ptr_eq(&newest.geometry, &larger.geometry));
+
+        let missing_inputs = [("transform", transform), ("mesh_0", missing)];
+        assert!(run_inputs(
+            &mut primitive,
+            &mut backend,
+            &missing_inputs,
+            output,
+            &params
+        ));
+        assert!(Primitive::warmup_pending(&primitive));
+        assert!(primitive.geometry.is_none());
+        let restored = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
+        assert!((extent(&restored) - 1.5).abs() < 1.0e-6);
     }
 
     #[test]
@@ -924,31 +1230,68 @@ mod tests {
         let source = backend.acquire(ResourceId(4), PortType::Transform, None, (0, 0));
         backend.set_transform(part_zero, compound.part_transforms[0]);
         backend.set_transform(part_one, compound.part_transforms[1]);
-        backend.set_transform(source, Transform { pos: [0.0, 2.0, 0.0], ..Transform::default() });
-        let inputs = [("transform", transform_slot), ("part_0", part_zero), ("part_1", part_one),
-            ("source_transform", source)];
+        backend.set_transform(
+            source,
+            Transform {
+                pos: [0.0, 2.0, 0.0],
+                ..Transform::default()
+            },
+        );
+        let inputs = [
+            ("transform", transform_slot),
+            ("part_0", part_zero),
+            ("part_1", part_one),
+            ("source_transform", source),
+        ];
         let mut params = ParamValues::default();
-        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_string_lossy().into_owned())));
+        params.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(Arc::new(path.to_string_lossy().into_owned())),
+        );
         params.insert(Cow::Borrowed("geometry"), ParamValue::Enum(1));
         params.insert(Cow::Borrowed("recenter"), ParamValue::Bool(false));
-        params.insert(Cow::Borrowed("compound_materials"), ParamValue::Table(Arc::new(
-            TableData::new(vec![vec![0.0, 0.0], vec![1.0, 1.0]]).unwrap(),
-        )));
+        params.insert(
+            Cow::Borrowed("compound_materials"),
+            ParamValue::Table(Arc::new(
+                TableData::new(vec![vec![0.0, 0.0], vec![1.0, 1.0]]).unwrap(),
+            )),
+        );
         let mut primitive = FluidRoleSource::new();
         let first = settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
-        let min_y = first.geometry.meshes[0].vertices.iter().map(|v| v[1]).fold(f32::INFINITY, f32::min);
-        assert_eq!(min_y, 1.5, "source transform applies to the assembled compound");
-        backend.set_transform(transform_slot, Transform { pos: [3.0, 0.0, 0.0], ..Transform::default() });
+        let min_y = first.geometry.meshes[0]
+            .vertices
+            .iter()
+            .map(|v| v[1])
+            .fold(f32::INFINITY, f32::min);
+        assert_eq!(
+            min_y, 1.5,
+            "source transform applies to the assembled compound"
+        );
+        backend.set_transform(
+            transform_slot,
+            Transform {
+                pos: [3.0, 0.0, 0.0],
+                ..Transform::default()
+            },
+        );
         let moved_body = settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
         assert!(Arc::ptr_eq(&first.geometry, &moved_body.geometry));
         assert_eq!(moved_body.transform.pos, [3.0, 0.0, 0.0]);
-        for (slot, mut transform) in [(part_zero, compound.part_transforms[0]), (part_one, compound.part_transforms[1])] {
+        for (slot, mut transform) in [
+            (part_zero, compound.part_transforms[0]),
+            (part_one, compound.part_transforms[1]),
+        ] {
             transform.pos[0] += 1.0;
             backend.set_transform(slot, transform);
         }
-        let moved_parts = settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
+        let moved_parts =
+            settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
         assert!(!Arc::ptr_eq(&first.geometry, &moved_parts.geometry));
-        let min_x = moved_parts.geometry.meshes[0].vertices.iter().map(|v| v[0]).fold(f32::INFINITY, f32::min);
+        let min_x = moved_parts.geometry.meshes[0]
+            .vertices
+            .iter()
+            .map(|v| v[0])
+            .fold(f32::INFINITY, f32::min);
         assert_eq!(min_x, 0.5, "child transforms alter the prepared geometry");
         manifold_fluids::validate_mesh(&moved_parts.geometry.meshes[0]).unwrap();
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();

@@ -241,6 +241,7 @@ fn port_type_str(ty: &PortType) -> String {
         PortType::RenderMode => "RenderMode".into(),
         PortType::RigidBody => "RigidBody".into(),
         PortType::FluidRole => "FluidRole".into(),
+        PortType::MeshSource => "MeshSource".into(),
         PortType::Object => "Object".into(),
     }
 }

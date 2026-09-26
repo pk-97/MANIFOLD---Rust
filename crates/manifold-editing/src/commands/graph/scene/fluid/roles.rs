@@ -5,9 +5,8 @@ use std::collections::{BTreeMap, HashSet};
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID,
-    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, InterfacePortDef, PresetMetadata,
-    SerializedParamValue, StringBindingDef,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
+    GROUP_TYPE_ID, GroupDef, InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
@@ -18,8 +17,7 @@ use crate::command::Command;
 use super::super::restore_scene_owner_graph;
 use super::super::{
     InstanceLayerSnapshot, collect_all_handles, dedup_handle, max_node_id_over,
-    refresh_target_manifest, scene_build_node, scene_build_wire,
-    with_target_graph_mut,
+    refresh_target_manifest, scene_build_node, scene_build_wire, with_target_graph_mut,
 };
 
 const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
@@ -138,7 +136,8 @@ impl Command for AssignSceneFluidRoleCommand {
             self.rejection = Some("Assign Fluid Role target is unavailable".into());
             return;
         };
-        let Some(baseline_instance) = project.graph_target_owner_mut(&self.target)
+        let Some(baseline_instance) = project
+            .graph_target_owner_mut(&self.target)
             .map(|instance| InstanceLayerSnapshot::capture(&*instance))
         else {
             self.rejection = Some("Assign Fluid Role target is unavailable".into());
@@ -167,7 +166,8 @@ impl Command for AssignSceneFluidRoleCommand {
         refresh_target_manifest(project, &self.target);
         self.prev_graph = Some(previous_graph);
         self.prev_instance = Some(baseline_instance);
-        self.after_instance = project.graph_target_owner_mut(&self.target)
+        self.after_instance = project
+            .graph_target_owner_mut(&self.target)
             .map(|instance| InstanceLayerSnapshot::capture(&*instance));
         self.prev = Some(baseline);
         self.after = Some(candidate);
@@ -271,7 +271,7 @@ fn build_assignment(
     collect_all_handles(&def.nodes, &mut handles);
     let handle = dedup_handle(&format!("{} Fluid Role", object.handle), &mut handles);
     let role_handle = dedup_handle(&format!("{handle} Source"), &mut handles);
-    let role_params = role_params(&object, role)?;
+    let role_params = role_params(role);
     let mut role_node = scene_build_node(
         role_id,
         ROLE_SOURCE_TYPE_ID,
@@ -317,6 +317,14 @@ fn build_assignment(
             ));
         }
     }
+    for (slot, mesh_id) in object.mesh_sources.iter().enumerate() {
+        group.wires.push(scene_build_wire(
+            *mesh_id,
+            "source",
+            role_id,
+            &format!("mesh_{slot}"),
+        ));
+    }
     if let Some(output) = group
         .interface
         .outputs
@@ -336,8 +344,6 @@ fn build_assignment(
         .wires
         .push(scene_build_wire(role_id, "role", output_id, &source_port));
 
-    let string_binding =
-        role_source_string_binding(def, object.sources.first(), role_node_id.clone());
     stamp_role_metadata(
         def,
         role_id,
@@ -346,12 +352,6 @@ fn build_assignment(
         role_metadata,
         &handle,
     );
-    if let Some(binding) = string_binding {
-        def.preset_metadata
-            .get_or_insert_with(empty_scene_metadata)
-            .string_bindings
-            .push(binding);
-    }
     route_role_to_domain(
         &mut def.nodes,
         &mut def.wires,
@@ -370,16 +370,9 @@ struct RoleObject {
     producer_id: u32,
     group_id: u32,
     handle: String,
-    sources: Vec<ImportedSource>,
+    mesh_sources: Vec<u32>,
     shared_transform_id: u32,
     local_transforms: Vec<Option<u32>>,
-    cube_size: Option<f32>,
-}
-
-#[derive(Debug, Clone)]
-struct ImportedSource {
-    node_id: NodeId,
-    params: BTreeMap<String, SerializedParamValue>,
 }
 
 fn discover_role_object(
@@ -474,7 +467,7 @@ fn discover_role_object(
     }
     let shared_transform_id = find_shared_transform(group, object_ids[0])?;
     let mut local_transforms = Vec::new();
-    let mut sources = Vec::new();
+    let mut mesh_sources = Vec::new();
     for object_id in &object_ids {
         let object = group
             .nodes
@@ -519,39 +512,11 @@ fn discover_role_object(
             }
         }
         local_transforms.push(local_transform);
-        let mut source = find_mesh_source(group, object.id)?;
-        if let Some(source) = source.as_mut() {
-            normalize_source_params(def, source)?;
-        }
-        sources.push(source);
+        mesh_sources.push(find_mesh_source(group, object.id)?);
     }
     if object_ids.len() > 64 {
         return Err("Assign Fluid Role supports at most 64 object parts".into());
     }
-    if sources.iter().all(Option::is_none) && object_ids.len() > 1 {
-        return Err("Assign Fluid Role does not support compound builtin cube groups".into());
-    }
-    let sources = if sources.iter().all(Option::is_some) {
-        let sources: Vec<_> = sources.into_iter().flatten().collect();
-        let first = sources.first().cloned().unwrap();
-        for other in &sources[1..] {
-            if !same_source_selector(&first, other) {
-                return Err(
-                    "Assign Fluid Role imported material selectors are inconsistent".into(),
-                );
-            }
-        }
-        sources
-    } else if sources.iter().all(Option::is_none) {
-        Vec::new()
-    } else {
-        return Err("Assign Fluid Role mixes builtin and imported object parts".into());
-    };
-    let cube_size = if sources.is_empty() {
-        Some(cube_group_size(group, &object_ids).unwrap_or(1.0))
-    } else {
-        None
-    };
     Ok(RoleObject {
         producer_id,
         group_id: producer_id,
@@ -559,10 +524,9 @@ fn discover_role_object(
             .handle
             .clone()
             .unwrap_or_else(|| format!("Object {object_index}")),
-        sources,
+        mesh_sources,
         shared_transform_id,
         local_transforms,
-        cube_size,
     })
 }
 
@@ -586,23 +550,23 @@ fn find_shared_transform(group: &GroupDef, object_id: u32) -> Result<u32, String
     Ok(node.id)
 }
 
-fn find_mesh_source(group: &GroupDef, object_id: u32) -> Result<Option<ImportedSource>, String> {
-    let wire = group
+fn find_mesh_source(group: &GroupDef, object_id: u32) -> Result<u32, String> {
+    let wires: Vec<_> = group
         .wires
         .iter()
-        .find(|wire| wire.to_node == object_id && wire.to_port == "vertices")
-        .ok_or_else(|| "Assign Fluid Role object mesh input is missing".to_string())?;
+        .filter(|wire| wire.to_node == object_id && wire.to_port == "vertices")
+        .collect();
+    if wires.len() != 1 {
+        return Err("Assign Fluid Role object mesh input must have one producer".into());
+    }
+    let wire = wires[0];
     let node = group
         .nodes
         .iter()
         .find(|node| node.id == wire.from_node)
         .ok_or_else(|| "Assign Fluid Role object mesh source is unavailable".to_string())?;
     match node.type_id.as_str() {
-        CUBE_MESH_TYPE_ID => Ok(None),
-        GLTF_MESH_TYPE_ID => Ok(Some(ImportedSource {
-            node_id: node.node_id.clone(),
-            params: node.params.clone(),
-        })),
+        CUBE_MESH_TYPE_ID | "node.platonic_solid_mesh" | GLTF_MESH_TYPE_ID => Ok(node.id),
         "node.gltf_skinned_mesh_source"
         | "node.skin_mesh"
         | "node.morph_targets_blend"
@@ -612,69 +576,7 @@ fn find_mesh_source(group: &GroupDef, object_id: u32) -> Result<Option<ImportedS
         _ => Err("Assign Fluid Role requires a supported static mesh source".into()),
     }
 }
-
-fn cube_group_size(group: &GroupDef, object_ids: &[u32]) -> Option<f32> {
-    let object_id = *object_ids.first()?;
-    let wire = group
-        .wires
-        .iter()
-        .find(|wire| wire.to_node == object_id && wire.to_port == "vertices")?;
-    let cube = group
-        .nodes
-        .iter()
-        .find(|node| node.id == wire.from_node && node.type_id == CUBE_MESH_TYPE_ID)?;
-    cube.params.get("size").and_then(as_number)
-}
-
-fn normalize_source_params(
-    def: &EffectGraphDef,
-    source: &mut ImportedSource,
-) -> Result<(), String> {
-    if matches!(source.params.get("path"), Some(SerializedParamValue::String { value }) if !value.is_empty())
-    {
-        return Ok(());
-    }
-    let Some(metadata) = def.preset_metadata.as_ref() else {
-        return Err("Assign Fluid Role requires a bound glTF source path".into());
-    };
-    let Some(binding) = metadata.string_bindings.iter().find(|binding| {
-        matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id == &source.node_id && param == "path")
-    }) else {
-        return Err("Assign Fluid Role requires a bound glTF source path".into());
-    };
-    if binding.default_value.is_empty() {
-        return Err("Assign Fluid Role requires a bound glTF source path".into());
-    }
-    source.params.insert(
-        "path".into(),
-        SerializedParamValue::String {
-            value: binding.default_value.clone(),
-        },
-    );
-    Ok(())
-}
-
-fn same_source_selector(left: &ImportedSource, right: &ImportedSource) -> bool {
-    [
-        "path",
-        "mesh_index",
-        "primitive_index",
-        "fit",
-        "recenter",
-        "translate_x",
-        "translate_y",
-        "translate_z",
-        "fragment_count",
-        "fragment_index",
-    ]
-    .iter()
-    .all(|key| left.params.get(*key) == right.params.get(*key))
-}
-
-fn role_params(
-    object: &RoleObject,
-    role: u32,
-) -> Result<BTreeMap<String, SerializedParamValue>, String> {
+fn role_params(role: u32) -> BTreeMap<String, SerializedParamValue> {
     let mut params = BTreeMap::new();
     params.insert("role".into(), SerializedParamValue::Enum { value: role });
     params.insert("enabled".into(), SerializedParamValue::Bool { value: true });
@@ -687,84 +589,7 @@ fn role_params(
     params.insert("inherit_motion".into(), float(0.0));
     params.insert("friction".into(), float(0.0));
     params.insert("collider_parts".into(), int(32));
-    if let Some(source) = object.sources.first() {
-        for name in [
-            "path",
-            "mesh_index",
-            "primitive_index",
-            "material_index",
-            "fit",
-            "recenter",
-            "translate_x",
-            "translate_y",
-            "translate_z",
-            "fragment_count",
-            "fragment_index",
-        ] {
-            params.insert(
-                name.into(),
-                source
-                    .params
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| source_default(name)),
-            );
-        }
-        if object.sources.len() > 1 || object.local_transforms.iter().any(Option::is_some) {
-            let rows = object
-                .sources
-                .iter()
-                .enumerate()
-                .map(|(slot, source)| {
-                    vec![
-                        slot as f32,
-                        source
-                            .params
-                            .get("material_index")
-                            .and_then(as_number)
-                            .unwrap_or(-1.0),
-                    ]
-                })
-                .collect();
-            params.insert(
-                "compound_materials".into(),
-                SerializedParamValue::Table { rows },
-            );
-        }
-    }
-    if object.sources.is_empty() {
-        let size = object.cube_size.unwrap_or(1.0);
-        params.insert("radius".into(), float(size * 3.0_f32.sqrt() / 2.0));
-    }
-    Ok(params)
-}
-
-fn role_source_string_binding(
-    def: &EffectGraphDef,
-    source: Option<&ImportedSource>,
-    role_node_id: NodeId,
-) -> Option<StringBindingDef> {
-    let source = source?;
-    def.preset_metadata
-        .as_ref()?
-        .string_bindings
-        .iter()
-        .find_map(|binding| match &binding.target {
-            BindingTarget::Node { node_id, param }
-                if node_id == &source.node_id && param == "path" =>
-            {
-                Some(StringBindingDef {
-                    id: binding.id.clone(),
-                    label: binding.label.clone(),
-                    default_value: binding.default_value.clone(),
-                    target: BindingTarget::Node {
-                        node_id: role_node_id.clone(),
-                        param: "path".into(),
-                    },
-                })
-            }
-            _ => None,
-        })
+    params
 }
 
 fn stamp_role_metadata(
@@ -1014,8 +839,7 @@ fn route_role_to_domain(
     if matching_inputs.len() > 1 {
         return Err("Assign Fluid Role domain boundary has duplicate role inputs".into());
     }
-    if let Some(port) = matching_inputs.first()
-    {
+    if let Some(port) = matching_inputs.first() {
         if port.port_type != "FluidRole" {
             return Err("Assign Fluid Role domain boundary has a conflicting role input".into());
         }
@@ -1111,31 +935,6 @@ fn group_render_indices(wires: &[EffectGraphWire], render_id: u32, group_id: u32
     indices
 }
 
-fn source_default(name: &str) -> SerializedParamValue {
-    match name {
-        "path" => SerializedParamValue::String {
-            value: String::new(),
-        },
-        "fit" => SerializedParamValue::Enum { value: 0 },
-        "recenter" => SerializedParamValue::Bool { value: true },
-        "mesh_index" | "primitive_index" | "material_index" => {
-            SerializedParamValue::Int { value: -1 }
-        }
-        "fragment_count" => SerializedParamValue::Int { value: 1 },
-        "fragment_index" => SerializedParamValue::Int { value: 0 },
-        _ => float(0.0),
-    }
-}
-
-fn as_number(value: &SerializedParamValue) -> Option<f32> {
-    match value {
-        SerializedParamValue::Float { value } => Some(*value),
-        SerializedParamValue::Int { value } => Some(*value as f32),
-        SerializedParamValue::Enum { value } => Some(*value as f32),
-        _ => None,
-    }
-}
-
 fn float(value: f32) -> SerializedParamValue {
     SerializedParamValue::Float { value }
 }
@@ -1169,10 +968,10 @@ fn empty_scene_metadata() -> PresetMetadata {
 mod tests;
 
 mod lifecycle;
-pub(in crate::commands::graph::scene) use lifecycle::{
-    disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
-};
 pub use lifecycle::{
     RemoveSceneFluidRoleCommand, RetargetSceneFluidRoleCommand, SceneFluidRoleAssignment,
     scene_fluid_role_assignments,
+};
+pub(in crate::commands::graph::scene) use lifecycle::{
+    disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
 };

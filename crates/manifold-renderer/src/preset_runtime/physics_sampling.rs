@@ -32,8 +32,17 @@ pub(super) fn physics_sample_steps(
         let is_body = graph.get_node(node_id).is_some_and(|node| node.node.type_id().as_str() == "node.rigid_body");
         // Release events belong to their delivered frame. Historical pose
         // sampling holds the last output instead of replaying trigger state.
+        let is_fluid_role = graph.get_node(node_id).is_some_and(|node| {
+            node.node.type_id().as_str() == "node.fluid_role_source"
+        });
+        // A mesh description is setup state: its prepared geometry stays
+        // fixed during historical live-control sampling. Do not replay GPU
+        // sources or local topology transforms at historical timestamps.
         pending.extend(graph.wires_into(node_id)
             .filter(|wire| !(is_body && wire.to.1 == "release_count"))
+            .filter(|wire| !is_fluid_role || matches!(wire.to.1,
+                "transform" | "role" | "enabled" | "velocity_x" | "velocity_y"
+                | "velocity_z" | "inherit_motion" | "friction"))
             .map(|wire| wire.from.0));
     }
     for node_id in &ancestry {
@@ -138,8 +147,12 @@ mod tests {
         def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
             "id": 500, "nodeId": "pouring_mesh", "typeId": "node.fluid_role_source"
         }));
+        def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": 501, "nodeId": "visible_source", "typeId": "node.cube_mesh"
+        }));
         def["wires"].as_array_mut().unwrap().extend([
             serde_json::json!({"fromNode": 5, "fromPort": "transform", "toNode": 500, "toPort": "transform"}),
+            serde_json::json!({"fromNode": 501, "fromPort": "source", "toNode": 500, "toPort": "mesh_0"}),
             serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"}),
         ]);
         let runtime = PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_builtin())
@@ -151,7 +164,7 @@ mod tests {
             match kind.as_str() {
                 "node.fluid_role_source" => { assert!(sampled); saw_source = true; }
                 "node.lfo" => { assert!(sampled); saw_motion = true; }
-                "node.scene_object" | "node.render_scene" => assert!(!sampled),
+                "node.scene_object" | "node.render_scene" | "node.cube_mesh" => assert!(!sampled),
                 _ => {}
             }
         }
