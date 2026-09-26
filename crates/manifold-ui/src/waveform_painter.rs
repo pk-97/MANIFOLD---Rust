@@ -135,7 +135,7 @@ pub fn draw_waveform(
                             / outer.max(f32::EPSILON))
                         .round() as u8
                     };
-                    Color32::new(channel(|c| c.r), channel(|c| c.g), channel(|c| c.b), 255)
+                    Color32::new(channel(|c| c.r), channel(|c| c.g), channel(|c| c.b), 255) // design-token-exempt: coverage-weighted palette blend
                 };
                 src.a = (outer * x_coverage * 255.0).round() as u8;
                 buffer[idx] = straight_alpha_over(buffer[idx], src);
@@ -159,12 +159,10 @@ fn straight_alpha_over(dst: Color32, src: Color32) -> Color32 {
         return Color32::TRANSPARENT;
     }
     let blend = |s: u8, d: u8| ((s as f32 * sa + d as f32 * da) / a).round() as u8;
-    Color32::new(
-        blend(src.r, dst.r),
-        blend(src.g, dst.g),
-        blend(src.b, dst.b),
-        (a * 255.0).round() as u8,
-    )
+    let r = blend(src.r, dst.r);
+    let g = blend(src.g, dst.g);
+    let b = blend(src.b, dst.b);
+    Color32::new(r, g, b, (a * 255.0).round() as u8) // design-token-exempt: computed straight-alpha compositing
 }
 
 /// Draw a small text-style button overlay at a position.
@@ -370,11 +368,11 @@ mod tests {
 
     #[test]
     fn waveform_straight_alpha_keeps_edge_colour_bright() {
-        let src = Color32::new(100, 150, 200, 64);
+        let src = Color32::new(100, 150, 200, 64); // design-token-exempt: numeric compositing fixture
         assert_eq!(straight_alpha_over(Color32::TRANSPARENT, src), src);
         assert_eq!(
-            straight_alpha_over(Color32::new(20, 20, 20, 255), src),
-            Color32::new(40, 53, 65, 255)
+            straight_alpha_over(Color32::new(20, 20, 20, 255), src), // design-token-exempt: numeric compositing fixture
+            Color32::new(40, 53, 65, 255) // design-token-exempt: expected compositing result
         );
     }
 }
