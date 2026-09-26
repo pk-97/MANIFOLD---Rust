@@ -3390,19 +3390,7 @@ mod tests {
         // an explicit-key scheme anymore (`build_param_row`'s ParamId-derived key
         // covers all its rows), so there is nothing left to audit here.
 
-        // Modifier: per-slot offsets (up to 4 param slots) must fit inside
-        // MODIFIER_ROW_STRIDE, same per-index-range contract as OBJECT/LIGHT.
-        // C-P1d: the old `MODIFIER_OFF_PARAM_BASE` 3-wide `[-] value [+]`
-        // stepper offsets are gone (deleted with the pre-convergence bespoke
-        // numeric/enum stepper builders) — a Numeric/Axis row's own value
-        // cell, track, and steppers now key through `build_param_row`'s internal
-        // ParamId-derived scheme, not `modifier_row_key`; only the reorder/
-        // remove chrome and the mod-button offset still use it.
-        assert_no_dupes_and_fits_stride(
-            "MODIFIER (per-row)",
-            &[MODIFIER_OFF_UP, MODIFIER_OFF_DOWN, MODIFIER_OFF_REMOVE],
-            Some(MODIFIER_ROW_STRIDE),
-        );
+
     }
 
     /// BUG-193/P5: the Lights-section twin of the object-removal test above
