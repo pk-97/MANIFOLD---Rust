@@ -145,11 +145,11 @@ mod tests {
     fn standalone_formula_and_zero_inactive_slots_are_declared() {
         let body = SampleMeshTriangles::WGSL_BODY.expect("sample mesh triangles body");
         assert!(body.contains("source_face_index(idx / 3u,total,sample_count)"));
-        assert!(body.contains("Element(v.position,v.normal,v.uv,v.uv1,v.tangent)"));
+        assert!(body.contains("Element(v.position,v.normal,v.uv,v.uv1,v.tangent,v.color)"));
         assert!(body.contains("if idx / 3u >= sample_count"));
         assert!(
             body.contains(
-                "Element(vec3<f32>(0.0),vec3<f32>(0.0),vec2<f32>(0.0),vec2<f32>(0.0),vec4<f32>(0.0))",
+                "Element(vec3<f32>(0.0),vec3<f32>(0.0),vec2<f32>(0.0),vec2<f32>(0.0),vec4<f32>(0.0), vec4<f32>(1.0))",
             )
         );
         assert_eq!(SampleMeshTriangles::WGSL_INCLUDES.len(), 1);

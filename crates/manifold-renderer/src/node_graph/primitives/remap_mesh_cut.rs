@@ -86,7 +86,12 @@ impl Primitive for RemapMeshCut {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        super::mesh_cut_remap::run::<Self>(ctx, &mut self.pipeline, &mut self.last_key, 64);
+        super::mesh_cut_remap::run::<Self>(
+            ctx,
+            &mut self.pipeline,
+            &mut self.last_key,
+            std::mem::size_of::<MeshVertex>() as u64,
+        );
     }
 }
 

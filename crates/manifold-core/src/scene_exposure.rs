@@ -622,15 +622,12 @@ where
                 spec.name = meta_entry.label.clone();
                 changed = true;
             }
-            // Material feature modes are persisted card metadata. Refresh
-            // their labels as part of the stamp repair so old manifests gain
-            // newly appended compatibility values without touching authored
-            // defaults or custom bindings.
-            if matches!(
-                meta_entry.material_role,
-                Some(crate::material_inspector::MaterialParamRole::FeatureMode(_))
-            ) && spec.value_labels != meta_entry.value_labels
-            {
+            // Value labels are a stamp-time copy of the primitive metadata,
+            // just like the name and range above. Refresh them for every
+            // exact auto-stamp, including scene light modes whose enum set
+            // can grow after an import. The exact stamp id and `!user_added`
+            // guard keep authored/fan-out bindings untouched.
+            if spec.value_labels != meta_entry.value_labels {
                 spec.value_labels = meta_entry.value_labels.clone();
                 changed = true;
             }
@@ -1813,6 +1810,117 @@ mod tests {
             &TestProvider
         ));
         assert_eq!(def, after_repair);
+    }
+
+    #[test]
+    fn migrate_refreshes_light_enum_labels_and_preserves_authored_binding() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.light" {
+                    vec![SceneParamMetadata {
+                        min: 0.0,
+                        max: 2.0,
+                        default_value: SerializedParamValue::Enum { value: 1 },
+                        whole_numbers: true,
+                        value_labels: vec!["Sun".into(), "Point".into(), "Spot".into()],
+                        convert: ParamConvert::EnumRound,
+                        ..float_meta("mode", "Light Mode")
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(11, "node.light");
+        let node_id = node.node_id.clone();
+        let mut stale_spec = float_spec_default("11_mode", "Light Mode", "Light");
+        stale_spec.max = 1.0;
+        stale_spec.default_value = 1.0;
+        stale_spec.whole_numbers = true;
+        stale_spec.value_labels = vec!["Sun".into(), "Point".into()];
+        let stale_binding = BindingDef {
+            id: "11_mode".into(),
+            label: "Light Mode".into(),
+            default_value: 1.0,
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "mode".into(),
+            },
+            convert: ParamConvert::EnumRound,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+        let authored_spec = ParamSpecDef {
+            id: "custom_light_mode".into(),
+            name: "My light mode".into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: true,
+            value_labels: vec!["Custom off".into(), "Custom on".into()],
+            section: Some("Light".into()),
+            ..Default::default()
+        };
+        let authored_binding = BindingDef {
+            id: authored_spec.id.clone(),
+            label: authored_spec.name.clone(),
+            default_value: authored_spec.default_value,
+            target: BindingTarget::Node {
+                node_id,
+                param: "mode".into(),
+            },
+            convert: ParamConvert::EnumRound,
+            user_added: true,
+            scale: 0.5,
+            offset: 0.25,
+            default_mirrors_node_param: false,
+        };
+        let expected_authored = authored_binding.clone();
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_spec, authored_spec],
+                bindings: vec![stale_binding, authored_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            scene_modifiers: Vec::new(),
+            nodes: vec![node],
+            wires: Vec::new(),
+        };
+
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &["node.light"],
+            |_n| "Light".into(),
+            &TestProvider
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let spec = meta.params.iter().find(|p| p.id == "11_mode").unwrap();
+        assert_eq!((spec.min, spec.max), (0.0, 2.0));
+        assert_eq!(spec.value_labels, vec!["Sun", "Point", "Spot"]);
+        assert_eq!(
+            meta.bindings
+                .iter()
+                .find(|binding| binding.id == "custom_light_mode")
+                .unwrap(),
+            &expected_authored
+        );
+
+        let repaired = def.clone();
+        assert!(!migrate_scene_exposures(
+            &mut def,
+            &["node.light"],
+            |_n| "Light".into(),
+            &TestProvider
+        ));
+        assert_eq!(def, repaired);
     }
 
     /// Pass 4 covers NON-vocabulary nodes too (2026-08-27): the cinematic

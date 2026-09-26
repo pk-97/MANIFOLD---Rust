@@ -667,17 +667,11 @@ mod tests {
 
     #[test]
     fn material_is_copy_and_cheap_to_clone() {
-        // Trip-wire on the size — the per-frame copy cost matters because
-        // every wire carries one. Ceiling raised 128 → 256 for
-        // GLB_CONFORMANCE_DESIGN.md G-P4's five per-map UV transforms
-        // (5 × 24 B), then 256 → 336 for
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's sheen/iridescence/
-        // anisotropy/dispersion/transmission+volume fields (17 × 4 B =
-        // 68 B), plus the shared subsurface controls — a ~400-byte Copy per
-        // wire per frame is still far below anything measurable next to a
-        // single texture bind.
+        // Fixed-size metadata adds independent UV sets, transforms and
+        // samplers for all 19 map families without heap allocation.
+        // Keep a 1 KiB ceiling on this per-wire value as fields are extended.
         let sz = std::mem::size_of::<Material>();
-        assert!(sz <= 384, "Material grew unexpectedly large: {sz} bytes");
+        assert!(sz <= 1024, "Material grew unexpectedly large: {sz} bytes");
         let m = Material::default_unlit_white();
         let _copy = m;
         let _another = m;

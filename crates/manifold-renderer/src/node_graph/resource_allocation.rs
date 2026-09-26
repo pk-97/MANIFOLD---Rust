@@ -479,6 +479,7 @@ mod tests {
         ArrayFeedback, ContainerBounds3D, GenerateCubeMesh, ResolveAccumulator, ScatterParticles,
         SceneObjectNode, SeedParticles, Value, WaveShearMesh,
     };
+    use crate::generators::mesh_common::MeshVertex;
 
     struct FixedArrayNode {
         type_id: EffectNodeType,
@@ -810,11 +811,11 @@ mod tests {
         // An oversized borrowed buffer must not become an exact-size scratch
         // allocation even when its logical resource reaches its last reader.
         let prebound = AHashMap::from_iter([(first, ArrayStorage {
-            root: first, bytes: 72 * 64,
+            root: first, bytes: 72 * std::mem::size_of::<MeshVertex>() as u64,
         })]);
         let planned = plan_array_allocations(&graph, &plan, (64, 64), &prebound).unwrap();
         assert_ne!(planned.storage[&third].root, first);
-        assert_eq!(prebound[&first].bytes, 72 * 64);
+        assert_eq!(prebound[&first].bytes, 72 * std::mem::size_of::<MeshVertex>() as u64);
     }
 
     #[cfg(feature = "gpu-proofs")]
@@ -999,7 +1000,11 @@ mod tests {
         let outputs = &plan.steps().iter().find(|step| step.node == source).unwrap().outputs;
         let mut prebound = AHashMap::default();
         for (port, resource) in outputs {
-            let bytes = if *port == "vertices" { 1536 * 64 } else { 4 * 9000 };
+            let bytes = if *port == "vertices" {
+                1536 * std::mem::size_of::<MeshVertex>() as u64
+            } else {
+                4 * 9000
+            };
             prebound.insert(*resource, ArrayStorage { root: *resource, bytes });
         }
         let planned = plan_array_allocations(&graph, &plan, (64, 64), &prebound).unwrap();

@@ -124,24 +124,24 @@ crate::primitive! {
         },
 
         // Base/emissive map metadata.
-        ParamDef { name: Cow::Borrowed("uv_m00"), label: "Base Colour UV M00", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("uv_m01"), label: "Base Colour UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("uv_m10"), label: "Base Colour UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("uv_m11"), label: "Base Colour UV M11", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("uv_tx"), label: "Base Colour UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("uv_ty"), label: "Base Colour UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("uv_m00"), label: "Base Colour UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("uv_m01"), label: "Base Colour UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("uv_m10"), label: "Base Colour UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("uv_m11"), label: "Base Colour UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("uv_tx"), label: "Base Colour UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("uv_ty"), label: "Base Colour UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("uv_set"), label: "Base Colour UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wrap_u"), label: "Base Colour Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
         ParamDef { name: Cow::Borrowed("wrap_v"), label: "Base Colour Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
         ParamDef { name: Cow::Borrowed("mag_filter"), label: "Base Colour Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
         ParamDef { name: Cow::Borrowed("min_filter"), label: "Base Colour Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
         ParamDef { name: Cow::Borrowed("mip_filter"), label: "Base Colour Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
-        ParamDef { name: Cow::Borrowed("em_uv_m00"), label: "Emissive UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("em_uv_m01"), label: "Emissive UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("em_uv_m10"), label: "Emissive UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("em_uv_m11"), label: "Emissive UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("em_uv_tx"), label: "Emissive UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("em_uv_ty"), label: "Emissive UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_uv_m00"), label: "Emissive UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_uv_m01"), label: "Emissive UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_uv_m10"), label: "Emissive UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_uv_m11"), label: "Emissive UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_uv_tx"), label: "Emissive UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_uv_ty"), label: "Emissive UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("em_uv_set"), label: "Emissive UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("em_wrap_u"), label: "Emissive Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
         ParamDef { name: Cow::Borrowed("em_wrap_v"), label: "Emissive Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
@@ -321,7 +321,8 @@ mod tests {
 
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
-        let mut params = ParamValues::default();
+        let mut params: ParamValues = UnlitMaterial::PARAMS.iter()
+            .map(|param| (param.name.clone(), param.default.clone())).collect();
         params.insert(
             std::borrow::Cow::Borrowed("color_r"),
             ParamValue::Float(0.5),
@@ -395,6 +396,8 @@ mod tests {
         let mat = backend.material(out_slot).expect("material should be set");
         assert_eq!(mat.kind, MaterialKind::Unlit);
         assert_eq!(mat.base_color, [0.5, 0.6, 0.7, 1.0]);
+        assert_eq!(mat.base_color_uv_transform, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(mat.emissive_uv_transform, mat.base_color_uv_transform);
         // Emission premultiplied with intensity=2.0.
         assert!((mat.emission[0] - 1.0).abs() < 1e-5);
         assert!((mat.emission[1] - 0.8).abs() < 1e-5);

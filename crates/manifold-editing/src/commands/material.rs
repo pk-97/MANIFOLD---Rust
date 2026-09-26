@@ -354,8 +354,16 @@ fn validate_descriptor_identity(
     }
     let expected = if spec.is_toggle {
         ParamConvert::BoolThreshold
+    } else if spec.is_trigger {
+        ParamConvert::Trigger
     } else if matches!(role, MaterialParamRole::FeatureMode(_)) || !spec.value_labels.is_empty() {
         ParamConvert::EnumRound
+    } else if spec.whole_numbers {
+        // Integer-valued controls without enum labels (for example the
+        // imported PBR subsurface sample count) use IntRound. Treating these
+        // as Float makes an otherwise identity binding fail material-look
+        // validation after the control is added to the manifest.
+        ParamConvert::IntRound
     } else {
         ParamConvert::Float
     };
@@ -796,6 +804,41 @@ mod tests {
                 .unwrap()
                 .get_base_param("material_roughness"),
             0.8
+        );
+    }
+
+    #[test]
+    fn material_inspector_accepts_unlabelled_int_round_controls() {
+        let (mut project, target, context) = fixture();
+        with_graph_mut(&mut project, &target, |graph| {
+            let metadata = graph.preset_metadata.as_mut().unwrap();
+            metadata.bindings[0].convert = ParamConvert::IntRound;
+            let spec = &mut metadata.params[0];
+            spec.whole_numbers = true;
+            spec.max = 64.0;
+        });
+        let owner = project.preset_instance_mut(&target).unwrap();
+        {
+            let param = owner.params.get_mut("material_roughness").unwrap();
+            param.spec.whole_numbers = true;
+            param.spec.max = 64.0;
+        }
+        owner.set_base_param_by_id("material_roughness", 8.0);
+
+        let change = [MaterialParamChange {
+            param_id: ParamId::from("material_roughness"),
+            expected: 8.0,
+            value: 16.0,
+        }];
+        assert!(validate_material_edit(&project, &target, &context, &change, None).is_ok());
+
+        with_graph_mut(&mut project, &target, |graph| {
+            graph.preset_metadata.as_mut().unwrap().bindings[0].convert = ParamConvert::Float;
+        });
+        assert!(
+            validate_material_edit(&project, &target, &context, &change, None)
+                .expect_err("an IntRound card cannot use a Float binding")
+                .contains("unsupported conversion")
         );
     }
 

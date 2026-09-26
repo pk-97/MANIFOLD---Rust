@@ -1028,9 +1028,9 @@ fn rt_dynamic_coverage_and_attributes() {
         vertex([1.0, 1.0, 1.0], [1.0, 1.0]),
         vertex([-1.0, 1.0, 1.0], [0.0, 1.0]),
     ]
-    // Vertex normals UP (data, not geometry): the sun-bounce term needs
-    // dot(hit_n, sun_dir) = 1 on the ceiling's underside hits.
-    .map(|v| PackedVertex { normal: [0.0, 1.0, 0.0, 0.0], ..v });
+    // The underside faces the receiver, so Fresnel leaves nonzero diffuse
+    // energy. The grazing sun below clears the finite floor on shadow rays.
+    .map(|v| PackedVertex { normal: [0.0, -1.0, 0.0, 0.0], ..v });
     let floor_vb = write_shared(device, &floor_verts);
     let ceil_vb = write_shared(device, &ceil_verts);
 
@@ -1117,7 +1117,7 @@ fn rt_dynamic_coverage_and_attributes() {
         device.upload_texture(&prefiltered_env, &[0u8; 8]);
 
         let casters = if sun {
-            vec![RtCasterParams::new([0.0, 1.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
+            vec![RtCasterParams::new([0.9950372, -0.09950372, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
         } else {
             vec![]
         };
@@ -1158,8 +1158,8 @@ fn rt_dynamic_coverage_and_attributes() {
     }
 
     // ── Section 7: accepted-hit brightness multiplies the GI gather's
-    // evaluated radiance ONCE. Ceiling sun-bounce term is a constant per
-    // accepted hit (albedo 0.8/π), so the gain-2/gain-1 ratio is exactly 2
+    // evaluated radiance ONCE. The ceiling lighting and Fresnel weights are
+    // identical for each paired hit, so the gain-2/gain-1 ratio is exactly 2
     // (not 4 — coverage is not multiplied again). gain 0.5 (coverage 0.5)
     // halves the texel-sum ratio within tolerance (fixed seeds, Bernoulli
     // acceptance among the identical geometric hits of the two runs).

@@ -538,6 +538,10 @@ mod tests {
             ("anisotropy_strength", 0.29),
             ("transmission", 0.38),
             ("ior", 1.33),
+            // PBR imports expose this IntRound control without enum labels.
+            // Default must restore it through the same atomic undo unit as
+            // the float material factors.
+            ("subsurface_samples", 23.0),
         ];
         let material = fixture.material.clone();
         for &(name, default_value) in &authored_defaults {
