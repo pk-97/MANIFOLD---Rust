@@ -96,6 +96,7 @@ crate::primitive! {
         role_61: FluidRole optional,
         role_62: FluidRole optional,
         role_63: FluidRole optional,
+        acceleration_field: VectorField optional,
         domain: Transform optional, emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
         resolution: ScalarF32 optional, domain_size: ScalarF32 optional, fill_height: ScalarF32 optional,
         viscosity: ScalarF32 optional, surface_tension: ScalarF32 optional,
@@ -146,7 +147,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. The optional domain Transform sets the axis-aligned container centre and full XYZ dimensions in metres. Bounds round outward around that centre to uniform cells. Domain rotation and billboarding are rejected. Without that input, Domain Size preserves the cube centred in X/Z with floor Y=0. Closed face toggles control all six boundaries; domain and boundary edits restart the simulation. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. Mesh-role graphs currently require Live mode pending complete cache identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
+    composition_notes: "CPU reference engine, not a real-time guarantee. The optional domain Transform sets the axis-aligned container centre and full XYZ dimensions in metres. Bounds round outward around that centre to uniform cells. Domain rotation and billboarding are rejected. Without that input, Domain Size preserves the cube centred in X/Z with floor Y=0. Closed face toggles control all six boundaries; domain and boundary edits restart the simulation. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. The optional acceleration_field is a scene-space vector field in metres per second squared, shared with Physics World. It is retained and sampled at fixed ticks; live changes do not rebuild the simulation. Mesh-role and vector-field graphs currently require Live mode pending complete cache and input-take identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
     examples: ["WaterBasin", "WaterDamBreak", "HoneyDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion.",
@@ -167,7 +168,11 @@ crate::primitive! {
 }
 
 impl FluidSurface {
-    fn report_failure(domain_failure: &mut bool, ctx: &mut EffectNodeContext<'_, '_>, error: String) {
+    fn report_failure(
+        domain_failure: &mut bool,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        error: String,
+    ) {
         *domain_failure = true;
         ctx.error(error);
         ctx.mark_outputs_pending();
@@ -233,6 +238,11 @@ impl Primitive for FluidSurface {
             self.role_pending |=
                 !ctx.inputs.slot_content_ready(slot) || ctx.inputs.transform("domain").is_none();
         }
+        let acceleration_field = ctx.inputs.vector_field("acceleration_field");
+        if let Some(slot) = ctx.inputs.slot("acceleration_field") {
+            self.role_pending |=
+                !ctx.inputs.slot_content_ready(slot) || acceleration_field.is_none();
+        }
         if self.role_pending {
             self.runtime.hold_pending(ctx.time.seconds);
             ctx.mark_outputs_pending();
@@ -249,12 +259,20 @@ impl Primitive for FluidSurface {
             ("whitewater_capacity", 100000.0),
         ] {
             if !ctx.scalar_or_param(name, fallback).is_finite() {
-                Self::report_failure(&mut self.domain_failure, ctx, format!("Water: {name} must be finite"));
+                Self::report_failure(
+                    &mut self.domain_failure,
+                    ctx,
+                    format!("Water: {name} must be finite"),
+                );
                 return;
             }
         }
         if !(0.0..=2.0).contains(&ctx.scalar_or_param("surface_subdivisions", 0.0)) {
-            Self::report_failure(&mut self.domain_failure, ctx, "Water: surface detail must be between 0 and 2".into());
+            Self::report_failure(
+                &mut self.domain_failure,
+                ctx,
+                "Water: surface detail must be between 0 and 2".into(),
+            );
             return;
         }
         if !(0.0..=10.0).contains(&ctx.scalar_or_param("surface_smoothing_iterations", 2.0))
@@ -328,7 +346,11 @@ impl Primitive for FluidSurface {
             Some(ParamValue::String(path)) => path.as_str(),
             Some(ParamValue::Float(_)) | None => "",
             _ => {
-                Self::report_failure(&mut self.domain_failure, ctx, "Water: cache path must be a String".into());
+                Self::report_failure(
+                    &mut self.domain_failure,
+                    ctx,
+                    "Water: cache path must be a String".into(),
+                );
                 return;
             }
         };
@@ -347,10 +369,11 @@ impl Primitive for FluidSurface {
             emission: emitter.is_some() && ctx.scalar_or_param("emission", 1.0) > 0.5,
             inflow_speed: ctx.scalar_or_param("inflow_speed", 1.5),
         };
-        if let Err(error) = self.runtime.observe_scene(
+        if let Err(error) = self.runtime.observe_scene_with_field(
             settings,
             controls,
             &roles,
+            acceleration_field,
             ctx.time.seconds,
             ctx.scalar_or_param("speed", 1.0),
             ctx.scalar_or_param("reset", 0.0),
@@ -540,11 +563,22 @@ mod tests {
             params.insert(Cow::Borrowed("resolution"), ParamValue::Float(resolution));
             let inputs = NodeInputs::new(&[], &backend, &[]);
             let outputs = NodeOutputs::new(
-                &[], &backend, &mut scalar, &mut camera, &mut light, &mut material,
-                &mut transform, &mut atmosphere, &mut render_mode, &mut object,
+                &[],
+                &backend,
+                &mut scalar,
+                &mut camera,
+                &mut light,
+                &mut material,
+                &mut transform,
+                &mut atmosphere,
+                &mut render_mode,
+                &mut object,
             );
             let time = FrameTime {
-                beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(0.0), frame_count: 0,
+                beats: Beats(0.0),
+                seconds: Seconds(0.0),
+                delta: Seconds(0.0),
+                frame_count: 0,
             };
             let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None)
                 .with_errors(&mut errors);
@@ -569,7 +603,10 @@ mod tests {
         fluid
             .runtime
             .observe(
-                FluidSettings { resolution: 8, ..FluidSettings::default() },
+                FluidSettings {
+                    resolution: 8,
+                    ..FluidSettings::default()
+                },
                 FluidControls::default(),
                 Seconds(0.0),
                 1.0,
@@ -579,13 +616,14 @@ mod tests {
         fluid.runtime.advance(false).unwrap();
         assert!(fluid.warmup_pending());
         fluid.domain_failure = true;
-        assert!(!fluid.warmup_pending(), "failed inputs must not keep pumping an old worker");
+        assert!(
+            !fluid.warmup_pending(),
+            "failed inputs must not keep pumping an old worker"
+        );
         fluid.domain_failure = false;
         fluid.runtime.advance(true).unwrap();
         assert_eq!(
-            Primitive::fluid_domain_snapshot(&fluid)
-                .unwrap()
-                .state,
+            Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
             FluidDomainState::Ready
         );
 

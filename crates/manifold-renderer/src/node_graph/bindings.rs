@@ -13,6 +13,7 @@
 //!   return `None`, which is fine for tests that don't dispatch GPU work.
 
 use ahash::AHashMap;
+use manifold_physics::FieldValue;
 use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
@@ -294,6 +295,12 @@ impl<'a> NodeInputs<'a> {
         self.backend.mesh_source(self.slot(port)?)
     }
 
+    /// [`FieldValue`] bound to the named [`PortType::VectorField`] input.
+    /// The payload is an owned CPU evaluator used by native physics solvers.
+    pub fn vector_field(&self, port: &str) -> Option<FieldValue> {
+        self.backend.vector_field(self.slot(port)?)
+    }
+
     /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
     /// `None` if unwired. Same CPU-struct drain shape as `Atmosphere` —
     /// produced by `node.scene_object`, consumed by `render_scene`'s
@@ -399,6 +406,11 @@ impl<'a> NodeInputs<'a> {
     pub fn mesh_source_slot(&self, slot: Slot) -> Option<MeshSource> {
         self.backend.mesh_source(slot)
     }
+
+    /// [`FieldValue`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn vector_field_slot(&self, slot: Slot) -> Option<FieldValue> {
+        self.backend.vector_field(slot)
+    }
 }
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
@@ -434,6 +446,7 @@ pub struct NodeOutputs<'a> {
     pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
     pending_fluid_role_writes: Option<&'a mut Vec<(Slot, FluidRole)>>,
     pending_mesh_source_writes: Option<&'a mut Vec<(Slot, MeshSource)>>,
+    pending_vector_field_writes: Option<&'a mut Vec<(Slot, FieldValue)>>,
     pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
     pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
@@ -466,6 +479,7 @@ impl<'a> NodeOutputs<'a> {
             pending_rigid_body_writes: None,
             pending_fluid_role_writes: None,
             pending_mesh_source_writes: None,
+            pending_vector_field_writes: None,
             pending_object_writes,
         }
     }
@@ -516,6 +530,25 @@ impl<'a> NodeOutputs<'a> {
             self.pending_mesh_source_writes
                 .as_mut()
                 .expect("executor must provide mesh-source output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_vector_field_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, FieldValue)>,
+    ) -> Self {
+        self.pending_vector_field_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`FieldValue`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_vector_field(&mut self, port: &str, value: FieldValue) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_vector_field_writes
+                .as_mut()
+                .expect("executor must provide vector-field output scratch")
                 .push((slot, value));
         }
     }

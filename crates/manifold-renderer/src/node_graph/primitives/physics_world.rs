@@ -65,7 +65,7 @@ impl InstanceUploadState {
 crate::primitive! {
  name: PhysicsWorldNode,
  type_id: "node.physics_world",
- purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixty-four independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
+ purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixty-four independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; an optional continuous acceleration field contributes m/s² at each native microstep. Reset restores the authored starting poses and copy layout.",
  inputs: {
 body_0: RigidBody optional,
 body_1: RigidBody optional,
@@ -134,6 +134,7 @@ body_63: RigidBody optional,
 copies: RigidBody optional,
 gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional,
 copy_count: ScalarF32 optional, copy_spacing: ScalarF32 optional, copy_columns: ScalarF32 optional, copy_layout: ScalarF32 optional,
+acceleration_field: VectorField optional,
  },
  outputs: {
 pose_0: Transform,
@@ -219,7 +220,7 @@ ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamTy
  composition_notes: "Connect body_N to its matching pose_N consumer. Output transforms already include authored scale: connect directly to Scene Object transform, without applying that transform twice. Optional copies creates reset-latched bodies in the same native world and writes a fixed-capacity instances array plus active_count; copy_count, copy_spacing, copy_columns, and copy_layout are numeric port-shadowed controls and apply on first build, reset, or backwards transport. Grid preserves the centered x/z arrangement; Pile uses a compact deterministic cube-root layout with bounded jitter and index-seeded rotations. Copies require uniform positive scale. State follows the transport clock; pause holds, reset/backward time restores initial poses. Preview batches use the project frame interval as a CPU work budget and retain all unprocessed ticks. Preview may lag under overload; the Physics Lag HUD shows remaining work. Export/offline renders process every pending tick. Both paths use identical fixed steps. Shape/scale/topology edits rebuild this world; contact-property edits preserve motion. Native world stays private; no mutable handle wires.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Physics World", category: Atom },
- summary: "Simulate colliding objects together under gravity, with speed and reset controls.",
+ summary: "Simulate colliding objects together under gravity and an optional continuous acceleration field, with speed and reset controls.",
  category: Geometry3D, role: Filter,
  aliases: ["physics", "box3d", "rigid simulation"],
  boundary_reason: NonGpu,
@@ -259,6 +260,11 @@ impl Primitive for PhysicsWorldNode {
         if let Some(slot) = ctx.inputs.slot("copies") {
             body_inputs_pending |= !ctx.inputs.slot_content_ready(slot) || prototype.is_none();
         }
+        let acceleration_field = ctx.inputs.vector_field("acceleration_field");
+        if let Some(slot) = ctx.inputs.slot("acceleration_field") {
+            body_inputs_pending |=
+                !ctx.inputs.slot_content_ready(slot) || acceleration_field.is_none();
+        }
         if body_inputs_pending {
             self.simulation.hold_pending(ctx.time.seconds);
             ctx.mark_outputs_pending();
@@ -275,7 +281,7 @@ impl Primitive for PhysicsWorldNode {
         let copy_spacing = ctx.scalar_or_param("copy_spacing", 1.25);
         let copy_columns = ctx.scalar_or_param("copy_columns", 16.0);
         let copy_layout = read_copy_layout(ctx);
-        let result = self.simulation.advance_with_copy_layout(
+        let result = self.simulation.advance_with_fields(
             bodies.clone(),
             prototype,
             copy_count,
@@ -286,6 +292,7 @@ impl Primitive for PhysicsWorldNode {
             ctx.time.seconds,
             speed,
             reset,
+            acceleration_field,
         );
         if crate::node_graph::physics::authored_sample_only() {
             if let Err(error) = result {

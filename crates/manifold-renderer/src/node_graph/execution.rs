@@ -115,6 +115,8 @@ pub struct Executor {
     fluid_role_write_scratch: Vec<(Slot, crate::node_graph::fluid_role::FluidRole)>,
     /// Sibling scratch for [`PortType::MeshSource`] writes — same drain pattern.
     mesh_source_write_scratch: Vec<(Slot, crate::node_graph::mesh_source::MeshSource)>,
+    /// Sibling scratch for [`PortType::VectorField`] writes — same drain pattern.
+    vector_field_write_scratch: Vec<(Slot, manifold_physics::FieldValue)>,
     render_mode_write_scratch: Vec<(Slot, crate::node_graph::render_mode::RenderMode)>,
     atmosphere_write_scratch: Vec<(Slot, crate::node_graph::atmosphere::Atmosphere)>,
     /// Sibling scratch for [`PortType::Object`] writes — same drain pattern.
@@ -493,6 +495,7 @@ impl Executor {
             rigid_body_write_scratch: Vec::new(),
             fluid_role_write_scratch: Vec::new(),
             mesh_source_write_scratch: Vec::new(),
+            vector_field_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
@@ -1939,6 +1942,7 @@ impl Executor {
                     self.rigid_body_write_scratch.clear();
                     self.fluid_role_write_scratch.clear();
                     self.mesh_source_write_scratch.clear();
+                    self.vector_field_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
                     {
@@ -1961,7 +1965,8 @@ impl Executor {
                         )
                         .with_rigid_body_writes(&mut self.rigid_body_write_scratch)
                         .with_fluid_role_writes(&mut self.fluid_role_write_scratch)
-                        .with_mesh_source_writes(&mut self.mesh_source_write_scratch);
+                        .with_mesh_source_writes(&mut self.mesh_source_write_scratch)
+                        .with_vector_field_writes(&mut self.vector_field_write_scratch);
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
                         // need them (`scatter_particles` and friends)
@@ -2116,6 +2121,9 @@ impl Executor {
                     }
                     for (slot, value) in self.mesh_source_write_scratch.drain(..) {
                         self.backend.set_mesh_source(slot, value);
+                    }
+                    for (slot, value) in self.vector_field_write_scratch.drain(..) {
+                        self.backend.set_vector_field(slot, value);
                     }
                     // Object writes use the same drain shape.
                     for (slot, value) in self.object_write_scratch.drain(..) {

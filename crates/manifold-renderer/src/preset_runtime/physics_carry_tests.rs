@@ -39,11 +39,15 @@ impl EffectNode for PoseObserver {
 }
 
 fn runtime(height: f32, fused: bool) -> PresetRuntime {
+    runtime_with_field(height, fused, false)
+}
+
+fn runtime_with_field(height: f32, fused: bool, field: bool) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.pose", || {
         Box::new(PoseObserver(EffectNodeType::new("test.pose")))
     });
-    let def = serde_json::from_value(serde_json::json!({
+    let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
         "version": 2, "name": "Native physics carry",
         "nodes": [
             {"id":0,"nodeId":"input","typeId":"system.generator_input"},
@@ -64,6 +68,24 @@ fn runtime(height: f32, fused: bool) -> PresetRuntime {
         ]
     }))
     .unwrap();
+    if field {
+        def.nodes.push(
+            serde_json::from_value(serde_json::json!({
+                "id":7,"nodeId":"field","typeId":"node.uniform_vector_field","params":{
+                    "x":{"type":"Float","value":4.0},
+                    "y":{"type":"Float","value":0.0}
+                }
+            }))
+            .unwrap(),
+        );
+        def.wires
+            .push(manifold_core::effect_graph_def::EffectGraphWire {
+                from_node: 7,
+                from_port: "out".into(),
+                to_node: 3,
+                to_port: "acceleration_field".into(),
+            });
+    }
     PresetRuntime::from_def_for_render(def, &registry, None, fused).unwrap()
 }
 
@@ -110,6 +132,34 @@ fn physics_carry_preserves_native_rigid_trajectory_and_paused_pose() {
 }
 
 #[test]
+fn physics_shared_field_graph_is_frame_rate_independent_and_survives_rebuild() {
+    let mut reference = runtime_with_field(5.0, false, true);
+    let mut expected = Transform::default();
+    for tick in 0..=30 {
+        expected = frame(&mut reference, tick as f64 / 60.0);
+    }
+    assert!(expected.pos[0] > 0.4, "the graph field must reach Box3D");
+    for fps in [24, 30] {
+        let mut edited = runtime_with_field(5.0, false, true);
+        let mut actual = Transform::default();
+        for tick in 0..=fps / 2 {
+            if tick > 0 {
+                let mut rebuilt = runtime_with_field(5.0, tick % 2 == 0, true);
+                rebuilt.carry_generator_state_from(&mut edited);
+                edited = rebuilt;
+            }
+            actual = frame(&mut edited, tick as f64 / fps as f64);
+        }
+        for axis in 0..3 {
+            assert!(
+                (actual.pos[axis] - expected.pos[axis]).abs() < 1e-5,
+                "{fps} FPS/rebuild changed trajectory: {actual:?} vs {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn physics_carry_rejects_setup_changes_and_output_resize() {
     let mut prior = runtime(5.0, false);
     frame(&mut prior, 0.0);
@@ -136,7 +186,7 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     for (id, name) in [(400, "gain_a"), (401, "gain_b")] {
         def.nodes.push(
             serde_json::from_value(serde_json::json!({
-                "id": id, "nodeId": name, "typeId": "node.gain"
+                "id": id, "nodeId": name, "typeId": "node.exposure"
             }))
             .unwrap(),
         );

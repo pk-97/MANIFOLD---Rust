@@ -15,6 +15,7 @@
 //! implementation are designed together.
 
 use ahash::AHashMap;
+use manifold_physics::FieldValue;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 
 use crate::node_graph::bindings::Slot;
@@ -279,6 +280,16 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as [`Backend::set_fluid_role`].
     fn set_mesh_source(&mut self, _slot: Slot, _value: MeshSource) {}
 
+    /// [`FieldValue`] bound to a slot. CPU-only owned vector-field evaluator
+    /// for native physics inputs.
+    fn vector_field(&self, _slot: Slot) -> Option<FieldValue> {
+        None
+    }
+
+    /// Write a [`FieldValue`] into a slot. Drained from the per-step scratch
+    /// by the executor, same shape as [`Backend::set_mesh_source`].
+    fn set_vector_field(&mut self, _slot: Slot, _value: FieldValue) {}
+
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
     /// `node.scene_object`'s evaluate and drained by the executor before
@@ -393,6 +404,7 @@ pub struct MockBackend {
     rigid_bodies: AHashMap<Slot, RigidBody>,
     fluid_roles: AHashMap<Slot, FluidRole>,
     mesh_sources: AHashMap<Slot, MeshSource>,
+    vector_fields: AHashMap<Slot, FieldValue>,
     /// SceneObject values written via [`Backend::set_object`] — same shape.
     objects: AHashMap<Slot, SceneObject>,
     /// Skip-passthrough aliases installed this frame via
@@ -418,6 +430,7 @@ impl MockBackend {
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
             mesh_sources: AHashMap::default(),
+            vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
@@ -468,6 +481,7 @@ impl Backend for MockBackend {
         if let Some(slot) = self.bound.remove(&id) {
             self.fluid_roles.remove(&slot);
             self.mesh_sources.remove(&slot);
+            self.vector_fields.remove(&slot);
             let key = pool_key(ty, format, dims, false);
             self.free_by_type.entry(key).or_default().push(slot);
         }
@@ -486,6 +500,7 @@ impl Backend for MockBackend {
         self.free_by_type.clear();
         self.fluid_roles.clear();
         self.mesh_sources.clear();
+        self.vector_fields.clear();
     }
 
     fn texture_2d(&self, _slot: Slot) -> Option<&GpuTexture> {
@@ -574,6 +589,14 @@ impl Backend for MockBackend {
 
     fn set_mesh_source(&mut self, slot: Slot, value: MeshSource) {
         self.mesh_sources.insert(slot, value);
+    }
+
+    fn vector_field(&self, slot: Slot) -> Option<FieldValue> {
+        self.vector_fields.get(&slot).cloned()
+    }
+
+    fn set_vector_field(&mut self, slot: Slot, value: FieldValue) {
+        self.vector_fields.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<SceneObject> {

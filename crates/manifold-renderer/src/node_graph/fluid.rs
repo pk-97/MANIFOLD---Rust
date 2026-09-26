@@ -13,10 +13,12 @@ use manifold_fluids::{
 use manifold_physics::input::{
     HistoryWrite, InputHistory, Timestamped, input_span, input_span_before,
 };
+use manifold_physics::{FieldInput, FieldValue};
 
 use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
 use super::fluid_role::FluidRole;
 use super::transform::Transform;
+use super::vector_field::ContinuousField;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
 mod domain;
@@ -205,10 +207,11 @@ impl FluidControls {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Sample {
     time: f64,
     controls: FluidControls,
+    acceleration_field: Option<FieldValue>,
 }
 
 impl Timestamped for Sample {
@@ -456,7 +459,16 @@ impl Worker {
                         }
                         native_roles.apply(native, &request.role_setup, &request.history,
                             &request.role_history, tick, domain)?;
-                        stats = native.step(Seconds(TICK)).map_err(|e| e.to_string())?;
+                        let field = FluidRuntime::field_at(&request.history, tick, domain);
+                        stats = if field.is_empty() {
+                            native.step(Seconds(TICK))
+                        } else {
+                            native.step_with_fields(Seconds(TICK), &[FieldInput {
+                                field: &field,
+                                acceleration: 1.0,
+                                delta_velocity: 0.0,
+                            }])
+                        }.map_err(|e| e.to_string())?;
                         completed_count += 1;
                         pose = step.next.obstacle;
                         let last = index + 1 == request.count;
@@ -676,6 +688,30 @@ impl FluidRuntime {
         speed: f32,
         reset: f32,
     ) -> Result<(), String> {
+        self.observe_scene_with_field(
+            settings,
+            controls,
+            scene_roles,
+            None,
+            transport,
+            speed,
+            reset,
+        )
+    }
+
+    /// Retain scene-space acceleration with the same input intervals as sources
+    /// and colliders. Field edits affect subsequent ticks without restarting FLIP.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_scene_with_field(
+        &mut self,
+        settings: FluidSettings,
+        controls: FluidControls,
+        scene_roles: &[Option<FluidRole>],
+        acceleration_field: Option<FieldValue>,
+        transport: Seconds,
+        speed: f32,
+        reset: f32,
+    ) -> Result<(), String> {
         // Setup edits take effect at the current render evaluation. Replaying
         // live controls between frames must not move/rebuild the domain at
         // historical timestamps using newly authored setup values.
@@ -688,6 +724,9 @@ impl FluidRuntime {
         roles::Setup::validate(scene_roles)?;
         if self.cache_mode != CacheMode::Live && scene_roles.iter().any(Option::is_some) {
             return Err("Fluid scene roles require Live mode until their geometry and input take are recorded in the cache manifest".into());
+        }
+        if self.cache_mode != CacheMode::Live && acceleration_field.is_some() {
+            return Err("Fluid vector fields require Live mode until their input take is recorded in the cache manifest".into());
         }
         if self.cache_mode != CacheMode::Playback {
             controls.validate()?;
@@ -738,13 +777,13 @@ impl FluidRuntime {
             self.role_history.clear();
         }
         self.prune_history()?;
-        if self
-            .history
-            .back()
-            .is_some_and(|last| last.time == target_time && last.controls == controls)
-            && self
-                .role_history
-                .latest_matches(&self.role_setup, scene_roles)
+        if self.history.back().is_some_and(|last| {
+            last.time == target_time
+                && last.controls == controls
+                && last.acceleration_field == acceleration_field
+        }) && self
+            .role_history
+            .latest_matches(&self.role_setup, scene_roles)
         {
             // A held transport with unchanged controls needs no extra endpoint,
             // even when history is full and the worker is still catching up.
@@ -756,6 +795,7 @@ impl FluidRuntime {
             Sample {
                 time: target_time,
                 controls,
+                acceleration_field,
             },
             manifold_physics::Seconds(self.simulation_time()),
         ) {
@@ -841,6 +881,17 @@ impl FluidRuntime {
             previous: Self::controls_at(history.iter(), (current - TICK).max(0.0)),
             current: Self::controls_at(history.iter(), current),
             next: Self::controls_at_before(history.iter(), current + TICK),
+        }
+    }
+
+    fn field_at(history: &[Sample], tick: u64, domain: FluidDomainLayout) -> ContinuousField<'_> {
+        let span = input_span(history.iter(), Seconds(tick as f64 * TICK))
+            .expect("observe before advance");
+        ContinuousField {
+            before: span.before.acceleration_field.as_ref(),
+            after: span.after.acceleration_field.as_ref(),
+            alpha: span.alpha,
+            origin: domain.min,
         }
     }
 
@@ -930,7 +981,7 @@ impl FluidRuntime {
                 .take()
                 .expect("one recycled history snapshot per request");
             history.clear();
-            history.extend(self.history.iter().copied());
+            history.extend(self.history.iter().cloned());
             let mut role_history = self
                 .spare_role_history
                 .take()
@@ -979,6 +1030,176 @@ impl FluidRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_physics::VectorField;
+
+    #[test]
+    fn fluid_shared_field_history_preserves_pending_edits_and_scene_coordinates() {
+        let settings = FluidSettings {
+            domain: Some(Transform {
+                pos: [10.0, -3.0, 7.0],
+                scale: [4.0; 3],
+                ..Transform::default()
+            }),
+            ..FluidSettings::default()
+        };
+        let domain = settings.domain_layout().unwrap();
+        let mut runtime = FluidRuntime::default();
+        let controls = FluidControls::default();
+        for (time, strength) in [(0.0, 0.0), (2.0 * TICK, 4.0), (2.0 * TICK, 10.0)] {
+            runtime
+                .observe_scene_with_field(
+                    settings,
+                    controls,
+                    &[],
+                    Some(FieldValue::uniform([strength, 0.0, 0.0]).unwrap()),
+                    Seconds(time),
+                    1.0,
+                    0.0,
+                )
+                .unwrap();
+        }
+        let epoch = runtime.epoch;
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
+        assert_eq!(
+            FluidRuntime::field_at(&samples, 1, domain).sample([1.0; 3]),
+            [2.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            FluidRuntime::field_at(&samples, 2, domain).sample([1.0; 3]),
+            [10.0, 0.0, 0.0]
+        );
+
+        let center = settings.domain.unwrap().pos;
+        let radial = FieldValue::radial(center, 4.0, 1.0).unwrap();
+        runtime
+            .observe_scene_with_field(
+                settings,
+                controls,
+                &[],
+                Some(radial),
+                Seconds(2.0 * TICK),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.epoch, epoch,
+            "a live field edit must preserve FLIP state"
+        );
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
+        let position = domain.to_native([center[0] + 1.0, center[1], center[2]]);
+        assert_eq!(
+            FluidRuntime::field_at(&samples, 2, domain).sample(position),
+            [0.75, 0.0, 0.0]
+        );
+        runtime
+            .observe_scene_with_field(settings, controls, &[], None, Seconds(2.0 * TICK), 1.0, 1.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, epoch);
+        assert_eq!(runtime.history.len(), 1);
+        assert!(
+            runtime
+                .history
+                .front()
+                .unwrap()
+                .acceleration_field
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn fluid_shared_field_requires_a_recorded_input_identity_for_cache_modes() {
+        for mode in [CacheMode::Record, CacheMode::Playback] {
+            let mut runtime = FluidRuntime::default();
+            runtime.set_cache(mode, "not-opened-by-observe").unwrap();
+            let error = runtime
+                .observe_scene_with_field(
+                    FluidSettings::default(),
+                    FluidControls::default(),
+                    &[],
+                    Some(FieldValue::uniform([1.0; 3]).unwrap()),
+                    Seconds::ZERO,
+                    1.0,
+                    0.0,
+                )
+                .unwrap_err();
+            assert!(error.contains("input take"));
+            assert!(runtime.history.is_empty());
+        }
+    }
+
+    #[test]
+    fn fluid_shared_field_worker_matches_gravity_without_restarting() {
+        fn run(gravity: f32, field: Option<FieldValue>) -> [f32; 3] {
+            let settings = FluidSettings {
+                resolution: 8,
+                fill_height: 0.0,
+                initial_volume: Some(Transform {
+                    pos: [0.0, 2.0, 0.0],
+                    scale: [1.5; 3],
+                    ..Transform::default()
+                }),
+                ..FluidSettings::default()
+            };
+            let controls = FluidControls {
+                gravity,
+                emission: false,
+                obstacle_enabled: false,
+                ..FluidControls::default()
+            };
+            let mut runtime = FluidRuntime::default();
+            runtime
+                .observe_scene_with_field(
+                    settings,
+                    controls,
+                    &[],
+                    field.clone(),
+                    Seconds::ZERO,
+                    1.0,
+                    0.0,
+                )
+                .unwrap();
+            runtime.advance(true).unwrap();
+            let epoch = runtime.epoch;
+            // One retained interval is drained by the same worker used by live preview.
+            runtime
+                .observe_scene_with_field(
+                    settings,
+                    controls,
+                    &[],
+                    field,
+                    Seconds(8.0 * TICK),
+                    1.0,
+                    0.0,
+                )
+                .unwrap();
+            runtime.advance(true).unwrap();
+            assert_eq!(runtime.epoch, epoch);
+            assert_eq!(runtime.completed_tick, 8);
+            assert!(!runtime.vertices.is_empty());
+            std::array::from_fn(|axis| {
+                runtime
+                    .vertices
+                    .iter()
+                    .map(|v| v.position[axis])
+                    .sum::<f32>()
+                    / runtime.vertices.len() as f32
+            })
+        }
+        let resting = run(0.0, None);
+        let gravity = run(-6.0, None);
+        let field = run(0.0, Some(FieldValue::uniform([0.0, -6.0, 0.0]).unwrap()));
+        assert!(
+            resting[1] - field[1] > 0.01,
+            "field must move the native fluid"
+        );
+        for axis in 0..3 {
+            assert!(
+                (gravity[axis] - field[axis]).abs() < 0.005,
+                "gravity {gravity:?} differs from equivalent field {field:?}"
+            );
+        }
+    }
 
     #[test]
     fn fluid_preview_scheduler_requests_all_due_ticks_across_display_rates() {
@@ -1648,7 +1869,10 @@ mod tests {
                 error: None,
             })
             .unwrap();
-        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert_eq!(
+            runtime.domain_snapshot().state,
+            FluidDomainState::Initializing
+        );
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
 
         runtime
@@ -1667,10 +1891,16 @@ mod tests {
         let snapshot = runtime.domain_snapshot();
         assert_eq!(snapshot.epoch, epoch);
         assert_eq!(snapshot.state, FluidDomainState::Ready);
-        assert_eq!(snapshot.accepted_layout, Some(FluidSettings::default().domain_layout().unwrap()));
+        assert_eq!(
+            snapshot.accepted_layout,
+            Some(FluidSettings::default().domain_layout().unwrap())
+        );
 
         runtime.clear();
-        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert_eq!(
+            runtime.domain_snapshot().state,
+            FluidDomainState::Initializing
+        );
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
         runtime
             .accept(Reply {
@@ -1685,7 +1915,10 @@ mod tests {
                 error: None,
             })
             .unwrap();
-        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert_eq!(
+            runtime.domain_snapshot().state,
+            FluidDomainState::Initializing
+        );
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
     }
 
@@ -1702,24 +1935,29 @@ mod tests {
             )
             .unwrap();
         let epoch = runtime.epoch;
-        assert!(runtime
-            .accept(Reply {
-                epoch,
-                tick: 0,
-                history: Vec::new(),
-                role_history: Vec::new(),
-                vertices: Vec::new(),
-                whitewater: WhitewaterFrame::default(),
-                obstacle: Transform::default(),
-                stats: FrameStats::default(),
-                error: Some("native setup failed".into()),
-            })
-            .is_err());
+        assert!(
+            runtime
+                .accept(Reply {
+                    epoch,
+                    tick: 0,
+                    history: Vec::new(),
+                    role_history: Vec::new(),
+                    vertices: Vec::new(),
+                    whitewater: WhitewaterFrame::default(),
+                    obstacle: Transform::default(),
+                    stats: FrameStats::default(),
+                    error: Some("native setup failed".into()),
+                })
+                .is_err()
+        );
         assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Failed);
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
 
         runtime.clear();
-        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert_eq!(
+            runtime.domain_snapshot().state,
+            FluidDomainState::Initializing
+        );
     }
 
     #[test]
@@ -1780,7 +2018,7 @@ mod tests {
             FluidRuntime::controls_at(runtime.history.iter(), 1.0).gravity,
             10.0
         );
-        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
         assert_eq!(FluidRuntime::step_at(&samples, 59).next.gravity, 0.0);
         assert_eq!(FluidRuntime::step_at(&samples, 60).current.gravity, 10.0);
         assert_eq!(

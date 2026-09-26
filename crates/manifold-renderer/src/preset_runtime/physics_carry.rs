@@ -124,6 +124,7 @@ impl PresetRuntime {
                     PortType::Transform => carry!(transform, set_transform),
                     PortType::RigidBody => carry!(rigid_body, set_rigid_body),
                     PortType::FluidRole => carry!(fluid_role, set_fluid_role),
+                    PortType::VectorField => carry!(vector_field, set_vector_field),
                     PortType::MeshSource => carry!(mesh_source, set_mesh_source),
                     _ => {}
                 }

@@ -8,6 +8,8 @@
 pub use manifold_foundation::Seconds;
 pub mod input;
 pub mod interaction;
+mod field_value;
+pub use field_value::FieldValue;
 pub use interaction::{
     FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
     VectorField, VortexField,
@@ -272,6 +274,7 @@ pub struct PhysicsWorld {
     provenance: u64,
     bodies: Vec<BodyRecord>,
     field_scratch: Vec<FieldApplication>,
+    field_seen: Vec<bool>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
 }
@@ -336,6 +339,7 @@ impl PhysicsWorld {
             provenance: if provenance == 0 { 1 } else { provenance },
             bodies: Vec::new(),
             field_scratch: Vec::new(),
+            field_seen: Vec::new(),
             _not_sync: PhantomData,
         })
     }
@@ -454,6 +458,7 @@ impl PhysicsWorld {
             native,
             owned_geometry: OwnedGeometry::Hulls(owned_hulls),
         });
+        self.field_seen.push(false);
         self.field_scratch
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         Ok(BodyHandle {
@@ -538,6 +543,7 @@ impl PhysicsWorld {
             native,
             owned_geometry: OwnedGeometry::Mesh(owned_mesh),
         });
+        self.field_seen.push(false);
         self.field_scratch
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         Ok(BodyHandle {
@@ -630,11 +636,16 @@ impl PhysicsWorld {
                 ));
             }
         }
-        for (index, handle) in bodies.iter().enumerate() {
+        // A shared scene field commonly targets thousands of copies. Validate
+        // uniqueness in linear time using storage prepared with body creation.
+        self.field_seen.fill(false);
+        for handle in bodies {
             self.body_record(*handle)?;
-            if bodies[..index].contains(handle) {
+            let seen = &mut self.field_seen[handle.index as usize];
+            if *seen {
                 return Err(PhysicsError::InvalidInput("duplicate field body handle"));
             }
+            *seen = true;
         }
 
         self.field_scratch.clear();
@@ -2303,11 +2314,18 @@ mod tests {
         }
         assert!(bodies.len() > initial_capacity);
         let prepared_capacity = world.field_scratch.capacity();
+        let seen_capacity = world.field_seen.capacity();
         assert!(prepared_capacity >= bodies.len());
+        assert_eq!(world.field_seen.len(), bodies.len());
         world
             .apply_fields(&bodies, &[], Seconds(1.0 / 60.0))
             .unwrap();
         assert_eq!(world.field_scratch.capacity(), prepared_capacity);
+        assert_eq!(world.field_seen.capacity(), seen_capacity);
+        // A rejected prefix must not contaminate the next recipient set.
+        assert!(world.apply_fields(&[bodies[0], bodies[0]], &[], Seconds(1.0 / 60.0)).is_err());
+        world.apply_fields(&bodies, &[], Seconds(1.0 / 60.0)).unwrap();
+        assert_eq!(world.field_seen.capacity(), seen_capacity);
     }
 
     #[test]

@@ -81,6 +81,8 @@ pub enum PortType {
     FluidRole,
     /// CPU-only authored source geometry description.
     MeshSource,
+    /// CPU-only owned vector-field evaluator for native physics inputs.
+    VectorField,
     /// CPU-only struct wire carrying a
     /// [`SceneObject`](crate::node_graph::scene_object::SceneObject) — the
     /// bundle of transform + material + mesh/map/instance [`Slot`](crate::node_graph::bindings::Slot)s

@@ -2,7 +2,7 @@
 use manifold_core::Seconds;
 use manifold_physics::{
     input::{input_span, input_span_before, InputHistory, Timestamped},
-    BodyConfig, BodyHandle, BodyKind, PhysicsWorld,
+    BodyConfig, BodyHandle, BodyKind, FieldInput, FieldValue, PhysicsWorld, VectorField,
 };
 use std::sync::Arc;
 
@@ -158,6 +158,7 @@ struct AuthoredPoseSample {
     bodies: [Option<RigidBody>; MAX_BODIES],
     prototype: Option<RigidBody>,
     gravity: [f32; 3],
+    acceleration_field: Option<FieldValue>,
 }
 
 impl Timestamped for AuthoredPoseSample {
@@ -302,6 +303,7 @@ pub struct RigidSimulation {
     /// sweep through objects that lay between the old and new pose.
     deferred_animated_edit: [Option<DeferredAnimatedEdit>; MAX_BODIES],
     copy_handles: Vec<Option<BodyHandle>>,
+    field_handles: Vec<BodyHandle>,
     copy_description: Option<RigidBody>,
     copy_bullet_enabled: Vec<bool>,
     deferred_copy_animated_edit: Option<DeferredAnimatedEdit>,
@@ -336,6 +338,7 @@ impl Default for RigidSimulation {
             bullet_enabled: [false; MAX_BODIES],
             deferred_animated_edit: std::array::from_fn(|_| None),
             copy_handles: vec![None; MAX_COPIES],
+            field_handles: Vec::with_capacity(MAX_BODIES + MAX_COPIES),
             copy_description: None,
             copy_bullet_enabled: vec![false; MAX_COPIES],
             deferred_copy_animated_edit: None,
@@ -444,6 +447,39 @@ impl RigidSimulation {
         speed: f32,
         reset_count: f32,
     ) -> Result<(), String> {
+        self.advance_with_fields(
+            bodies,
+            prototype,
+            copy_count,
+            copy_spacing,
+            copy_columns,
+            layout,
+            gravity,
+            now,
+            speed,
+            reset_count,
+            None,
+        )
+    }
+
+    /// Advance the shared world with an optional retained acceleration field.
+    /// Field edits are sampled through the same fixed-tick authored history as
+    /// gravity and applied at every native microstep.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_with_fields(
+        &mut self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        copy_count: f32,
+        copy_spacing: f32,
+        copy_columns: f32,
+        layout: f32,
+        gravity: [f32; 3],
+        now: Seconds,
+        speed: f32,
+        reset_count: f32,
+        acceleration_field: Option<FieldValue>,
+    ) -> Result<(), String> {
         if !now.0.is_finite()
             || !speed.is_finite()
             || !(0.0..=4.0).contains(&speed)
@@ -529,6 +565,7 @@ impl RigidSimulation {
                     bodies.clone(),
                     prototype.clone(),
                     gravity,
+                    acceleration_field.clone(),
                 )?;
                 self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
@@ -625,6 +662,11 @@ impl RigidSimulation {
                     .is_some_and(|body| body.enabled && body.fragment_parent.is_none());
             }
             self.copy_handles[..active_copy_count].copy_from_slice(&copy_handles);
+            self.field_handles.clear();
+            self.field_handles
+                .extend(self.handles.iter().flatten().copied());
+            self.field_handles
+                .extend(copy_handles.into_iter().flatten());
             self.descriptions = bodies.clone();
             self.copy_description = prototype.clone();
             self.active_copy_count = active_copy_count;
@@ -644,6 +686,7 @@ impl RigidSimulation {
                         bodies: bodies.clone(),
                         prototype: prototype.clone(),
                         gravity,
+                        acceleration_field: acceleration_field.clone(),
                     },
                     Seconds::ZERO,
                 )
@@ -667,6 +710,7 @@ impl RigidSimulation {
             bodies.clone(),
             prototype.clone(),
             gravity,
+            acceleration_field.clone(),
         )?;
         self.authored_time = authored_time;
         let accumulated = self.accumulator + elapsed_simulation;
@@ -747,13 +791,37 @@ impl RigidSimulation {
         let mut completed = 0;
         for _ in 0..steps {
             let tick_gravity = self.interpolated_gravity(self.physics_time);
+            let (field_before, field_after, field_alpha) = {
+                let span = input_span(self.authored_samples.iter(), Seconds(self.physics_time))
+                    .expect("authored input history is seeded before stepping");
+                (
+                    span.before.acceleration_field.clone(),
+                    span.after.acceleration_field.clone(),
+                    span.alpha,
+                )
+            };
+            let sampled_field = crate::node_graph::vector_field::ContinuousField {
+                before: field_before.as_ref(),
+                after: field_after.as_ref(),
+                alpha: field_alpha,
+                origin: [0.0; 3],
+            };
             self.world
                 .as_mut()
                 .expect("world constructed above")
                 .set_gravity(tick_gravity)
                 .map_err(|e| e.to_string())?;
-            let dynamic_microsteps =
-                self.configure_fast_bodies(&bodies, prototype.as_ref(), tick_gravity, TICK)?;
+            let dynamic_microsteps = self.configure_fast_bodies(
+                &bodies,
+                prototype.as_ref(),
+                tick_gravity,
+                if sampled_field.is_empty() {
+                    None
+                } else {
+                    Some(&sampled_field)
+                },
+                TICK,
+            )?;
             let (animated_microsteps, animated_speed) =
                 self.animated_microsteps(&bodies, prototype.as_ref(), TICK);
             let microsteps = animated_microsteps.max(dynamic_microsteps);
@@ -816,6 +884,19 @@ impl RigidSimulation {
                             .set_animated_target(handle, target.config(), Seconds(microstep_time))
                             .map_err(|e| e.to_string())?;
                     }
+                }
+                if !sampled_field.is_empty() {
+                    world
+                        .apply_fields(
+                            &self.field_handles,
+                            &[FieldInput {
+                                field: &sampled_field,
+                                acceleration: 1.0,
+                                delta_velocity: 0.0,
+                            }],
+                            Seconds(microstep_time),
+                        )
+                        .map_err(|e| e.to_string())?;
                 }
                 world
                     .step(Seconds(microstep_time), solver_substeps)
@@ -1157,6 +1238,7 @@ impl RigidSimulation {
         bodies: [Option<RigidBody>; MAX_BODIES],
         prototype: Option<RigidBody>,
         gravity: [f32; 3],
+        acceleration_field: Option<FieldValue>,
     ) -> Result<(), String> {
         if self.authored_samples.is_exhausted() {
             return Err(
@@ -1169,6 +1251,7 @@ impl RigidSimulation {
                 && same_body_arrays(&last.bodies, &bodies)
                 && same_optional_body(last.prototype.as_ref(), prototype.as_ref())
                 && last.gravity == gravity
+                && last.acceleration_field == acceleration_field
         }) {
             return Ok(());
         }
@@ -1179,6 +1262,7 @@ impl RigidSimulation {
                     bodies,
                     prototype,
                     gravity,
+                    acceleration_field,
                 },
                 Seconds(self.physics_time),
             )
@@ -1191,6 +1275,7 @@ impl RigidSimulation {
         bodies: &[Option<RigidBody>; MAX_BODIES],
         prototype: Option<&RigidBody>,
         gravity: [f32; 3],
+        acceleration_field: Option<&dyn VectorField>,
         tick: f64,
     ) -> Result<usize, String> {
         // Box3D skips bullet targets during the bullet pass. When two fast
@@ -1213,11 +1298,12 @@ impl RigidSimulation {
                     continue;
                 }
                 let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-                if needs_bullet(body, velocity, gravity, tick) {
+                let acceleration = summed_acceleration(world, handle, gravity, acceleration_field)?;
+                if needs_bullet(body, velocity, acceleration, tick) {
                     fast_count += 1;
                     let extent = body_min_extent(body);
                     fast_steps = fast_steps.max(
-                        (predicted_dynamic_travel(velocity, gravity, tick) / (extent * 0.5))
+                        (predicted_dynamic_travel(velocity, acceleration, tick) / (extent * 0.5))
                             .ceil()
                             .clamp(1.0, 512.0) as usize,
                     );
@@ -1238,7 +1324,8 @@ impl RigidSimulation {
                 continue;
             }
             let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-            let enabled = fast_count < 2 && needs_bullet(body, velocity, gravity, tick);
+            let acceleration = summed_acceleration(world, handle, gravity, acceleration_field)?;
+            let enabled = fast_count < 2 && needs_bullet(body, velocity, acceleration, tick);
             if self.bullet_enabled[index] != enabled {
                 world
                     .set_bullet(handle, enabled)
@@ -1252,7 +1339,8 @@ impl RigidSimulation {
                     continue;
                 };
                 let velocity = world.linear_velocity(handle).map_err(|e| e.to_string())?;
-                let enabled = needs_bullet(prototype, velocity, gravity, tick);
+                let acceleration = summed_acceleration(world, handle, gravity, acceleration_field)?;
+                let enabled = needs_bullet(prototype, velocity, acceleration, tick);
                 if self.copy_bullet_enabled[index] != enabled {
                     world
                         .set_bullet(handle, enabled)
@@ -1468,8 +1556,32 @@ fn animated_sweep_distance(start: &RigidBody, end: &RigidBody) -> f32 {
     linear_squared.sqrt() + angular * radius
 }
 
-fn needs_bullet(body: &RigidBody, velocity: [f32; 3], gravity: [f32; 3], tick: f64) -> bool {
-    let predicted_travel = predicted_dynamic_travel(velocity, gravity, tick);
+fn summed_acceleration(
+    world: &PhysicsWorld,
+    handle: BodyHandle,
+    gravity: [f32; 3],
+    field: Option<&dyn VectorField>,
+) -> Result<[f32; 3], String> {
+    let mut acceleration = gravity;
+    if let Some(field) = field {
+        let position = world
+            .pose(handle)
+            .map_err(|error| error.to_string())?
+            .position;
+        let sample = field.sample(position);
+        for axis in 0..3 {
+            acceleration[axis] += sample[axis];
+        }
+    }
+    if acceleration.iter().all(|component| component.is_finite()) {
+        Ok(acceleration)
+    } else {
+        Err("Physics: acceleration field result must be finite".into())
+    }
+}
+
+fn needs_bullet(body: &RigidBody, velocity: [f32; 3], acceleration: [f32; 3], tick: f64) -> bool {
+    let predicted_travel = predicted_dynamic_travel(velocity, acceleration, tick);
     let extent = body_min_extent(body);
     predicted_travel > extent * 0.5
 }
@@ -1533,9 +1645,9 @@ fn body_collision_radius(body: &RigidBody) -> f32 {
     }
 }
 
-fn predicted_dynamic_travel(velocity: [f32; 3], gravity: [f32; 3], tick: f64) -> f32 {
+fn predicted_dynamic_travel(velocity: [f32; 3], acceleration: [f32; 3], tick: f64) -> f32 {
     let speed = velocity.into_iter().map(|v| v * v).sum::<f32>().sqrt();
-    let acceleration = gravity.into_iter().map(|v| v * v).sum::<f32>().sqrt();
+    let acceleration = acceleration.into_iter().map(|v| v * v).sum::<f32>().sqrt();
     let tick = tick as f32;
     speed * tick + 0.5 * acceleration * tick * tick
 }
@@ -1753,9 +1865,353 @@ mod tests {
         assert!((per_frame.poses[0].pos[0] - partitioned.poses[0].pos[0]).abs() < 1.0e-5);
     }
 
+    #[test]
+    fn uniform_field_is_mass_independent() {
+        let field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
+        let mut light_body = one_body([0.0, 8.0, 0.0]);
+        let mut heavy_body = one_body([10.0, 8.0, 0.0]);
+        light_body[0].as_mut().unwrap().mass = 1.0;
+        heavy_body[0].as_mut().unwrap().mass = 7.0;
+        let mut light = RigidSimulation::default();
+        let mut heavy = RigidSimulation::default();
+        light
+            .advance_with_fields(
+                light_body.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(field.clone()),
+            )
+            .unwrap();
+        heavy
+            .advance_with_fields(
+                heavy_body.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(field.clone()),
+            )
+            .unwrap();
+        light
+            .advance_with_fields(
+                light_body,
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(1.0),
+                1.0,
+                0.0,
+                Some(field.clone()),
+            )
+            .unwrap();
+        heavy
+            .advance_with_fields(
+                heavy_body,
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(1.0),
+                1.0,
+                0.0,
+                Some(field),
+            )
+            .unwrap();
+
+        assert!((light.poses[0].pos[1] - heavy.poses[0].pos[1]).abs() < 1.0e-5);
+        let light_velocity = light
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(light.handles[0].unwrap())
+            .unwrap();
+        let heavy_velocity = heavy
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(heavy.handles[0].unwrap())
+            .unwrap();
+        for (actual, expected) in light_velocity.iter().zip(heavy_velocity) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+        assert!((light_velocity[1] + 4.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn fixed_bodies_ignore_field_while_copies_receive_it() {
+        let mut bodies = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            kind: 0,
+            transform: Transform {
+                pos: [0.0, -100.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let prototype = body([0.0, 8.0, 0.0]);
+        let field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance_with_fields(
+                bodies.clone(),
+                Some(prototype.clone()),
+                1.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(field.clone()),
+            )
+            .unwrap();
+        simulation
+            .advance_with_fields(
+                bodies,
+                Some(prototype),
+                1.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(1.0),
+                1.0,
+                0.0,
+                Some(field),
+            )
+            .unwrap();
+
+        assert_eq!(simulation.poses[0].pos, [0.0, -100.0, 0.0]);
+        assert!(simulation.copy_poses[0].pos[1] < 8.0);
+    }
+
+    fn run_uniform_field_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
+        let bodies = one_body([0.0, 8.0, 0.0]);
+        let field = FieldValue::uniform([1.0, -4.0, 0.5]).unwrap();
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance_with_fields(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(field.clone()),
+            )
+            .unwrap();
+        for frame in 1..=fps {
+            simulation
+                .advance_with_fields(
+                    bodies.clone(),
+                    None,
+                    0.0,
+                    1.25,
+                    16.0,
+                    0.0,
+                    [0.0; 3],
+                    Seconds(frame as f64 / fps as f64),
+                    1.0,
+                    0.0,
+                    Some(field.clone()),
+                )
+                .unwrap();
+        }
+        let velocity = simulation
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(simulation.handles[0].unwrap())
+            .unwrap();
+        (simulation.poses[0].pos, velocity)
+    }
+
+    #[test]
+    fn uniform_field_trace_is_render_partition_invariant() {
+        let traces = [24, 30, 60].map(run_uniform_field_trace);
+        for trace in traces.iter().skip(1) {
+            for (actual, expected) in trace.0.iter().zip(traces[0].0) {
+                assert!((actual - expected).abs() < 1.0e-5);
+            }
+            for (actual, expected) in trace.1.iter().zip(traces[0].1) {
+                assert!((actual - expected).abs() < 1.0e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn changed_field_waits_behind_preview_debt() {
+        let bodies = one_body([0.0, 8.0, 0.0]);
+        let old_field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
+        let new_field = FieldValue::uniform([0.0, 8.0, 0.0]).unwrap();
+        let mut expected = RigidSimulation::default();
+        expected
+            .advance_with_fields(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(old_field.clone()),
+            )
+            .unwrap();
+        expected
+            .advance_with_fields(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(0.5),
+                1.0,
+                0.0,
+                Some(old_field.clone()),
+            )
+            .unwrap();
+        expected
+            .advance_with_fields(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(0.5),
+                1.0,
+                0.0,
+                Some(new_field.clone()),
+            )
+            .unwrap();
+
+        let mut queued = RigidSimulation::default();
+        queued
+            .advance_with_fields(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds::ZERO,
+                1.0,
+                0.0,
+                Some(old_field.clone()),
+            )
+            .unwrap();
+        {
+            let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+            queued
+                .advance_with_fields(
+                    bodies.clone(),
+                    None,
+                    0.0,
+                    1.25,
+                    16.0,
+                    0.0,
+                    [0.0; 3],
+                    Seconds(0.5),
+                    1.0,
+                    0.0,
+                    Some(old_field),
+                )
+                .unwrap();
+            assert!(queued.pending_time.0 > 0.0);
+            let body_identity = queued.handles[0];
+            let physics_time_before_edit = queued.physics_time;
+            let pose_before_edit = queued.poses[0].pos;
+            queued
+                .advance_with_fields(
+                    bodies.clone(),
+                    None,
+                    0.0,
+                    1.25,
+                    16.0,
+                    0.0,
+                    [0.0; 3],
+                    Seconds(0.5),
+                    1.0,
+                    0.0,
+                    Some(new_field.clone()),
+                )
+                .unwrap();
+            assert!(queued.physics_time > physics_time_before_edit);
+            assert_ne!(queued.poses[0].pos, pose_before_edit);
+            assert_eq!(queued.handles[0], body_identity, "field edits must retain the native body");
+        }
+        while queued.pending_time.0 > 0.0 {
+            queued
+                .advance_with_fields(
+                    bodies.clone(),
+                    None,
+                    0.0,
+                    1.25,
+                    16.0,
+                    0.0,
+                    [0.0; 3],
+                    Seconds(0.5),
+                    1.0,
+                    0.0,
+                    Some(new_field.clone()),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(queued.poses, expected.poses);
+        let queued_velocity = queued
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(queued.handles[0].unwrap())
+            .unwrap();
+        let expected_velocity = expected
+            .world
+            .as_ref()
+            .unwrap()
+            .linear_velocity(expected.handles[0].unwrap())
+            .unwrap();
+        for (actual, expected) in queued_velocity.iter().zip(expected_velocity) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+    }
+
     fn varying_gravity(sample: usize) -> [f32; 3] {
         let phase = sample as f32 * 0.09;
-        [phase.sin() * 2.0, -9.8 + phase.cos() * 3.0, phase.sin() * -0.75]
+        [
+            phase.sin() * 2.0,
+            -9.8 + phase.cos() * 3.0,
+            phase.sin() * -0.75,
+        ]
     }
 
     fn run_varying_gravity_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
@@ -1763,13 +2219,7 @@ mod tests {
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation
-            .advance(
-                bodies.clone(),
-                varying_gravity(0),
-                Seconds::ZERO,
-                1.0,
-                0.0,
-            )
+            .advance(bodies.clone(), varying_gravity(0), Seconds::ZERO, 1.0, 0.0)
             .unwrap();
         let samples_per_frame = 240 / fps;
         for frame in 1..=fps {
@@ -1882,10 +2332,10 @@ mod tests {
             .unwrap();
         simulation.authored_samples = InputHistory::with_capacity(2).unwrap();
         simulation
-            .record_authored_sample(0.0, bodies.clone(), None, gravity)
+            .record_authored_sample(0.0, bodies.clone(), None, gravity, None)
             .unwrap();
         simulation
-            .record_authored_sample(FRAME, bodies.clone(), None, gravity)
+            .record_authored_sample(FRAME, bodies.clone(), None, gravity, None)
             .unwrap();
         let accepted_len = simulation.authored_samples.len();
         let accepted_pose = simulation.poses;
@@ -1903,7 +2353,7 @@ mod tests {
         assert_eq!(simulation.pending_time, accepted_debt);
 
         let retry = simulation
-            .record_authored_sample(FRAME, bodies.clone(), None, gravity)
+            .record_authored_sample(FRAME, bodies.clone(), None, gravity, None)
             .unwrap_err();
         assert!(retry.contains("exhausted"));
         assert_eq!(simulation.authored_samples.len(), accepted_len);

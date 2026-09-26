@@ -242,6 +242,7 @@ fn port_type_str(ty: &PortType) -> String {
         PortType::RigidBody => "RigidBody".into(),
         PortType::FluidRole => "FluidRole".into(),
         PortType::MeshSource => "MeshSource".into(),
+        PortType::VectorField => "VectorField".into(),
         PortType::Object => "Object".into(),
     }
 }

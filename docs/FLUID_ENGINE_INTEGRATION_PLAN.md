@@ -2,7 +2,7 @@
 
 <!-- index: FLIP integration through shared manifold-physics forces, scene authoring, timed controls, rigid-body interaction, baking and export. -->
 
-**Status:** IN PROGRESS · 2026-09-26 · Codex. Shared native force adapters, Add Fluid authoring, and the P3 mesh bridge are implemented locally. Typed mesh roles reach the fluid worker and renderer, and grouped scene objects can receive fluid roles. P4 geometry authoring, timed routing and remaining acceptance are in progress.
+**Status:** IN PROGRESS · 2026-09-27 · Codex. Shared native force adapters, Add Fluid authoring, and the P3 mesh bridge are implemented locally. Typed mesh roles reach the fluid worker and renderer, and grouped scene objects can receive fluid roles. The shared continuous-field graph bridge is implemented locally but its new runtime proofs remain unverified. P4 geometry authoring, timed routing and remaining acceptance are in progress.
 **Prerequisites:** existing CPU FLIP work at `3683a086d66bd5edf68328a7fdb427515258292b` on `codex/flip-fluids-engine`; main through `6c68c9008` and collision work through `d2bc03f50` are integrated locally. Collision UI gaps are tracked in BUG-vglg.4 (preparation controls) and BUG-vglg.5 (compound-child modifier addressing).
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6. Keep work in the existing worktree; Peter has deferred landing. No public push is authorised by this plan.
 
@@ -323,6 +323,12 @@ Source-handoff validation: 78 focused tests pass across the shared stream, analy
 - **Demo:** none — L1 deterministic input traces. **Forbidden:** one event per display-frame storage, current-audio substitution for history, silently dropped debt.
 
 ### P6 — FLIP consumes the shared fields
+
+The local graph bridge uses `manifold-physics::FieldValue` on typed CPU `VectorField` wires. Uniform, radial and vortex sources compose through add, component-wise multiply and scale nodes; existing scalar controls can drive every numeric parameter. Expressions hold at most 32 operations, report overflow explicitly and allocate no memory while composing, cloning or sampling. Sampled grids share immutable prepared storage. Existing GPU texture/particle force nodes remain separate payloads; the P11 readback bridge is still required.
+
+Both `physics_world` and `fluid_surface` now accept `acceleration_field` in scene-space metres per second squared. Retained input history blends sampled vectors at each fixed tick; paused edits preserve unfinished intervals, and live field changes preserve native worlds. Box3D applies continuous force at each microstep; FLIP translates native sample positions into scene coordinates before evaluating the same field. No connected field preserves the existing stepping path. FLIP field graphs currently require Live cache mode until P9 records their input identity. This bridge targets all eligible bodies in a connected world or liquid in a connected domain; individual body targeting, timed impulses and Add Force authoring remain P5/P7 work.
+
+Validation status: focused physics/renderer/UI clippy and the new Metal proof compile. Runtime assertions are not yet verified: CPU test listing and the Metal proof both stalled in macOS `_dyld_start` before test-main. Preserve that distinction when assessing this checkpoint; do not infer field behavior from compilation.
 
 - **Entry/read-back:** P1/P5; `ForceField`, `ForceFieldGrid`, `FluidWorld::step`; verify upstream integration and registration lifetimes.
 - **Deliver:** `step_with_fields`, reusable native field-grid adapter, common uniform/radial/vortex/masked inputs and explicit validation. Field changes must not reconstruct the world. Add fluid impulse/substep conformance and gravity override tests.

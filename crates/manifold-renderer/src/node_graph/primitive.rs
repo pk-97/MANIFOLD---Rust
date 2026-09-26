@@ -1343,6 +1343,9 @@ macro_rules! __primitive_port_type {
     (MeshSource) => {
         $crate::node_graph::ports::PortType::MeshSource
     };
+    (VectorField) => {
+        $crate::node_graph::ports::PortType::VectorField
+    };
     (RenderMode) => {
         $crate::node_graph::ports::PortType::RenderMode
     };

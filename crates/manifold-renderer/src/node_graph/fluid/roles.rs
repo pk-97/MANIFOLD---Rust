@@ -218,7 +218,7 @@ mod tests {
             .unwrap();
         assert_eq!(runtime.epoch, epoch);
         assert!(Arc::ptr_eq(&runtime.role_setup, &setup));
-        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
         let mut values = Vec::new();
         runtime.role_history.snapshot(&mut values);
         let middle = controls_at(&samples, &values, 1, 0, 0.5);
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(runtime.role_history.values.len(), 3);
         assert_eq!(runtime.role_history.values.back().unwrap().velocity[0], 3.0);
         assert_eq!(runtime.role_history.values.capacity(), capacity);
-        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
         let mut values = Vec::new();
         runtime.role_history.snapshot(&mut values);
         assert_eq!(
@@ -279,7 +279,7 @@ mod tests {
         }
         assert_eq!(runtime.history.len(), 3);
         assert_eq!(runtime.role_history.values.len(), 6);
-        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
         let mut values = Vec::new();
         runtime.role_history.snapshot(&mut values);
         assert_eq!(
@@ -298,7 +298,7 @@ mod tests {
         runtime.prune_history().unwrap();
         assert_eq!(runtime.history.len(), 1);
         assert_eq!(runtime.role_history.values.len(), 2);
-        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let samples: Vec<_> = runtime.history.iter().cloned().collect();
         runtime.role_history.snapshot(&mut values);
         assert_eq!(
             controls_at(&samples, &values, 2, 0, 1.0).transform.pos[0],

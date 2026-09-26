@@ -294,6 +294,67 @@ fn scene_physics_invalid_mesh_role_fails_instead_of_waiting_for_preparation() {
 }
 
 #[test]
+fn scene_physics_shared_field_changes_rendered_liquid_after_graph_round_trip() {
+    let mut def: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
+    let nodes = def["nodes"].as_array_mut().unwrap();
+    let fluid = nodes.iter_mut().find(|node| node["id"] == 4).unwrap();
+    for (name, value) in [("resolution", 8.0), ("fill_height", 0.0), ("emission", 0.0), ("gravity", 0.0)] {
+        fluid["params"][name] = serde_json::json!({"type": "Float", "value": value});
+    }
+    nodes.extend([
+        serde_json::json!({"id": 500, "nodeId": "seed", "typeId": "node.transform_3d", "params": {
+            "pos_y": {"type":"Float","value":1.5},
+            "scale_x": {"type":"Float","value":1.5},
+            "scale_y": {"type":"Float","value":1.5},
+            "scale_z": {"type":"Float","value":1.5}
+        }}),
+        serde_json::json!({"id": 501, "nodeId": "direction", "typeId": "node.uniform_vector_field", "params": {
+            "x": {"type":"Float","value":1.0}, "y": {"type":"Float","value":0.0}
+        }}),
+        serde_json::json!({"id": 502, "nodeId": "strength", "typeId": "node.scale_vector_field", "params": {
+            "strength": {"type":"Float","value":8.0}
+        }})
+    ]);
+    let wires = def["wires"].as_array_mut().unwrap();
+    wires.retain(|wire| wire["toNode"] != 4);
+    wires.extend([
+        serde_json::json!({"fromNode":500,"fromPort":"transform","toNode":4,"toPort":"initial_volume"}),
+        serde_json::json!({"fromNode":501,"fromPort":"out","toNode":502,"toPort":"field"}),
+        serde_json::json!({"fromNode":502,"fromPort":"out","toNode":4,"toPort":"acceleration_field"})
+    ]);
+    let typed: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_value(def.clone()).unwrap();
+    let saved = serde_json::to_string(&typed).unwrap();
+    let restored: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
+    assert_eq!(typed, restored);
+    let harness = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let build = |json: &str| PresetRuntime::from_json_str_with_device(
+        json, &registry, Arc::clone(&harness.device), WIDTH, HEIGHT,
+        GpuTextureFormat::Rgba16Float, None).unwrap();
+    let mut forced = build(&saved);
+    def["nodes"].as_array_mut().unwrap().iter_mut().find(|node| node["id"] == 502).unwrap()
+        ["params"]["strength"]["value"] = serde_json::json!(0.0);
+    let mut resting = build(&def.to_string());
+    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
+        GpuTextureFormat::Rgba16Float, "shared-field-liquid");
+    let _offline = PhysicsStepScope::for_render(true);
+    for runtime in [&mut forced, &mut resting] {
+        render_frame(runtime, &target, &harness.device, 0);
+    }
+    let before = render_frame(&mut resting, &target, &harness.device, 8);
+    let after = render_frame(&mut forced, &target, &harness.device, 8);
+    assert_finite_and_nonempty(&after, 8);
+    let changed = before.chunks_exact(8).zip(after.chunks_exact(8)).filter(|(a, b)| {
+        (0..3).any(|axis| {
+            let i = axis * 2;
+            (f16::from_le_bytes([a[i], a[i + 1]]).to_f32()
+                - f16::from_le_bytes([b[i], b[i + 1]]).to_f32()).abs() > 0.01
+        })
+    }).count();
+    assert!(changed > 50, "shared field must change the rendered fluid: {changed} pixels");
+}
+
+#[test]
 fn scene_physics_mesh_role_renders_after_graph_round_trip() {
     let mut def: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
     let nodes = def["nodes"].as_array_mut().unwrap();
