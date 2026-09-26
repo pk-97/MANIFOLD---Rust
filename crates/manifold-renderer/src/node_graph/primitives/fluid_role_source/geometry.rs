@@ -11,8 +11,11 @@ use manifold_physics::TriangleMesh;
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::generators::platonic_geometry::{platonic_mesh, platonic_points};
-use crate::node_graph::physics_mesh::{MeshSelection, prepare_colliders, transform_vertices};
+use crate::node_graph::physics_mesh::{
+    MeshSelection, load_compound_materials, prepare_colliders, transform_vertices,
+};
 use crate::node_graph::transform::Transform;
+use super::CompoundPreparation;
 
 /// The two preparation modes exposed by the source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,12 +33,16 @@ pub(crate) fn prepare_geometry(
     radius: f32,
     source_transform: Transform,
     mode: GeometryMode,
+    compound: Option<&CompoundPreparation>,
 ) -> Result<Vec<TriangleMesh>, String> {
     let label = if path.as_os_str().is_empty() {
         format!("builtin shape {shape}")
     } else {
         path.display().to_string()
     };
+    if compound.is_some() && path.as_os_str().is_empty() {
+        return Err("compound material selection requires an imported mesh path".into());
+    }
     let meshes = match mode {
         GeometryMode::CollisionProxy => {
             if path.as_os_str().is_empty() {
@@ -48,7 +55,11 @@ pub(crate) fn prepare_geometry(
                         .map_err(|error| error.to_string())?,
                 ]
             } else {
-                let mut vertices = selection.load(path)?;
+                let mut vertices = if let Some(compound) = compound {
+                    load_compound_materials(path, selection, compound.materials, compound.part_transforms)?
+                } else {
+                    selection.load(path)?
+                };
                 transform_vertices(&mut vertices, source_transform)?;
                 let hulls = prepare_colliders(&vertices, selection.collider_parts)
                     .map_err(|error| error.to_string())?
@@ -72,7 +83,11 @@ pub(crate) fn prepare_geometry(
                 transform_vertices(&mut vertices, source_transform)?;
                 vertices
             } else {
-                let mut vertices = selection.load(path)?;
+                let mut vertices = if let Some(compound) = compound {
+                    load_compound_materials(path, selection, compound.materials, compound.part_transforms)?
+                } else {
+                    selection.load(path)?
+                };
                 transform_vertices(&mut vertices, source_transform)?;
                 vertices
             };
@@ -151,8 +166,69 @@ fn canonical_bits(value: f32) -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+    use std::fs;
+
+    pub(crate) fn write_two_material_cube_fixture() -> (std::path::PathBuf, CompoundPreparation) {
+        let vertices = cube_triangle_list();
+        let material_zero = vertices[..18].to_vec();
+        let mut material_one = vertices[18..].to_vec();
+        for vertex in &mut material_one {
+            vertex.position[0] -= 0.5;
+        }
+
+        let mut bin = Vec::new();
+        for vertex in material_zero.iter().chain(&material_one) {
+            for value in vertex.position {
+                bin.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [
+                { "attributes": { "POSITION": 0 }, "material": 0 },
+                { "attributes": { "POSITION": 1 }, "material": 1 }
+            ]}],
+            "materials": [{}, {}],
+            "buffers": [{ "uri": "fixture.bin", "byteLength": bin.len() }],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": material_zero.len() * 12 },
+                { "buffer": 0, "byteOffset": material_zero.len() * 12, "byteLength": material_one.len() * 12 }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": material_zero.len(), "type": "VEC3", "min": [-0.5, -0.5, -0.5], "max": [0.5, 0.5, 0.5] },
+                { "bufferView": 1, "componentType": 5126, "count": material_one.len(), "type": "VEC3", "min": [-1.0, -0.5, -0.5], "max": [0.0, 0.5, 0.5] }
+            ]
+        });
+        let dir = std::env::temp_dir().join(format!(
+            "manifold-fluid-compound-{}",
+            manifold_core::short_id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("fixture.bin"), bin).unwrap();
+        fs::write(
+            dir.join("fixture.gltf"),
+            serde_json::to_vec(&doc).unwrap(),
+        )
+        .unwrap();
+
+        let mut part_transforms = [Transform::default(); 64];
+        part_transforms[1].pos[0] = 0.5;
+        let mut materials = [None; 64];
+        materials[0] = Some(0);
+        materials[1] = Some(1);
+        (
+            dir.join("fixture.gltf"),
+            CompoundPreparation {
+                materials,
+                part_transforms,
+            },
+        )
+    }
 
     fn cube_triangle_list() -> Vec<MeshVertex> {
         let points = [
@@ -259,6 +335,7 @@ mod tests {
             1.0,
             Transform::default(),
             GeometryMode::CollisionProxy,
+            None,
         )
         .unwrap();
         assert!(!proxy.is_empty());
@@ -272,9 +349,40 @@ mod tests {
             1.0,
             Transform::default(),
             GeometryMode::ClosedMesh,
+            None,
         )
         .unwrap();
         assert_eq!(closed[0].vertices.len(), 8);
         manifold_fluids::validate_mesh(&closed[0]).unwrap();
+    }
+
+    #[test]
+    fn scene_physics_compound_fluid_materials_assemble_before_validation() {
+        let (path, compound) = write_two_material_cube_fixture();
+        let selection = MeshSelection {
+            mesh: -1,
+            primitive: -1,
+            material: -1,
+            fit: false,
+            recenter: false,
+            translate: [0.0; 3],
+            fragment_count: 1,
+            fragment_index: 0,
+            collider_parts: 1,
+        };
+        let meshes = prepare_geometry(
+            &path,
+            selection,
+            1,
+            1.0,
+            Transform::default(),
+            GeometryMode::ClosedMesh,
+            Some(&compound),
+        )
+        .unwrap();
+        assert_eq!(meshes[0].vertices.len(), 8);
+        assert_eq!(meshes[0].triangles.len(), 12);
+        manifold_fluids::validate_mesh(&meshes[0]).unwrap();
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }

@@ -3,7 +3,8 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{ColliderGeometry, RigidBody};
 use crate::node_graph::physics_mesh::{
-    MeshSelection, prepare_colliders, transform_vertices, validate_transform,
+    PART_PORTS, MeshSelection, load_compound_materials, parse_compound_materials,
+    prepare_colliders, transform_vertices, validate_transform,
 };
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
@@ -17,51 +18,6 @@ const IDENTITY_TRANSFORM: Transform = Transform {
     billboard: false,
 };
 
-const PART_PORTS: [&str; 64] = [
-    "part_0", "part_1", "part_2", "part_3", "part_4", "part_5", "part_6", "part_7", "part_8",
-    "part_9", "part_10", "part_11", "part_12", "part_13", "part_14", "part_15", "part_16",
-    "part_17", "part_18", "part_19", "part_20", "part_21", "part_22", "part_23", "part_24",
-    "part_25", "part_26", "part_27", "part_28", "part_29", "part_30", "part_31", "part_32",
-    "part_33", "part_34", "part_35", "part_36", "part_37", "part_38", "part_39", "part_40",
-    "part_41", "part_42", "part_43", "part_44", "part_45", "part_46", "part_47", "part_48",
-    "part_49", "part_50", "part_51", "part_52", "part_53", "part_54", "part_55", "part_56",
-    "part_57", "part_58", "part_59", "part_60", "part_61", "part_62", "part_63",
-];
-
-fn compound_materials(
-    ctx: &EffectNodeContext<'_, '_>,
-) -> Result<([Option<i32>; 64], bool), String> {
-    let Some(table) = ctx
-        .params
-        .get("compound_materials")
-        .and_then(ParamValue::as_table)
-    else {
-        return Ok(([None; 64], false));
-    };
-    if table.col_count() != 2 {
-        return Err("compound_materials must have rows shaped [slot, material_index]".into());
-    }
-    let mut materials = [None; 64];
-    for row in table.rows() {
-        let slot = row[0];
-        let material = row[1];
-        if !slot.is_finite() || slot.fract() != 0.0 || !(0.0..64.0).contains(&slot) {
-            return Err("compound_materials contains a slot outside 0..63".into());
-        }
-        if !material.is_finite()
-            || material.fract() != 0.0
-            || !((i32::MIN as f32)..=(i32::MAX as f32)).contains(&material)
-        {
-            return Err("compound_materials contains an invalid material index".into());
-        }
-        let slot = slot as usize;
-        if materials[slot].is_some() {
-            return Err(format!("compound_materials contains duplicate slot {slot}"));
-        }
-        materials[slot] = Some(material as i32);
-    }
-    Ok((materials, true))
-}
 crate::primitive! {
  name: RigidBodyNode,
  type_id: "node.rigid_body",
@@ -196,7 +152,7 @@ impl Primitive for RigidBodyNode {
             .inputs
             .transform("source_transform")
             .unwrap_or(IDENTITY_TRANSFORM);
-        let (compound_materials, compound) = match compound_materials(ctx) {
+        let (compound_materials, compound) = match parse_compound_materials(ctx) {
             Ok(value) => value,
             Err(error) => {
                 ctx.error(error);
@@ -295,16 +251,12 @@ impl Primitive for RigidBodyNode {
                 std::thread::spawn(move || {
                     let result: Result<ColliderGeometry, String> = (|| {
                         if compound {
-                            let mut vertices = Vec::new();
-                            for slot in 0..64 {
-                                let Some(material) = compound_materials[slot] else {
-                                    continue;
-                                };
-                                let mut part =
-                                    selection.with_material(material).load(&path)?;
-                                transform_vertices(&mut part, part_transforms[slot])?;
-                                vertices.extend(part);
-                            }
+                            let vertices = load_compound_materials(
+                                &path,
+                                selection,
+                                compound_materials,
+                                part_transforms,
+                            )?;
                             prepare_colliders(&vertices, selection.collider_parts)
                         } else {
                             let mut vertices = selection.load(&path)?;
