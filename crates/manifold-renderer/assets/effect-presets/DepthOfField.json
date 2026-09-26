@@ -113,6 +113,21 @@
           "High"
         ],
         "oscSuffix": "Quality"
+      },
+      {
+        "id": "aperture",
+        "name": "Aperture",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Circle",
+          "Hexagon",
+          "Octagon"
+        ]
       }
     ],
     "bindings": [
@@ -278,7 +293,7 @@
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "blur_h",
+          "nodeId": "bokeh",
           "param": "quality"
         },
         "convert": {
@@ -286,13 +301,13 @@
         }
       },
       {
-        "id": "quality",
-        "label": "Quality",
-        "defaultValue": 1.0,
+        "id": "aperture",
+        "label": "Aperture",
+        "defaultValue": 0.0,
         "target": {
           "kind": "node",
-          "nodeId": "blur_v",
-          "param": "quality"
+          "nodeId": "bokeh",
+          "param": "aperture"
         },
         "convert": {
           "type": "EnumRound"
@@ -976,10 +991,6 @@
             {
               "name": "width",
               "portType": ""
-            },
-            {
-              "name": "width_2",
-              "portType": ""
             }
           ],
           "outputs": [
@@ -991,97 +1002,28 @@
         },
         "nodes": [
           {
-            "id": 43,
-            "nodeId": "highlight_knee",
-            "typeId": "node.clamp",
-            "handle": "highlight_knee",
+            "id": 40,
+            "nodeId": "bokeh",
+            "typeId": "node.bokeh_gather",
+            "handle": "bokeh",
             "params": {
-              "max": {
+              "max_radius": {
                 "type": "Float",
-                "value": 4.0
+                "value": 16.0
               },
-              "min": {
-                "type": "Float",
-                "value": 0.0
-              }
-            },
-            "title": "Highlight Knee"
-          },
-          {
-            "id": 42,
-            "nodeId": "prefilter",
-            "typeId": "node.downsample",
-            "handle": "prefilter",
-            "params": {
-              "factor": {
+              "quality": {
                 "type": "Enum",
                 "value": 1
               }
             },
-            "title": "Prefilter 4x"
+            "title": "Aperture Blur"
           },
           {
             "id": 44,
-            "nodeId": "coc_low",
-            "typeId": "node.downsample",
-            "handle": "coc_low",
-            "params": {
-              "factor": {
-                "type": "Enum",
-                "value": 1
-              }
-            },
-            "title": "CoC Prefilter 4x"
-          },
-          {
-            "id": 40,
-            "nodeId": "blur_h",
-            "typeId": "node.variable_blur",
-            "handle": "blur_h",
-            "params": {
-              "axis": {
-                "type": "Enum",
-                "value": 0
-              },
-              "max_radius": {
-                "type": "Float",
-                "value": 4.0
-              },
-              "quality": {
-                "type": "Enum",
-                "value": 1
-              },
-              "weighting_mode": {
-                "type": "Enum",
-                "value": 1
-              }
-            },
-            "title": "Horizontal Blur"
-          },
-          {
-            "id": 41,
-            "nodeId": "blur_v",
-            "typeId": "node.variable_blur",
-            "handle": "blur_v",
-            "params": {
-              "axis": {
-                "type": "Enum",
-                "value": 1
-              },
-              "max_radius": {
-                "type": "Float",
-                "value": 4.0
-              },
-              "quality": {
-                "type": "Enum",
-                "value": 1
-              },
-              "weighting_mode": {
-                "type": "Enum",
-                "value": 1
-              }
-            },
-            "title": "Vertical Blur"
+            "nodeId": "coc_channels",
+            "typeId": "node.pack_rgba",
+            "handle": "coc_channels",
+            "title": "Unsigned CoC"
           },
           {
             "id": 107,
@@ -1094,26 +1036,8 @@
         ],
         "wires": [
           {
-            "fromNode": 40,
-            "fromPort": "out",
-            "toNode": 41,
-            "toPort": "in"
-          },
-          {
             "fromNode": 107,
             "fromPort": "sourceImage",
-            "toNode": 43,
-            "toPort": "in"
-          },
-          {
-            "fromNode": 43,
-            "fromPort": "out",
-            "toNode": 42,
-            "toPort": "in"
-          },
-          {
-            "fromNode": 42,
-            "fromPort": "out",
             "toNode": 40,
             "toPort": "in"
           },
@@ -1121,7 +1045,7 @@
             "fromNode": 107,
             "fromPort": "width",
             "toNode": 44,
-            "toPort": "in"
+            "toPort": "r"
           },
           {
             "fromNode": 44,
@@ -1130,13 +1054,7 @@
             "toPort": "width"
           },
           {
-            "fromNode": 44,
-            "fromPort": "out",
-            "toNode": 41,
-            "toPort": "width"
-          },
-          {
-            "fromNode": 41,
+            "fromNode": 40,
             "fromPort": "out",
             "toNode": 108,
             "toPort": "blurredImage"
@@ -1296,12 +1214,6 @@
       "fromPort": "blurWidth",
       "toNode": 106,
       "toPort": "width"
-    },
-    {
-      "fromNode": 105,
-      "fromPort": "blurWidth",
-      "toNode": 106,
-      "toPort": "width_2"
     },
     {
       "fromNode": 0,

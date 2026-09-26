@@ -39,6 +39,7 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.free_camera",
     "node.look_at_camera",
     "node.camera_lens",
+    "node.bokeh_gather",
     "node.atmosphere",
     "node.bake_environment",
     "node.scene_object",
@@ -82,7 +83,10 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
     node.parameters()
         .iter()
         .filter(|pd| {
-            type_id != "node.render_scene" || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref())
+            (type_id != "node.render_scene"
+                || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref()))
+                && (type_id != "node.bokeh_gather"
+                    || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
         })
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or({
@@ -147,7 +151,96 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         section_name_for_node,
         &provider,
     );
-    repaired || migrated
+    let bokeh_source_migrated = migrate_bokeh_source_coc(def);
+    repaired || migrated || bokeh_source_migrated
+}
+
+/// The layered gather consumes the original signed CoC and computes its own
+/// conservative tile bounds. Older saved graphs routed that CoC through the
+/// standalone `coc_dilate` node first, which inflated radii at silhouettes.
+/// Rewrite only the canonical `coc_from_depth → coc_dilate → bokeh_gather`
+/// shape at load time. A dilation node shared by another consumer stays in
+/// place; noncanonical producers remain untouched.
+fn migrate_bokeh_source_coc(def: &mut EffectGraphDef) -> bool {
+    fn migrate_scope(
+        nodes: &mut Vec<manifold_core::effect_graph_def::EffectGraphNode>,
+        wires: &mut Vec<manifold_core::effect_graph_def::EffectGraphWire>,
+    ) -> bool {
+        let mut changed = false;
+
+        for node in nodes.iter_mut() {
+            if let Some(group) = node.group.as_deref_mut() {
+                changed |= migrate_scope(&mut group.nodes, &mut group.wires);
+            }
+        }
+
+        let bokeh_ids: Vec<u32> = nodes
+            .iter()
+            .filter(|node| node.type_id == "node.bokeh_gather")
+            .map(|node| node.id)
+            .collect();
+        for bokeh_id in bokeh_ids {
+            let Some(width_index) = wires.iter().position(|wire| {
+                wire.to_node == bokeh_id && wire.to_port == "width" && wire.from_port == "out"
+            }) else {
+                continue;
+            };
+            let dilate_id = wires[width_index].from_node;
+            let is_dilate = nodes
+                .iter()
+                .any(|node| node.id == dilate_id && node.type_id == "node.coc_dilate");
+            if !is_dilate {
+                continue;
+            }
+            let Some(source_wire) = wires.iter().find(|wire| {
+                wire.to_node == dilate_id && wire.to_port == "in" && wire.from_port == "out"
+            }) else {
+                continue;
+            };
+            let is_coc_source = nodes.iter().any(|node| {
+                node.id == source_wire.from_node && node.type_id == "node.coc_from_depth"
+            });
+            if !is_coc_source {
+                continue;
+            }
+
+            let source_id = source_wire.from_node;
+            wires[width_index].from_node = source_id;
+            wires[width_index].from_port = "out".to_string();
+            changed = true;
+
+            let has_other_consumer = wires.iter().any(|wire| wire.from_node == dilate_id);
+            if !has_other_consumer {
+                wires.retain(|wire| wire.from_node != dilate_id && wire.to_node != dilate_id);
+                nodes.retain(|node| node.id != dilate_id);
+            }
+        }
+        // Camera DoF blurs a scene's transparent silhouette too. Keep the
+        // primitive's legacy alpha-preserving default for arbitrary textures,
+        // and respect an explicitly saved transparency choice.
+        for index in 0..nodes.len() {
+            if nodes[index].type_id != "node.bokeh_gather"
+                || nodes[index].params.contains_key("blur_alpha")
+            {
+                continue;
+            }
+            let is_camera_dof = wires.iter().any(|wire| {
+                wire.to_node == nodes[index].id && wire.to_port == "width"
+                    && wire.from_port == "out"
+                    && nodes.iter().any(|node| {
+                        node.id == wire.from_node && node.type_id == "node.coc_from_depth"
+                    })
+            });
+            if is_camera_dof {
+                nodes[index].params.insert("blur_alpha".to_string(),
+                    manifold_core::effect_graph_def::SerializedParamValue::Bool { value: true });
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    migrate_scope(&mut def.nodes, &mut def.wires)
 }
 
 /// Legacy tail repair (2026-08-27): pre-fix projects carry the lens's old
@@ -278,7 +371,11 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
             "Material".to_string()
         }
         "node.light" => return display.to_string(),
-        "node.orbit_camera" | "node.free_camera" | "node.look_at_camera" | "node.camera_lens" => {
+        "node.orbit_camera"
+        | "node.free_camera"
+        | "node.look_at_camera"
+        | "node.camera_lens"
+        | "node.bokeh_gather" => {
             "Camera".to_string()
         }
         "node.atmosphere" => "Atmosphere".to_string(),
@@ -314,7 +411,185 @@ impl SceneExposureMetadataProvider for PrimitiveRegistrySceneExposureProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::effect_graph_def::{
+        EffectGraphNode, EffectGraphWire, GroupDef, GroupInterface,
+    };
     use manifold_core::NodeId;
+    use std::collections::BTreeMap;
+
+    fn graph_node(id: u32, node_id: &str, type_id: &str) -> EffectGraphNode {
+        EffectGraphNode {
+            id,
+            node_id: NodeId::new(node_id),
+            type_id: type_id.to_string(),
+            handle: Some(node_id.to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        }
+    }
+
+    fn graph_wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+        EffectGraphWire {
+            from_node,
+            from_port: from_port.to_string(),
+            to_node,
+            to_port: to_port.to_string(),
+        }
+    }
+
+    fn graph_def(nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>) -> EffectGraphDef {
+        EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes,
+            wires,
+        }
+    }
+
+    fn grouped_node(id: u32, nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>) -> EffectGraphNode {
+        let mut group = graph_node(id, "dof", "group");
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: Vec::new(),
+            },
+            nodes,
+            wires,
+            tint: None,
+        }));
+        group
+    }
+
+    fn canonical_coc_scope() -> (Vec<EffectGraphNode>, Vec<EffectGraphWire>) {
+        (
+            vec![
+                graph_node(10, "coc", "node.coc_from_depth"),
+                graph_node(11, "dilate", "node.coc_dilate"),
+                graph_node(12, "bokeh", "node.bokeh_gather"),
+            ],
+            vec![
+                graph_wire(10, "out", 11, "in"),
+                graph_wire(11, "out", 12, "width"),
+            ],
+        )
+    }
+
+    #[test]
+    fn migrate_nested_canonical_coc_wire_removes_dilate_and_is_idempotent() {
+        let (nodes, wires) = canonical_coc_scope();
+        let mut def = graph_def(vec![grouped_node(1, nodes, wires)], Vec::new());
+
+        assert!(migrate_scene_exposures(&mut def));
+        let group = def.nodes[0].group.as_ref().expect("nested dof group");
+        assert!(group.nodes.iter().all(|node| node.type_id != "node.coc_dilate"));
+        assert!(group.wires.iter().any(|wire| {
+            wire.from_node == 10
+                && wire.from_port == "out"
+                && wire.to_node == 12
+                && wire.to_port == "width"
+        }));
+        assert_eq!(group.nodes.iter().find(|node| node.id == 12).unwrap().params["blur_alpha"],
+            manifold_core::effect_graph_def::SerializedParamValue::Bool { value: true });
+
+        let after = def.clone();
+        assert!(!migrate_scene_exposures(&mut def));
+        assert_eq!(def, after, "repeating load migration must be a no-op");
+    }
+
+    #[test]
+    fn migrate_keeps_shared_dilate_for_other_consumers() {
+        let mut def = graph_def(
+            vec![
+                graph_node(10, "coc", "node.coc_from_depth"),
+                graph_node(11, "dilate", "node.coc_dilate"),
+                graph_node(12, "bokeh", "node.bokeh_gather"),
+                graph_node(13, "other", "node.variable_blur"),
+            ],
+            vec![
+                graph_wire(10, "out", 11, "in"),
+                graph_wire(11, "out", 12, "width"),
+                graph_wire(11, "out", 13, "width"),
+            ],
+        );
+
+        assert!(migrate_bokeh_source_coc(&mut def));
+        assert!(def.nodes.iter().any(|node| node.id == 11));
+        assert!(def.wires.iter().any(|wire| {
+            wire.from_node == 10 && wire.to_node == 12 && wire.to_port == "width"
+        }));
+        assert!(def.wires.iter().any(|wire| {
+            wire.from_node == 11 && wire.to_node == 13 && wire.to_port == "width"
+        }));
+        assert!(def.wires.iter().any(|wire| wire.to_node == 11 && wire.to_port == "in"));
+    }
+
+    #[test]
+    fn camera_dof_migration_keeps_explicit_alpha_choice() {
+        let mut bokeh = graph_node(12, "bokeh", "node.bokeh_gather");
+        bokeh.params.insert("blur_alpha".to_string(),
+            manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false });
+        let mut def = graph_def(
+            vec![graph_node(10, "coc", "node.coc_from_depth"), bokeh],
+            vec![graph_wire(10, "out", 12, "width")],
+        );
+        assert!(!migrate_bokeh_source_coc(&mut def));
+        assert_eq!(def.nodes[1].params["blur_alpha"],
+            manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false });
+    }
+
+    #[test]
+    fn migrate_leaves_noncanonical_coc_producer_untouched() {
+        let mut def = graph_def(
+            vec![
+                graph_node(10, "custom", "node.custom_coc"),
+                graph_node(11, "dilate", "node.coc_dilate"),
+                graph_node(12, "bokeh", "node.bokeh_gather"),
+            ],
+            vec![
+                graph_wire(10, "out", 11, "in"),
+                graph_wire(11, "out", 12, "width"),
+            ],
+        );
+        let before = def.clone();
+        assert!(!migrate_bokeh_source_coc(&mut def));
+        assert_eq!(def, before);
+    }
+
+    #[test]
+    fn bokeh_controls_migrate_without_changing_saved_lens_or_toggle() {
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version":2,
+            "nodes":[{"id":5,"nodeId":"bokeh","typeId":"node.bokeh_gather",
+                "params":{"enabled":{"type":"Bool","value":false},
+                          "max_radius":{"type":"Float","value":16.0}}}],
+            "wires":[]
+        }))
+        .unwrap();
+        assert!(migrate_scene_exposures(&mut def));
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        for name in ["enabled", "aperture", "quality"] {
+            assert!(metadata.bindings.iter().any(|b| matches!(&b.target,
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if node_id.as_str() == "bokeh" && param == name)));
+        }
+        assert!(!metadata.bindings.iter().any(|b| matches!(&b.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "max_radius")));
+        assert_eq!(
+            def.nodes[0].params["enabled"],
+            manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false }
+        );
+        assert!(!migrate_scene_exposures(&mut def));
+    }
 
     #[test]
     fn metadata_for_light_includes_enum_and_float_params() {

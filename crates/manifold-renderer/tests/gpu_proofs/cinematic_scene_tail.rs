@@ -1,19 +1,11 @@
 //! CINEMATIC_SCENE_TAIL P1 gate proofs.
 //!
-//! I1 — neutral-lens pass-through at the ASSEMBLED-graph level (extends
-//! CINEMATIC_POST I2 (pinhole pass-through) from the reference preset to the
-//! import-assembled graph): an import graph carrying the full dof + motion_blur
-//! tail, at the defaults the assembler stamps (bokeh enabled = false — DoF
-//! off is the labeled toggle, 2026-08-27; shutter_angle = 180 — the P4
-//! amendment; 0 stopped being the default when Peter asked for motion to
-//! smear out of the box), renders byte-identical to the SAME graph with the
-//! tail surgically stripped (the pre-P1 SSAO-only shape). bokeh disabled is
-//! a host-side in→out alias past every early-out in the chain; the static
-//! scene's zero velocity field collapses every motion-blur tap onto the
-//! center texel even at shutter 180 (velocity × shutter/360 = 0). A fresh
-//! import therefore matches the pre-tail look on a static frame, proven
-//! byte-for-byte on a real import assembly — DoF stays off until the toggle
-//! is flipped; motion blur is live but invisible until something moves.
+//! I1 — the assembled import tail preserves the sharp static fixture at the
+//! default f/32 lens. DoF defaults On; its subpixel circle of confusion must
+//! preserve full-resolution color and transparent silhouette coverage. The
+//! static scene's zero velocity also collapses motion-blur taps at the default
+//! shutter angle of 180 degrees. Compare against the same graph with its tail
+//! surgically stripped, after both variants have loaded and converged.
 //!
 //! The strip is surgical: flatten the assembled def, drop the `dof` group node
 //! (its inner coc/coc_dilate/bokeh atoms ride with it) and the top-level
@@ -212,12 +204,12 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
         differing,
         0,
         "import tail is NOT a bit-clean pass-through at default lens: {differing} bytes differ \
-         between the with-tail and stripped spines (bokeh enabled=false must alias in→out \
-         host-side; the static scene's zero velocity must collapse every motion-blur tap even \
+         between the with-tail and stripped spines (neutral camera DoF must preserve focused \
+         pixels and coverage; the static scene's zero velocity must collapse every motion-blur tap even \
          at the P4 shutter=180 default)"
     );
     eprintln!(
-        "[cinematic-tail-I1] PASS: {} bytes, {} differ (bit-clean pass-through at bokeh disabled, shutter=180, zero velocity)",
+        "[cinematic-tail-I1] PASS: {} bytes, {} differ (bit-clean pass-through at f/32, shutter=180, zero velocity)",
         a.len(),
         differing
     );

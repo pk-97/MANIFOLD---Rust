@@ -116,6 +116,8 @@ impl GeneratorRegistry {
         // COMPILE_CONTRACT_DESIGN P2: multi_blend's num_inputs variants (2..8) are
         // fixed-source, specialized by input count only. Warm them all here.
         crate::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(device);
+        crate::node_graph::primitives::Blur::prewarm_pipelines(device);
+        crate::node_graph::primitives::BokehGather::prewarm_pipelines(device);
 
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
         // preset's *structure* happens to reference (the loop above never
