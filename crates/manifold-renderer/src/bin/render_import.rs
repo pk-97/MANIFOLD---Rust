@@ -102,6 +102,8 @@ struct Args {
     anim_start: Option<f32>,
     anim_end: Option<f32>,
     anim_frames: Option<u32>,
+    /// Optional bounded static warm-frame benchmark after normal convergence.
+    benchmark_frames: Option<u32>,
 }
 
 /// BUG-su2o: resolves `--orbit`/`--tilt` against the import graph's ACTUAL
@@ -153,7 +155,7 @@ fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     let glb = argv
         .next()
-        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace] [--anim-param ID --anim-start F --anim-end F --anim-frames N]")?;
+        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace] [--benchmark-frames N] [--anim-param ID --anim-start F --anim-end F --anim-frames N]")?;
     let mut args = Args {
         glb: PathBuf::from(glb),
         width: 1280,
@@ -170,6 +172,7 @@ fn parse_args() -> Result<Args, String> {
         anim_start: None,
         anim_end: None,
         anim_frames: None,
+        benchmark_frames: None,
     };
     while let Some(flag) = argv.next() {
         if flag == "--trace" {
@@ -222,10 +225,37 @@ fn parse_args() -> Result<Args, String> {
             "--anim-frames" => {
                 args.anim_frames = Some(value.parse().map_err(|e| format!("bad anim-frames: {e}"))?);
             }
+            "--benchmark-frames" => {
+                args.benchmark_frames = Some(parse_benchmark_frames(&value)?);
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
     Ok(args)
+}
+
+fn parse_benchmark_frames(value: &str) -> Result<u32, String> {
+    let frames: u32 = value
+        .parse()
+        .map_err(|e| format!("bad benchmark-frames: {e}"))?;
+    if (1..=120).contains(&frames) {
+        Ok(frames)
+    } else {
+        Err(format!("--benchmark-frames must be in 1..=120, got {frames}"))
+    }
+}
+
+fn validate_benchmark_mode(args: &Args) -> Result<(), String> {
+    if args.benchmark_frames.is_some()
+        && (args.anim_param.is_some()
+            || args.anim_start.is_some()
+            || args.anim_end.is_some()
+            || args.anim_frames.is_some())
+    {
+        Err("--benchmark-frames cannot be combined with animation flags".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// `--dump-def <glb-path> <out.json>` — P3-D INV-R8 harness mode. Assembles
@@ -277,6 +307,11 @@ fn main() {
             std::process::exit(2);
         }
     };
+
+    if let Err(e) = validate_benchmark_mode(&args) {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    }
 
     // Validate anim flags: all four required together or none at all.
     let has_anim = args.anim_param.is_some() || args.anim_start.is_some() || args.anim_end.is_some() || args.anim_frames.is_some();
@@ -415,6 +450,20 @@ fn main() {
                 &args,
                 args.time,
             );
+            if let Some(frames) = args.benchmark_frames
+                && let Err(e) = benchmark_static_frames(
+                    &device,
+                    &target,
+                    &mut runtime,
+                    &manifest,
+                    &args,
+                    args.time,
+                    frames,
+                )
+            {
+                eprintln!("render-import: benchmark failed: {e}");
+                std::process::exit(2);
+            }
             return;
         }
     };
@@ -577,6 +626,111 @@ fn main() {
 /// A texture-decode swap (>0.1 linear) is orders of magnitude above,
 /// so the BUG-100/BUG-117 discrimination survives.
 const EPSILON_STABLE: f64 = 5e-3;
+
+fn benchmark_context(args: &Args, frame_count: i64, time: f64) -> PresetContext {
+    PresetContext {
+        time,
+        beat: time * 2.0,
+        dt: 1.0 / 60.0,
+        width: args.width,
+        height: args.height,
+        output_width: args.width,
+        output_height: args.height,
+        aspect: args.width as f32 / args.height as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count,
+        anim_progress: 1.0,
+        trigger_count: 0,
+    }
+}
+
+fn percentile_ms(samples: &[f64], percentile: f64) -> f64 {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let rank = percentile.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+    if lower == upper {
+        sorted[lower]
+    } else {
+        sorted[lower] + (sorted[upper] - sorted[lower]) * (rank - lower as f64)
+    }
+}
+
+/// Run a bounded static benchmark after convergence. The five warm frames
+/// settle command-buffer/resource state and are deliberately excluded from
+/// the reported samples. No readback occurs inside the measured section.
+fn benchmark_static_frames(
+    device: &GpuDevice,
+    target: &RenderTarget,
+    runtime: &mut PresetRuntime,
+    manifest: &ParamManifest,
+    args: &Args,
+    time: f64,
+    frames: u32,
+) -> Result<(), String> {
+    if runtime.io_pending() {
+        return Err("IO is still pending after convergence".to_string());
+    }
+
+    let warmup_start = args.frames_max as i64;
+    for offset in 0..5i64 {
+        let context = benchmark_context(args, warmup_start + offset, time);
+        let mut encoder = device.create_encoder("render-import-benchmark-warmup");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
+            runtime.render(&mut gpu, &target.texture, &context, manifest);
+        }
+        encoder.commit_and_wait_completed();
+        if runtime.io_pending() {
+            return Err(format!("IO became pending during warmup frame {offset}"));
+        }
+    }
+
+    let mut gpu_ms = Vec::with_capacity(frames as usize);
+    let mut frame_ms = Vec::with_capacity(frames as usize);
+    for offset in 0..frames as i64 {
+        let context = benchmark_context(args, warmup_start + 5 + offset, time);
+        let wall_start = std::time::Instant::now();
+        let mut encoder = device.create_encoder("render-import-benchmark");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
+            runtime.render(&mut gpu, &target.texture, &context, manifest);
+        }
+        // This headless path leaves GpuEncoder::chunking_enabled false, so
+        // each frame is one command buffer. Profiling therefore reports the
+        // complete command-buffer GPU time without dispatch timestamp setup.
+        let profile = encoder.commit_and_wait_profiled(device);
+        let wall = wall_start.elapsed().as_secs_f64() * 1000.0;
+        if runtime.io_pending() {
+            return Err(format!("IO became pending during measured frame {offset}"));
+        }
+        if !profile.total_ms.is_finite() || profile.total_ms <= 0.0 {
+            return Err(format!("measured frame {offset} has invalid GPU time {}", profile.total_ms));
+        }
+        if !wall.is_finite() || wall <= 0.0 {
+            return Err(format!("measured frame {offset} has invalid wall time {wall}"));
+        }
+        gpu_ms.push(profile.total_ms);
+        frame_ms.push(wall);
+    }
+
+    let benchmark = serde_json::json!({
+        "width": args.width,
+        "height": args.height,
+        "frames": frames,
+        "gpu_median_ms": percentile_ms(&gpu_ms, 0.50),
+        "gpu_p95_ms": percentile_ms(&gpu_ms, 0.95),
+        "frame_median_ms": percentile_ms(&frame_ms, 0.50),
+        "frame_p95_ms": percentile_ms(&frame_ms, 0.95),
+    });
+    println!(
+        "benchmark: {}",
+        serde_json::to_string(&benchmark).map_err(|e| format!("serialize benchmark: {e}"))?
+    );
+    Ok(())
+}
 
 /// Single-frame convergence render (warmup phase or normal mode).
 fn render_single_frame(
@@ -862,5 +1016,38 @@ mod tests {
     #[test]
     fn check_param_range_no_declared_range_passes() {
         assert!(check_param_range("some_param", 999.0, 0.0, 0.0).is_ok());
+    }
+
+    #[test]
+    fn benchmark_frames_parser_enforces_bounded_range() {
+        assert_eq!(parse_benchmark_frames("1").unwrap(), 1);
+        assert_eq!(parse_benchmark_frames("120").unwrap(), 120);
+        assert!(parse_benchmark_frames("0").is_err());
+        assert!(parse_benchmark_frames("121").is_err());
+        assert!(parse_benchmark_frames("many").is_err());
+    }
+
+    #[test]
+    fn benchmark_mode_rejects_animation_flags() {
+        let args = Args {
+            glb: PathBuf::from("fixture.glb"),
+            width: 8,
+            height: 8,
+            out: PathBuf::from("/tmp/out.png"),
+            overrides: Vec::new(),
+            orbit: None,
+            tilt: None,
+            frames_max: 10,
+            non_black_floor: 0.02,
+            trace: false,
+            time: 0.0,
+            anim_param: Some("camera_orbit".to_string()),
+            anim_start: Some(0.0),
+            anim_end: Some(1.0),
+            anim_frames: Some(2),
+            benchmark_frames: Some(1),
+        };
+        let error = validate_benchmark_mode(&args).unwrap_err();
+        assert!(error.contains("cannot be combined with animation flags"));
     }
 }

@@ -12,6 +12,34 @@ pub const CUT_MAP_TYPE_IDS: &[&str] = &["node.cut_mesh_bands", "node.cut_mesh_ce
 
 pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
+        source: "bokeh_gather.rs",
+        rust_struct: "BokehRadiusUniforms",
+        shader: "shaders/bokeh_tile_dilate.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "bokeh_gather.rs",
+        rust_struct: "BokehCompositeUniforms",
+        shader: "shaders/bokeh_reconstruct.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "bokeh_gather.rs",
+        rust_struct: "BokehCompositeUniforms",
+        shader: "shaders/bokeh_prefilter.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "filter.rs",
+        rust_struct: "DualBlurUniforms",
+        shader: "shaders/blur_dual.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "physics_world.rs",
         rust_struct: "InstanceUploadParams",
         shader: "shaders/physics_instance_upload.wgsl",
@@ -156,13 +184,6 @@ pub const CASES: &[CustomAbiCase] = &[
         source: "bake_equirect_envmap.rs",
         rust_struct: "EnvmapUniforms",
         shader: "shaders/bake_equirect_envmap.wgsl",
-        shader_struct: "Uniforms",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "bokeh_gather.rs",
-        rust_struct: "BokehDilateUniforms",
-        shader: "shaders/bokeh_coc_dilate_wide.wgsl",
         shader_struct: "Uniforms",
         aliases: &[],
     },

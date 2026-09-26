@@ -68,7 +68,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Bilateral Blur | `node.bilateral_blur` | Filter | A depth-guided blur that smooths noise without bleeding across depth edges — the standard denoise pass after any per-pixel noisy sampler (ambient occlusion, di… |
 | Blur | `node.blur` | Filter | Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur. |
 | Blur (3D) | `node.blur_3d` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
-| Bokeh Gather | `node.bokeh_gather` | Filter | A true circular-aperture depth-of-field blur: each out-of-focus pixel gathers from a disc of neighbors sized by its own blur amount, and neighbors only contrib… |
+| Bokeh Gather | `node.bokeh_gather` | Filter | Depth-of-field blur with clean foreground coverage and circular or polygonal highlights. |
 | Custom Convolution | `node.custom_convolution` | Filter | Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't d… |
 | Gaussian Blur | `node.gaussian_blur` | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
 | Motion Blur | `node.motion_blur` | Filter | Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object move… |
@@ -455,7 +455,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DataMosh` | Data Mosh | effect | Stylize | 8 |
-| `DepthOfField` | Depth of Field | effect | Filmic | 8 |
+| `DepthOfField` | Depth of Field | effect | Filmic | 10 |
 | `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
 | `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
 | `Dither` | Dither | effect | Stylize | 2 |

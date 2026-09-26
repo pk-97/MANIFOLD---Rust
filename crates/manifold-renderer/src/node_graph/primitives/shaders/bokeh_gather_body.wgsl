@@ -1,168 +1,421 @@
-// node.bokeh_gather — fusable body (freeze section 12), 2-input GATHER via the
-// STENCIL-FETCH ABI. Single-pass occlusion-aware disc gather DoF
-// (docs/CINEMATIC_POST_DESIGN.md D5), replacing the two-pass separable
-// node.variable_blur H/V gather inside CinematicScene (CINEMATIC_POST P4).
-//
-// MIP-GATHER UPGRADE (2026-08-28, silhouette-edge speckle fix): at full blur
-// the 32-tap disc covers ~1800 px² (~1 sample per 56 px²), so each tap at a
-// bright-on-black silhouette was a coin flip between a hot pixel and black,
-// and the per-pixel spiral rotation decorrelated neighboring pixels'
-// outcomes — sparse static dots hugging hard edges. The fix: `in` arrives
-// bound as a MIPMAPPED prefiltered copy (run() builds the chain with exact
-// box-average downsamples), and tap colors sample at a fractional LOD
-// derived from the center pixel's CoC so the disc stays dense at the sampled
-// level (~4-texel effective radius). The coin flip becomes an area average —
-// deterministic and smooth across neighboring centers. CoC weights stay
-// full-res (fetch_width at LOD 0): occlusion boundaries remain crisp, only
-// color is variance-reduced.
-//
-// LOD FORMULA: lod = clamp(log2(center_coc_px / 4), 0, 8) — one LOD per
-// pixel for the whole disc (per-tap LOD would leave the inner taps at LOD 0
-// exactly where speckle lives, and break the weight normalization's energy
-// conservation). Fractional LOD + trilinear sampling: the LOD field varies
-// smoothly with CoC, so there are no banding transitions. Small CoC clamps
-// to 0 = full res, no cost.
-//
-// This atom is fusion-EXEMPT (BoundaryReason::BarrieredReduction — the
-// internal mip chain is a barriered multi-pass prefilter the fused form can
-// never express). The body is only ever emitted STANDALONE (via
-// standalone_for_boundary_spec), which is what makes the raw
-// `textureSampleLevel(tex_in, samp, …, lod)` call below legal: `tex_in`/
-// `samp` are the codegen's standalone binding names, and no fused emission
-// exists to break. run() binds the mipmapped chain as `in` and a
-// mip_filter=Linear sampler as `samp`.
-//
-// Exact algorithm, no substitution:
-//
-//   1. center_coc_frac = width(uv).r (coc_from_depth/coc_dilate's [0,1]
-//      fraction-of-max_radius convention); center_coc_frac < 0.005 ->
-//      pass-through (mirrors node.variable_blur's own in-focus early-out,
-//      and is what makes I2 — a zero-CoC lens — bit-clean: level 0 of the
-//      chain is an exact copy of `in`).
-//   2. center_coc_px = center_coc_frac * max_radius;
-//      lod = clamp(log2(center_coc_px / 4), 0, 8).
-//   3. 32 golden-angle spiral taps (docs/CINEMATIC_POST_DESIGN.md D2:
-//      r_i = sqrt((i+0.5)/32), theta_i = i*2.399963), rotated per-pixel by
-//      D2's committed hash, scaled by center_coc_px — the disc radius is the
-//      CENTER pixel's own CoC, not each tap's. Tap UVs are computed in
-//      full-res pixel space; only the SAMPLING LEVEL changes.
-//   4. Each tap's own CoC (sampled fresh from `width` at the tap's UV,
-//      scaled to px the same way) sets how much it contributes:
-//      weight = clamp((tap_coc_px - distance + RAMP) / (2*RAMP), 0, 1) —
-//      a sample counts in proportion to how far its own CoC reaches past
-//      the distance back to the center (the standard scatter-as-gather
-//      occlusion approximation named in D5, softened from D5's binary step
-//      to a 2px ramp 2026-08-28: the binary cutoff + small included counts
-//      + normalization was the residual spray-noise amplifier).
-//   5. Coverage-filled normalization (2026-08-28, replaces D5's
-//      divide-by-included-weight): out = acc/BOKEH_N + center *
-//      (1 - w_acc/BOKEH_N) * focus_fill, where focus_fill =
-//      1 - smoothstep(0, 0.25, center_coc_frac). The excluded taps' share
-//      of the kernel is filled with the CENTER pixel's own color, so a
-//      blurred halo dilutes smoothly into whatever is behind it (in the
-//      black void: feathers to black — no plateau-then-cliff rim). The
-//      focus gate confines the fill to SHARP pixels: a sharp foreground
-//      interior fills with its own color (no dark fringe), while a
-//      defocused texel has no unscattered remainder and scatters fully
-//      (ungated, a hot texel kept a bright core — I3 regression).
-//      D5's w_acc normalization held every blurred region at full
-//      brightness right up to a hard cutoff — the "disconnected halo"
-//      artifact Peter flagged on the music-video repro.
-//
-// `width` is a Gather stencil-fetch input (`fetch_width`, defined by the
-// codegen as a real textureSampleLevel over the bound texture) — full-res
-// always. PARAMS: [max_radius, enabled]. `enabled` is overloaded as the
-// per-pass field selector (0 = far, 1 = near); the host still aliases `in→out`
-// when the node param `enabled = false`, so the body only sees 0/1.
-// Matches bokeh_gather.wgsl (the hand parity oracle) — kept independent (not
-// sharing source) so the gpu_tests parity check is a real cross-check.
-
-const BOKEH_N: u32 = 32u;
-const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
-// Effective disc radius at the sampled mip level the LOD formula targets:
-// 2 texels, so each tap's footprint (~1 texel) OVERLAPS its neighbors —
-// taps read correlated area averages and the 32-tap spiral pattern fills
-// rather than spraying. (Was 4: footprints were a third the size of their
-// gaps and a small source mirrored back as 32 separated blobs.)
-const BOKEH_LOD_TARGET_RADIUS: f32 = 2.0;
-// Soft inclusion ramp width (px, full-res): a tap's weight fades 0→1 across
-// [tap_coc - RAMP, tap_coc + RAMP] instead of flipping binary at the
-// threshold. The binary step + small included-tap count + luminance
-// normalization was the noise amplifier: one tap flipping changed the
-// output by 1/w_acc, and the per-pixel hash decorrelated the flip between
-// neighbors. Centered on the old threshold so occlusion reach is unchanged
-// on average.
-const BOKEH_INCLUSION_RAMP: f32 = 1.0;
-
-// D2's committed per-pixel rotation hash (docs/CINEMATIC_POST_DESIGN.md D2) —
-// same formula as ssao_from_depth_body.wgsl's ssao_hash_angle / film_grain's
-// white_noise base, scaled to radians so it adds directly to theta_i.
-fn bokeh_hash_angle(px: vec2<f32>) -> f32 {
-    return fract(sin(dot(px, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.283185307;
+// Half-resolution aperture gather. `in` is one premultiplied layer mip
+// pyramid. `width` packs original far/near CoC in RG and tile reach in BA.
+// Search bounds NEVER replace the original tap radii. No frame-dependent
+// random rotation: subpixel motion samples a continuous, stable field.
+// Independent golden-angle sets for each quality avoid angular aliasing from striding.
+const BOKEH_OFFSETS: array<vec2<f32>,112> = array<vec2<f32>,112>(
+    vec2<f32>(0.176776695, 0.000000000),
+    vec2<f32>(-0.225772188, 0.206825818),
+    vec2<f32>(0.034558052, -0.393771179),
+    vec2<f32>(0.284571220, 0.371172764),
+    vec2<f32>(-0.522223187, -0.092373929),
+    vec2<f32>(0.494695392, -0.314684715),
+    vec2<f32>(-0.165465927, 0.615525001),
+    vec2<f32>(-0.315561468, -0.607594404),
+    vec2<f32>(0.684642162, 0.250030219),
+    vec2<f32>(-0.712256086, 0.294008958),
+    vec2<f32>(0.343354499, -0.733728620),
+    vec2<f32>(0.253730241, 0.808931990),
+    vec2<f32>(-0.764745892, -0.443185876),
+    vec2<f32>(0.897133984, -0.197232390),
+    vec2<f32>(-0.547506905, 0.778772232),
+    vec2<f32>(-0.126486773, -0.976089697),
+    vec2<f32>(0.125000000, 0.000000000),
+    vec2<f32>(-0.159645045, 0.146247939),
+    vec2<f32>(0.024436233, -0.278438271),
+    vec2<f32>(0.201222239, 0.262458779),
+    vec2<f32>(-0.369267557, -0.065318231),
+    vec2<f32>(0.349802466, -0.222515696),
+    vec2<f32>(-0.117002079, 0.435241902),
+    vec2<f32>(-0.223135654, -0.429634123),
+    vec2<f32>(0.484115115, 0.176798064),
+    vec2<f32>(-0.503641109, 0.207895728),
+    vec2<f32>(0.242788294, -0.518824483),
+    vec2<f32>(0.179414374, 0.572001296),
+    vec2<f32>(-0.540757006, -0.313379738),
+    vec2<f32>(0.634369523, -0.139464360),
+    vec2<f32>(-0.387145845, 0.550675126),
+    vec2<f32>(-0.089439655, -0.690199644),
+    vec2<f32>(0.549071757, 0.462758258),
+    vec2<f32>(-0.738878471, 0.030554945),
+    vec2<f32>(0.538955125, -0.536332334),
+    vec2<f32>(-0.036058186, 0.779791515),
+    vec2<f32>(-0.512817532, -0.614526793),
+    vec2<f32>(0.812359593, 0.109301834),
+    vec2<f32>(-0.688310641, 0.478908616),
+    vec2<f32>(0.188086057, -0.836061382),
+    vec2<f32>(0.435033266, 0.759191055),
+    vec2<f32>(-0.850448410, -0.271316239),
+    vec2<f32>(0.826102401, -0.381680263),
+    vec2<f32>(-0.357888202, 0.855155562),
+    vec2<f32>(-0.319407334, -0.888033758),
+    vec2<f32>(0.849908635, 0.446688159),
+    vec2<f32>(-0.944034646, 0.248844503),
+    vec2<f32>(0.536595808, -0.834529771),
+    vec2<f32>(0.088388348, 0.000000000),
+    vec2<f32>(-0.112886094, 0.103412909),
+    vec2<f32>(0.017279026, -0.196885589),
+    vec2<f32>(0.142285610, 0.185586382),
+    vec2<f32>(-0.261111594, -0.046186964),
+    vec2<f32>(0.247347696, -0.157342357),
+    vec2<f32>(-0.082732964, 0.307762501),
+    vec2<f32>(-0.157780734, -0.303797202),
+    vec2<f32>(0.342321081, 0.125015110),
+    vec2<f32>(-0.356128043, 0.147004479),
+    vec2<f32>(0.171677249, -0.366864310),
+    vec2<f32>(0.126865120, 0.404465995),
+    vec2<f32>(-0.382372946, -0.221592938),
+    vec2<f32>(0.448566992, -0.098616195),
+    vec2<f32>(-0.273753452, 0.389386116),
+    vec2<f32>(-0.063243386, -0.488044848),
+    vec2<f32>(0.388252363, 0.327219502),
+    vec2<f32>(-0.522465978, 0.021605608),
+    vec2<f32>(0.381098824, -0.379244231),
+    vec2<f32>(-0.025496988, 0.551395868),
+    vec2<f32>(-0.362616754, -0.434536062),
+    vec2<f32>(0.574424977, 0.077288068),
+    vec2<f32>(-0.486709121, 0.338639530),
+    vec2<f32>(0.132996927, -0.591184673),
+    vec2<f32>(0.307614972, 0.536829143),
+    vec2<f32>(-0.601357838, -0.191849552),
+    vec2<f32>(0.584142610, -0.269888702),
+    vec2<f32>(-0.253065174, 0.604686297),
+    vec2<f32>(-0.225855092, -0.627934692),
+    vec2<f32>(0.600976159, 0.315856226),
+    vec2<f32>(-0.667533300, 0.175959636),
+    vec2<f32>(0.379430535, -0.590101660),
+    vec2<f32>(0.120699093, 0.702313483),
+    vec2<f32>(-0.572007808, -0.442994998),
+    vec2<f32>(0.731701930, -0.060620009),
+    vec2<f32>(-0.505760271, 0.546712034),
+    vec2<f32>(0.003684028, -0.755181387),
+    vec2<f32>(0.514304945, 0.566946138),
+    vec2<f32>(-0.772294866, -0.071576115),
+    vec2<f32>(0.625787308, -0.474950256),
+    vec2<f32>(-0.142380569, 0.782649522),
+    vec2<f32>(-0.428883941, -0.681539482),
+    vec2<f32>(0.785920133, 0.215388125),
+    vec2<f32>(-0.733485521, 0.376412659),
+    vec2<f32>(0.289861676, -0.781852102),
+    vec2<f32>(0.317911469, 0.780941610),
+    vec2<f32>(-0.770263923, -0.365042448),
+    vec2<f32>(0.823263301, -0.253820875),
+    vec2<f32>(-0.440156530, 0.751049086),
+    vec2<f32>(-0.184643240, -0.859851367),
+    vec2<f32>(0.724177356, 0.514421672),
+    vec2<f32>(-0.890157361, 0.110938598),
+    vec2<f32>(0.587054262, -0.689695435),
+    vec2<f32>(0.033319900, 0.913688833),
+    vec2<f32>(-0.647726957, -0.657276418),
+    vec2<f32>(0.930014131, 0.047552248),
+    vec2<f32>(-0.724323114, 0.598471827),
+    vec2<f32>(0.130975323, -0.938766725),
+    vec2<f32>(0.542204890, 0.787449273),
+    vec2<f32>(-0.939649022, -0.216211044),
+    vec2<f32>(0.845936750, -0.479273945),
+    vec2<f32>(-0.302491897, 0.932435602),
+    vec2<f32>(-0.410097094, -0.899101147),
+    vec2<f32>(0.916975868, 0.389027966)
+);
+const POLYGON_OFFSETS: array<vec2<f32>,224> = array<vec2<f32>,224>(
+    vec2<f32>(0.168346711, 0.000000000),
+    vec2<f32>(-0.225449421, 0.206530138),
+    vec2<f32>(0.036307664, -0.413707099),
+    vec2<f32>(0.273324667, 0.356503627),
+    vec2<f32>(-0.505040133, -0.089334488),
+    vec2<f32>(0.531302513, -0.337971169),
+    vec2<f32>(-0.163098499, 0.606718286),
+    vec2<f32>(-0.300812115, -0.579195423),
+    vec2<f32>(0.694111271, 0.253488323),
+    vec2<f32>(-0.733806300, 0.302904573),
+    vec2<f32>(0.328191293, -0.701325731),
+    vec2<f32>(0.247579320, 0.789321884),
+    vec2<f32>(-0.840154548, -0.486886734),
+    vec2<f32>(0.874755170, -0.192312470),
+    vec2<f32>(-0.523477319, 0.744592619),
+    vec2<f32>(-0.130489658, -1.006979685),
+    vec2<f32>(0.119039101, 0.000000000),
+    vec2<f32>(-0.159416815, 0.146038861),
+    vec2<f32>(0.025673395, -0.292535095),
+    vec2<f32>(0.193269725, 0.252086132),
+    vec2<f32>(-0.357117303, -0.063169022),
+    vec2<f32>(0.375687610, -0.238981705),
+    vec2<f32>(-0.115328055, 0.429014614),
+    vec2<f32>(-0.212706287, -0.409553011),
+    vec2<f32>(0.490810786, 0.179243312),
+    vec2<f32>(-0.518879411, 0.214185878),
+    vec2<f32>(0.232066289, -0.495912180),
+    vec2<f32>(0.175065016, 0.558134857),
+    vec2<f32>(-0.594078978, -0.344280911),
+    vec2<f32>(0.618545312, -0.135985452),
+    vec2<f32>(-0.370154362, 0.526506490),
+    vec2<f32>(-0.092270122, -0.712042164),
+    vec2<f32>(0.556008399, 0.468604467),
+    vec2<f32>(-0.704244818, 0.029122734),
+    vec2<f32>(0.531708593, -0.529121067),
+    vec2<f32>(-0.038661111, 0.836082161),
+    vec2<f32>(-0.495661441, -0.593968063),
+    vec2<f32>(0.780591586, 0.105027494),
+    vec2<f32>(-0.724259969, 0.503921222),
+    vec2<f32>(0.187625675, -0.834014936),
+    vec2<f32>(0.414289941, 0.722991188),
+    vec2<f32>(-0.850109219, -0.271208027),
+    vec2<f32>(0.866617735, -0.400399375),
+    vec2<f32>(-0.343599249, 0.821012839),
+    vec2<f32>(-0.309077100, -0.859313075),
+    vec2<f32>(0.914356683, 0.480560247),
+    vec2<f32>(-0.929725099, 0.245072552),
+    vec2<f32>(0.511592233, -0.795643467),
+    vec2<f32>(0.084173355, 0.000000000),
+    vec2<f32>(-0.112724711, 0.103265069),
+    vec2<f32>(0.018153832, -0.206853550),
+    vec2<f32>(0.136662333, 0.178251814),
+    vec2<f32>(-0.252520066, -0.044667244),
+    vec2<f32>(0.265651257, -0.168985584),
+    vec2<f32>(-0.081549249, 0.303359143),
+    vec2<f32>(-0.150406058, -0.289597711),
+    vec2<f32>(0.347055635, 0.126744161),
+    vec2<f32>(-0.366903150, 0.151452287),
+    vec2<f32>(0.164095647, -0.350662865),
+    vec2<f32>(0.123789660, 0.394660942),
+    vec2<f32>(-0.420077274, -0.243443367),
+    vec2<f32>(0.437377585, -0.096156235),
+    vec2<f32>(-0.261738660, 0.372296309),
+    vec2<f32>(-0.065244829, -0.503489843),
+    vec2<f32>(0.393157309, 0.331353396),
+    vec2<f32>(-0.497976286, 0.020592883),
+    vec2<f32>(0.375974752, -0.374145095),
+    vec2<f32>(-0.027337533, 0.591199366),
+    vec2<f32>(-0.350485566, -0.419998845),
+    vec2<f32>(0.551961604, 0.074265653),
+    vec2<f32>(-0.512129136, 0.356326113),
+    vec2<f32>(0.132671387, -0.589737617),
+    vec2<f32>(0.292947227, 0.511231972),
+    vec2<f32>(-0.601117993, -0.191773035),
+    vec2<f32>(0.612791277, -0.283125113),
+    vec2<f32>(-0.242961359, 0.580543746),
+    vec2<f32>(-0.218550513, -0.607626102),
+    vec2<f32>(0.646547811, 0.339807409),
+    vec2<f32>(-0.657414922, 0.173292464),
+    vec2<f32>(0.361750337, -0.562604891),
+    vec2<f32>(0.122514609, 0.712877451),
+    vec2<f32>(-0.588527671, -0.455788908),
+    vec2<f32>(0.699196403, -0.057926993),
+    vec2<f32>(-0.493860840, 0.533849097),
+    vec2<f32>(0.004039760, -0.828102248),
+    vec2<f32>(0.501120076, 0.552411744),
+    vec2<f32>(-0.738618196, -0.068454968),
+    vec2<f32>(0.646470684, -0.490648201),
+    vec2<f32>(-0.144010764, 0.791610516),
+    vec2<f32>(-0.408727939, -0.649509578),
+    vec2<f32>(0.776039993, 0.212680388),
+    vec2<f32>(-0.785116792, 0.402908975),
+    vec2<f32>(0.280007932, -0.755273319),
+    vec2<f32>(0.305614619, 0.750734704),
+    vec2<f32>(-0.811738443, -0.384697997),
+    vec2<f32>(0.820420385, -0.252944373),
+    vec2<f32>(-0.419175568, 0.715248793),
+    vec2<f32>(-0.184762272, -0.860405679),
+    vec2<f32>(0.758558088, 0.538844134),
+    vec2<f32>(-0.854266257, 0.106465558),
+    vec2<f32>(0.568404016, -0.667784361),
+    vec2<f32>(0.035908093, 0.984661545),
+    vec2<f32>(-0.637365779, -0.646762484),
+    vec2<f32>(0.886821328, 0.045343771),
+    vec2<f32>(-0.736105139, 0.608206723),
+    vec2<f32>(0.134579661, -0.964600854),
+    vec2<f32>(0.517980859, 0.752268484),
+    vec2<f32>(-0.918222902, -0.211280944),
+    vec2<f32>(0.925906910, -0.524581841),
+    vec2<f32>(-0.294531363, 0.907897143),
+    vec2<f32>(-0.392334741, -0.860158778),
+    vec2<f32>(0.948585541, 0.402438402),
+    vec2<f32>(0.172124541, 0.000000000),
+    vec2<f32>(-0.220041375, 0.201575924),
+    vec2<f32>(0.033777937, -0.384882175),
+    vec2<f32>(0.279488199, 0.364542863),
+    vec2<f32>(-0.516373624, -0.091339223),
+    vec2<f32>(0.493445822, -0.313889840),
+    vec2<f32>(-0.166831230, 0.620603860),
+    vec2<f32>(-0.322264417, -0.620500524),
+    vec2<f32>(0.709687665, 0.259176797),
+    vec2<f32>(-0.750273482, 0.309701987),
+    vec2<f32>(0.355599355, -0.759895166),
+    vec2<f32>(0.258920797, 0.825480302),
+    vec2<f32>(-0.770553058, -0.446551247),
+    vec2<f32>(0.894385353, -0.196628111),
+    vec2<f32>(-0.541142266, 0.769719188),
+    vec2<f32>(-0.124187827, -0.958348888),
+    vec2<f32>(0.121710430, 0.000000000),
+    vec2<f32>(-0.155592748, 0.142535703),
+    vec2<f32>(0.023884609, -0.272152796),
+    vec2<f32>(0.197628001, 0.257770731),
+    vec2<f32>(-0.365131291, -0.064586584),
+    vec2<f32>(0.348918887, -0.221953635),
+    vec2<f32>(-0.117967494, 0.438833198),
+    vec2<f32>(-0.227875354, -0.438760128),
+    vec2<f32>(0.501824961, 0.183265671),
+    vec2<f32>(-0.530523467, 0.218992375),
+    vec2<f32>(0.251446715, -0.537327025),
+    vec2<f32>(0.183084652, 0.583702719),
+    vec2<f32>(-0.544863292, -0.315759415),
+    vec2<f32>(0.632425948, -0.139037071),
+    vec2<f32>(-0.382645366, 0.544273657),
+    vec2<f32>(-0.087814054, -0.677654997),
+    vec2<f32>(0.536563731, 0.452216481),
+    vec2<f32>(-0.720048617, 0.029776271),
+    vec2<f32>(0.524773243, -0.522219468),
+    vec2<f32>(-0.035146774, 0.760081395),
+    vec2<f32>(-0.501349985, -0.600784839),
+    vec2<f32>(0.798108666, 0.107384392),
+    vec2<f32>(-0.680896486, 0.473750040),
+    vec2<f32>(0.187713353, -0.834404673),
+    vec2<f32>(0.438911937, 0.765959853),
+    vec2<f32>(-0.869186328, -0.277294146),
+    vec2<f32>(0.857088808, -0.395996769),
+    vec2<f32>(-0.376612780, 0.899896984),
+    vec2<f32>(-0.330506980, -0.918893599),
+    vec2<f32>(0.866634752, 0.455478937),
+    vec2<f32>(-0.950588850, 0.250572170),
+    vec2<f32>(0.534666672, -0.831529521),
+    vec2<f32>(0.086062271, 0.000000000),
+    vec2<f32>(-0.110020687, 0.100787962),
+    vec2<f32>(0.016888969, -0.192441088),
+    vec2<f32>(0.139744099, 0.182271432),
+    vec2<f32>(-0.258186812, -0.045669612),
+    vec2<f32>(0.246722911, -0.156944920),
+    vec2<f32>(-0.083415615, 0.310301930),
+    vec2<f32>(-0.161132208, -0.310250262),
+    vec2<f32>(0.354843833, 0.129588399),
+    vec2<f32>(-0.375136741, 0.154850993),
+    vec2<f32>(0.177799677, -0.379947583),
+    vec2<f32>(0.129460399, 0.412740151),
+    vec2<f32>(-0.385276529, -0.223275624),
+    vec2<f32>(0.447192677, -0.098314055),
+    vec2<f32>(-0.270571133, 0.384859594),
+    vec2<f32>(-0.062093913, -0.479174444),
+    vec2<f32>(0.379407853, 0.319765340),
+    vec2<f32>(-0.509151260, 0.021055003),
+    vec2<f32>(0.371070719, -0.369264927),
+    vec2<f32>(-0.024852522, 0.537458709),
+    vec2<f32>(-0.354507974, -0.424819033),
+    vec2<f32>(0.564348050, 0.075932232),
+    vec2<f32>(-0.481466523, 0.334991866),
+    vec2<f32>(0.132733385, -0.590013202),
+    vec2<f32>(0.310357607, 0.541615407),
+    vec2<f32>(-0.614607547, -0.196076571),
+    vec2<f32>(0.606053308, -0.280012000),
+    vec2<f32>(-0.266305451, 0.636323260),
+    vec2<f32>(-0.233703726, -0.649755895),
+    vec2<f32>(0.612803310, 0.322072245),
+    vec2<f32>(-0.672167822, 0.177181281),
+    vec2<f32>(0.378066430, -0.587980163),
+    vec2<f32>(0.119245632, 0.693856209),
+    vec2<f32>(-0.561435557, -0.434807252),
+    vec2<f32>(0.714886912, -0.059226919),
+    vec2<f32>(-0.492823045, 0.532727271),
+    vec2<f32>(0.003587120, -0.735316364),
+    vec2<f32>(0.501363340, 0.552679907),
+    vec2<f32>(-0.755193361, -0.069991151),
+    vec2<f32>(0.615013016, -0.466772953),
+    vec2<f32>(-0.140908992, 0.774560437),
+    vec2<f32>(-0.428270357, -0.680564436),
+    vec2<f32>(0.793454931, 0.217453101),
+    vec2<f32>(-0.750232426, 0.385006894),
+    vec2<f32>(0.301005198, -0.811909838),
+    vec2<f32>(0.334211300, 0.820981738),
+    vec2<f32>(-0.796334910, -0.377397975),
+    vec2<f32>(0.838831254, -0.258620641),
+    vec2<f32>(-0.442928966, 0.755779756),
+    vec2<f32>(-0.183882510, -0.856308782),
+    vec2<f32>(0.715159137, 0.508015552),
+    vec2<f32>(-0.873436654, 0.108854728),
+    vec2<f32>(0.573449172, -0.673711617),
+    vec2<f32>(0.032464600, 0.890235051),
+    vec2<f32>(-0.630697900, -0.639996300),
+    vec2<f32>(0.906722286, 0.046361320),
+    vec2<f32>(-0.708446142, 0.585353482),
+    vec2<f32>(0.128763719, -0.922915035),
+    vec2<f32>(0.536840735, 0.779658859),
+    vec2<f32>(-0.938828535, -0.216022252),
+    vec2<f32>(0.854620771, -0.484193964),
+    vec2<f32>(-0.309642279, 0.954476755),
+    vec2<f32>(-0.426249698, -0.934514283),
+    vec2<f32>(0.963037312, 0.408569581)
+);
+fn aperture_offset(index: u32, aperture: u32) -> vec2<f32> {
+    if aperture == 0u { return BOKEH_OFFSETS[index]; }
+    return POLYGON_OFFSETS[(min(aperture,2u)-1u)*112u+index];
 }
-
-const BOKEH_FIELD_FAR: u32 = 0u;
-const BOKEH_FIELD_NEAR: u32 = 1u;
-
-fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32) -> vec4<f32> {
-    let center = fetch_in(uv);
-    let center_coc_frac = clamp(fetch_width(uv).r, 0.0, 1.0);
-    if center_coc_frac < 0.005 {
-        // `enabled` is overloaded as a per-pass field selector: far pass
-        // returns the original center; near pass returns transparent black
-        // because the near field is only additive light (the far result
-        // already carries the in-focus / far contribution).
-        if enabled == BOKEH_FIELD_NEAR {
-            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32, aperture: u32, quality: u32, blur_alpha: u32) -> vec4<f32> {
+    let pixel = clamp(vec2<i32>(uv*dims),vec2<i32>(0),vec2<i32>(dims)-1);
+    let guide = textureLoad(tex_width,pixel,0);
+    let near_field = enabled == 1u;
+    let center = textureSampleLevel(tex_in,samp,uv,0.0);
+    let empty_far = blur_alpha != 0u && center.a < 1e-6 && guide.g == 0.0;
+    // Far gather footprints follow the receiving surface. A tile-wide far
+    // maximum chooses overly coarse color mips for small local CoC, producing
+    // square blur patches where unrelated background enters the tile bound.
+    // Near coverage must still search beyond its own silhouette.
+    let far_search = select(max(guide.r,guide.g),guide.b,empty_far);
+    let search_frac = select(far_search, guide.a, near_field);
+    let radius = search_frac * max_radius;
+    if radius < 0.5 {
+        if near_field { return vec4<f32>(0.0); }
+        return vec4<f32>(center.rgb / max(center.a,1e-6),center.a);
+    }
+    // Do not blur focused pixels just because distant tiles contain blur.
+    // Near foreground pixels still gather a background fill for their halo.
+    if !near_field && !empty_far && guide.r * max_radius < 0.5 && guide.g * max_radius < 0.5 {
+        return vec4<f32>(center.rgb/max(center.a,1e-6),center.a);
+    }
+    let lod = max(log2(radius / 2.0),0.0);
+    let sample_count = 16u << min(quality,2u);
+    let sample_base = sample_count - 16u;
+    var rgb = vec3<f32>(0.0);
+    var coverage = 0.0;
+    var weights = 0.0;
+    var aperture_weight = 0.0;
+    for(var i=0u;i<sample_count;i++) {
+        let offset = aperture_offset(sample_base+i,aperture) * radius;
+        let tap_uv = uv + offset/dims;
+        let sample = textureSampleLevel(tex_in, samp, tap_uv, lod);
+        // Match source-radius support to the coarse color footprint. Use a
+        // conservative four-texel max; interpolating against an empty texel
+        // would falsely shrink the radius of a thin foreground silhouette.
+        let guide_lod = i32(min(ceil(lod),f32(textureNumLevels(tex_width)-1u)));
+        let guide_dims = vec2<i32>(textureDimensions(tex_width,guide_lod));
+        let gp = vec2<i32>(floor(tap_uv*vec2<f32>(guide_dims)-0.5));
+        var tap_guide = vec4<f32>(0.0);
+        for(var gy=0;gy<2;gy++) {
+            for(var gx=0;gx<2;gx++) {
+                tap_guide = max(tap_guide,textureLoad(tex_width,clamp(gp+vec2<i32>(gx,gy),vec2<i32>(0),guide_dims-1),guide_lod));
+            }
         }
-        return center;
+        let tap_radius = select(tap_guide.r,tap_guide.g,near_field)*max_radius;
+        // The aperture-distance uses the disc coordinate before polygon
+        // shaping so polygon corners are not clipped by a circular weight.
+        let distance = length(BOKEH_OFFSETS[sample_base+i])*radius;
+        aperture_weight += clamp(radius-distance+0.5,0.0,1.0);
+        var weight = clamp(tap_radius-distance+0.5,0.0,1.0);
+        if !near_field && guide.g * max_radius >= 0.5 {
+            // Background extrapolation beneath defocused foreground.
+            weight = 1.0;
+        }
+        if near_field {
+            weight *= radius*radius/max(tap_radius*tap_radius,0.25);
+        }
+        rgb += sample.rgb * weight;
+        coverage += sample.a * weight;
+        weights += weight;
     }
-
-    let center_coc_px = center_coc_frac * max_radius;
-    let lod = clamp(log2(center_coc_px / BOKEH_LOD_TARGET_RADIUS), 0.0, 8.0);
-    let texel = 1.0 / dims;
-    let px = uv * dims;
-    let rot = bokeh_hash_angle(px);
-
-    var acc: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
-    var w_acc: f32 = 0.0;
-
-    for (var i: u32 = 0u; i < BOKEH_N; i = i + 1u) {
-        let r = sqrt((f32(i) + 0.5) / f32(BOKEH_N));
-        let theta = f32(i) * BOKEH_GOLDEN_ANGLE + rot;
-        let offset_px = vec2<f32>(r * cos(theta), r * sin(theta)) * center_coc_px;
-        let tap_uv = uv + offset_px * texel;
-
-        // Mip-gather: area-averaged color at the CoC-proportional LOD.
-        // `tex_in` is the mipmapped prefiltered chain bound by run();
-        // textureSampleLevel clamps lod to the chain's depth, so the 8.0
-        // ceiling above is a formality, not a requirement.
-        let tap_color = textureSampleLevel(tex_in, samp, tap_uv, lod).rgb;
-        let tap_coc_px = clamp(fetch_width(tap_uv).r, 0.0, 1.0) * max_radius;
-        let distance_to_center_px = length(offset_px);
-        let w = clamp((tap_coc_px - distance_to_center_px + BOKEH_INCLUSION_RAMP)
-                      / (2.0 * BOKEH_INCLUSION_RAMP), 0.0, 1.0);
-
-        acc = acc + tap_color * w;
-        w_acc = w_acc + w;
+    if near_field {
+        let normalization = max(aperture_weight,1e-6);
+        let alpha = coverage/normalization;
+        return vec4<f32>(rgb/normalization/max(alpha,1.0),min(alpha,1.0));
     }
-
-    let coverage = w_acc / f32(BOKEH_N);
-    let rgb = acc / f32(BOKEH_N);
-
-    if enabled == BOKEH_FIELD_NEAR {
-        // Near field: plain average, no center fill (the original center is
-        // already in the far result). Alpha is the accumulated coverage so the
-        // composite pass knows how much this pixel's near halo contributes.
-        return vec4<f32>(rgb, coverage);
-    }
-
-    // Far field: coverage-filled normalization. The fill is for SHARP pixels
-    // only (a foreground interior whose blurry background taps were excluded
-    // fills with its own color — no dark fringe). A defocused center has no
-    // unscattered remainder — gating by the center's own CoC keeps a hot
-    // texel from retaining a bright core (I3 regression).
-    let focus_fill = 1.0 - smoothstep(0.0, 0.25, center_coc_frac);
-    let far_rgb = rgb + center.rgb * (1.0 - coverage) * focus_fill;
-    return vec4<f32>(far_rgb, center.a);
+    // Transparent empty taps still occupy aperture area. Normalizing opacity
+    // by accepted source taps would turn a faint halo into opaque geometry.
+    let alpha_denominator = select(weights,aperture_weight,blur_alpha != 0u);
+    return vec4<f32>(rgb/max(coverage,1e-6),min(coverage/max(alpha_denominator,1e-6),1.0));
 }
