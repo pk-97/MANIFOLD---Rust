@@ -12,6 +12,9 @@
 
 #include "fluidsimulation.h"
 #include "aabb.h"
+#include "forcefield.h"
+#include "grid3d.h"
+#include "interpolation.h"
 #include "meshfluidsource.h"
 #include "meshobject.h"
 #include "threadutils.h"
@@ -84,6 +87,88 @@ vmath::vec3 read_vector(const float *values, const char *name) {
     return value;
 }
 
+class NativeField final : public ForceField {
+public:
+    void setValues(const float *values, size_t value_count, uint32_t width,
+                   uint32_t height, uint32_t depth) {
+        if (values == nullptr) {
+            throw std::invalid_argument("force field values pointer must be non-null");
+        }
+        if (width != static_cast<uint32_t>(_isize + 1) ||
+            height != static_cast<uint32_t>(_jsize + 1) ||
+            depth != static_cast<uint32_t>(_ksize + 1)) {
+            throw std::invalid_argument("force field dimensions must match the native domain");
+        }
+        const size_t expected = static_cast<size_t>(width) * height * depth * 3;
+        if (value_count != expected) {
+            throw std::invalid_argument("force field value count does not match dimensions");
+        }
+        for (uint32_t k = 0; k < depth; ++k) {
+            for (uint32_t j = 0; j < height; ++j) {
+                for (uint32_t i = 0; i < width; ++i) {
+                    const size_t index =
+                        (static_cast<size_t>(i) + static_cast<size_t>(width) *
+                         (static_cast<size_t>(j) + static_cast<size_t>(height) * k)) * 3;
+                    const float x = values[index];
+                    const float y = values[index + 1];
+                    const float z = values[index + 2];
+                    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                        throw std::invalid_argument("force field values must be finite");
+                    }
+                    _values.set(static_cast<int>(i), static_cast<int>(j), static_cast<int>(k),
+                                vmath::vec3(x, y, z));
+                }
+            }
+        }
+        _values_changed = true;
+    }
+
+    void update(double, double) override {}
+
+    void addForceFieldToGrid(MACVelocityField &fieldGrid) override {
+        for (int k = 0; k < _ksize; ++k) {
+            for (int j = 0; j < _jsize; ++j) {
+                for (int i = 0; i <= _isize; ++i) {
+                    const vmath::vec3 p = Grid3d::FaceIndexToPositionU(i, j, k, _dx);
+                    fieldGrid.addU(i, j, k, Interpolation::trilinearInterpolate(p, _dx, _values).x);
+                }
+            }
+        }
+        for (int k = 0; k < _ksize; ++k) {
+            for (int j = 0; j <= _jsize; ++j) {
+                for (int i = 0; i < _isize; ++i) {
+                    const vmath::vec3 p = Grid3d::FaceIndexToPositionV(i, j, k, _dx);
+                    fieldGrid.addV(i, j, k, Interpolation::trilinearInterpolate(p, _dx, _values).y);
+                }
+            }
+        }
+        for (int k = 0; k <= _ksize; ++k) {
+            for (int j = 0; j < _jsize; ++j) {
+                for (int i = 0; i < _isize; ++i) {
+                    const vmath::vec3 p = Grid3d::FaceIndexToPositionW(i, j, k, _dx);
+                    fieldGrid.addW(i, j, k, Interpolation::trilinearInterpolate(p, _dx, _values).z);
+                }
+            }
+        }
+    }
+
+    void addGravityScaleToGrid(ForceFieldGravityScaleGrid &) override {}
+    std::vector<vmath::vec3> generateDebugProbes() override { return {}; }
+
+protected:
+    void _initialize() override {
+        _values = Array3d<vmath::vec3>(_isize + 1, _jsize + 1, _ksize + 1,
+                                       vmath::vec3(0.0f, 0.0f, 0.0f));
+    }
+
+    bool _isSubclassStateChanged() override { return _values_changed; }
+    void _clearSubclassState() override { _values_changed = false; }
+
+private:
+    Array3d<vmath::vec3> _values;
+    bool _values_changed = false;
+};
+
 TriangleMesh make_box(const Bounds &bounds) {
     TriangleMesh mesh;
     const float x0 = bounds.min[0];
@@ -128,10 +213,17 @@ struct NativeWorld {
         } else {
             simulation->setVelocityTransferMethodFLIP();
         }
+        simulation->setForceFieldReductionLevel(1);
+        simulation->enableForceFields();
+        force_field = std::make_unique<NativeField>();
+        simulation->getForceFieldGrid()->addForceField(force_field.get());
         simulation->initialize();
+        force_field->disable();
+        simulation->disableForceFields();
     }
 
     std::unique_ptr<FluidSimulation> simulation;
+    std::unique_ptr<NativeField> force_field;
     std::unique_ptr<MeshFluidSource> emitter;
     std::unique_ptr<MeshObject> obstacle;
     std::vector<char> empty_surface;
@@ -298,6 +390,26 @@ extern "C" int manifold_fluids_world_set_gravity(void *world, const float *gravi
     });
 }
 
+extern "C" int manifold_fluids_world_set_force_fields(void *world, const float *values,
+                                                        size_t value_count, uint32_t width,
+                                                        uint32_t height, uint32_t depth,
+                                                        int enabled) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (enabled == 0) {
+            native->force_field->disable();
+            native->simulation->disableForceFields();
+            return;
+        }
+        native->force_field->setValues(values, value_count, width, height, depth);
+        native->force_field->enable();
+        native->simulation->enableForceFields();
+    });
+}
+
 extern "C" int manifold_fluids_world_set_surface_options(void *world,
                                                              double marker_particle_scale,
                                                              double smoothing,
@@ -447,9 +559,22 @@ extern "C" int manifold_fluids_world_set_obstacle(void *world, const float *prev
                 static_cast<int>(native->ksize), native->cell_size);
         }
         native->obstacle->updateMeshAnimated(make_box(previous), make_box(current), make_box(next));
+        native->obstacle->enable();
         if (!native->obstacle_added) {
             native->simulation->addMeshObstacle(native->obstacle.get());
             native->obstacle_added = true;
+        }
+    });
+}
+
+extern "C" int manifold_fluids_world_clear_obstacle(void *world) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (native->obstacle) {
+            native->obstacle->disable();
         }
     });
 }
@@ -476,6 +601,48 @@ extern "C" int manifold_fluids_world_step(void *world, double dt,
                 std::to_string(stats.viscositySolverError));
         }
         write_stats(stats, stats_out);
+    });
+}
+
+extern "C" int manifold_fluids_world_marker_motion(void *world, float *position_out,
+                                                     float *velocity_out) {
+    return guarded([&] {
+        if (world == nullptr || position_out == nullptr || velocity_out == nullptr) {
+            throw std::invalid_argument("marker motion output pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        const size_t count = native->simulation->getNumMarkerParticles();
+        if (count == 0) {
+            throw std::invalid_argument("FLIP Fluids has no marker particles");
+        }
+        if (count > 4096) {
+            throw std::invalid_argument("marker motion diagnostic particle bound exceeded");
+        }
+        std::vector<vmath::vec3> positions(count);
+        std::vector<vmath::vec3> velocities(count);
+        native->simulation->getMarkerParticlePositionDataRange(
+            0, count, reinterpret_cast<char *>(positions.data()));
+        native->simulation->getMarkerParticleVelocityDataRange(
+            0, count, reinterpret_cast<char *>(velocities.data()));
+        vmath::vec3 mean_position(0.0f, 0.0f, 0.0f);
+        vmath::vec3 mean_velocity(0.0f, 0.0f, 0.0f);
+        for (size_t index = 0; index < count; ++index) {
+            mean_position += positions[index];
+            mean_velocity += velocities[index];
+        }
+        mean_position /= static_cast<float>(count);
+        mean_velocity /= static_cast<float>(count);
+        position_out[0] = mean_position.x;
+        position_out[1] = mean_position.y;
+        position_out[2] = mean_position.z;
+        velocity_out[0] = mean_velocity.x;
+        velocity_out[1] = mean_velocity.y;
+        velocity_out[2] = mean_velocity.z;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(position_out[axis]) || !std::isfinite(velocity_out[axis])) {
+                throw std::runtime_error("FLIP Fluids returned non-finite marker motion");
+            }
+        }
     });
 }
 

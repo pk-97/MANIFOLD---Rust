@@ -7,6 +7,7 @@
 //! not hold that global lock.
 
 use manifold_foundation::Seconds;
+use manifold_physics::FieldInput;
 use std::cell::Cell;
 use std::ffi::CStr;
 use std::fmt;
@@ -289,6 +290,15 @@ unsafe extern "C" {
         velocity: *const f32,
     ) -> i32;
     fn manifold_fluids_world_set_gravity(world: *mut std::ffi::c_void, gravity: *const f32) -> i32;
+    fn manifold_fluids_world_set_force_fields(
+        world: *mut std::ffi::c_void,
+        values: *const f32,
+        value_count: usize,
+        width: u32,
+        height: u32,
+        depth: u32,
+        enabled: i32,
+    ) -> i32;
     fn manifold_fluids_world_set_surface_options(
         world: *mut std::ffi::c_void,
         particle_scale: f64,
@@ -332,10 +342,17 @@ unsafe extern "C" {
         next_min: *const f32,
         next_max: *const f32,
     ) -> i32;
+    fn manifold_fluids_world_clear_obstacle(world: *mut std::ffi::c_void) -> i32;
     fn manifold_fluids_world_step(
         world: *mut std::ffi::c_void,
         dt: f64,
         stats_out: *mut NativeFrameStats,
+    ) -> i32;
+    #[cfg(test)]
+    fn manifold_fluids_world_marker_motion(
+        world: *mut std::ffi::c_void,
+        position_out: *mut f32,
+        velocity_out: *mut f32,
     ) -> i32;
     fn manifold_fluids_world_surface(
         world: *mut std::ffi::c_void,
@@ -358,6 +375,9 @@ unsafe extern "C" {
 /// An exclusively owned native FLIP simulation world.
 pub struct FluidWorld {
     native: *mut std::ffi::c_void,
+    field_dimensions: [u32; 3],
+    field_cell_size: f32,
+    field_scratch: Vec<f32>,
     vertex_scratch: Vec<[f32; 3]>,
     triangle_scratch: Vec<[u32; 3]>,
     normal_scratch: Vec<[f32; 3]>,
@@ -391,6 +411,13 @@ impl FluidWorld {
         }
         Ok(Self {
             native,
+            field_dimensions: [
+                config.cells[0] + 1,
+                config.cells[1] + 1,
+                config.cells[2] + 1,
+            ],
+            field_cell_size: config.cell_size as f32,
+            field_scratch: Vec::new(),
             vertex_scratch: Vec::new(),
             triangle_scratch: Vec::new(),
             normal_scratch: Vec::new(),
@@ -474,6 +501,29 @@ impl FluidWorld {
         native_result(ok, "setting gravity")
     }
 
+    /// Reserve the reusable native field sample grid before runtime ticks.
+    pub fn prepare_fields(&mut self) -> Result<(), FluidError> {
+        let grid_count = self
+            .field_dimensions
+            .iter()
+            .try_fold(1usize, |count, &dimension| {
+                count.checked_mul(dimension as usize)
+            })
+            .ok_or_else(|| FluidError::input("field grid dimensions overflow"))?;
+        let value_count = grid_count
+            .checked_mul(3)
+            .ok_or_else(|| FluidError::input("field grid value count overflow"))?;
+        if self.field_scratch.len() < value_count {
+            self.field_scratch
+                .try_reserve_exact(value_count - self.field_scratch.len())
+                .map_err(|error| {
+                    FluidError::input(format!("field grid allocation failed: {error}"))
+                })?;
+            self.field_scratch.resize(value_count, 0.0);
+        }
+        Ok(())
+    }
+
     pub fn set_emitter(
         &mut self,
         bounds: Bounds,
@@ -517,11 +567,109 @@ impl FluidWorld {
         native_result(ok, "setting the fluid obstacle")
     }
 
+    pub fn clear_obstacle(&mut self) -> Result<(), FluidError> {
+        let ok = unsafe { manifold_fluids_world_clear_obstacle(self.native) };
+        native_result(ok, "clearing the fluid obstacle")
+    }
+
     pub fn step(&mut self, dt: Seconds) -> Result<FrameStats, FluidError> {
+        self.step_with_fields(dt, &[])
+    }
+
+    pub fn step_with_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<FrameStats, FluidError> {
         if !(dt.0.is_finite() && dt.0 > 0.0 && dt.0 <= 1.0 / 30.0) {
             return Err(FluidError::input(
                 "dt must be finite and in (0, 1/30] seconds",
             ));
+        }
+        if !fields.is_empty() {
+            if !self.field_cell_size.is_finite() || self.field_cell_size <= 0.0 {
+                return Err(FluidError::input(
+                    "field grid cell size must fit finite f32 coordinates",
+                ));
+            }
+            let dt = dt.0 as f32;
+            for field in fields {
+                if !field.acceleration.is_finite() || !field.delta_velocity.is_finite() {
+                    return Err(FluidError::input(
+                        "field acceleration and delta_velocity must be finite",
+                    ));
+                }
+                let coefficient = field.acceleration + field.delta_velocity / dt;
+                if !coefficient.is_finite() {
+                    return Err(FluidError::input(
+                        "field acceleration and delta_velocity produce a non-finite scale",
+                    ));
+                }
+            }
+            self.prepare_fields()?;
+            self.field_scratch.fill(0.0);
+            let [width, height, depth] = self.field_dimensions;
+            for k in 0..depth {
+                for j in 0..height {
+                    for i in 0..width {
+                        let position = [
+                            i as f32 * self.field_cell_size,
+                            j as f32 * self.field_cell_size,
+                            k as f32 * self.field_cell_size,
+                        ];
+                        if position.iter().any(|value| !value.is_finite()) {
+                            return Err(FluidError::input("field grid position is not finite"));
+                        }
+                        let base = (i as usize
+                            + width as usize * (j as usize + height as usize * k as usize))
+                            * 3;
+                        for field in fields {
+                            let sample = field.field.sample(position);
+                            if sample.iter().any(|value| !value.is_finite()) {
+                                return Err(FluidError::input(
+                                    "field sample must return finite components",
+                                ));
+                            }
+                            let coefficient = field.acceleration + field.delta_velocity / dt;
+                            for (axis, value) in sample.into_iter().enumerate() {
+                                let contribution = value * coefficient;
+                                let combined = self.field_scratch[base + axis] + contribution;
+                                if !contribution.is_finite() || !combined.is_finite() {
+                                    return Err(FluidError::input(
+                                        "combined field acceleration must be finite",
+                                    ));
+                                }
+                                self.field_scratch[base + axis] = combined;
+                            }
+                        }
+                    }
+                }
+            }
+            let ok = unsafe {
+                manifold_fluids_world_set_force_fields(
+                    self.native,
+                    self.field_scratch.as_ptr(),
+                    self.field_scratch.len(),
+                    width,
+                    height,
+                    depth,
+                    1,
+                )
+            };
+            native_result(ok, "setting force fields")?;
+        } else {
+            let ok = unsafe {
+                manifold_fluids_world_set_force_fields(
+                    self.native,
+                    std::ptr::null(),
+                    0,
+                    self.field_dimensions[0],
+                    self.field_dimensions[1],
+                    self.field_dimensions[2],
+                    0,
+                )
+            };
+            native_result(ok, "clearing force fields")?;
         }
         let mut native_stats = NativeFrameStats::default();
         let ok = unsafe { manifold_fluids_world_step(self.native, dt.0, &mut native_stats) };
@@ -821,10 +969,321 @@ fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+    use manifold_physics::{FieldInput, UniformField, VectorField};
+
     use super::{
         Bounds, Config, LiquidOptions, Seconds, SurfaceOptions, SurfaceVertex, TimeStepOptions,
         WhitewaterKind, WhitewaterOptions, decode_surface,
     };
+
+    fn field_world(substeps: u32) -> super::FluidWorld {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [12, 12, 12],
+            cell_size: 0.25,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native field world");
+        world
+            .set_time_step_options(TimeStepOptions {
+                min_substeps: substeps,
+                max_substeps: substeps,
+                cfl: 5,
+                adaptive_obstacles: false,
+            })
+            .expect("fixed field substeps");
+        world.set_gravity([0.0, 0.0, 0.0]).expect("zero gravity");
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.75, 0.75, 0.75],
+                    max: [2.25, 1.75, 2.25],
+                },
+                [0.0, 0.0, 0.0],
+            )
+            .expect("fluid box");
+        world.prepare_fields().expect("field storage");
+        world.step(Seconds(1.0 / 60.0)).expect("warm field world");
+        world
+    }
+
+    fn marker_velocity(world: &mut super::FluidWorld) -> [f32; 3] {
+        let mut position = [0.0; 3];
+        let mut velocity = [0.0; 3];
+        let ok = unsafe {
+            super::manifold_fluids_world_marker_motion(
+                world.native,
+                position.as_mut_ptr(),
+                velocity.as_mut_ptr(),
+            )
+        };
+        super::native_result(ok, "reading marker motion").expect("marker motion");
+        velocity
+    }
+
+    struct NonFiniteField;
+
+    impl VectorField for NonFiniteField {
+        fn sample(&self, _position: [f32; 3]) -> [f32; 3] {
+            [f32::NAN, 0.0, 0.0]
+        }
+    }
+
+    #[test]
+    fn scene_physics_uniform_field_changes_native_marker_velocity() {
+        let mut world = field_world(1);
+        let field = UniformField::new([2.0, 0.0, 0.0]).expect("uniform field");
+        let before = marker_velocity(&mut world);
+        world
+            .step_with_fields(
+                Seconds(1.0 / 60.0),
+                &[FieldInput {
+                    field: &field,
+                    acceleration: 1.0,
+                    delta_velocity: 0.0,
+                }],
+            )
+            .expect("uniform field step");
+        let after = marker_velocity(&mut world);
+        assert!(
+            after[0] > before[0] + 0.01,
+            "field did not accelerate marker: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn scene_physics_delta_velocity_applies_once_across_substeps_and_empty_tick() {
+        fn impulse(substeps: u32) -> (f32, f32) {
+            let mut world = field_world(substeps);
+            let field = UniformField::new([1.0, 0.0, 0.0]).expect("uniform field");
+            world
+                .step_with_fields(
+                    Seconds(1.0 / 60.0),
+                    &[FieldInput {
+                        field: &field,
+                        acceleration: 0.0,
+                        delta_velocity: 1.0,
+                    }],
+                )
+                .expect("impulse step");
+            let once = marker_velocity(&mut world)[0];
+            world.step(Seconds(1.0 / 60.0)).expect("empty step");
+            (once, marker_velocity(&mut world)[0])
+        }
+
+        fn gravity_reference(substeps: u32) -> (f32, f32) {
+            let mut world = field_world(substeps);
+            world
+                .set_gravity([60.0, 0.0, 0.0])
+                .expect("reference gravity");
+            world
+                .step(Seconds(1.0 / 60.0))
+                .expect("reference gravity step");
+            let once = marker_velocity(&mut world)[0];
+            world
+                .set_gravity([0.0; 3])
+                .expect("clear reference gravity");
+            world
+                .step(Seconds(1.0 / 60.0))
+                .expect("reference empty step");
+            (once, marker_velocity(&mut world)[0])
+        }
+
+        let (one_substep, one_after_empty) = impulse(1);
+        let (four_substeps, four_after_empty) = impulse(4);
+        let (one_gravity, one_gravity_after_empty) = gravity_reference(1);
+        let (four_gravity, four_gravity_after_empty) = gravity_reference(4);
+        eprintln!(
+            "impulse response: 1={one_substep:?}/{one_after_empty:?}, \
+             4={four_substeps:?}/{four_after_empty:?}; \
+             gravity reference: 1={one_gravity:?}/{one_gravity_after_empty:?}, \
+             4={four_gravity:?}/{four_gravity_after_empty:?}"
+        );
+        // Pressure projection and PIC blending attenuate this coarse blob's
+        // particle momentum. Compare with the native force path at the same
+        // substep count, rather than expecting ballistic particle velocities.
+        for (impulse, after, gravity, gravity_after) in [
+            (
+                one_substep,
+                one_after_empty,
+                one_gravity,
+                one_gravity_after_empty,
+            ),
+            (
+                four_substeps,
+                four_after_empty,
+                four_gravity,
+                four_gravity_after_empty,
+            ),
+        ] {
+            assert!(
+                (0.5..1.1).contains(&gravity),
+                "reference must have a measurable unit impulse"
+            );
+            assert!(
+                (impulse - gravity).abs() < 1e-4,
+                "impulse must match native integrated force"
+            );
+            assert!(
+                (after - gravity_after).abs() < 1e-4,
+                "empty tick must clear the impulse"
+            );
+        }
+        assert!((one_substep - four_substeps).abs() < 0.1);
+        assert!((one_after_empty - one_substep).abs() < 0.1);
+        assert!((four_after_empty - four_substeps).abs() < 0.1);
+    }
+
+    #[test]
+    fn scene_physics_uniform_field_matches_native_gravity() {
+        let mut gravity_world = field_world(1);
+        gravity_world
+            .set_gravity([0.0, -9.81, 0.0])
+            .expect("gravity");
+        gravity_world
+            .step(Seconds(1.0 / 60.0))
+            .expect("gravity step");
+        let gravity_velocity = marker_velocity(&mut gravity_world);
+
+        let mut field_world = field_world(1);
+        let field = UniformField::new([0.0, -1.0, 0.0]).expect("uniform field");
+        field_world
+            .step_with_fields(
+                Seconds(1.0 / 60.0),
+                &[FieldInput {
+                    field: &field,
+                    acceleration: 9.81,
+                    delta_velocity: 0.0,
+                }],
+            )
+            .expect("uniform gravity field step");
+        let field_velocity = marker_velocity(&mut field_world);
+        for axis in 0..3 {
+            assert!(
+                (gravity_velocity[axis] - field_velocity[axis]).abs() < 0.1,
+                "gravity mismatch on axis {axis}: {gravity_velocity:?} vs {field_velocity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scene_physics_zero_field_matches_gravity_only_baseline() {
+        let mut baseline = field_world(1);
+        baseline.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+        baseline.step(Seconds(1.0 / 60.0)).expect("baseline step");
+        let baseline_velocity = marker_velocity(&mut baseline);
+
+        let mut zero_field = field_world(1);
+        zero_field.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+        let field = UniformField::new([0.0; 3]).expect("zero field");
+        zero_field
+            .step_with_fields(
+                Seconds(1.0 / 60.0),
+                &[FieldInput {
+                    field: &field,
+                    acceleration: 1.0,
+                    delta_velocity: 0.0,
+                }],
+            )
+            .expect("zero field step");
+        let zero_velocity = marker_velocity(&mut zero_field);
+        for axis in 0..3 {
+            assert!((baseline_velocity[axis] - zero_velocity[axis]).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn scene_physics_nonfinite_field_leaves_native_state_unstepped() {
+        let mut world = field_world(1);
+        let before = marker_velocity(&mut world);
+        let field = NonFiniteField;
+        assert!(
+            world
+                .step_with_fields(
+                    Seconds(1.0 / 60.0),
+                    &[FieldInput {
+                        field: &field,
+                        acceleration: 1.0,
+                        delta_velocity: 0.0,
+                    }],
+                )
+                .is_err()
+        );
+        let after = marker_velocity(&mut world);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn scene_physics_nonfinite_field_scalars_are_rejected() {
+        let mut world = field_world(1);
+        let before = marker_velocity(&mut world);
+        let field = UniformField::new([1.0, 0.0, 0.0]).expect("uniform field");
+        for (acceleration, delta_velocity) in [(f32::NAN, 0.0), (0.0, f32::INFINITY)] {
+            assert!(
+                world
+                    .step_with_fields(
+                        Seconds(1.0 / 60.0),
+                        &[FieldInput {
+                            field: &field,
+                            acceleration,
+                            delta_velocity,
+                        }],
+                    )
+                    .is_err()
+            );
+            assert_eq!(before, marker_velocity(&mut world));
+        }
+    }
+
+    #[test]
+    fn scene_physics_field_storage_reuses_scratch_capacity() {
+        let mut world = field_world(1);
+        let field = UniformField::new([0.0, 0.0, 0.0]).expect("uniform field");
+        let capacity = world.field_scratch.capacity();
+        for _ in 0..3 {
+            world
+                .step_with_fields(
+                    Seconds(1.0 / 60.0),
+                    &[FieldInput {
+                        field: &field,
+                        acceleration: 1.0,
+                        delta_velocity: 0.0,
+                    }],
+                )
+                .expect("reused field step");
+            assert_eq!(capacity, world.field_scratch.capacity());
+        }
+    }
+
+    #[test]
+    fn scene_physics_obstacle_can_clear_and_reuse_native_object() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [8, 8, 8],
+            cell_size: 0.5,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native obstacle world");
+        let obstacle = Bounds {
+            min: [1.0, 1.0, 1.0],
+            max: [2.0, 2.0, 2.0],
+        };
+        world.clear_obstacle().expect("clear before creation");
+        world
+            .set_obstacle(obstacle, obstacle, obstacle)
+            .expect("set obstacle");
+        world.step(Seconds(1.0 / 60.0)).expect("obstacle step");
+        world.clear_obstacle().expect("clear obstacle");
+        world
+            .step(Seconds(1.0 / 60.0))
+            .expect("cleared obstacle step");
+        world
+            .set_obstacle(obstacle, obstacle, obstacle)
+            .expect("reuse obstacle");
+        world
+            .step(Seconds(1.0 / 60.0))
+            .expect("reused obstacle step");
+    }
 
     fn bobj(vertices: &[[f32; 3]], triangles: &[[i32; 3]]) -> Vec<u8> {
         let mut bytes = Vec::new();

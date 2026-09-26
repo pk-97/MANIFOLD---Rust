@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 manifold-foundation = { path = "../manifold-foundation" }
+manifold-physics = { path = "../manifold-physics" }
 
 [build-dependencies]
 cc = "1"

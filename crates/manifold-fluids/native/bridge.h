@@ -29,6 +29,9 @@ void manifold_fluids_world_destroy(void *world);
 int manifold_fluids_world_add_fluid_box(void *world, const float *min, const float *max,
                                         const float *velocity);
 int manifold_fluids_world_set_gravity(void *world, const float *gravity);
+int manifold_fluids_world_set_force_fields(void *world, const float *values, size_t value_count,
+                                            uint32_t width, uint32_t height, uint32_t depth,
+                                            int enabled);
 int manifold_fluids_world_set_surface_options(void *world, double marker_particle_scale,
                                                double smoothing, uint32_t smoothing_iterations);
 int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
@@ -46,7 +49,9 @@ int manifold_fluids_world_set_obstacle(void *world, const float *previous_min,
                                        const float *previous_max, const float *current_min,
                                        const float *current_max, const float *next_min,
                                        const float *next_max);
+int manifold_fluids_world_clear_obstacle(void *world);
 int manifold_fluids_world_step(void *world, double dt, ManifoldFluidsFrameStats *stats_out);
+int manifold_fluids_world_marker_motion(void *world, float *position_out, float *velocity_out);
 int manifold_fluids_world_surface(void *world, const uint8_t **data_out, size_t *len_out);
 int manifold_fluids_world_whitewater_count(void *world, size_t *count_out);
 int manifold_fluids_world_whitewater(void *world, ManifoldFluidsWhitewaterParticle *particles,
