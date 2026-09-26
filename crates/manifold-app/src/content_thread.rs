@@ -1443,6 +1443,7 @@ impl ContentThread {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            export_run_finished: false,
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
             graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),

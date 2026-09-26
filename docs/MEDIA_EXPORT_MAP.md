@@ -62,9 +62,15 @@ App periphery (`crates/manifold-app/src/`):
 1. **Start (UI thread):** menu `ExportVideo` → `start_export` → native save dialog →
    `ExportConfig` from `ProjectSettings` (`output_width/height`, `frame_rate`,
    `export_hdr`) + `Timeline::export_in/out_beat` → `ContentCommand::StartExport`.
+   A centered export modal opens immediately with the output filename, status,
+   progress bar and Cancel export button. It captures background input; export
+   progress no longer occupies the header or competes with the warmup overlay.
 2. **Content thread enters export mode** — `run_export` *replaces* the normal per-frame
    loop until done. UI keeps rendering; it receives `ContentState` snapshots with
-   `export_progress`/`export_status` every 10 frames (the BUG-083 (video-export-has-no-progress-display) fields).
+   `export_progress`/`export_status` every 10 frames and at preparation/finalization
+   boundaries. The UI consumes these sparse notifications without replacing its
+   full playback snapshot. Per-file results show a toast; `export_run_finished`
+   closes the modal only after the entire batch and playback restoration.
 3. **Range & audio:** beat range falls back to the content range when unset, errors if
    start ≥ end. Audio mixdown is rendered up front to a temp WAV via
    `manifold_playback::audio_mixdown::render_export_audio` — the `audio_path` in the
@@ -82,12 +88,17 @@ App periphery (`crates/manifold-app/src/`):
    IOSurface, no staging copy** on this path. The native side copies into a
    CVPixelBuffer-backed texture via a compute dispatch and `waitUntilCompleted` per
    frame, then appends with `CMTime(frame_index, fps_rounded_to_int)`.
-7. **Cancellation:** the loop polls `cmd_rx` for `ContentCommand::CancelExport` — but
-   **nothing in the UI sends it** (`content_command.rs` marks it `#[allow(dead_code)]`,
-   "no UI producer yet"). A long export is uninterruptible today short of quitting.
+7. **Cancellation:** Cancel export or Escape sends `ContentCommand::CancelExport`
+   once. The modal stays open with a disabled cancellation button until cleanup
+   and playback restoration finish. The loop polls at frame boundaries and
+   around finalization, so a
+   blocking preparation or finalization phase must return before cancellation
+   can be observed. A request during finalization removes that file once the
+   blocking call returns. Cancelling a section stops the remaining sections;
+   completed files remain, and the current partial output is removed.
 8. **Finalize:** encoder writes the MP4 trailer (`finishWritingWithCompletionHandler`,
-   30 s semaphore timeout). With audio: ffmpeg is resolved *now* (not at export start)
-   and muxes WAV + video-only temp into the final path; on success the temp is deleted.
+   30 s semaphore timeout). With audio: ffmpeg, resolved before rendering starts,
+   muxes WAV + video-only temp into the final path; on success the temp is deleted.
    On cancel/error the partial output and temp are removed; the mixdown WAV is always
    removed; transport state (position/playing) is restored regardless of outcome.
 
@@ -244,8 +255,8 @@ open items):
    gate but AVFoundation generally can't open them; failure surfaced as a per-clip
    decode error later instead of at import. Fixed: the probe-failure path now rejects the
    import with a visible codec-not-supported message via the existing import-error dialog.
-8. No cancel-export UI (self-documented dead `CancelExport` variant) — a multi-minute
-   render is uninterruptible; UX gap, release-relevant.
+8. **Fixed:** export progress lives in a modal with Cancel export and Escape.
+   Cancellation is cooperative at frame boundaries, as described in section 3.
 9. Loop restart seeks to file time 0.0, not the clip in-point (section 5) — masked if engine
    drift-correction re-seeks; needs a runtime check with a trimmed looping clip.
 10. `MetalEncoder_EndSession` returns OK if the 30 s finalize semaphore *times out*

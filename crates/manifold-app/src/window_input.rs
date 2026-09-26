@@ -226,6 +226,12 @@ impl Application {
         is_graph_editor: bool,
         position: PhysicalPosition<f64>,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if is_primary {
+                self.primary_cursor_moved(window_id, position);
+            }
+            return;
+        }
         // An active text session's drag claims pointer motion ahead of
         // everything else (P5b) — but only actually consumes it while a
         // drag is armed (`text_input_pointer_move` returns `false`
@@ -250,6 +256,12 @@ impl Application {
         button: MouseButton,
         state: ElementState,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if is_primary {
+                self.primary_mouse_input(window_id, is_primary, button, state);
+            }
+            return;
+        }
         // An active text session claims the press/release ahead of normal
         // dispatch (P5b/D16): inside the field it places the caret/word and
         // consumes the event; outside it commits first and then falls
@@ -293,6 +305,9 @@ impl Application {
         is_graph_editor: bool,
         delta: MouseScrollDelta,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            return;
+        }
         if is_graph_editor {
             // The editor's zoom is self-contained; the primary scroll block
             // below is `is_primary`-gated and would never run for the editor
@@ -2378,6 +2393,15 @@ impl Application {
         is_graph_editor: bool,
         logical_key: Key,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if matches!(logical_key, Key::Named(NamedKey::Escape))
+                && self.ws.ui_root.export_progress.request_cancel()
+            {
+                self.send_content_cmd(crate::content_command::ContentCommand::CancelExport);
+                self.ws.ui_root.overlay_dirty = true;
+            }
+            return;
+        }
         if is_primary && self.perform_handle_key(&logical_key) {
             return;
         }
