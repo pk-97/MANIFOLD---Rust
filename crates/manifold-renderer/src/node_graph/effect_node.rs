@@ -1122,6 +1122,13 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Current accepted setup state for native fluid-domain bounds. Nodes that
+    /// expose fluid-domain observations return `Some`; all other nodes return
+    /// `None`.
+    fn fluid_domain_snapshot(&self) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
+        None
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
         None

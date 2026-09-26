@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use crate::gpu_encoder::GpuEncoder;
@@ -60,12 +61,22 @@ fn hash_def(def: &EffectGraphDef) -> u64 {
     hasher.finish()
 }
 
+/// Hash the values actually consumed by bindings, without cloning the manifest.
+/// Base values and UI flags don't affect rendering until the effective changes.
+fn hash_params(params: &ParamManifest) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for param in params.iter() {
+        param.id().hash(&mut hasher);
+        param.value.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Persistent per-open-viewport state: an isolated `PresetRuntime` (its own
 /// `Graph`/`ExecutionPlan`/`Executor`/`MetalBackend`, per D9), a navigation
-/// camera, and a dirty flag gating re-render to "camera moved or the
-/// authored graph changed" — never per display tick (the whole point of
-/// this struct existing instead of calling `render_viewport_frame` per
-/// frame).
+/// camera, and a cache refreshed for camera, graph or effective control
+/// changes and pending initialization. Time alone doesn't render a new frame.
 pub struct ViewportSession {
     runtime: PresetRuntime,
     device: Arc<GpuDevice>,
@@ -77,11 +88,12 @@ pub struct ViewportSession {
     /// subsequent camera move so navigation never re-walks the node map.
     camera_instance: NodeInstanceId,
     def_hash: u64,
+    param_values_hash: Option<u64>,
     width: u32,
     height: u32,
     /// `true` when `cached_rgba` is stale w.r.t. `camera`/the built graph —
     /// set by every camera-mutating method and by [`Self::sync_def`] on a
-    /// real def change; cleared by [`Self::render_if_dirty`]. Starts `true`
+    /// real def change; cleared by [`Self::refresh`]. Starts `true`
     /// so the viewport's first frame always renders.
     dirty: bool,
     cached_rgba: Vec<u8>,
@@ -122,6 +134,7 @@ impl ViewportSession {
             render_scene_node: render_scene_node.clone(),
             camera_instance,
             def_hash: hash_def(def),
+            param_values_hash: None,
             width,
             height,
             dirty: true,
@@ -204,6 +217,7 @@ impl ViewportSession {
         self.target = target;
         self.camera_instance = camera_instance;
         self.def_hash = h;
+        self.param_values_hash = None;
         self.dirty = true;
         Ok(())
     }
@@ -293,7 +307,19 @@ impl ViewportSession {
         light_positions: &[[f32; 3]],
         gizmo_lines: &[crate::node_graph::viewport_overlay::WorldLine],
     ) -> Vec<u8> {
-        if self.dirty {
+        self.refresh(frame_ctx, &ParamManifest::default());
+        self.composite_overlays(overlay_cfg, show_camera, light_positions, gizmo_lines)
+    }
+
+    /// Refresh the cached scene before reading runtime observations. Effective
+    /// controls use the normal binding path and preserve the runtime/camera.
+    /// Pending initialization keeps pumping until an asynchronous result lands.
+    pub fn refresh(&mut self, frame_ctx: &PresetContext, params: &ParamManifest) {
+        let params_hash = hash_params(params);
+        if self.param_values_hash != Some(params_hash) {
+            self.dirty = true;
+        }
+        if self.dirty || self.runtime.warmup_pending() {
             let mut enc = self.device.create_encoder("viewport-session-render-enc");
             {
                 let mut gpu = GpuEncoder::new(&mut enc, &self.device);
@@ -301,14 +327,33 @@ impl ViewportSession {
                     &mut gpu,
                     &self.target.texture,
                     frame_ctx,
-                    &manifold_core::params::ParamManifest::default(),
+                    params,
                 );
             }
             enc.commit_and_wait_completed();
             self.cached_rgba = readback_tonemapped_rgba8(&self.device, &self.target.texture, self.width, self.height);
             self.dirty = false;
+            self.param_values_hash = Some(params_hash);
         }
+    }
 
+    /// Append bounds from the same runtime that produced the cached image.
+    pub fn write_fluid_domains(
+        &self,
+        output: &mut Vec<(NodeId, crate::node_graph::fluid::FluidDomainSnapshot)>,
+    ) {
+        self.runtime.write_fluid_domains_watched(output);
+    }
+
+    /// Draw editor overlays without evaluating the graph again. This lets the
+    /// caller read accepted domains after refresh and overlay that exact state.
+    pub fn composite_overlays(
+        &self,
+        overlay_cfg: &ViewportOverlayConfig,
+        show_camera: Option<(&crate::node_graph::camera::Camera, f32)>,
+        light_positions: &[[f32; 3]],
+        gizmo_lines: &[crate::node_graph::viewport_overlay::WorldLine],
+    ) -> Vec<u8> {
         let mut out = self.cached_rgba.clone();
         let editor_cam = self.camera.to_camera();
         let mut world_lines = build_overlay_lines(overlay_cfg, show_camera, light_positions);

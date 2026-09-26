@@ -384,6 +384,13 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
+    /// Current accepted setup state for native fluid-domain bounds.
+    fn fluid_domain_snapshot(
+        &self,
+    ) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
+        None
+    }
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -721,6 +728,11 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn warmup_pending(&self) -> bool {
         Primitive::warmup_pending(self)
+    }
+    fn fluid_domain_snapshot(
+        &self,
+    ) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
+        Primitive::fluid_domain_snapshot(self)
     }
     fn fused_gather_sampler_mode(
         &self,

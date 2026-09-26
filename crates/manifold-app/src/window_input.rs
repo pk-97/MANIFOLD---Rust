@@ -1155,10 +1155,19 @@ impl Application {
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
         };
+        if !self.graph_editor.as_ref().and_then(|ed| ed.viewport_target.as_ref())
+            .is_some_and(|(target, node)| Some(target) == self.watched_graph_target.as_ref()
+                && Some(node) == self.last_preview_node.as_ref())
+        {
+            return false;
+        }
         let Some(def) = self.viewport_def_cloned() else { return false };
-        let Some(scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
+        let Some(mut scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
             return false;
         };
+        if let Some(ed) = self.graph_editor.as_ref() {
+            crate::fluid_domain_edit::apply_runtime_domains(&mut scene, &def, &ed.viewport_fluid_domains);
+        }
         let (w, h, cam, mode, selected) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
             let Some(session) = ed.viewport_session.as_ref() else { return false };

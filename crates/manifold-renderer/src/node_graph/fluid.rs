@@ -27,6 +27,21 @@ pub const TICK: f64 = 1.0 / 60.0;
 const HISTORY_CAPACITY: usize = 8192;
 const BATCH: usize = 4;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FluidDomainState {
+    Initializing,
+    Ready,
+    PendingInputs,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FluidDomainSnapshot {
+    pub epoch: u64,
+    pub state: FluidDomainState,
+    pub accepted_layout: Option<FluidDomainLayout>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FluidSettings {
     pub resolution: u32,
@@ -613,6 +628,29 @@ impl FluidRuntime {
     }
     pub fn warmup_pending(&self) -> bool {
         self.busy && !self.initialized && self.failure.is_none()
+    }
+
+    pub fn domain_snapshot(&self) -> FluidDomainSnapshot {
+        let state = if self.failure.is_some() {
+            FluidDomainState::Failed
+        } else if self.initialized && self.settings.is_some() {
+            FluidDomainState::Ready
+        } else {
+            FluidDomainState::Initializing
+        };
+        let accepted_layout = if state == FluidDomainState::Ready {
+            self.settings
+                .expect("ready fluid runtime has settings")
+                .domain_layout()
+                .ok()
+        } else {
+            None
+        };
+        FluidDomainSnapshot {
+            epoch: self.epoch,
+            state,
+            accepted_layout,
+        }
     }
 
     /// Historical graph evaluations call only observe; native stepping and
@@ -1574,6 +1612,114 @@ mod tests {
         assert!(runtime.spare.is_some());
         assert!(runtime.spare_whitewater.is_some());
         assert!(runtime.spare_history.is_some());
+    }
+
+    #[test]
+    fn fluid_domain_snapshot_waits_for_current_accepted_reply() {
+        let mut runtime = FluidRuntime::default();
+        assert_eq!(
+            runtime.domain_snapshot(),
+            FluidDomainSnapshot {
+                epoch: 0,
+                state: FluidDomainState::Initializing,
+                accepted_layout: None,
+            }
+        );
+        runtime
+            .observe(
+                FluidSettings::default(),
+                FluidControls::default(),
+                Seconds(0.0),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        let epoch = runtime.epoch;
+        runtime
+            .accept(Reply {
+                epoch: epoch.wrapping_add(1),
+                tick: 1,
+                history: Vec::new(),
+                role_history: Vec::new(),
+                vertices: Vec::new(),
+                whitewater: WhitewaterFrame::default(),
+                obstacle: Transform::default(),
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert!(runtime.domain_snapshot().accepted_layout.is_none());
+
+        runtime
+            .accept(Reply {
+                epoch,
+                tick: 1,
+                history: Vec::new(),
+                role_history: Vec::new(),
+                vertices: Vec::new(),
+                whitewater: WhitewaterFrame::default(),
+                obstacle: Transform::default(),
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        let snapshot = runtime.domain_snapshot();
+        assert_eq!(snapshot.epoch, epoch);
+        assert_eq!(snapshot.state, FluidDomainState::Ready);
+        assert_eq!(snapshot.accepted_layout, Some(FluidSettings::default().domain_layout().unwrap()));
+
+        runtime.clear();
+        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert!(runtime.domain_snapshot().accepted_layout.is_none());
+        runtime
+            .accept(Reply {
+                epoch,
+                tick: 2,
+                history: Vec::new(),
+                role_history: Vec::new(),
+                vertices: Vec::new(),
+                whitewater: WhitewaterFrame::default(),
+                obstacle: Transform::default(),
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
+        assert!(runtime.domain_snapshot().accepted_layout.is_none());
+    }
+
+    #[test]
+    fn fluid_domain_snapshot_reports_runtime_failure_and_recovers_after_reset() {
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .observe(
+                FluidSettings::default(),
+                FluidControls::default(),
+                Seconds(0.0),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        let epoch = runtime.epoch;
+        assert!(runtime
+            .accept(Reply {
+                epoch,
+                tick: 0,
+                history: Vec::new(),
+                role_history: Vec::new(),
+                vertices: Vec::new(),
+                whitewater: WhitewaterFrame::default(),
+                obstacle: Transform::default(),
+                stats: FrameStats::default(),
+                error: Some("native setup failed".into()),
+            })
+            .is_err());
+        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Failed);
+        assert!(runtime.domain_snapshot().accepted_layout.is_none());
+
+        runtime.clear();
+        assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Initializing);
     }
 
     #[test]

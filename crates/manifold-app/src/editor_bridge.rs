@@ -1390,8 +1390,8 @@ impl Application {
                 .is_some_and(|n| n.type_id == "node.render_scene")
         });
         let viewport_open = self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open);
-        let viewport_def = if viewport_is_scene_node && viewport_open {
-            self.viewport_def_cloned()
+        let mut viewport_def = if viewport_is_scene_node && viewport_open {
+            self.watched_def_cloned()
         } else {
             None
         };
@@ -1614,7 +1614,9 @@ impl Application {
                 "viewport_def is only Some when viewport_is_scene_node held, which requires last_preview_node",
             );
             let needs_open = match ws.viewport_session.as_ref() {
-                Some(s) => s.dimensions() != (viewport_tex_w, viewport_tex_h),
+                Some(s) => s.dimensions() != (viewport_tex_w, viewport_tex_h)
+                    || !ws.viewport_target.as_ref().is_some_and(|(target, node)|
+                        Some(target) == self.watched_graph_target.as_ref() && node == &render_scene_node),
                 None => true,
             };
             if needs_open {
@@ -1627,7 +1629,11 @@ impl Application {
                     viewport_tex_h,
                     &viewport_ctx,
                 ) {
-                    Ok(session) => ws.viewport_session = Some(session),
+                    Ok(session) => {
+                        ws.viewport_session = Some(session);
+                        ws.viewport_target = self.watched_graph_target.clone()
+                            .map(|target| (target, render_scene_node));
+                    }
                     Err(_e) => {
                         // no-silent-fallbacks: a failed splice (e.g. a nested
                         // render_scene node, the known P5 constraint above)
@@ -1647,27 +1653,43 @@ impl Application {
             ws.viewport_session = None;
             ws.viewport_pane = None;
         }
+        if ws.viewport_session.is_none() {
+            ws.viewport_target = None;
+        }
         ws.viewport_rect = ws
             .viewport_session
             .is_some()
             .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
 
-        // Render if dirty (camera moved this frame, or the session was just
-        // (re)built above — never per display tick: `render_if_dirty` is a
-        // no-op cache hit unless `ViewportSession`'s own `dirty` flag is set,
-        // which only navigation input (`viewport_input::apply`, below) or a
-        // def change sets) and upload into the UI-device-local pane the
-        // present pass blits below — same `TexturePane::local` + `upload_texture`
-        // pattern the audio spectrogram uses (`ui_frame.rs`).
+        // Refresh first, then read accepted bounds from that same runtime.
+        // Card changes use bindings, so they don't rebuild the preview graph.
+        ws.viewport_fluid_domains.clear();
         if let Some(session) = ws.viewport_session.as_mut() {
+            let empty_params = manifold_core::params::ParamManifest::default();
+            let params = self.watched_graph_target.as_ref()
+                .and_then(|target| self.local_project.graph_target_owner(target))
+                .map(|owner| &owner.params).unwrap_or(&empty_params);
+            session.refresh(&viewport_ctx, params);
+            session.write_fluid_domains(&mut ws.viewport_fluid_domains);
+            if let Some(def) = viewport_def.as_mut()
+                && let Some(target) = self.watched_graph_target.as_ref()
+                && crate::fluid_domain_edit::project_authored_params(def, &self.local_project, target).is_none()
+            {
+                viewport_def = None;
+            }
             let (w, h) = session.dimensions();
             // P6: gizmo handle geometry for the current selection/mode,
             // built against THIS frame's def and editor camera — see
             // `viewport_gizmo` and the `ws.viewport_selected_object`/
             // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
-            let scene = viewport_def
+            let mut scene = viewport_def
                 .as_ref()
                 .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def);
+            if let Some(scene) = scene.as_mut()
+                && let Some(def) = viewport_def.as_ref()
+            {
+                crate::fluid_domain_edit::apply_runtime_domains(scene, def, &ws.viewport_fluid_domains);
+            }
             let draft = ws.viewport_gizmo_drag.as_ref()
                 .and_then(|drag| drag.fluid_domain.as_ref())
                 .filter(|drag| Some(drag.object_node_id) == ws.viewport_selected_object
@@ -1698,8 +1720,7 @@ impl Application {
                 );
             }
             ws.viewport_overlay_lines.extend(gizmo_lines);
-            let rgba = session.render_if_dirty(
-                &viewport_ctx,
+            let rgba = session.composite_overlays(
                 &manifold_renderer::node_graph::ViewportOverlayConfig::default(),
                 None,
                 &[],

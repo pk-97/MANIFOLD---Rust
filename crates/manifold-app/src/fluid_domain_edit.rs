@@ -31,19 +31,27 @@ struct DomainBinding {
 /// Build the authored graph snapshot used by the viewport scene VM.
 ///
 /// A direct scalar card binding is projected into its node literal using the
-/// owner's base value. The binding default is projected alongside it so the
-/// viewport's empty runtime manifest cannot plant an older authored default
-/// back over the preview. The project itself is never mutated.
+/// owner's base value. Only editor geometry uses this projection; the viewport
+/// runtime receives the original graph and the owner's effective manifest.
 pub(crate) fn authored_def(project: &Project, target: &GraphTarget) -> Option<EffectGraphDef> {
     let mut def = crate::graph_target::resolve(project, target)?.clone();
+    project_authored_params(&mut def, project, target)?;
+    Some(def)
+}
+
+pub(crate) fn project_authored_params(
+    def: &mut EffectGraphDef,
+    project: &Project,
+    target: &GraphTarget,
+) -> Option<()> {
     if !matches!(target, GraphTarget::Generator(_)) {
-        return Some(def);
+        return Some(());
     }
     let Some(metadata) = def.preset_metadata.as_mut() else {
-        return Some(def);
+        return Some(());
     };
     let Some(owner) = project.graph_target_owner(target) else {
-        return Some(def);
+        return Some(());
     };
 
     for binding in &mut metadata.bindings {
@@ -94,7 +102,34 @@ pub(crate) fn authored_def(project: &Project, target: &GraphTarget) -> Option<Ef
         let node = find_node_by_stable_id_mut(&mut def.nodes, node_id)?;
         node.params.insert(param.clone(), value);
     }
-    Some(def)
+    Some(())
+}
+
+/// Match editor bounds/picking to the runtime that rendered the cached frame.
+/// Unaccepted domains have no bounds. A driven or changed layout remains
+/// selectable, but can't write through stale authored transform values.
+pub(crate) fn apply_runtime_domains(
+    scene: &mut SceneVm,
+    def: &EffectGraphDef,
+    domains: &[(NodeId, manifold_renderer::node_graph::fluid::FluidDomainSnapshot)],
+) {
+    use manifold_renderer::node_graph::fluid::FluidDomainState;
+    for object in &mut scene.objects {
+        let SceneObjectVm::Known(row) = object else { continue };
+        if row.fluid_node_ids.is_empty() {
+            continue;
+        }
+        let accepted = row.fluid_node_ids.iter()
+            .filter_map(|id| find_node_by_doc_id(&def.nodes, *id))
+            .find(|node| node.type_id == "node.fluid_surface")
+            .and_then(|node| domains.iter().find(|(id, _)| id == &node.node_id))
+            .and_then(|(_, snapshot)| (snapshot.state == FluidDomainState::Ready)
+                .then_some(snapshot.accepted_layout).flatten());
+        if accepted.is_none() || row.fluid_domain != accepted {
+            row.fluid_domain_transform = None;
+        }
+        row.fluid_domain = accepted;
+    }
 }
 
 fn scalar_to_serialized(convert: ParamConvert, value: f32) -> Option<SerializedParamValue> {
@@ -612,6 +647,69 @@ mod tests {
 
     const WATER_BASIN: &str =
         include_str!("../../manifold-renderer/assets/generator-presets/WaterBasin.json");
+
+    #[test]
+    fn runtime_domain_bounds_hide_unaccepted_layouts_and_lock_driven_edits() {
+        use manifold_renderer::node_graph::fluid::{FluidDomainSnapshot, FluidDomainState};
+        let (project, layer, object_id) = fluid_project(true);
+        let def = authored_def(&project, &GraphTarget::Generator(layer)).unwrap();
+        let authored = SceneVm::from_def(&def).unwrap();
+        let row = authored.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.object_node_id == object_id => Some(row),
+            _ => None,
+        }).unwrap();
+        let layout = row.fluid_domain.unwrap();
+        let fluid = row.fluid_node_ids.iter().filter_map(|id| find_node_by_doc_id(&def.nodes, *id))
+            .find(|node| node.type_id == "node.fluid_surface").unwrap().node_id.clone();
+
+        for state in [FluidDomainState::Initializing, FluidDomainState::PendingInputs, FluidDomainState::Failed] {
+            let mut scene = authored.clone();
+            // Even a malformed non-ready observation must not expose old bounds.
+            apply_runtime_domains(&mut scene, &def, &[(fluid.clone(), FluidDomainSnapshot {
+                epoch: 1, state, accepted_layout: Some(layout),
+            })]);
+            assert!(gizmo_target_for(&scene, object_id).is_none());
+            assert!(scene.objects.iter().all(|object| !matches!(object,
+                SceneObjectVm::Known(row) if row.object_node_id == object_id && row.fluid_domain.is_some())));
+        }
+        let mut missing = authored.clone();
+        apply_runtime_domains(&mut missing, &def, &[]);
+        assert!(gizmo_target_for(&missing, object_id).is_none());
+
+        let mut ready = authored.clone();
+        let observation = FluidDomainSnapshot { epoch: 2, state: FluidDomainState::Ready, accepted_layout: Some(layout) };
+        apply_runtime_domains(&mut ready, &def, &[(fluid.clone(), observation)]);
+        assert!(gizmo_target_for(&ready, object_id).is_some());
+
+        let mut changed = layout;
+        changed.min[0] += 3.0;
+        apply_runtime_domains(&mut ready, &def, &[(fluid, FluidDomainSnapshot {
+            accepted_layout: Some(changed), ..observation
+        })]);
+        assert!(gizmo_target_for(&ready, object_id).is_none(), "driven layout cannot write stale base values");
+        assert!(ready.objects.iter().any(|object| matches!(object,
+            SceneObjectVm::Known(row) if row.object_node_id == object_id && row.fluid_domain == Some(changed))));
+    }
+
+    #[test]
+    fn runtime_domain_bounds_match_grouped_fluid_by_stable_identity() {
+        use manifold_renderer::node_graph::fluid::{FluidDomainSnapshot, FluidDomainState};
+        let (project, layer, object_id) = added_fluid_project();
+        let def = authored_def(&project, &GraphTarget::Generator(layer)).unwrap();
+        let mut scene = SceneVm::from_def(&def).unwrap();
+        let row = scene.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.object_node_id == object_id => Some(row),
+            _ => None,
+        }).unwrap();
+        let layout = row.fluid_domain.unwrap();
+        let fluid = row.fluid_node_ids.iter().filter_map(|id| find_node_by_doc_id(&def.nodes, *id))
+            .find(|node| node.type_id == "node.fluid_surface").unwrap();
+        assert!(!def.nodes.iter().any(|node| node.node_id == fluid.node_id));
+        apply_runtime_domains(&mut scene, &def, &[(fluid.node_id.clone(), FluidDomainSnapshot {
+            epoch: 4, state: FluidDomainState::Ready, accepted_layout: Some(layout),
+        })]);
+        assert!(gizmo_target_for(&scene, object_id).is_some());
+    }
 
     fn fluid_project(bound: bool) -> (Project, LayerId, u32) {
         let mut project = Project::default();

@@ -88,6 +88,12 @@ pub struct Workspace {
     /// list — a known P5 constraint, not new to P5c). Only meaningful on the
     /// graph-editor `Workspace`; the main window's never touches it.
     pub viewport_session: Option<manifold_renderer::node_graph::ViewportSession>,
+    /// Owner and render node of the cached scene; identical graphs on two
+    /// owners must still have separate simulation and parameter histories.
+    pub viewport_target: Option<(manifold_core::GraphTarget, manifold_core::NodeId)>,
+    /// Accepted domains from the runtime that produced the cached viewport.
+    /// Reused by rendering and picking, never substituted from another solver.
+    pub viewport_fluid_domains: Vec<(manifold_core::NodeId, manifold_renderer::node_graph::fluid::FluidDomainSnapshot)>,
     /// UI-device-local texture pane the viewport's composited RGBA8 blits
     /// through — the same `TexturePane::local` + `blit_texture_pane`
     /// pattern the audio spectrogram uses (`texture_pane.rs`), never an
@@ -170,6 +176,8 @@ impl Workspace {
             dock: manifold_ui::Dock::editor(),
             timeline_scrubbing: false,
             viewport_session: None,
+            viewport_target: None,
+            viewport_fluid_domains: Vec::new(),
             viewport_pane: None,
             viewport_open: false,
             viewport_rect: None,

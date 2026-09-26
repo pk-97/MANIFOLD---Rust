@@ -5,7 +5,9 @@ use std::borrow::Cow;
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid::{FluidControls, FluidRuntime, FluidSettings};
+use crate::node_graph::fluid::{
+    FluidControls, FluidDomainSnapshot, FluidDomainState, FluidRuntime, FluidSettings,
+};
 use crate::node_graph::fluid_cache::CacheMode;
 use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
@@ -160,11 +162,13 @@ crate::primitive! {
         last_version: u64 = u64::MAX,
         last_lag: u32 = u32::MAX,
         role_pending: bool = false,
+        domain_failure: bool = false,
     },
 }
 
 impl FluidSurface {
-    fn report_failure(ctx: &mut EffectNodeContext<'_, '_>, error: String) {
+    fn report_failure(domain_failure: &mut bool, ctx: &mut EffectNodeContext<'_, '_>, error: String) {
+        *domain_failure = true;
         ctx.error(error);
         ctx.mark_outputs_pending();
         if let Some(gpu) = ctx.gpu.as_deref_mut() {
@@ -177,9 +181,21 @@ impl Primitive for FluidSurface {
     fn clear_state(&mut self) {
         self.runtime.clear();
         self.role_pending = false;
+        self.domain_failure = false;
+    }
+    fn fluid_domain_snapshot(&self) -> Option<FluidDomainSnapshot> {
+        let mut snapshot = self.runtime.domain_snapshot();
+        if self.role_pending {
+            snapshot.state = FluidDomainState::PendingInputs;
+            snapshot.accepted_layout = None;
+        } else if self.domain_failure {
+            snapshot.state = FluidDomainState::Failed;
+            snapshot.accepted_layout = None;
+        }
+        Some(snapshot)
     }
     fn warmup_pending(&self) -> bool {
-        self.role_pending || self.runtime.warmup_pending()
+        !self.domain_failure && (self.role_pending || self.runtime.warmup_pending())
     }
     fn array_output_capacity(
         &self,
@@ -204,6 +220,7 @@ impl Primitive for FluidSurface {
         Some((value.clamp(3.0, 3145728.0) as u32 / 3) * 3)
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.domain_failure = false;
         let mut roles = std::array::from_fn::<_, MAX_FLUID_ROLES, _>(|_| None);
         self.role_pending = false;
         for (index, port) in ROLE_PORTS.iter().enumerate() {
@@ -232,18 +249,19 @@ impl Primitive for FluidSurface {
             ("whitewater_capacity", 100000.0),
         ] {
             if !ctx.scalar_or_param(name, fallback).is_finite() {
-                Self::report_failure(ctx, format!("Water: {name} must be finite"));
+                Self::report_failure(&mut self.domain_failure, ctx, format!("Water: {name} must be finite"));
                 return;
             }
         }
         if !(0.0..=2.0).contains(&ctx.scalar_or_param("surface_subdivisions", 0.0)) {
-            Self::report_failure(ctx, "Water: surface detail must be between 0 and 2".into());
+            Self::report_failure(&mut self.domain_failure, ctx, "Water: surface detail must be between 0 and 2".into());
             return;
         }
         if !(0.0..=10.0).contains(&ctx.scalar_or_param("surface_smoothing_iterations", 2.0))
             || !(1.0..=250000.0).contains(&ctx.param_f32("whitewater_capacity", 100000.0))
         {
             Self::report_failure(
+                &mut self.domain_failure,
                 ctx,
                 "Water: invalid surface smoothing iterations or whitewater capacity".into(),
             );
@@ -252,7 +270,7 @@ impl Primitive for FluidSurface {
         let boundary_collisions = match boundary_collisions(ctx.params) {
             Ok(faces) => faces,
             Err(error) => {
-                Self::report_failure(ctx, error);
+                Self::report_failure(&mut self.domain_failure, ctx, error);
                 return;
             }
         };
@@ -300,6 +318,7 @@ impl Primitive for FluidSurface {
         };
         let Some(cache_mode) = cache_mode else {
             Self::report_failure(
+                &mut self.domain_failure,
                 ctx,
                 "Water: cache mode must be Live, Record or Playback".into(),
             );
@@ -309,12 +328,12 @@ impl Primitive for FluidSurface {
             Some(ParamValue::String(path)) => path.as_str(),
             Some(ParamValue::Float(_)) | None => "",
             _ => {
-                Self::report_failure(ctx, "Water: cache path must be a String".into());
+                Self::report_failure(&mut self.domain_failure, ctx, "Water: cache path must be a String".into());
                 return;
             }
         };
         if let Err(error) = self.runtime.set_cache(cache_mode, cache_path) {
-            Self::report_failure(ctx, error);
+            Self::report_failure(&mut self.domain_failure, ctx, error);
             return;
         }
         let defaults = FluidControls::default();
@@ -336,7 +355,7 @@ impl Primitive for FluidSurface {
             ctx.scalar_or_param("speed", 1.0),
             ctx.scalar_or_param("reset", 0.0),
         ) {
-            Self::report_failure(ctx, error);
+            Self::report_failure(&mut self.domain_failure, ctx, error);
             return;
         }
         if crate::node_graph::physics::authored_sample_only() {
@@ -346,7 +365,7 @@ impl Primitive for FluidSurface {
             .runtime
             .advance(crate::node_graph::physics::offline_simulation())
         {
-            Self::report_failure(ctx, error);
+            Self::report_failure(&mut self.domain_failure, ctx, error);
             return;
         }
         let lag = self.runtime.lag_seconds() as f32;
@@ -380,7 +399,7 @@ impl Primitive for FluidSurface {
             ) {
                 Ok(changed) => uploaded |= changed,
                 Err(error) => {
-                    Self::report_failure(ctx, error.into());
+                    Self::report_failure(&mut self.domain_failure, ctx, error.into());
                     return;
                 }
             }
@@ -402,7 +421,7 @@ impl Primitive for FluidSurface {
                 match upload.upload(gpu, dst, values, self.runtime.version, retained) {
                     Ok(changed) => uploaded |= changed,
                     Err(error) => {
-                        Self::report_failure(ctx, error.into());
+                        Self::report_failure(&mut self.domain_failure, ctx, error.into());
                         return;
                     }
                 }
@@ -499,5 +518,91 @@ mod tests {
         assert_eq!(fluid.runtime.stats.particles, 0);
         assert!(fluid.runtime.vertices.is_empty());
         assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn fluid_surface_domain_snapshot_recovers_after_validation_error() {
+        let backend = MockBackend::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("fill_height"), ParamValue::Float(0.0));
+        let mut scalar = Vec::new();
+        let mut camera = Vec::new();
+        let mut light = Vec::new();
+        let mut material = Vec::new();
+        let mut transform = Vec::new();
+        let mut atmosphere = Vec::new();
+        let mut render_mode = Vec::new();
+        let mut object = Vec::new();
+        let mut errors = Vec::new();
+        let mut fluid = FluidSurface::new();
+        let _offline = PhysicsStepScope::for_render(true);
+        for resolution in [8.0, f32::NAN, 8.0] {
+            params.insert(Cow::Borrowed("resolution"), ParamValue::Float(resolution));
+            let inputs = NodeInputs::new(&[], &backend, &[]);
+            let outputs = NodeOutputs::new(
+                &[], &backend, &mut scalar, &mut camera, &mut light, &mut material,
+                &mut transform, &mut atmosphere, &mut render_mode, &mut object,
+            );
+            let time = FrameTime {
+                beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(0.0), frame_count: 0,
+            };
+            let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None)
+                .with_errors(&mut errors);
+            Primitive::run(&mut fluid, &mut ctx);
+            let snapshot = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+            if resolution.is_finite() {
+                assert!(errors.is_empty(), "{errors:?}");
+                assert_eq!(snapshot.state, FluidDomainState::Ready);
+                assert!(snapshot.accepted_layout.is_some());
+            } else {
+                assert!(!errors.is_empty());
+                assert_eq!(snapshot.state, FluidDomainState::Failed);
+                assert!(snapshot.accepted_layout.is_none());
+            }
+            errors.clear();
+        }
+    }
+
+    #[test]
+    fn fluid_surface_domain_snapshot_hides_accepted_bounds_for_pending_or_failed_state() {
+        let mut fluid = FluidSurface::new();
+        fluid
+            .runtime
+            .observe(
+                FluidSettings { resolution: 8, ..FluidSettings::default() },
+                FluidControls::default(),
+                Seconds(0.0),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        fluid.runtime.advance(false).unwrap();
+        assert!(fluid.warmup_pending());
+        fluid.domain_failure = true;
+        assert!(!fluid.warmup_pending(), "failed inputs must not keep pumping an old worker");
+        fluid.domain_failure = false;
+        fluid.runtime.advance(true).unwrap();
+        assert_eq!(
+            Primitive::fluid_domain_snapshot(&fluid)
+                .unwrap()
+                .state,
+            FluidDomainState::Ready
+        );
+
+        fluid.role_pending = true;
+        let pending = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+        assert_eq!(pending.state, FluidDomainState::PendingInputs);
+        assert!(pending.accepted_layout.is_none());
+
+        fluid.role_pending = false;
+        fluid.domain_failure = true;
+        let failed = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+        assert_eq!(failed.state, FluidDomainState::Failed);
+        assert!(failed.accepted_layout.is_none());
+
+        fluid.clear_state();
+        let reset = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+        assert_eq!(reset.state, FluidDomainState::Initializing);
+        assert!(reset.accepted_layout.is_none());
     }
 }
