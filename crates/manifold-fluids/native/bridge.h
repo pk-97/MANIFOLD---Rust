@@ -28,6 +28,24 @@ int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
 void manifold_fluids_world_destroy(void *world);
 int manifold_fluids_world_add_fluid_box(void *world, const float *min, const float *max,
                                         const float *velocity);
+int manifold_fluids_world_add_mesh(void *world, uint32_t slot, uint8_t role,
+                                    const float *vertices, size_t vertex_count,
+                                    const uint32_t *triangles, size_t triangle_count,
+                                    const float *pose);
+int manifold_fluids_world_add_fluid_mesh(void *world, const float *vertices,
+                                         size_t vertex_count, const uint32_t *triangles,
+                                         size_t triangle_count, const float *pose,
+                                         const float *velocity);
+int manifold_fluids_world_set_mesh_motion(void *world, uint32_t slot,
+                                          const float *previous, const float *current,
+                                          const float *next);
+int manifold_fluids_world_set_mesh_enabled(void *world, uint32_t slot, int enabled);
+int manifold_fluids_world_set_inflow_options(void *world, uint32_t slot,
+                                             const float *velocity, float inherit_motion);
+int manifold_fluids_world_set_collider_friction(void *world, uint32_t slot, float friction);
+int manifold_fluids_world_remove_mesh(void *world, uint32_t slot);
+int manifold_fluids_world_set_boundary_collisions(void *world, const int32_t *collisions,
+                                                  size_t count);
 int manifold_fluids_world_set_gravity(void *world, const float *gravity);
 int manifold_fluids_world_set_force_fields(void *world, const float *values, size_t value_count,
                                             uint32_t width, uint32_t height, uint32_t depth,

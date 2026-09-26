@@ -13,6 +13,9 @@ use std::ffi::CStr;
 use std::fmt;
 use std::marker::PhantomData;
 
+mod mesh;
+pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
+
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -289,6 +292,54 @@ unsafe extern "C" {
         max: *const f32,
         velocity: *const f32,
     ) -> i32;
+    fn manifold_fluids_world_add_mesh(
+        world: *mut std::ffi::c_void,
+        slot: u32,
+        role: u8,
+        vertices: *const f32,
+        vertex_count: usize,
+        triangles: *const u32,
+        triangle_count: usize,
+        pose: *const f32,
+    ) -> i32;
+    fn manifold_fluids_world_add_fluid_mesh(
+        world: *mut std::ffi::c_void,
+        vertices: *const f32,
+        vertex_count: usize,
+        triangles: *const u32,
+        triangle_count: usize,
+        pose: *const f32,
+        velocity: *const f32,
+    ) -> i32;
+    fn manifold_fluids_world_set_mesh_motion(
+        world: *mut std::ffi::c_void,
+        slot: u32,
+        previous: *const f32,
+        current: *const f32,
+        next: *const f32,
+    ) -> i32;
+    fn manifold_fluids_world_set_mesh_enabled(
+        world: *mut std::ffi::c_void,
+        slot: u32,
+        enabled: i32,
+    ) -> i32;
+    fn manifold_fluids_world_set_inflow_options(
+        world: *mut std::ffi::c_void,
+        slot: u32,
+        velocity: *const f32,
+        inherit_motion: f32,
+    ) -> i32;
+    fn manifold_fluids_world_set_collider_friction(
+        world: *mut std::ffi::c_void,
+        slot: u32,
+        friction: f32,
+    ) -> i32;
+    fn manifold_fluids_world_remove_mesh(world: *mut std::ffi::c_void, slot: u32) -> i32;
+    fn manifold_fluids_world_set_boundary_collisions(
+        world: *mut std::ffi::c_void,
+        collisions: *const i32,
+        count: usize,
+    ) -> i32;
     fn manifold_fluids_world_set_gravity(world: *mut std::ffi::c_void, gravity: *const f32) -> i32;
     fn manifold_fluids_world_set_force_fields(
         world: *mut std::ffi::c_void,
@@ -382,6 +433,7 @@ pub struct FluidWorld {
     triangle_scratch: Vec<[u32; 3]>,
     normal_scratch: Vec<[f32; 3]>,
     whitewater_scratch: Vec<NativeWhitewaterParticle>,
+    mesh_state: mesh::MeshState,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
 }
@@ -394,6 +446,7 @@ unsafe impl Send for FluidWorld {}
 impl FluidWorld {
     pub fn new(config: Config) -> Result<Self, FluidError> {
         validate_config(config)?;
+        let mesh_state = mesh::MeshState::new()?;
         let mut native = std::ptr::null_mut();
         let ok = unsafe {
             manifold_fluids_world_create(
@@ -422,6 +475,7 @@ impl FluidWorld {
             triangle_scratch: Vec::new(),
             normal_scratch: Vec::new(),
             whitewater_scratch: Vec::new(),
+            mesh_state,
             _not_sync: PhantomData,
         })
     }
