@@ -129,14 +129,10 @@ impl Primitive for FluidRoleSource {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(transform) = ctx.inputs.transform("transform") else {
-            ctx.error("Fluid Role Source needs a transform");
-            ctx.mark_outputs_pending();
-            return;
+            return self.fail(ctx, "Fluid Role Source needs a transform".into());
         };
         if let Err(error) = validate_transform(transform, "body transform") {
-            ctx.error(error);
-            ctx.mark_outputs_pending();
-            return;
+            return self.fail(ctx, error);
         }
         let source_transform = ctx.inputs.transform("source_transform").unwrap_or_default();
         if let Err(error) = validate_transform(source_transform, "source transform") {
@@ -277,7 +273,7 @@ impl Primitive for FluidRoleSource {
             || self.preparation_error.is_some()
         {
             if let Some(error) = &self.preparation_error {
-                ctx.error(error.clone());
+                return self.fail(ctx, error.clone());
             }
             ctx.mark_outputs_pending();
             return;
@@ -301,6 +297,11 @@ impl FluidRoleSource {
     fn fail(&mut self, ctx: &mut EffectNodeContext<'_, '_>, error: String) {
         ctx.error(error);
         ctx.mark_outputs_pending();
+        if let Some(gpu) = ctx.gpu.as_deref_mut() {
+            gpu.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
+                crate::frame_status::FrameRenderFailure::InvalidGeometry,
+            ));
+        }
     }
 
     fn fail_setup(&mut self, ctx: &mut EffectNodeContext<'_, '_>, error: String) {
@@ -308,8 +309,7 @@ impl FluidRoleSource {
         self.pending_geometry = None;
         self.geometry = None;
         self.preparation_error = Some(error.clone());
-        ctx.error(error);
-        ctx.mark_outputs_pending();
+        self.fail(ctx, error);
     }
 }
 

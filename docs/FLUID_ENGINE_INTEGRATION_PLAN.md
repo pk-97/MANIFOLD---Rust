@@ -244,6 +244,8 @@ All commands run from the owned worktree, using its absolute `Cargo.toml` via a 
 
 ### P2 — First usable Add Fluid workflow
 
+Local checkpoint: Add Fluid now creates a mesh-role source with position, rotation and emission velocity controls. The Scene Panel creation/edit/reset/undo flow, content-owned insertion and reload assertions, and render-after-reload proof pass. Invalid role geometry produces a render failure rather than indefinite preparation. Legacy emitter graphs remain supported. This verifies the first authoring path; general object assignment and transport/take/export acceptance below remain open.
+
 - **Entry/read-back:** D2/D8; `SceneSetupVm`, `stamp_scene_node_exposures`, `fluid_surface`, normal graph edit commands and existing water preset bindings.
 - **Deliver:** Add Fluid graph insertion, selection, domain/reset/source controls and ordinary material sections. Keep prototype geometry limitations explicit until P4. Add `scene_physics_add_fluid_undo_reload` and `fluid-authoring` UI flow.
 - **Gate/scope:** focused core/editing/UI/app tests and changed-crate clippy; `fluid-authoring` L3 drives add → change source position → play → pause → reset → undo/redo → save/reload → change again. Existing water GPU proof once if its path changes; inspect render-trace costs. Provide Peter the exact worktree launch command.

@@ -70,6 +70,32 @@ fn render_frame(
     readback_raw_halves(device, &target.texture, WIDTH, HEIGHT)
 }
 
+fn warmup_mesh_roles(
+    runtime: &mut PresetRuntime,
+    target: &RenderTarget,
+    device: &manifold_gpu::GpuDevice,
+) {
+    // Async geometry preparation is pumped at unchanged transport time, as
+    // export pre-roll does. Only complete frames advance simulation time.
+    let mut complete = false;
+    for _ in 0..200 {
+        let mut encoder = device.create_encoder("mesh-role-warmup");
+        let status = {
+            let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
+            runtime.render(&mut gpu, &target.texture, &context(0), &ParamManifest::default());
+            gpu.frame_status()
+        };
+        encoder.commit_and_wait_completed();
+        assert!(!matches!(status, FrameRenderStatus::Failed(_)), "role warmup: {status:?}");
+        if status == FrameRenderStatus::Complete && !runtime.warmup_pending() {
+            complete = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(complete, "mesh role preparation must finish within bounded pre-roll");
+}
+
 fn assert_finite_and_nonempty(bytes: &[u8], frame: u32) {
     assert_eq!(bytes.len(), (WIDTH * HEIGHT * 8) as usize);
     let mut nonempty = 0usize;
@@ -221,6 +247,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
         GpuTextureFormat::Rgba16Float, "added-fluid-proof");
     let _offline = PhysicsStepScope::for_render(true);
     let base_pixels = render_frame(&mut base_runtime, &target, &harness.device, 0);
+    warmup_mesh_roles(&mut fluid_runtime, &target, &harness.device);
     let mut fluid_pixels = Vec::new();
     for frame in 0..=30 {
         fluid_pixels = render_frame(&mut fluid_runtime, &target, &harness.device, frame);
@@ -236,6 +263,34 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     assert!(changed > 200, "added fluid must visibly affect the existing scene: {changed} pixels");
     std::fs::write("/tmp/manifold_added_fluid.png",
         readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+}
+
+#[test]
+fn scene_physics_invalid_mesh_role_fails_instead_of_waiting_for_preparation() {
+    let mut def: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
+    def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": 500, "nodeId": "invalid_source", "typeId": "node.fluid_role_source",
+        "params": { "radius": {"type": "Float", "value": -1.0} }
+    }));
+    def["wires"].as_array_mut().unwrap().extend([
+        serde_json::json!({"fromNode": 5, "fromPort": "transform", "toNode": 500, "toPort": "transform"}),
+        serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"})
+    ]);
+    let harness = harness::shared();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &def.to_string(), &PrimitiveRegistry::with_builtin(), Arc::clone(&harness.device),
+        WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
+    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
+        GpuTextureFormat::Rgba16Float, "invalid-mesh-role");
+    let _offline = PhysicsStepScope::for_render(true);
+    let mut encoder = harness.device.create_encoder("invalid-mesh-role");
+    let status = {
+        let mut gpu = RendererGpuEncoder::new(&mut encoder, &harness.device);
+        runtime.render(&mut gpu, &target.texture, &context(0), &ParamManifest::default());
+        gpu.frame_status()
+    };
+    encoder.commit_and_wait_completed();
+    assert_eq!(status, FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
 }
 
 #[test]
@@ -280,26 +335,8 @@ fn scene_physics_mesh_role_renders_after_graph_round_trip() {
     let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
         GpuTextureFormat::Rgba16Float, "mesh-role-proof");
     let _offline = PhysicsStepScope::for_render(true);
-    // Async geometry preparation is pumped at unchanged transport time, as
-    // export pre-roll does. Only a complete frame may advance the simulation.
     for runtime in [&mut fluid_runtime, &mut empty_runtime] {
-        let mut complete = false;
-        for _ in 0..200 {
-            let mut encoder = harness.device.create_encoder("mesh-role-warmup");
-            let status = {
-                let mut gpu = RendererGpuEncoder::new(&mut encoder, &harness.device);
-                runtime.render(&mut gpu, &target.texture, &context(0), &ParamManifest::default());
-                gpu.frame_status()
-            };
-            encoder.commit_and_wait_completed();
-            assert!(!matches!(status, FrameRenderStatus::Failed(_)), "role warmup: {status:?}");
-            if status == FrameRenderStatus::Complete && !runtime.warmup_pending() {
-                complete = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(complete, "mesh role preparation must finish within bounded pre-roll");
+        warmup_mesh_roles(runtime, &target, &harness.device);
     }
     let empty = render_frame(&mut empty_runtime, &target, &harness.device, 1);
     let liquid = render_frame(&mut fluid_runtime, &target, &harness.device, 1);

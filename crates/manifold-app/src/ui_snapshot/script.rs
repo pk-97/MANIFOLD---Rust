@@ -881,9 +881,10 @@ impl Runner {
         out_dir: &std::path::Path,
         render: &mut RenderState,
     ) -> StepResult {
-        // A chunky wheel notch: the Scene dock scales the raw delta by its own
-        // SCROLL_SPEED (~0.375 → ~900px/step), so the deepest rows reach well
-        // inside the cap. Success is judged on the target's CENTER (that is where
+        // Start with a chunky wheel notch so deep rows reach the viewport within
+        // the cap. Halve it when a step crosses the whole viewport; wheel speed
+        // changes must not make this driver oscillate past a reachable row.
+        // Success is judged on the target's CENTER (that is where
         // a following gesture synthesizes its pointer / drag origin), not full
         // containment — the last row of a maxed-out scroll can never clear a
         // both-sides margin, yet its center is perfectly clickable. `MARGIN` just
@@ -930,6 +931,7 @@ impl Runner {
         // the first productive step keeps ScrollTo correct if one ever flips.
         let mut sign = 1.0_f32;
         let mut sign_locked = false;
+        let mut step = STEP;
 
         for _ in 0..MAX_ITERS {
             let rect = match self.resolve(ui, data, target) {
@@ -956,7 +958,7 @@ impl Runner {
             let dir = if want_y_decrease { -1.0 } else { 1.0 };
             let sc = Vec2::new(cx.clamp(vis.x + 1.0, vis.x + vis.width - 1.0), vis.y + vis.height * 0.5);
             let prev_y = rect.y;
-            let sip = self.scroll_once(ui, data, sc, Vec2::new(0.0, dir * sign * STEP));
+            let sip = self.scroll_once(ui, data, sc, Vec2::new(0.0, dir * sign * step));
             self.advance_frame(ui, data, zoom_ppb, render, sip);
             let moved = match self.resolve(ui, data, target) {
                 Ok(r) => r.y - prev_y,
@@ -973,6 +975,10 @@ impl Runner {
                     sign = -sign;
                 }
                 sign_locked = true;
+            }
+            let next_y = cy_target + moved;
+            if (cy_target > bot && next_y < top) || (cy_target < top && next_y > bot) {
+                step *= 0.5;
             }
         }
 

@@ -1171,6 +1171,29 @@ fn trace_scene_object(
                         fluid_node_ids.push(source.id);
                     }
                 }
+                for index in 0..super::fluid_role::MAX_FLUID_ROLES {
+                    let role_port = format!("role_{index}");
+                    let Some((role_level, _, role, _)) =
+                        resolve_producer_through_group(&current_level, n.id, &role_port)
+                    else {
+                        continue;
+                    };
+                    if role.type_id != "node.fluid_role_source"
+                        || fluid_node_ids.contains(&role.id)
+                    {
+                        continue;
+                    }
+                    fluid_node_ids.push(role.id);
+                    for port in ["transform", "source_transform"] {
+                        if let Some((_, _, source, _)) =
+                            resolve_producer_through_group(&role_level, role.id, port)
+                            && source.type_id == "node.transform_3d"
+                            && !fluid_node_ids.contains(&source.id)
+                        {
+                            fluid_node_ids.push(source.id);
+                        }
+                    }
+                }
             }
             source_vertex_count = node_source_vertex_count(n);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
@@ -1573,6 +1596,32 @@ mod tests {
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.fluid_node_ids, vec![4, 5]);
         assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
+    }
+
+    #[test]
+    fn scene_physics_fluid_roles_resolve_group_controls_and_deduplicate_transforms() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let mut source_group = node(10, GROUP_TYPE_ID, Some("Source"));
+        source_group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![node(11, "node.fluid_role_source", None),
+                node(12, "node.transform_3d", None), node(13, GROUP_OUTPUT_TYPE_ID, None)],
+            wires: vec![wire(12, "transform", 11, "transform"),
+                wire(12, "transform", 11, "source_transform"), wire(11, "role", 13, "role")],
+            tint: None,
+        }));
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, "node.scene_object", Some("Fluid")),
+            node(4, "node.fluid_surface", None), source_group],
+            vec![wire(1, "color", 2, "in"), wire(3, "object", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
+                wire(10, "role", 4, "role_1")]);
+        let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        let vm = SceneVm::from_def(&restored).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert_eq!(row.fluid_node_ids, vec![4, 11, 12]);
+        assert!(row.transform.is_none());
     }
 
     #[test]

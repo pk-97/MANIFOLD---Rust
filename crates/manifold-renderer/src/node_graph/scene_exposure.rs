@@ -31,6 +31,7 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.rigid_body",
     "node.physics_world",
     "node.fluid_surface",
+    "node.fluid_role_source",
     "node.transform_3d",
     "node.pbr_material",
     "node.phong_material",
@@ -96,6 +97,10 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
             "domain_size" | "fill_height" | "viscosity" | "surface_tension" | "gravity"
                 | "emission" | "inflow_speed" | "speed" | "reset" | "surface_subdivisions"
                 | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"))
+        .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
+            "role" | "enabled" | "geometry" | "shape" | "radius"
+                | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
+                | "friction" | "collider_parts"))
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or({
                 if matches!(pd.ty, ParamType::Angle) {
@@ -376,6 +381,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
     let category = match node.type_id.as_str() {
         "node.rigid_body" | "node.physics_world" => "Physics".to_string(),
         "node.fluid_surface" => "Simulation".to_string(),
+        "node.fluid_role_source" => "Source".to_string(),
         "node.transform_3d" => "Transform".to_string(),
         "node.pbr_material" | "node.phong_material" | "node.unlit_material" | "node.cel_material" => {
             "Material".to_string()

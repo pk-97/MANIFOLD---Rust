@@ -558,7 +558,8 @@ pub(super) fn dispatch_project(
                     metadata_for_node_type("node.pbr_material"),
                     metadata_for_node_type("node.scene_object"),
                     default,
-                );
+                )
+                .with_role_metadata(metadata_for_node_type("node.fluid_role_source"));
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
                     Box::new(command),
                     crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
@@ -1807,7 +1808,7 @@ mod tests {
             SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => Some(row),
             _ => None,
         }).expect("fluid is a selectable scene object");
-        assert_eq!(row.fluid_node_ids.len(), 2, "surface and source controls");
+        assert_eq!(row.fluid_node_ids.len(), 3, "surface, role source, and source transform controls");
         let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
             Some(&added), &row.fluid_node_ids,
         );
@@ -1818,8 +1819,25 @@ mod tests {
         let saved = serde_json::to_string(&project).unwrap();
         let reloaded: Project = serde_json::from_str(&saved).unwrap();
         assert_eq!(effective_def(&reloaded, &layer_id), added);
-        let reloaded_vm = SceneVm::from_def(&effective_def(&reloaded, &layer_id)).unwrap();
+        let reloaded_def = effective_def(&reloaded, &layer_id);
+        let reloaded_vm = SceneVm::from_def(&reloaded_def).unwrap();
         assert_eq!(reloaded_vm.objects, vm.objects);
+        let reloaded_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&reloaded_def), &row.fluid_node_ids,
+        );
+        let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
+        for (param, expected_label) in [("velocity_y", "Source"), ("rot_y", "Source Transform")] {
+            let binding = metadata.bindings.iter().find(|binding| matches!(
+                &binding.target,
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                    if name == param && (node_id.as_str().starts_with("fluid_role_source_")
+                        || node_id.as_str().starts_with("fluid_source_"))
+            )).expect("fluid source control survives reload");
+            let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
+            let section = spec.section.as_ref().unwrap();
+            assert!(section.contains(expected_label));
+            assert!(reloaded_sections.contains(section), "source control appears in fluid inspector");
+        }
         command.undo(&mut project);
         assert_eq!(effective_def(&project, &layer_id), original);
         command.execute(&mut project);

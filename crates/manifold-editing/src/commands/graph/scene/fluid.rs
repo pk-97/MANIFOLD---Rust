@@ -21,6 +21,7 @@ use super::super::{
 use super::{collect_all_handles, max_node_id_over};
 
 const FLUID_TYPE_ID: &str = "node.fluid_surface";
+const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
 const MATERIAL_TYPE_ID: &str = "node.pbr_material";
 const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
@@ -39,6 +40,7 @@ pub struct AddSceneFluidCommand {
     render_scene_node_id: u32,
     fluid_metadata: Vec<SceneParamMetadata>,
     source_metadata: Vec<SceneParamMetadata>,
+    role_metadata: Vec<SceneParamMetadata>,
     material_metadata: Vec<SceneParamMetadata>,
     object_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
@@ -66,6 +68,7 @@ impl AddSceneFluidCommand {
             render_scene_node_id,
             fluid_metadata,
             source_metadata,
+            role_metadata: Vec::new(),
             material_metadata,
             object_metadata,
             catalog_default,
@@ -79,15 +82,29 @@ impl AddSceneFluidCommand {
         }
     }
 
+    pub fn with_role_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+        self.role_metadata = metadata;
+        self
+    }
+
     fn source_metadata(&self) -> Vec<SceneParamMetadata> {
         self.source_metadata
             .iter()
             .filter(|metadata| {
                 matches!(
                     metadata.name.as_str(),
-                    "pos_x" | "pos_y" | "pos_z" | "scale_x" | "scale_y" | "scale_z"
+                    "pos_x" | "pos_y" | "pos_z" | "rot_x" | "rot_y" | "rot_z"
+                        | "scale_x" | "scale_y" | "scale_z"
                 )
             })
+            .cloned()
+            .collect()
+    }
+
+    fn fluid_metadata(&self) -> Vec<SceneParamMetadata> {
+        self.fluid_metadata
+            .iter()
+            .filter(|metadata| !matches!(metadata.name.as_str(), "emission" | "inflow_speed"))
             .cloned()
             .collect()
     }
@@ -166,6 +183,7 @@ impl Command for AddSceneFluidCommand {
         };
 
         let render_id = self.render_scene_node_id;
+        let fluid_metadata = self.fluid_metadata();
         let source_metadata = self.source_metadata();
         let mut candidate = baseline.clone();
         let result = (|def: &mut EffectGraphDef| {
@@ -214,6 +232,9 @@ impl Command for AddSceneFluidCommand {
             let Some(group_id) = fresh_id() else {
                 return Err("Add Fluid document id space is exhausted");
             };
+            let Some(role_id) = fresh_id() else {
+                return Err("Add Fluid document id space is exhausted");
+            };
 
             let mut existing_node_ids = Vec::new();
             collect_node_ids(&def.nodes, &mut existing_node_ids);
@@ -237,6 +258,7 @@ impl Command for AddSceneFluidCommand {
             let fluid_node_handle =
                 dedup_handle(&format!("{fluid_handle} Simulation"), &mut handles);
             let source_handle = dedup_handle(&format!("{fluid_handle} Source"), &mut handles);
+            let role_handle = dedup_handle(&format!("{fluid_handle} Source Role"), &mut handles);
             let material_handle = dedup_handle(&format!("{fluid_handle} Material"), &mut handles);
             let object_handle = fluid_handle.clone();
 
@@ -246,7 +268,7 @@ impl Command for AddSceneFluidCommand {
             fluid_params.insert("resolution".into(), int(16));
             fluid_params.insert("whitewater".into(), float(0.0));
             fluid_params.insert("gravity".into(), float(-9.81));
-            fluid_params.insert("emission".into(), float(1.0));
+            fluid_params.insert("emission".into(), float(0.0));
             fluid_params.insert("inflow_speed".into(), float(1.0));
             fluid_params.insert("speed".into(), float(1.0));
             fluid_params.insert("surface_subdivisions".into(), int(0));
@@ -255,6 +277,9 @@ impl Command for AddSceneFluidCommand {
             source_params.insert("pos_x".into(), float(0.0));
             source_params.insert("pos_y".into(), float(2.8));
             source_params.insert("pos_z".into(), float(0.0));
+            source_params.insert("rot_x".into(), float(0.0));
+            source_params.insert("rot_y".into(), float(0.0));
+            source_params.insert("rot_z".into(), float(0.0));
             source_params.insert("scale_x".into(), float(0.7));
             source_params.insert("scale_y".into(), float(0.5));
             source_params.insert("scale_z".into(), float(0.7));
@@ -292,6 +317,29 @@ impl Command for AddSceneFluidCommand {
             let source_node_id = source.node_id.clone();
             let source_params = source.params.clone();
 
+            let mut role_params = BTreeMap::new();
+            role_params.insert("role".into(), SerializedParamValue::Enum { value: 1 });
+            role_params.insert("enabled".into(), SerializedParamValue::Bool { value: true });
+            role_params.insert("geometry".into(), SerializedParamValue::Enum { value: 0 });
+            role_params.insert("shape".into(), SerializedParamValue::Enum { value: 1 });
+            role_params.insert("radius".into(), float(3.0_f32.sqrt() / 2.0));
+            role_params.insert("velocity_x".into(), float(0.0));
+            role_params.insert("velocity_y".into(), float(-1.0));
+            role_params.insert("velocity_z".into(), float(0.0));
+            role_params.insert("inherit_motion".into(), float(0.0));
+            role_params.insert("friction".into(), float(0.0));
+            role_params.insert("collider_parts".into(), int(32));
+
+            let mut role = scene_build_node(
+                role_id,
+                ROLE_SOURCE_TYPE_ID,
+                Some(role_handle),
+                role_params,
+            );
+            role.node_id = stable_id("fluid_role_source", role_id);
+            let role_node_id = role.node_id.clone();
+            let role_params = role.params.clone();
+
             let mut material = scene_build_node(
                 material_id,
                 MATERIAL_TYPE_ID,
@@ -327,9 +375,10 @@ impl Command for AddSceneFluidCommand {
                     }],
                     params: Vec::new(),
                 },
-                nodes: vec![fluid, source, material, object, output],
+                nodes: vec![fluid, source, role, material, object, output],
                 wires: vec![
-                    scene_build_wire(source_id, "transform", fluid_id, "emitter"),
+                    scene_build_wire(source_id, "transform", role_id, "transform"),
+                    scene_build_wire(role_id, "role", fluid_id, "role_0"),
                     scene_build_wire(fluid_id, "vertices", object_id, "vertices"),
                     scene_build_wire(material_id, "out", object_id, "material"),
                     scene_build_wire(object_id, "object", output_id, "object"),
@@ -359,7 +408,7 @@ impl Command for AddSceneFluidCommand {
                 &fluid_node_id,
                 FLUID_TYPE_ID,
                 &format!("{fluid_handle} - Simulation"),
-                &self.fluid_metadata,
+                &fluid_metadata,
                 &fluid_params,
             );
             stamp_scene_node_exposures_into(
@@ -368,9 +417,19 @@ impl Command for AddSceneFluidCommand {
                 source_id,
                 &source_node_id,
                 TRANSFORM_TYPE_ID,
-                &format!("{fluid_handle} - Source"),
+                &format!("{fluid_handle} - Source Transform"),
                 &source_metadata,
                 &source_params,
+            );
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                role_id,
+                &role_node_id,
+                ROLE_SOURCE_TYPE_ID,
+                &format!("{fluid_handle} - Source"),
+                &self.role_metadata,
+                &role_params,
             );
             stamp_scene_node_exposures_into(
                 &mut meta.params,
