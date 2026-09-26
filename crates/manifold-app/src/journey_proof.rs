@@ -63,6 +63,33 @@ use crate::content_state::ContentState;
 // binary path, which can't reach a `#[cfg(test)]` item.
 use crate::headless_harness::headless_content_thread;
 
+/// Run a real export and collect every state notification, including per-file
+/// results and the single whole-run terminal pulse. The production path uses
+/// unbounded channels, so collecting after `run_export` returns cannot block
+/// the exporter and preserves the notification order for lifecycle proofs.
+fn run_headless_export_states(
+    project: Project,
+    cfg: ExportConfig,
+    queued_command: Option<ContentCommand>,
+) -> Vec<ContentState> {
+    let mut ct = headless_content_thread(project, cfg.width, cfg.height);
+
+    let (cmd_tx, cmd_rx): (Sender<ContentCommand>, Receiver<ContentCommand>) =
+        crossbeam_channel::unbounded();
+    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+
+    if let Some(command) = queued_command {
+        cmd_tx.send(command).expect("queue export command");
+    }
+
+    ct.run_export(cfg, &cmd_rx, &state_tx);
+
+    drop(cmd_tx);
+    drop(state_tx);
+
+    state_rx.try_iter().collect()
+}
+
 /// Drive one real export through the production path: build a headless
 /// content thread, call the real `ContentThread::run_export` (never a
 /// reimplementation), and return the finished output path.
@@ -94,7 +121,7 @@ fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, S
             // observable oracle that `is_exporting`/`export_progress`/
             // `export_status` climb during a real export — not just that the
             // fields are non-zero somewhere, but that the exact snapshots
-            // the UI's header consumer reads actually progress.
+            // the UI's export modal reads actually progress.
             while let Ok(state) = state_rx.recv() {
                 if state.is_exporting {
                     println!(
@@ -104,7 +131,9 @@ fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, S
                     );
                 }
                 if let Some(ev) = state.export_finished {
-                    finished = Some(ev);
+                    finished.get_or_insert(ev);
+                }
+                if state.export_run_finished {
                     break;
                 }
             }
@@ -492,6 +521,18 @@ mod tests {
         sum / indices.len() as f32
     }
 
+    fn one_beat_generator_project(marker: Option<Beats>) -> Project {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        let mut layer = star_field_generator_layer(0);
+        layer.clips[0].duration_beats = Beats(1.0);
+        project.timeline.layers.push(layer);
+        if let Some(beat) = marker {
+            project.timeline.add_marker(TimelineMarker::new(beat).with_name("Mid"));
+        }
+        project
+    }
+
     /// P3's render-path proof (per `prove-render-path-before-claiming-visual-
     /// win`): export a fixture project with a param bound to a band envelope
     /// over a click-track audio layer, extract frames, assert the bound
@@ -757,6 +798,131 @@ mod tests {
             (dur - 4.0).abs() <= one_frame,
             "setting-off export must cover the whole range: {dur:.3}s"
         );
+    }
+
+    /// Exercise the real modal → content command → export lifecycle. The
+    /// cancellation command is obtained from the modal's actual Escape event;
+    /// the batch half proves per-file completion does not close the modal
+    /// before the whole run has restored playback state.
+    #[test]
+    fn export_modal_cancel_and_batch_lifecycle() {
+        let dir = out_dir("export_modal_cancel_and_batch_lifecycle");
+
+        let cancelled_path = dir.join("cancelled.mp4");
+        let _ = std::fs::remove_file(&cancelled_path);
+        let mut cancel_ui = crate::ui_root::UIRoot::new();
+        cancel_ui.export_progress.begin(cancelled_path.to_str().unwrap());
+        cancel_ui.build();
+        let escape = manifold_ui::input::UIEvent::KeyDown {
+            node_id: manifold_ui::node::NodeId::PLACEHOLDER,
+            key: manifold_ui::input::Key::Escape,
+            modifiers: manifold_ui::input::Modifiers::default(),
+        };
+        let mut actions = Vec::new();
+        assert!(cancel_ui.route_overlay_event(&escape, &mut actions));
+        assert!(matches!(
+            actions.as_slice(),
+            [manifold_ui::panels::PanelAction::Project(
+                manifold_ui::panels::ProjectAction::CancelExport
+            )]
+        ));
+        let cancel_command = match actions.pop() {
+            Some(manifold_ui::panels::PanelAction::Project(
+                manifold_ui::panels::ProjectAction::CancelExport,
+            )) => ContentCommand::CancelExport,
+            other => panic!("modal Escape must yield CancelExport, got {other:?}"),
+        };
+
+        let cancel_states = run_headless_export_states(
+            one_beat_generator_project(None),
+            tiny_export_config(&cancelled_path, 4.0),
+            Some(cancel_command),
+        );
+        let cancel_finished: Vec<_> = cancel_states
+            .iter()
+            .filter_map(|state| state.export_finished.as_ref())
+            .collect();
+        assert_eq!(cancel_finished.len(), 1, "cancellation must emit one terminal file result");
+        assert!(!cancel_finished[0].success);
+        assert_eq!(cancel_finished[0].message, "Export cancelled");
+        assert!(!cancelled_path.exists(), "cancelled export must remove its partial output");
+        assert_eq!(
+            cancel_states.iter().filter(|state| state.export_run_finished).count(),
+            1,
+            "cancellation must emit one whole-run terminal pulse"
+        );
+        assert!(cancel_states.last().is_some_and(|state| state.export_run_finished));
+        for state in &cancel_states {
+            let terminal = state.export_run_finished;
+            assert!(cancel_ui.consume_export_notification(state));
+            if !terminal {
+                assert!(cancel_ui.export_progress.is_open(), "modal closes only on run terminal");
+            }
+        }
+        assert!(!cancel_ui.export_progress.is_open());
+
+        let batch_base = dir.join("batch.mp4");
+        let _ = std::fs::remove_file(&batch_base);
+        let _ = std::fs::remove_file(dir.join("batch--section-1.mp4"));
+        let _ = std::fs::remove_file(dir.join("batch--Mid.mp4"));
+        let mut batch_cfg = tiny_export_config(&batch_base, 4.0);
+        batch_cfg.split_at_markers = true;
+        let batch_states = run_headless_export_states(
+            one_beat_generator_project(Some(Beats(0.5))),
+            batch_cfg,
+            None,
+        );
+        let batch_finished: Vec<_> = batch_states
+            .iter()
+            .filter_map(|state| state.export_finished.as_ref())
+            .collect();
+        assert_eq!(batch_finished.len(), 2, "one interior marker must produce two file results");
+        assert!(batch_finished.iter().all(|event| event.success));
+        assert!(dir.join("batch--section-1.mp4").exists());
+        assert!(dir.join("batch--Mid.mp4").exists());
+        assert_eq!(
+            batch_states.iter().filter(|state| state.export_run_finished).count(),
+            1,
+            "a split run must emit one whole-run terminal pulse"
+        );
+        assert!(batch_states.last().is_some_and(|state| state.export_run_finished));
+
+        let mut batch_ui = crate::ui_root::UIRoot::new();
+        batch_ui.export_progress.begin(batch_base.to_str().unwrap());
+        let mut per_file_results = 0;
+        for state in &batch_states {
+            let terminal = state.export_run_finished;
+            assert!(batch_ui.consume_export_notification(state));
+            if state.export_finished.is_some() {
+                per_file_results += 1;
+                assert!(!terminal);
+                assert!(batch_ui.export_progress.is_open(), "per-file result must leave modal open");
+            }
+            if terminal {
+                assert!(!batch_ui.export_progress.is_open());
+            }
+        }
+        assert_eq!(per_file_results, 2);
+
+        let invalid_path = dir.join("invalid-range.mp4");
+        let _ = std::fs::remove_file(&invalid_path);
+        let mut invalid_cfg = tiny_export_config(&invalid_path, 4.0);
+        invalid_cfg.start_beat = 0.75;
+        invalid_cfg.end_beat = 0.5;
+        let invalid_states = run_headless_export_states(
+            one_beat_generator_project(None),
+            invalid_cfg,
+            None,
+        );
+        let invalid_finished: Vec<_> = invalid_states
+            .iter()
+            .filter_map(|state| state.export_finished.as_ref())
+            .collect();
+        assert_eq!(invalid_finished.len(), 1);
+        assert!(!invalid_finished[0].success);
+        assert_eq!(invalid_finished[0].message, "No content in export range");
+        assert_eq!(invalid_states.iter().filter(|state| state.export_run_finished).count(), 1);
+        assert!(invalid_states.last().is_some_and(|state| state.export_run_finished));
     }
 
     /// D4 (design doc): same project + range + fps -> the same feature

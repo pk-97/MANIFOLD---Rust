@@ -207,6 +207,11 @@ impl Application {
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
+                // Export messages are sparse notifications, not full playback
+                // snapshots. Consume every event before keeping the latest state.
+                if self.ws.ui_root.consume_export_notification(&state) {
+                    continue;
+                }
                 let drag_active = self.overlay.drag_mode()
                     != manifold_ui::interaction_overlay::DragMode::None
                     || self.overlay.has_pending_automation_press();
@@ -516,16 +521,21 @@ impl Application {
 
         // 1d. Percussion import runs on content thread — read status from content_state.
         let was_importing = false; // previous frame state not tracked here
-        let is_importing = self.content_state.percussion_importing;
+        let is_importing = !self.ws.ui_root.export_progress.is_open()
+            && self.content_state.percussion_importing;
 
         // 1e. Sync percussion pipeline status to header panel
         // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
         {
-            let msg = self.content_state.percussion_status_message.clone();
+            let msg = if self.ws.ui_root.export_progress.is_open() {
+                ""
+            } else {
+                self.content_state.percussion_status_message.as_ref()
+            };
             let progress = self.content_state.percussion_progress;
             let show = self.content_state.percussion_show_progress && !msg.is_empty();
             self.ws.ui_root.header.set_import_status(
-                &msg,
+                msg,
                 if progress < 0.0 {
                     0.0
                 } else {
@@ -545,33 +555,16 @@ impl Application {
             }
         }
 
-        // 1d2. Export progress (BUG-083) — the content thread's export loop
-        // (content_export.rs's run_export/send_export_progress) blocks the
-        // content thread and pushes a degraded ContentState every 10 frames;
-        // read it the same way percussion import status is read above, so a
-        // multi-minute export no longer looks like a hang.
+        // Export owns its progress surface. Do not redraw a stale loading
+        // overlay beneath it; warmup itself only needs changed-state rebuilds.
         {
-            let is_exporting = self.content_state.is_exporting;
-            self.ws.ui_root.header.set_export_status(
-                &self.content_state.export_status,
-                self.content_state.export_progress,
-                is_exporting,
-            );
-            // Keep redrawing the progress strip while exporting, same as
-            // the percussion import bar above.
-            if is_exporting {
-                self.needs_rebuild = true;
-            }
-        }
-
-        // 1d3. Warmup progress overlay — published from inside the blocking
-        // LoadProject warmup pass (WARMUP_DESIGN.md D5). Rebuild while warming
-        // so the layer label + bar update; rebuild once more when it clears
-        // so the overlay disappears.
-        {
-            let was_warming = self.ws.ui_root.warmup.is_some();
-            self.ws.ui_root.warmup = self.content_state.warmup.clone();
-            if self.ws.ui_root.warmup.is_some() || was_warming {
+            let warmup = if self.ws.ui_root.export_progress.is_open() {
+                None
+            } else {
+                self.content_state.warmup.clone()
+            };
+            if self.ws.ui_root.warmup != warmup {
+                self.ws.ui_root.warmup = warmup;
                 self.needs_rebuild = true;
             }
         }
@@ -670,6 +663,9 @@ impl Application {
             .map(crate::menu::AppMenu::drain)
             .unwrap_or_default();
         for ma in menu_actions {
+            if self.ws.ui_root.export_progress.is_open() {
+                continue;
+            }
             use crate::menu::MenuAction as M;
             use manifold_ui::panels::PanelAction as P;
             match ma {
@@ -1089,6 +1085,11 @@ impl Application {
             .unwrap_or_default();
 
         for (action_idx, action) in actions.iter().enumerate().take(editor_card_seg_start) {
+            if self.ws.ui_root.export_progress.is_open()
+                && !matches!(action, PanelAction::Project(ProjectAction::CancelExport))
+            {
+                continue;
+            }
             if self.dispatch_inspector_host_action(action, false) { continue; }
             if let PanelAction::Root(action) = action
                 && self.dispatch_mapping_action(action)
@@ -1286,6 +1287,10 @@ impl Application {
                 }
                 PanelAction::Project(ProjectAction::SaveProjectAs) => {
                     self.save_project_as();
+                    continue;
+                }
+                PanelAction::Project(ProjectAction::CancelExport) => {
+                    self.send_content_cmd(ContentCommand::CancelExport);
                     continue;
                 }
                 PanelAction::Project(ProjectAction::ExportVideo) => {
@@ -1822,7 +1827,7 @@ impl Application {
         // retarget the canvas to that card's graph. Card-click retargets are
         // collected and applied after the editor-workspace borrow drops (they call
         // `self.watch_*`). See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
-        if actions.len() > editor_card_seg_start {
+        if !self.ws.ui_root.export_progress.is_open() && actions.len() > editor_card_seg_start {
             let mut retarget_effect: Option<usize> = None;
             let mut retarget_generator = false;
             // Deferred like the retargets above: `self.begin_save_preset_prompt`

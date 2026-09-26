@@ -278,10 +278,8 @@ pub enum ContentCommand {
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.
     StartExport(Box<ExportConfig>),
-    /// Cancel in-progress export. Polled by the export loop at
-    /// content_export.rs:242. No UI producer yet — the cancel button/hotkey
-    /// is a known UX gap; leave the variant and plumbing ready to wire up.
-    #[allow(dead_code)]
+    /// Cancel in-progress export at the next frame boundary. Sent by the
+    /// export modal's Cancel button or Escape; cleanup runs on this thread.
     CancelExport,
     /// Export the current composited frame as a still image. Captured across
     /// two content ticks (readback submit → read) so the live render never

@@ -51,9 +51,9 @@ pub enum LedPreview {
     None,
 }
 
-/// Sent once when an export finishes. Consumed by `push_state`
-/// (`ui_bridge/state_sync.rs`) to fire the D17 export-complete toast
-/// (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — no longer dead code as of that wiring.
+/// One output file's result. Consumed once from the content channel by
+/// `UIRoot::consume_export_notification` to show the export status toast.
+/// A split export produces one result per section; still exports use it too.
 #[derive(Clone, Debug)]
 pub struct ExportFinishedEvent {
     pub success: bool,
@@ -222,8 +222,11 @@ pub struct ContentState {
     pub export_progress: f32,
     /// Export status text (e.g. "Exporting 120/600 (20%)"). BUG-083.
     pub export_status: Arc<str>,
-    /// Set once when export finishes (success or failure).
+    /// Per-file result (success, failure or cancellation), including still exports.
     pub export_finished: Option<ExportFinishedEvent>,
+    /// Set once when the entire export run finishes, after all sections and
+    /// playback restoration have completed.
+    pub export_run_finished: bool,
 
     // ── Warmup ────────────────────────────────────────────────────
     /// Load-time warmup progress. `None` when no warmup is running.
@@ -546,6 +549,7 @@ impl Default for ContentState {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            export_run_finished: false,
             warmup: None,
             undo_redo_event: None,
             graph_edit_diagnostic: None,
