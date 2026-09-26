@@ -570,6 +570,149 @@ fn graph_of_generator<'a>(project: &'a Project, layer_id: &LayerId) -> &'a Effec
 }
 
 #[test]
+fn scene_physics_append_object_uses_physical_slot_and_undoes_exactly() {
+    let graph = compound_imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+
+    let mut command = AddSceneObjectCommand::new(
+        target,
+        vec![],
+        0,
+        1, // stale logical parent count; physical object_0 and object_1 exist
+        (100.0, 200.0),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+    assert!(command.was_applied(), "add rejected: {:?}", command.rejection_reason());
+
+    let after = graph_of(&project, &fx);
+    assert_eq!(
+        after.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"),
+        Some(&SerializedParamValue::Float { value: 3.0 })
+    );
+    assert!(after.wires.iter().any(|wire| {
+        wire.from_node == 10 && wire.from_port == "object" && wire.to_node == 0 && wire.to_port == "object_0"
+    }));
+    assert!(after.wires.iter().any(|wire| {
+        wire.from_node == 10 && wire.from_port == "object_1" && wire.to_node == 0 && wire.to_port == "object_1"
+    }));
+    assert!(after.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_2"));
+
+    command.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &graph);
+}
+
+#[test]
+fn scene_physics_append_physics_object_uses_physical_slot() {
+    let mut graph = physics_scene_graph();
+    graph.nodes.iter_mut().find(|node| node.id == 0).unwrap().params.insert(
+        "objects".into(),
+        SerializedParamValue::Float { value: 2.0 },
+    );
+    graph.wires.push(EffectGraphWire {
+        from_node: 104,
+        from_port: "object".into(),
+        to_node: 0,
+        to_port: "object_1".into(),
+    });
+    let (mut project, fx) = project_with_graph(graph);
+    let mut command = AddSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        0,
+        1,
+        (100.0, 200.0),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        mirror_catalog_default(),
+    )
+    .with_physics_world(body_params(), Vec::new());
+    command.execute(&mut project);
+    assert!(command.was_applied(), "physics add rejected: {:?}", command.rejection_reason());
+    let after = graph_of(&project, &fx);
+    assert_eq!(
+        after.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"),
+        Some(&SerializedParamValue::Float { value: 3.0 })
+    );
+    assert!(after.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_2"));
+}
+
+#[test]
+fn scene_physics_append_rejects_malformed_count_without_mutation() {
+    let mut graph = render_scene_graph(0, 0);
+    graph.nodes.iter_mut().find(|node| node.id == 0).unwrap().params.insert(
+        "objects".into(),
+        SerializedParamValue::Float { value: f32::NAN },
+    );
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let version = project.find_effect_by_id(&fx).unwrap().graph_structure_version;
+    let mut command = AddSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        0,
+        0,
+        (0.0, 0.0),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(command.rejection_reason(), Some("Add scene object render scene has an invalid object count"));
+    assert_eq!(serde_json::to_value(graph_of(&project, &fx)).unwrap(), serde_json::to_value(&graph).unwrap());
+    assert_eq!(project.find_effect_by_id(&fx).unwrap().graph_structure_version, version);
+}
+
+#[test]
+fn scene_physics_append_rejects_unrepresentable_count_increment() {
+    let graph = render_scene_graph(16_777_216, 0);
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let mut command = AddSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()), vec![], 0, 0, (0.0, 0.0),
+        Vec::new(), Vec::new(), Vec::new(), mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(command.rejection_reason(), Some("Add scene object object count is exhausted"));
+    assert_eq!(graph_of(&project, &fx), &graph);
+}
+
+#[test]
+fn scene_physics_append_rejects_occupied_destination_without_mutation() {
+    let mut graph = render_scene_graph(2, 0);
+    graph.wires.push(EffectGraphWire {
+        from_node: 7,
+        from_port: "object".into(),
+        to_node: 0,
+        to_port: "object_2".into(),
+    });
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let version = project.find_effect_by_id(&fx).unwrap().graph_structure_version;
+    let mut command = AddSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        0,
+        1,
+        (0.0, 0.0),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(command.rejection_reason(), Some("Add scene object destination object slot is occupied"));
+    assert_eq!(graph_of(&project, &fx), &graph);
+    assert_eq!(project.find_effect_by_id(&fx).unwrap().graph_structure_version, version);
+}
+
+#[test]
 fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
     let before = graph_of(&project, &fx).clone();

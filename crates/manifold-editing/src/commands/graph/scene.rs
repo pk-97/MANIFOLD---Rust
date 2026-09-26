@@ -42,19 +42,15 @@ use super::{
 /// exactly like a group-creation, so undo restores the pre-edit `(nodes,
 /// wires)` verbatim rather than reversing each sub-step by hand.
 ///
-/// `next_index` (the new object's 0-based slot, `k` in `mesh_k`/`material_k`/
-/// `transform_k`) is resolved by the caller from the LIVE `objects` param
-/// value shown on the node face at click time — not re-derived here. This
-/// command can't fall back on `render_scene`'s own `DEFAULT_OBJECTS`/
-/// `OBJECT_SAFETY_MAX` (they're private to `manifold-renderer`, which
-/// `manifold-editing` does not depend on), so the UI's already-resolved count
-/// is the one source of truth; `execute()` is a deterministic function of it.
+/// `next_index` remains in the constructor for the scene-setup action ABI, but
+/// is only a stale UI hint. The content-owned `render_scene.objects` count is
+/// validated and resolved at execution time so logical parent rows cannot
+/// overwrite a compound object's later physical parts.
 #[derive(Debug)]
 pub struct AddSceneObjectCommand {
     target: GraphTarget,
     scope_path: Vec<u32>,
     render_scene_node_id: u32,
-    next_index: u32,
     centroid: (f32, f32),
     /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new material/
     /// transform/scene_object nodes' full param manifests, computed by the
@@ -79,6 +75,8 @@ pub struct AddSceneObjectCommand {
         Vec<EffectGraphWire>,
         Option<PresetMetadata>,
     )>,
+    // Reuse the accepted graph identities when redo restores this insertion.
+    after: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
     rejection: Option<&'static str>,
 }
 
@@ -87,7 +85,7 @@ impl AddSceneObjectCommand {
         target: GraphTarget,
         scope_path: Vec<u32>,
         render_scene_node_id: u32,
-        next_index: u32,
+        _next_index: u32,
         centroid: (f32, f32),
         material_metadata: Vec<SceneParamMetadata>,
         transform_metadata: Vec<SceneParamMetadata>,
@@ -98,7 +96,6 @@ impl AddSceneObjectCommand {
             target,
             scope_path,
             render_scene_node_id,
-            next_index,
             centroid,
             material_metadata,
             transform_metadata,
@@ -107,8 +104,16 @@ impl AddSceneObjectCommand {
             physics_material_metadata: None,
             catalog_default,
             prev: None,
+            after: None,
             rejection: None,
         }
+    }
+
+    fn capture_after(&mut self, project: &Project) {
+        if self.prev.is_none() { return; }
+        self.after = project.graph_for_target(&self.target, Some(&self.catalog_default))
+            .and_then(|def| graph_level(def, &self.scope_path)
+                .map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec(), def.preset_metadata.clone())));
     }
 
     /// Request the physics-aware Add Object shape. If this is used in a
@@ -154,10 +159,15 @@ impl AddSceneObjectCommand {
         Ok(Some((world_id, body_slot)))
     }
 
-    fn execute_physics(&mut self, project: &mut Project, world_id: u32, body_slot: u32) {
+    fn execute_physics(
+        &mut self,
+        project: &mut Project,
+        world_id: u32,
+        body_slot: u32,
+        k: u32,
+    ) {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
-        let k = self.next_index;
         let centroid = self.centroid;
         let Some(body_metadata) = self.physics_body_metadata.as_ref() else {
             return;
@@ -259,6 +269,7 @@ impl AddSceneObjectCommand {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
         refresh_target_manifest(project, &self.target);
+        self.capture_after(project);
     }
 }
 
@@ -428,12 +439,52 @@ impl Command for AddSceneObjectCommand {
     }
 
     fn execute(&mut self, project: &mut Project) {
+        if let Some((nodes, wires, metadata)) = self.after.as_ref() {
+            self.rejection = None;
+            let unchanged = project.graph_for_target(&self.target, Some(&self.catalog_default))
+                .and_then(|def| graph_level(def, &self.scope_path).map(|(nodes, wires)| (def, nodes, wires)))
+                .zip(self.prev.as_ref())
+                .is_some_and(|((def, nodes, wires), (before_nodes, before_wires, before_metadata))|
+                    nodes == before_nodes && wires == before_wires && &def.preset_metadata == before_metadata);
+            if !unchanged {
+                self.rejection = Some("Add Object redo rejected: graph changed since undo");
+                return;
+            }
+            let restored = with_existing_target_graph_mut(project, &self.target, true, |def| {
+                let (target_nodes, target_wires) = descend_level(&mut def.nodes, &mut def.wires, &self.scope_path)?;
+                target_nodes.clone_from(nodes);
+                target_wires.clone_from(wires);
+                def.preset_metadata.clone_from(metadata);
+                Some(())
+            }).flatten().is_some();
+            if !restored {
+                self.rejection = Some("Add Object redo target is unavailable");
+                return;
+            }
+            refresh_target_manifest(project, &self.target);
+            return;
+        }
         self.prev = None;
         self.rejection = None;
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = match scene_object_append_slot_for_target(
+            project,
+            &self.target,
+            &self.catalog_default,
+            &scope,
+            render_id,
+        ) {
+            Ok(k) => k,
+            Err(reason) => {
+                self.rejection = Some(reason);
+                return;
+            }
+        };
         if self.physics_body_metadata.is_some() {
             match self.physics_world_for_scope(project) {
                 Ok(Some((world_id, body_slot))) => {
-                    self.execute_physics(project, world_id, body_slot);
+                    self.execute_physics(project, world_id, body_slot, k);
                     return;
                 }
                 Err(reason) => {
@@ -443,9 +494,6 @@ impl Command for AddSceneObjectCommand {
                 Ok(None) => {}
             }
         }
-        let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let k = self.next_index;
         let centroid = self.centroid;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
@@ -660,6 +708,7 @@ impl Command for AddSceneObjectCommand {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
         refresh_target_manifest(project, &self.target);
+        self.capture_after(project);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -682,12 +731,82 @@ impl Command for AddSceneObjectCommand {
     }
 
     fn was_applied(&self) -> bool {
-        self.prev.is_some()
+        self.prev.is_some() && self.rejection.is_none()
     }
 
     fn rejection_reason(&self) -> Option<&str> {
         self.rejection
     }
+}
+
+const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
+
+/// Resolve the next physical render-scene object slot from content-owned
+/// state. Callers may carry a logical UI count for action compatibility, but
+/// it cannot identify a physical slot when a compound object has children.
+pub(super) fn scene_object_append_slot(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    render_id: u32,
+) -> Result<u32, &'static str> {
+    let Some(render) = nodes.iter().find(|node| node.id == render_id) else {
+        return Err("Add scene object render scene is unavailable");
+    };
+    if render.type_id != RENDER_SCENE_TYPE_ID {
+        return Err("Add scene object target is not a render scene");
+    }
+    let Some(value) = render.params.get("objects") else {
+        return Err("Add scene object render scene has an invalid object count");
+    };
+    let count = match value {
+        SerializedParamValue::Float { value }
+            if value.is_finite() && *value >= 0.0 && value.fract() == 0.0 =>
+        {
+            if *value >= u32::MAX as f32 {
+                return Err("Add scene object object count is exhausted");
+            }
+            *value as u32
+        }
+        SerializedParamValue::Int { value } if *value >= 0 => *value as u32,
+        _ => return Err("Add scene object render scene has an invalid object count"),
+    };
+    // Render-scene counts are written as f32. Reject an increment which
+    // cannot survive serialization instead of reusing the last slot.
+    if count == u32::MAX || (count + 1) as f32 as u32 != count + 1 {
+        return Err("Add scene object object count is exhausted");
+    }
+    let destination = format!("object_{count}");
+    if wires
+        .iter()
+        .any(|wire| wire.to_node == render_id && wire.to_port == destination)
+    {
+        return Err("Add scene object destination object slot is occupied");
+    }
+    Ok(count)
+}
+
+fn scene_object_append_slot_for_target(
+    project: &Project,
+    target: &GraphTarget,
+    catalog_default: &EffectGraphDef,
+    scope: &[u32],
+    render_id: u32,
+) -> Result<u32, &'static str> {
+    let Some(def) = project.graph_for_target(target, Some(catalog_default)) else {
+        return Err("Add scene object target is unavailable");
+    };
+    scene_object_append_slot_for_scope(def, scope, render_id)
+}
+
+pub(super) fn scene_object_append_slot_for_scope(
+    def: &EffectGraphDef,
+    scope: &[u32],
+    render_id: u32,
+) -> Result<u32, &'static str> {
+    let Some((nodes, wires)) = graph_level(def, scope) else {
+        return Err("Add scene object scope is unavailable");
+    };
+    scene_object_append_slot(nodes, wires, render_id)
 }
 
 /// The add-light gesture (D7a): one undoable composite edit that (1) bumps
@@ -942,9 +1061,9 @@ fn shift_indexed_ports_down(
 /// for P3 to handle if a real ungrouped scene needs it.
 ///
 /// `object_index` (`k`, the 0-based slot in `object_k`) is resolved by the
-/// caller from the live Vm's own `ObjectKnownRow::index` — not re-derived
-/// here, same "UI's already-resolved index is the one source of truth"
-/// posture `AddSceneObjectCommand::next_index` documents.
+/// caller from the live Vm's own `ObjectKnownRow::index`. This is a delete
+/// target for an existing physical slot; append commands resolve their next
+/// slot from the content-owned render-scene count at execution time.
 #[derive(Debug)]
 pub struct RemoveSceneObjectCommand {
     target: GraphTarget,
