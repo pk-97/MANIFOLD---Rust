@@ -198,3 +198,7 @@ mod blob_grain_probe_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/mosh.rs"]
 mod mosh_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/fragment_cut_edges.rs"]
+mod fragment_cut_edges;
