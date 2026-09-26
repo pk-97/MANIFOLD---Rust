@@ -3124,7 +3124,6 @@ mod tests {
         assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 0.5, ..base }));
         assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 2.0, ..base }));
         assert!(!blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 1.0, ..base }));
-        assert_eq!(SHADOW_RAYS_MSL.matches("force_opacity(forced_opacity::non_opaque)").count(), 2);
     }
 
     /// P4b (§5.2) source contracts: ONE shared appearance-acceptance helper
@@ -3167,16 +3166,26 @@ mod tests {
         assert!(gi.contains("if (slot_materials[oi].kind == 0.0f)"));
         assert!(gi.contains("float3 unlit_emission = (sampler_active && bounce == 0u)"));
         assert!(gi.contains("gi += throughput * (hit_albedo + unlit_emission) * gi_brightness;"));
-        assert!(gi.contains("float hit_kd = (1.0f - max(hit_f.r, max(hit_f.g, hit_f.b))) * (1.0f - hit_metallic);"));
-        assert!(gi.contains("hit_albedo * hit_kd, slot_materials[oi].translucency"));
-        assert!(gi.contains("throughput *= hit_albedo * hit_kd;"));
-        assert!(trace.contains("traced = (hit_emissive + hit_kd * hit_albedo * hit_diffuse_env + hit_f * hit_specular_env + sun_bounce_term) * refl_hit_brightness;"));
+        // The shared surface resolver owns texture/factor evaluation for
+        // both hit classes. Numeric energy/lobe proofs cover its equations.
+        assert_eq!(gi.matches("rt_surface(").count(), 1);
+        assert!(gi.contains("rt_surface_fresnel(surface,"));
+        assert!(gi.contains("rt_direct_lights("));
+        let reflection = msl_block(trace, "if (walk_with_alpha_test(refl_q,");
+        assert_eq!(reflection.matches("rt_surface(").count(), 1);
+        assert_eq!(reflection.matches("refl_hit_brightness").count(), 2,
+            "unlit and lit reflection branches each apply appearance brightness once");
     }
 
     #[test]
     fn retained_rt_source_contracts_are_present() {
         assert!(SHADOW_RAYS_MSL.contains("constant bool HAS_TRANSLUCENCY [[function_constant(100)]];"));
-        assert_eq!(SHADOW_RAYS_MSL.matches("force_opacity(forced_opacity::non_opaque)").count(), 2);
+        for owner in ["static float3 sun_bounce_at_hit(", "static float3 rt_direct_lights(",
+            "kernel void trace_shadow_rays("] {
+            assert_eq!(msl_block(SHADOW_RAYS_MSL, owner)
+                .matches("force_opacity(forced_opacity::non_opaque)").count(), 1,
+                "{owner} must deliver translucent candidates for visibility queries");
+        }
         assert!(SHADOW_RAYS_MSL.contains("MAX_RT_REFL_SPP"));
     }
 
