@@ -80,6 +80,15 @@ Physics Solids demo. The original larger design remains a roadmap.
   Backward time and Reset also rebuild. Paused Animated position/rotation edits
   and undo teleport only the edited body (or copies) immediately, while owed historical ticks retain
   their prior trajectory. Arbitrary-time seek replay is not provided.
+  Rigid and FLIP adapters now share `manifold-physics::input` for bounded
+  chronological history and interpolation. Box3D retains gravity alongside
+  poses and samples it at each tick start, so a later gravity edit cannot
+  rewrite the forces on owed ticks. At a paused edit, the old endpoint closes
+  the preceding motion interval and the edited endpoint starts the next one.
+  The rigid history has 256 preallocated slots; exhaustion preserves its
+  accepted prefix and stops stepping with a restart/bake diagnostic until reset
+  or a setup rebuild. It no longer grows without a bound. Timestamped external
+  modulation capture remains P5 work in `FLUID_ENGINE_INTEGRATION_PLAN.md`.
 - The Physics Solids preset exposes each body's shape, motion, mass, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.

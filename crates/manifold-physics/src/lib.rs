@@ -6,6 +6,7 @@
 //! non-`Sync` marker so it may move between threads but cannot be shared there.
 
 pub use manifold_foundation::Seconds;
+pub mod input;
 pub mod interaction;
 pub use interaction::{
     FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,

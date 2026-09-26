@@ -1,6 +1,5 @@
 //! CPU FLIP reference runtime. Native state belongs exclusively to a worker;
 //! the content thread retains bounded control history and immutable mesh frames.
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,6 +9,9 @@ use manifold_core::Seconds;
 use manifold_fluids::{
     Bounds, FluidWorld, FrameStats, LiquidOptions, SurfaceOptions, SurfaceVertex, TimeStepOptions,
     WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
+};
+use manifold_physics::input::{
+    HistoryWrite, InputHistory, Timestamped, input_span, input_span_before,
 };
 
 use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
@@ -192,6 +194,12 @@ impl FluidControls {
 struct Sample {
     time: f64,
     controls: FluidControls,
+}
+
+impl Timestamped for Sample {
+    fn time(&self) -> manifold_physics::Seconds {
+        manifold_physics::Seconds(self.time)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -497,7 +505,7 @@ impl Drop for Worker {
 pub struct FluidRuntime {
     worker: Option<Worker>,
     settings: Option<FluidSettings>,
-    history: VecDeque<Sample>,
+    history: InputHistory<Sample>,
     role_setup: Arc<roles::Setup>,
     role_history: roles::History,
     last_transport: Option<f64>,
@@ -527,7 +535,8 @@ impl Default for FluidRuntime {
         Self {
             worker: None,
             settings: None,
-            history: VecDeque::with_capacity(HISTORY_CAPACITY),
+            history: InputHistory::with_capacity(HISTORY_CAPACITY)
+                .expect("FLIP history capacity must be at least two"),
             role_setup: Arc::new(roles::Setup::default()),
             role_history: roles::History::default(),
             last_transport: None,
@@ -677,32 +686,55 @@ impl FluidRuntime {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
-        if self.cache_mode == CacheMode::Playback {
-            self.target_time = (transport.0 * speed as f64).max(0.0);
+        let target_time = if self.cache_mode == CacheMode::Playback {
+            (transport.0 * speed as f64).max(0.0)
         } else if let Some(previous) = self.last_transport {
-            self.target_time += (transport.0 - previous).max(0.0) * speed as f64;
+            self.target_time + (transport.0 - previous).max(0.0) * speed as f64
+        } else {
+            self.target_time
+        };
+        if self.cache_mode == CacheMode::Playback {
+            // Playback addresses cached ticks directly, including speed edits
+            // that move its target backward. No solver consumes these controls.
+            self.history.clear();
+            self.role_history.clear();
         }
-        self.last_transport = Some(transport.0);
-        if let Some(last) = self.history.back_mut()
-            && (last.time - self.target_time).abs() < 1e-10
+        self.prune_history()?;
+        if self
+            .history
+            .back()
+            .is_some_and(|last| last.time == target_time && last.controls == controls)
+            && self
+                .role_history
+                .latest_matches(&self.role_setup, scene_roles)
         {
-            last.controls = controls;
-            self.role_history
-                .observe(&self.role_setup, scene_roles, true);
+            // A held transport with unchanged controls needs no extra endpoint,
+            // even when history is full and the worker is still catching up.
+            self.target_time = target_time;
+            self.last_transport = Some(transport.0);
             return Ok(());
         }
-        self.prune_history();
-        if self.history.len() == HISTORY_CAPACITY {
-            let error = "Water preview is too far behind to retain its control history. Lower resolution and reset.".to_owned();
-            self.failure = Some(error.clone());
-            return Err(error);
-        }
-        self.history.push_back(Sample {
-            time: self.target_time,
-            controls,
-        });
-        self.role_history
-            .observe(&self.role_setup, scene_roles, false);
+        let write = match self.history.record(
+            Sample {
+                time: target_time,
+                controls,
+            },
+            manifold_physics::Seconds(self.simulation_time()),
+        ) {
+            Ok(write) => write,
+            Err(error) => {
+                let message = format!("Water: {error}");
+                self.failure = Some(message.clone());
+                return Err(message);
+            }
+        };
+        self.target_time = target_time;
+        self.last_transport = Some(transport.0);
+        self.role_history.observe(
+            &self.role_setup,
+            scene_roles,
+            matches!(write, HistoryWrite::Replaced),
+        );
         Ok(())
     }
 
@@ -710,52 +742,59 @@ impl FluidRuntime {
         self.last_transport = Some(transport.0);
     }
 
-    fn prune_history(&mut self) {
+    fn prune_history(&mut self) -> Result<(), String> {
         let retain_from = (self.simulation_time() - TICK).max(0.0);
-        while self.history.len() > 2 && self.history[1].time < retain_from - 1e-10 {
-            self.history.pop_front();
-            self.role_history.pop_front();
-        }
+        let removed = self
+            .history
+            .prune_before(manifold_physics::Seconds(retain_from))
+            .map_err(|error| format!("Water preview history could not be pruned: {error}"))?;
+        self.role_history.pop_front(removed);
+        Ok(())
     }
 
-    fn controls_at<'a>(mut history: impl Iterator<Item = &'a Sample>, time: f64) -> FluidControls {
-        let mut previous = *history.next().expect("observe before advance");
-        for next in history {
-            if next.time >= time {
-                let alpha = if next.time > previous.time {
-                    ((time - previous.time) / (next.time - previous.time)).clamp(0.0, 1.0) as f32
-                } else {
-                    1.0
-                };
-                let interpolate = |a: Transform, b: Transform| Transform {
-                    pos: std::array::from_fn(|i| a.pos[i] + alpha * (b.pos[i] - a.pos[i])),
-                    scale: std::array::from_fn(|i| a.scale[i] + alpha * (b.scale[i] - a.scale[i])),
-                    ..a
-                };
-                // Continuous pose/force values interpolate; switches are held
-                // until their exact authored time rather than smeared in time.
-                return FluidControls {
-                    emitter: interpolate(previous.controls.emitter, next.controls.emitter),
-                    obstacle: interpolate(previous.controls.obstacle, next.controls.obstacle),
-                    obstacle_enabled: if alpha >= 1.0 {
-                        next.controls.obstacle_enabled
-                    } else {
-                        previous.controls.obstacle_enabled
-                    },
-                    gravity: previous.controls.gravity
-                        + alpha * (next.controls.gravity - previous.controls.gravity),
-                    inflow_speed: previous.controls.inflow_speed
-                        + alpha * (next.controls.inflow_speed - previous.controls.inflow_speed),
-                    emission: if alpha >= 1.0 {
-                        next.controls.emission
-                    } else {
-                        previous.controls.emission
-                    },
-                };
-            }
-            previous = *next;
+    fn controls_at<'a>(history: impl Iterator<Item = &'a Sample>, time: f64) -> FluidControls {
+        let span =
+            input_span(history, manifold_physics::Seconds(time)).expect("observe before advance");
+        Self::controls_from_span(span)
+    }
+
+    fn controls_at_before<'a>(
+        history: impl Iterator<Item = &'a Sample>,
+        time: f64,
+    ) -> FluidControls {
+        let span = input_span_before(history, manifold_physics::Seconds(time))
+            .expect("observe before advance");
+        Self::controls_from_span(span)
+    }
+
+    fn controls_from_span(span: manifold_physics::input::InputSpan<'_, Sample>) -> FluidControls {
+        let previous = span.before.controls;
+        let next = span.after.controls;
+        let alpha = span.alpha;
+        let interpolate = |a: Transform, b: Transform| Transform {
+            pos: std::array::from_fn(|i| a.pos[i] + alpha * (b.pos[i] - a.pos[i])),
+            scale: std::array::from_fn(|i| a.scale[i] + alpha * (b.scale[i] - a.scale[i])),
+            ..a
+        };
+        // Continuous pose/force values interpolate; switches are held until
+        // their exact authored time rather than smeared in time.
+        FluidControls {
+            emitter: interpolate(previous.emitter, next.emitter),
+            obstacle: interpolate(previous.obstacle, next.obstacle),
+            obstacle_enabled: if alpha >= 1.0 {
+                next.obstacle_enabled
+            } else {
+                previous.obstacle_enabled
+            },
+            gravity: previous.gravity + alpha * (next.gravity - previous.gravity),
+            inflow_speed: previous.inflow_speed
+                + alpha * (next.inflow_speed - previous.inflow_speed),
+            emission: if alpha >= 1.0 {
+                next.emission
+            } else {
+                previous.emission
+            },
         }
-        previous.controls
     }
 
     fn step_at(history: &[Sample], tick: u64) -> Step {
@@ -763,7 +802,7 @@ impl FluidRuntime {
         Step {
             previous: Self::controls_at(history.iter(), (current - TICK).max(0.0)),
             current: Self::controls_at(history.iter(), current),
-            next: Self::controls_at(history.iter(), current + TICK),
+            next: Self::controls_at_before(history.iter(), current + TICK),
         }
     }
 
@@ -791,7 +830,7 @@ impl FluidRuntime {
         self.stats = reply.stats;
         self.initialized = true;
         self.version = self.version.wrapping_add(1);
-        self.prune_history();
+        self.prune_history()?;
         Ok(())
     }
 
@@ -1286,6 +1325,13 @@ mod tests {
             .unwrap();
         assert_ne!(runtime.epoch, epoch);
         assert!((runtime.target_time - 2.0).abs() < 1e-9);
+        // A speed edit changes the absolute cache address without seeking the
+        // transport. It must not be rejected as backward authored input.
+        runtime
+            .observe(settings, controls, Seconds(1.1), 0.5, 0.0)
+            .unwrap();
+        assert!((runtime.target_time - 0.55).abs() < 1e-9);
+        assert_eq!(runtime.history.len(), 1);
     }
 
     #[test]
@@ -1556,6 +1602,108 @@ mod tests {
             runtime
                 .observe(settings, second, Seconds(1.1), 1.0, 0.0)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn fluid_same_time_edit_keeps_unfinished_ramp_endpoint() {
+        let mut runtime = FluidRuntime::default();
+        let settings = FluidSettings::default();
+        let initial = FluidControls::default();
+        runtime
+            .observe(settings, initial, Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        let mut authored = initial;
+        authored.gravity = 0.0;
+        authored.obstacle.pos[0] = 1.0;
+        runtime
+            .observe(settings, authored, Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+        authored.gravity = 10.0;
+        authored.obstacle.pos[0] = 2.0;
+        runtime
+            .observe(settings, authored, Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+
+        assert_eq!(runtime.history.len(), 3);
+        assert_eq!(
+            FluidRuntime::controls_at(runtime.history.iter(), 0.5).gravity,
+            -4.905
+        );
+        assert_eq!(
+            FluidRuntime::controls_at(runtime.history.iter(), 1.0).gravity,
+            10.0
+        );
+        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        assert_eq!(FluidRuntime::step_at(&samples, 59).next.gravity, 0.0);
+        assert_eq!(FluidRuntime::step_at(&samples, 60).current.gravity, 10.0);
+        assert_eq!(
+            FluidRuntime::step_at(&samples, 59).next.obstacle.pos[0],
+            1.0
+        );
+        assert_eq!(
+            FluidRuntime::step_at(&samples, 60).current.obstacle.pos[0],
+            2.0
+        );
+    }
+
+    #[test]
+    fn fluid_history_overflow_latches_until_clear() {
+        let mut runtime = FluidRuntime::default();
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        for index in 0..HISTORY_CAPACITY {
+            runtime
+                .observe(settings, controls, Seconds(index as f64 * TICK), 1.0, 0.0)
+                .unwrap();
+        }
+        let target_before = runtime.target_time;
+        let last_transport = runtime.last_transport;
+        let prefix: Vec<_> = runtime.history.iter().map(|sample| sample.time).collect();
+        runtime
+            .observe(
+                settings,
+                controls,
+                Seconds((HISTORY_CAPACITY - 1) as f64 * TICK),
+                1.0,
+                0.0,
+            )
+            .expect("holding identical inputs must not exhaust a full history");
+        assert_eq!(runtime.history.len(), HISTORY_CAPACITY);
+        let error = runtime
+            .observe(
+                settings,
+                controls,
+                Seconds(HISTORY_CAPACITY as f64 * TICK),
+                1.0,
+                0.0,
+            )
+            .unwrap_err();
+        assert!(error.contains("restart the simulation"));
+        assert_eq!(runtime.target_time, target_before);
+        assert_eq!(runtime.last_transport, last_transport);
+        assert_eq!(
+            runtime
+                .history
+                .iter()
+                .map(|sample| sample.time)
+                .collect::<Vec<_>>(),
+            prefix
+        );
+        assert!(
+            runtime.advance(false).is_err(),
+            "overflow must stop scheduling native work"
+        );
+        assert!(
+            runtime
+                .observe(settings, controls, Seconds(200.0), 1.0, 0.0)
+                .is_err()
+        );
+        runtime.clear();
+        assert!(
+            runtime
+                .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
+                .is_ok()
         );
     }
 

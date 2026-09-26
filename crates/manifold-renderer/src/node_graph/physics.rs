@@ -1,7 +1,9 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
 use manifold_core::Seconds;
-use manifold_physics::{BodyConfig, BodyHandle, BodyKind, PhysicsWorld};
-use std::collections::VecDeque;
+use manifold_physics::{
+    input::{input_span, input_span_before, InputHistory, Timestamped},
+    BodyConfig, BodyHandle, BodyKind, PhysicsWorld,
+};
 use std::sync::Arc;
 
 use super::transform::Transform;
@@ -155,6 +157,13 @@ struct AuthoredPoseSample {
     time: f64,
     bodies: [Option<RigidBody>; MAX_BODIES],
     prototype: Option<RigidBody>,
+    gravity: [f32; 3],
+}
+
+impl Timestamped for AuthoredPoseSample {
+    fn time(&self) -> manifold_physics::Seconds {
+        manifold_physics::Seconds(self.time)
+    }
 }
 
 #[derive(Clone)]
@@ -307,7 +316,7 @@ pub struct RigidSimulation {
     accumulator: f64,
     authored_time: f64,
     physics_time: f64,
-    authored_samples: VecDeque<AuthoredPoseSample>,
+    authored_samples: InputHistory<AuthoredPoseSample>,
     reset_count: Option<f32>,
     pub poses: [Transform; MAX_BODIES],
     pub copy_poses: Vec<Transform>,
@@ -341,7 +350,8 @@ impl Default for RigidSimulation {
             accumulator: 0.0,
             authored_time: 0.0,
             physics_time: 0.0,
-            authored_samples: VecDeque::with_capacity(256),
+            authored_samples: InputHistory::with_capacity(256)
+                .expect("the fixed authored history capacity is valid"),
             reset_count: None,
             poses: [Transform::default(); MAX_BODIES],
             copy_poses: vec![Transform::default(); MAX_COPIES],
@@ -513,9 +523,15 @@ impl RigidSimulation {
             if self.world.is_some() && !topology_changed && !copy_topology_changed && !reset {
                 let elapsed = now.0 - self.last_time.unwrap_or(now).0;
                 let elapsed_simulation = elapsed * f64::from(speed);
-                self.authored_time += elapsed_simulation;
+                let authored_time = self.authored_time + elapsed_simulation;
+                self.record_authored_sample(
+                    authored_time,
+                    bodies.clone(),
+                    prototype.clone(),
+                    gravity,
+                )?;
+                self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
-                self.record_authored_sample(self.authored_time, bodies.clone(), prototype.clone());
                 self.last_time = Some(now);
             }
             return Ok(());
@@ -621,11 +637,17 @@ impl RigidSimulation {
             self.authored_time = 0.0;
             self.physics_time = 0.0;
             self.authored_samples.clear();
-            self.authored_samples.push_back(AuthoredPoseSample {
-                time: 0.0,
-                bodies: bodies.clone(),
-                prototype: prototype.clone(),
-            });
+            self.authored_samples
+                .record(
+                    AuthoredPoseSample {
+                        time: 0.0,
+                        bodies: bodies.clone(),
+                        prototype: prototype.clone(),
+                        gravity,
+                    },
+                    Seconds::ZERO,
+                )
+                .map_err(|error| format!("Physics: failed to seed input history: {error}"))?;
             for (index, body) in bodies.iter().enumerate() {
                 let Some(body) = body.as_ref().filter(|body| {
                     body.enabled && body.fragment_parent.is_none() && body.release_count > 0.0
@@ -639,8 +661,14 @@ impl RigidSimulation {
         // Preserve all elapsed time. Preview can yield with ticks still queued.
         let elapsed_simulation = elapsed * f64::from(speed);
         let stationary_edit = elapsed_simulation == 0.0;
-        self.authored_time += elapsed_simulation;
-        self.record_authored_sample(self.authored_time, bodies.clone(), prototype.clone());
+        let authored_time = self.authored_time + elapsed_simulation;
+        self.record_authored_sample(
+            authored_time,
+            bodies.clone(),
+            prototype.clone(),
+            gravity,
+        )?;
+        self.authored_time = authored_time;
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = 1.0 / 60.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
@@ -652,7 +680,6 @@ impl RigidSimulation {
         };
         {
             let world = self.world.as_mut().expect("world constructed above");
-            world.set_gravity(gravity).map_err(|e| e.to_string())?;
             for (i, body) in bodies.iter().enumerate() {
                 let (Some(body), Some(handle)) = (body, self.handles[i]) else {
                     continue;
@@ -719,8 +746,14 @@ impl RigidSimulation {
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for _ in 0..steps {
+            let tick_gravity = self.interpolated_gravity(self.physics_time);
+            self.world
+                .as_mut()
+                .expect("world constructed above")
+                .set_gravity(tick_gravity)
+                .map_err(|e| e.to_string())?;
             let dynamic_microsteps =
-                self.configure_fast_bodies(&bodies, prototype.as_ref(), gravity, TICK)?;
+                self.configure_fast_bodies(&bodies, prototype.as_ref(), tick_gravity, TICK)?;
             let (animated_microsteps, animated_speed) =
                 self.animated_microsteps(&bodies, prototype.as_ref(), TICK);
             let microsteps = animated_microsteps.max(dynamic_microsteps);
@@ -802,7 +835,7 @@ impl RigidSimulation {
         if completed == 0 {
             self.process_fragment_releases(self.physics_time, &bodies)?;
         }
-        self.prune_authored_samples();
+        self.prune_authored_samples()?;
         if self.pending_time.0 > 0.0
             && speed > 0.0
             && self
@@ -1123,39 +1156,34 @@ impl RigidSimulation {
         time: f64,
         bodies: [Option<RigidBody>; MAX_BODIES],
         prototype: Option<RigidBody>,
-    ) {
-        const EPSILON: f64 = 1.0e-12;
-        let same_time = self
-            .authored_samples
-            .back()
-            .is_some_and(|last| (last.time - time).abs() <= EPSILON);
-        if same_time {
-            if self.authored_samples.back().is_some_and(|last| {
-                same_body_arrays(&last.bodies, &bodies)
-                    && same_optional_body(last.prototype.as_ref(), prototype.as_ref())
-            }) {
-                return;
-            }
-            let preserve_owed_endpoint = self.physics_time + EPSILON < time
-                && self.authored_samples.len() >= 2
-                && self
-                    .authored_samples
-                    .get(self.authored_samples.len() - 2)
-                    .is_some_and(|sample| sample.time < time - EPSILON);
-            if !preserve_owed_endpoint {
-                *self.authored_samples.back_mut().expect("sample exists") = AuthoredPoseSample {
-                    time,
-                    bodies: bodies.clone(),
-                    prototype: prototype.clone(),
-                };
-                return;
-            }
+        gravity: [f32; 3],
+    ) -> Result<(), String> {
+        if self.authored_samples.is_exhausted() {
+            return Err(
+                "Physics: authored input history is exhausted; reset the simulation to continue"
+                    .into(),
+            );
         }
-        self.authored_samples.push_back(AuthoredPoseSample {
-            time,
-            bodies,
-            prototype,
-        });
+        if self.authored_samples.back().is_some_and(|last| {
+            last.time == time
+                && same_body_arrays(&last.bodies, &bodies)
+                && same_optional_body(last.prototype.as_ref(), prototype.as_ref())
+                && last.gravity == gravity
+        }) {
+            return Ok(());
+        }
+        self.authored_samples
+            .record(
+                AuthoredPoseSample {
+                    time,
+                    bodies,
+                    prototype,
+                    gravity,
+                },
+                Seconds(self.physics_time),
+            )
+            .map(|_| ())
+            .map_err(|error| format!("Physics: input history rejected authored sample: {error}"))
     }
 
     fn configure_fast_bodies(
@@ -1365,52 +1393,39 @@ impl RigidSimulation {
         time: f64,
         mut current: RigidBody,
     ) -> Option<RigidBody> {
-        let mut previous = self.authored_samples.front()?.bodies[index].clone()?;
-        let mut previous_time = self.authored_samples.front()?.time;
-        for sample in self.authored_samples.iter().skip(1) {
-            let next = sample.bodies[index].clone()?;
-            if sample.time >= time {
-                let alpha = interpolation_alpha(previous_time, sample.time, time);
-                let pose = interpolate_body(previous, next, alpha).transform;
-                current.transform.pos = pose.pos;
-                current.transform.rot_euler = pose.rot_euler;
-                return Some(current);
-            }
-            previous = next;
-            previous_time = sample.time;
-        }
-        current.transform.pos = previous.transform.pos;
-        current.transform.rot_euler = previous.transform.rot_euler;
+        let span = input_span_before(self.authored_samples.iter(), Seconds(time))?;
+        let previous = span.before.bodies[index].clone()?;
+        let next = span.after.bodies[index].clone()?;
+        let pose = interpolate_body(previous, next, span.alpha).transform;
+        current.transform.pos = pose.pos;
+        current.transform.rot_euler = pose.rot_euler;
         Some(current)
     }
 
     fn interpolated_prototype(&self, time: f64, mut current: RigidBody) -> Option<RigidBody> {
-        let first = self.authored_samples.front()?.prototype.clone()?;
-        let mut previous = first;
-        let mut previous_time = self.authored_samples.front()?.time;
-        for sample in self.authored_samples.iter().skip(1) {
-            let next = sample.prototype.clone()?;
-            if sample.time >= time {
-                let alpha = interpolation_alpha(previous_time, sample.time, time);
-                let pose = interpolate_body(previous, next, alpha).transform;
-                current.transform.pos = pose.pos;
-                current.transform.rot_euler = pose.rot_euler;
-                return Some(current);
-            }
-            previous = next;
-            previous_time = sample.time;
-        }
-        current.transform.pos = previous.transform.pos;
-        current.transform.rot_euler = previous.transform.rot_euler;
+        let span = input_span_before(self.authored_samples.iter(), Seconds(time))?;
+        let previous = span.before.prototype.clone()?;
+        let next = span.after.prototype.clone()?;
+        let pose = interpolate_body(previous, next, span.alpha).transform;
+        current.transform.pos = pose.pos;
+        current.transform.rot_euler = pose.rot_euler;
         Some(current)
     }
 
-    fn prune_authored_samples(&mut self) {
-        while self.authored_samples.len() > 1
-            && self.authored_samples[1].time <= self.physics_time + 1.0e-12
-        {
-            self.authored_samples.pop_front();
-        }
+    fn interpolated_gravity(&self, time: f64) -> [f32; 3] {
+        let span = input_span(self.authored_samples.iter(), Seconds(time))
+            .expect("authored input history is seeded before stepping");
+        std::array::from_fn(|axis| {
+            span.before.gravity[axis]
+                + (span.after.gravity[axis] - span.before.gravity[axis]) * span.alpha
+        })
+    }
+
+    fn prune_authored_samples(&mut self) -> Result<(), String> {
+        self.authored_samples
+            .prune_before(Seconds(self.physics_time + 1.0e-12))
+            .map(|_| ())
+            .map_err(|error| format!("Physics: failed to prune input history: {error}"))
     }
 }
 
@@ -1429,14 +1444,6 @@ fn same_body_arrays(
     left.iter()
         .zip(right)
         .all(|(left, right)| same_optional_body(left.as_ref(), right.as_ref()))
-}
-
-fn interpolation_alpha(previous_time: f64, next_time: f64, time: f64) -> f32 {
-    if next_time <= previous_time {
-        1.0
-    } else {
-        ((time - previous_time) / (next_time - previous_time)).clamp(0.0, 1.0) as f32
-    }
 }
 
 fn interpolate_body(mut previous: RigidBody, next: RigidBody, alpha: f32) -> RigidBody {
@@ -1744,6 +1751,168 @@ mod tests {
 
         assert!((per_frame.poses[0].pos[1] - partitioned.poses[0].pos[1]).abs() < 1.0e-5);
         assert!((per_frame.poses[0].pos[0] - partitioned.poses[0].pos[0]).abs() < 1.0e-5);
+    }
+
+    fn varying_gravity(sample: usize) -> [f32; 3] {
+        let phase = sample as f32 * 0.09;
+        [phase.sin() * 2.0, -9.8 + phase.cos() * 3.0, phase.sin() * -0.75]
+    }
+
+    fn run_varying_gravity_trace(fps: usize) -> ([f32; 3], [f32; 3]) {
+        assert_eq!(240 % fps, 0);
+        let bodies = one_body([0.0, 4.0, 0.0]);
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(
+                bodies.clone(),
+                varying_gravity(0),
+                Seconds::ZERO,
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        let samples_per_frame = 240 / fps;
+        for frame in 1..=fps {
+            let end_sample = frame * samples_per_frame;
+            {
+                let _authored = PhysicsAuthoredSampleScope::new();
+                for sample in ((frame - 1) * samples_per_frame + 1)..=end_sample {
+                    simulation
+                        .advance(
+                            bodies.clone(),
+                            varying_gravity(sample),
+                            Seconds(sample as f64 / 240.0),
+                            1.0,
+                            0.0,
+                        )
+                        .unwrap();
+                }
+            }
+            simulation
+                .advance(
+                    bodies.clone(),
+                    varying_gravity(end_sample),
+                    Seconds(end_sample as f64 / 240.0),
+                    1.0,
+                    0.0,
+                )
+                .unwrap();
+        }
+        let velocity = simulation
+            .world
+            .as_ref()
+            .expect("trace builds a native world")
+            .linear_velocity(simulation.handles[0].expect("trace body has a handle"))
+            .unwrap();
+        (simulation.poses[0].pos, velocity)
+    }
+
+    #[test]
+    fn retained_gravity_trace_is_render_partition_invariant() {
+        let traces = [24, 30, 60].map(run_varying_gravity_trace);
+        for trace in traces.iter().skip(1) {
+            for (actual, expected) in trace.0.iter().zip(traces[0].0) {
+                assert!((actual - expected).abs() < 1.0e-5);
+            }
+            for (actual, expected) in trace.1.iter().zip(traces[0].1) {
+                assert!((actual - expected).abs() < 1.0e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn changed_gravity_waits_behind_preview_debt() {
+        let bodies = one_body([0.0, 4.0, 0.0]);
+        let old_gravity = [0.0, -9.8, 0.0];
+        let new_gravity = [0.0, 8.0, 0.0];
+        let mut expected = RigidSimulation::default();
+        expected
+            .advance(bodies.clone(), old_gravity, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        expected
+            .advance(bodies.clone(), old_gravity, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        expected
+            .advance(bodies.clone(), new_gravity, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+
+        let mut queued = RigidSimulation::default();
+        queued
+            .advance(bodies.clone(), old_gravity, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+        queued
+            .advance(bodies.clone(), old_gravity, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        assert!(queued.pending_time.0 > 0.0);
+        queued
+            .advance(bodies.clone(), new_gravity, Seconds(0.5), 1.0, 0.0)
+            .unwrap();
+        while queued.pending_time.0 > 0.0 {
+            queued
+                .advance(bodies.clone(), new_gravity, Seconds(0.5), 1.0, 0.0)
+                .unwrap();
+        }
+
+        assert_eq!(queued.poses, expected.poses);
+        let queued_velocity = queued
+            .world
+            .as_ref()
+            .expect("queued simulation builds a native world")
+            .linear_velocity(queued.handles[0].expect("queued body has a handle"))
+            .unwrap();
+        let expected_velocity = expected
+            .world
+            .as_ref()
+            .expect("expected simulation builds a native world")
+            .linear_velocity(expected.handles[0].expect("expected body has a handle"))
+            .unwrap();
+        for (actual, expected) in queued_velocity.iter().zip(expected_velocity) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn exhausted_authored_history_preserves_state_until_reset() {
+        let bodies = one_body([0.0, 4.0, 0.0]);
+        let gravity = [0.0, -9.8, 0.0];
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), gravity, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+        simulation.authored_samples = InputHistory::with_capacity(2).unwrap();
+        simulation
+            .record_authored_sample(0.0, bodies.clone(), None, gravity)
+            .unwrap();
+        simulation
+            .record_authored_sample(FRAME, bodies.clone(), None, gravity)
+            .unwrap();
+        let accepted_len = simulation.authored_samples.len();
+        let accepted_pose = simulation.poses;
+        let accepted_time = simulation.authored_time;
+        let accepted_debt = simulation.pending_time;
+
+        let error = simulation
+            .advance(bodies.clone(), gravity, Seconds(2.0 * FRAME), 1.0, 0.0)
+            .unwrap_err();
+        assert!(error.contains("exhausted") || error.contains("full"));
+        assert!(simulation.authored_samples.is_exhausted());
+        assert_eq!(simulation.authored_samples.len(), accepted_len);
+        assert_eq!(simulation.poses, accepted_pose);
+        assert_eq!(simulation.authored_time, accepted_time);
+        assert_eq!(simulation.pending_time, accepted_debt);
+
+        let retry = simulation
+            .record_authored_sample(FRAME, bodies.clone(), None, gravity)
+            .unwrap_err();
+        assert!(retry.contains("exhausted"));
+        assert_eq!(simulation.authored_samples.len(), accepted_len);
+
+        simulation
+            .advance(bodies, gravity, Seconds(2.0 * FRAME), 1.0, 1.0)
+            .unwrap();
+        assert!(!simulation.authored_samples.is_exhausted());
+        assert_eq!(simulation.authored_samples.len(), 1);
     }
 
     #[test]
@@ -2496,6 +2665,10 @@ mod tests {
             .interpolated_body(0, 0.25, bodies[0].clone().unwrap())
             .unwrap();
         assert!((owed_pose.transform.pos[0] + 1.25).abs() < 1.0e-4);
+        let closing_pose = simulation
+            .interpolated_body(0, 0.5, bodies[0].clone().unwrap())
+            .unwrap();
+        assert!((closing_pose.transform.pos[0] + 0.5).abs() < 1.0e-4);
     }
 
     #[test]

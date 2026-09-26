@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use manifold_fluids::{FluidWorld, InflowOptions, MeshHandle, MeshRole};
-use manifold_physics::{BodyPose, TriangleMesh};
+use manifold_physics::input::{input_span, input_span_before};
+use manifold_physics::{BodyPose, Seconds, TriangleMesh};
 
 use super::{FluidDomainLayout, HISTORY_CAPACITY, Sample, TICK};
 use crate::node_graph::fluid_role::{
@@ -232,10 +233,81 @@ mod tests {
         runtime
             .observe_scene(settings, controls, &roles, Seconds(1.0), 1.0, 0.0)
             .unwrap();
-        assert_eq!(runtime.history.len(), 2);
-        assert_eq!(runtime.role_history.values.len(), 2);
+        assert_eq!(runtime.history.len(), 3);
+        assert_eq!(runtime.role_history.values.len(), 3);
         assert_eq!(runtime.role_history.values.back().unwrap().velocity[0], 3.0);
         assert_eq!(runtime.role_history.values.capacity(), capacity);
+        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let mut values = Vec::new();
+        runtime.role_history.snapshot(&mut values);
+        assert_eq!(
+            controls_at_before(&samples, &values, 1, 0, 1.0).velocity[0],
+            2.0
+        );
+        assert_eq!(controls_at(&samples, &values, 1, 0, 1.0).velocity[0], 3.0);
+    }
+
+    #[test]
+    fn scene_physics_role_history_stays_aligned_across_replace_and_prune() {
+        let mut runtime = FluidRuntime::default();
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        let mut roles = [
+            Some(role(FluidRoleKind::Inflow)),
+            None,
+            Some(role(FluidRoleKind::Collider)),
+        ];
+        for role in roles.iter_mut().flatten() {
+            role.transform.pos[0] = 0.0;
+        }
+        runtime
+            .observe_scene(settings, controls, &roles, Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        roles[0].as_mut().unwrap().transform.pos[0] = 10.0;
+        roles[2].as_mut().unwrap().transform.pos[0] = 20.0;
+        roles[2].as_mut().unwrap().enabled = false;
+        runtime
+            .observe_scene(settings, controls, &roles, Seconds(1.0), 1.0, 0.0)
+            .unwrap();
+        for x in [21.0, 22.0] {
+            roles[0].as_mut().unwrap().transform.pos[0] = x;
+            roles[2].as_mut().unwrap().transform.pos[0] = 2.0 * x;
+            roles[2].as_mut().unwrap().enabled = true;
+            runtime
+                .observe_scene(settings, controls, &roles, Seconds(1.0), 1.0, 0.0)
+                .unwrap();
+        }
+        assert_eq!(runtime.history.len(), 3);
+        assert_eq!(runtime.role_history.values.len(), 6);
+        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        let mut values = Vec::new();
+        runtime.role_history.snapshot(&mut values);
+        assert_eq!(
+            controls_at(&samples, &values, 2, 0, 0.5).transform.pos[0],
+            5.0
+        );
+        assert_eq!(
+            controls_at(&samples, &values, 2, 1, 0.5).transform.pos[0],
+            10.0
+        );
+        assert!(!controls_at_before(&samples, &values, 2, 1, 1.0).enabled);
+        assert!(controls_at(&samples, &values, 2, 1, 1.0).enabled);
+
+        // Model the consumer completing these samples, without native stepping.
+        runtime.completed_tick = 120;
+        runtime.prune_history().unwrap();
+        assert_eq!(runtime.history.len(), 1);
+        assert_eq!(runtime.role_history.values.len(), 2);
+        let samples: Vec<_> = runtime.history.iter().copied().collect();
+        runtime.role_history.snapshot(&mut values);
+        assert_eq!(
+            controls_at(&samples, &values, 2, 0, 1.0).transform.pos[0],
+            22.0
+        );
+        assert_eq!(
+            controls_at(&samples, &values, 2, 1, 1.0).transform.pos[0],
+            44.0
+        );
     }
 
     #[test]
@@ -443,9 +515,25 @@ impl History {
     pub fn clear(&mut self) {
         self.values.clear();
     }
-    pub fn pop_front(&mut self) {
-        for _ in 0..self.stride {
-            self.values.pop_front();
+    pub fn latest_matches(&self, setup: &Setup, roles: &[Option<FluidRole>]) -> bool {
+        if self.stride != setup.len() || self.values.len() < self.stride {
+            return false;
+        }
+        self.values
+            .iter()
+            .skip(self.values.len() - self.stride)
+            .zip(&setup.roles)
+            .all(|(last, prepared)| {
+                roles[prepared.slot]
+                    .as_ref()
+                    .is_some_and(|role| *last == Controls::from_role(role))
+            })
+    }
+    pub fn pop_front(&mut self, count: usize) {
+        for _ in 0..count {
+            for _ in 0..self.stride {
+                self.values.pop_front();
+            }
         }
     }
     pub fn observe(&mut self, setup: &Setup, roles: &[Option<FluidRole>], replace: bool) {
@@ -477,21 +565,22 @@ fn controls_at(
     role: usize,
     time: f64,
 ) -> Controls {
-    let mut previous = 0;
-    for next in 1..samples.len() {
-        if samples[next].time >= time {
-            let alpha = if samples[next].time > samples[previous].time {
-                ((time - samples[previous].time) / (samples[next].time - samples[previous].time))
-                    .clamp(0.0, 1.0) as f32
-            } else {
-                1.0
-            };
-            return values[previous * stride + role]
-                .interpolate(values[next * stride + role], alpha);
-        }
-        previous = next;
-    }
-    values[previous * stride + role]
+    let span = input_span(samples.iter(), Seconds(time)).expect("observe before role sampling");
+    values[span.before_index * stride + role]
+        .interpolate(values[span.after_index * stride + role], span.alpha)
+}
+
+fn controls_at_before(
+    samples: &[Sample],
+    values: &[Controls],
+    stride: usize,
+    role: usize,
+    time: f64,
+) -> Controls {
+    let span =
+        input_span_before(samples.iter(), Seconds(time)).expect("observe before role sampling");
+    values[span.before_index * stride + role]
+        .interpolate(values[span.after_index * stride + role], span.alpha)
 }
 
 #[derive(Default)]
@@ -574,7 +663,7 @@ impl NativeRoles {
             let at = |time| controls_at(samples, values, setup.len(), index, time);
             let previous = at((current_time - TICK).max(0.0));
             let current = at(current_time);
-            let next = at(current_time + TICK);
+            let next = controls_at_before(samples, values, setup.len(), index, current_time + TICK);
             for &handle in &self.handles[index] {
                 let native = (|| {
                     world.set_mesh_motion(
