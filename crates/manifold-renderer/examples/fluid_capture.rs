@@ -1,7 +1,8 @@
-//! Capture the shipped Water Basin CPU FLIP scene for offline/preview timing.
+//! Capture a CPU FLIP preset for bounded offline/preview timing.
 //!
 //! The frame CSVs keep render CPU, command-buffer wait, whole-buffer GPU, and
-//! native solver metrics separate. Offline is a complete-step replay at 60 Hz;
+//! native solver metrics separate. Offline is a complete-step replay using the
+//! native fixed 60 Hz simulation; output frames may use a lower capture FPS.
 //! preview records the latest completed native snapshot, so repeated scalar
 //! values are expected when the worker is behind. Each stepped offline frame
 //! contributes one raw RGBA frame to `offline.rgba`; readback and file writes
@@ -11,7 +12,9 @@
 //!
 //! `cargo build --profile test --features gpu-proofs --example fluid_capture`
 //!
-//! Run the resulting example with exactly one output directory argument.
+//! Run with one output directory and optional `--preset`, `--width`, `--height`,
+//! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
+//! and `--linear` flags. Defaults preserve the shipped Water Basin workflow.
 
 use std::error::Error;
 use std::fs::{self, File};
@@ -26,25 +29,28 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::frame_status::FrameRenderStatus;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::headless_readback::readback_tonemapped_rgba8;
+use manifold_renderer::headless_readback::{
+    encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8,
+};
 use manifold_renderer::node_graph::{PrimitiveRegistry, physics::PhysicsStepScope};
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::render_target::RenderTarget;
 use serde::Serialize;
 
-const WIDTH: u32 = 1280;
-const HEIGHT: u32 = 720;
-const RESOLUTION: u32 = 24;
-const DOMAIN_SIZE: f64 = 4.0;
-const CELL_SIZE: f64 = DOMAIN_SIZE / RESOLUTION as f64;
-const SURFACE_DETAIL: u32 = 0;
+const DEFAULT_WIDTH: u32 = 1280;
+const DEFAULT_HEIGHT: u32 = 720;
+const DEFAULT_FRAMES: u32 = 480;
+const DEFAULT_FPS: u32 = 60;
+const DEFAULT_MAX_SECONDS: f64 = 180.0;
 const FIXED_HZ: f64 = 60.0;
-const DT: f64 = 1.0 / FIXED_HZ;
-const OFFLINE_FRAMES: u32 = 480;
 const PREVIEW_SECONDS: f64 = 8.0;
 const PREVIEW_MAX_SECONDS: f64 = 10.0;
-const OVERALL_MAX_SECONDS: f64 = 180.0;
+const MAX_WIDTH: u32 = 3840;
+const MAX_HEIGHT: u32 = 2160;
+const MAX_FRAMES: u32 = 600;
+const MAX_FPS: u32 = 60;
+const MAX_SECONDS: f64 = 900.0;
 const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms";
 const METRIC_NAMES: [&str; 6] = [
     "simulation_time",
@@ -56,6 +62,27 @@ const METRIC_NAMES: [&str; 6] = [
 ];
 
 type CaptureResult<T> = Result<T, Box<dyn Error>>;
+
+#[derive(Clone, Debug)]
+struct CaptureOptions {
+    output_dir: PathBuf,
+    preset_path: PathBuf,
+    width: u32,
+    height: u32,
+    frames: u32,
+    fps: u32,
+    offline_only: bool,
+    max_seconds: f64,
+    stills_every: Option<u32>,
+    linear: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PresetSettings {
+    resolution: u32,
+    domain_size: f64,
+    surface_detail: u32,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct FluidMetrics {
@@ -96,6 +123,7 @@ struct InitialFrameTimings {
 #[derive(Clone, Debug, Serialize)]
 struct PassMetadata {
     frames: u32,
+    fps: u32,
     initial_frame: InitialFrameTimings,
     start_simulation_time: f64,
     end_simulation_time: f64,
@@ -106,6 +134,7 @@ struct PassMetadata {
 struct PreviewMetadata {
     elapsed_s: f64,
     actual_frames: u32,
+    fps: u32,
     initial_frame: InitialFrameTimings,
     accepted_fluid_frames: u32,
     total_sim_ticks_advanced: u64,
@@ -117,6 +146,7 @@ struct PreviewMetadata {
 
 #[derive(Clone, Debug, Serialize)]
 struct Metadata {
+    preset_path: String,
     gpu_device_name: String,
     width: u32,
     height: u32,
@@ -124,25 +154,71 @@ struct Metadata {
     cell_size: f64,
     surface_detail: u32,
     native_fixed_hz: f64,
+    capture_fps: u32,
+    display_transform: &'static str,
+    offline_only: bool,
+    stills_every: Option<u32>,
     offline: PassMetadata,
-    preview: PreviewMetadata,
+    preview: Option<PreviewMetadata>,
 }
 
-fn water_basin_json() -> CaptureResult<String> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn default_preset_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
         .join("generator-presets")
-        .join("WaterBasin.json");
-    fs::read_to_string(&path).map_err(|error| {
+        .join("WaterBasin.json")
+}
+
+fn read_preset(path: &Path) -> CaptureResult<String> {
+    fs::read_to_string(path).map_err(|error| {
         io::Error::new(
             error.kind(),
-            format!("read WaterBasin preset {}: {error}", path.display()),
+            format!("read preset {}: {error}", path.display()),
         )
         .into()
     })
 }
 
-fn build_runtime(json: &str, device: &Arc<GpuDevice>) -> CaptureResult<PresetRuntime> {
+fn preset_number(node: &serde_json::Value, name: &str) -> CaptureResult<f64> {
+    node["params"][name]["value"].as_f64().ok_or_else(|| {
+        io::Error::other(format!(
+            "fluid_surface parameter `{name}` is missing or non-numeric"
+        ))
+        .into()
+    })
+}
+
+fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
+    let document: serde_json::Value = serde_json::from_str(json)?;
+    let fluid = document["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.iter().find(|node| node["nodeId"] == "fluid_surface"))
+        .ok_or_else(|| io::Error::other("preset has no fluid_surface node"))?;
+    let resolution = preset_number(fluid, "resolution")?;
+    let domain_size = preset_number(fluid, "domain_size")?;
+    let surface_detail = preset_number(fluid, "surface_subdivisions")?;
+    if !resolution.is_finite()
+        || !domain_size.is_finite()
+        || !surface_detail.is_finite()
+        || resolution < 1.0
+        || domain_size <= 0.0
+        || surface_detail < 0.0
+    {
+        return Err(io::Error::other("preset fluid settings are invalid").into());
+    }
+    Ok(PresetSettings {
+        resolution: resolution.round() as u32,
+        domain_size,
+        surface_detail: surface_detail.round() as u32,
+    })
+}
+
+fn build_runtime(
+    json: &str,
+    device: &Arc<GpuDevice>,
+    width: u32,
+    height: u32,
+) -> CaptureResult<PresetRuntime> {
     // The compiler omits unwired scalar outputs. Diagnostic consumers retain
     // their bindings on the live fluid node; these orphan math nodes are not
     // executed. The shipped preset, simulation and rendering stay unchanged.
@@ -184,8 +260,8 @@ fn build_runtime(json: &str, device: &Arc<GpuDevice>) -> CaptureResult<PresetRun
         &instrumented,
         &registry,
         Arc::clone(device),
-        WIDTH,
-        HEIGHT,
+        width,
+        height,
         GpuTextureFormat::Rgba16Float,
         None,
     )
@@ -195,16 +271,16 @@ fn build_runtime(json: &str, device: &Arc<GpuDevice>) -> CaptureResult<PresetRun
     Ok(runtime)
 }
 
-fn context(frame: u32, authored_time: f64, dt: f64) -> PresetContext {
+fn context(frame: u32, authored_time: f64, dt: f64, width: u32, height: u32) -> PresetContext {
     PresetContext {
         time: authored_time,
         beat: authored_time * 2.0,
         dt: dt as f32,
-        width: WIDTH,
-        height: HEIGHT,
-        output_width: WIDTH,
-        output_height: HEIGHT,
-        aspect: WIDTH as f32 / HEIGHT as f32,
+        width,
+        height,
+        output_width: width,
+        output_height: height,
+        aspect: width as f32 / height as f32,
         owner_key: 0,
         is_clip_level: false,
         frame_count: i64::from(frame),
@@ -246,6 +322,7 @@ fn render_frame(
     frame: u32,
     authored_time: f64,
     dt: f64,
+    options: &CaptureOptions,
 ) -> CaptureResult<(FrameTimings, FluidMetrics)> {
     let frame_started = Instant::now();
     let mut encoder = device.create_encoder("fluid-capture");
@@ -255,7 +332,7 @@ fn render_frame(
         runtime.render(
             &mut gpu,
             &target.texture,
-            &context(frame, authored_time, dt),
+            &context(frame, authored_time, dt, options.width, options.height),
             &ParamManifest::default(),
         );
         gpu.frame_status()
@@ -353,33 +430,172 @@ fn write_csv(path: &Path, rows: &[MetricRow]) -> CaptureResult<()> {
     Ok(())
 }
 
-fn ensure_overall_limit(started: Instant, label: &str) -> CaptureResult<()> {
+fn ensure_wall_limit(started: Instant, label: &str, max_seconds: f64) -> CaptureResult<()> {
     let elapsed = started.elapsed().as_secs_f64();
-    if elapsed > OVERALL_MAX_SECONDS {
+    if elapsed > max_seconds {
         return Err(io::Error::other(format!(
-            "{label} exceeded overall wall limit of {OVERALL_MAX_SECONDS:.0}s ({elapsed:.3}s)"
+            "{label} exceeded wall limit of {max_seconds:.0}s ({elapsed:.3}s)"
         ))
         .into());
     }
     Ok(())
 }
 
-fn run(output_dir: &Path) -> CaptureResult<()> {
-    fs::create_dir_all(output_dir)?;
+fn parse_u32(value: &str, flag: &str) -> CaptureResult<u32> {
+    value
+        .parse()
+        .map_err(|_| io::Error::other(format!("{flag} expects an unsigned integer")).into())
+}
+
+fn parse_options() -> CaptureResult<CaptureOptions> {
+    let mut args = std::env::args().skip(1);
+    let mut output_dir = None;
+    let mut options = CaptureOptions {
+        output_dir: PathBuf::new(),
+        preset_path: default_preset_path(),
+        width: DEFAULT_WIDTH,
+        height: DEFAULT_HEIGHT,
+        frames: DEFAULT_FRAMES,
+        fps: DEFAULT_FPS,
+        offline_only: false,
+        max_seconds: DEFAULT_MAX_SECONDS,
+        stills_every: None,
+        linear: false,
+    };
+    while let Some(arg) = args.next() {
+        let mut value = |flag: &str| -> CaptureResult<String> {
+            args.next()
+                .ok_or_else(|| io::Error::other(format!("{flag} requires a value")).into())
+        };
+        match arg.as_str() {
+            "--preset" => options.preset_path = PathBuf::from(value("--preset")?),
+            "--width" => options.width = parse_u32(&value("--width")?, "--width")?,
+            "--height" => options.height = parse_u32(&value("--height")?, "--height")?,
+            "--frames" => options.frames = parse_u32(&value("--frames")?, "--frames")?,
+            "--fps" => options.fps = parse_u32(&value("--fps")?, "--fps")?,
+            "--max-seconds" => {
+                let raw = value("--max-seconds")?;
+                options.max_seconds = raw
+                    .parse()
+                    .map_err(|_| io::Error::other("--max-seconds expects a number"))?;
+            }
+            "--stills-every" => {
+                let every = parse_u32(&value("--stills-every")?, "--stills-every")?;
+                options.stills_every = Some(every);
+            }
+            "--offline-only" => options.offline_only = true,
+            "--linear" => options.linear = true,
+            flag if flag.starts_with('-') => {
+                return Err(io::Error::other(format!("unsupported argument `{flag}`")).into());
+            }
+            path if output_dir.is_none() => output_dir = Some(PathBuf::from(path)),
+            path => {
+                return Err(
+                    io::Error::other(format!("unexpected positional argument `{path}`")).into(),
+                );
+            }
+        }
+    }
+    options.output_dir = output_dir.ok_or_else(|| {
+        io::Error::other(
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear]",
+        )
+    })?;
+    if options.width == 0
+        || options.width > MAX_WIDTH
+        || options.height == 0
+        || options.height > MAX_HEIGHT
+    {
+        return Err(io::Error::other(format!(
+            "dimensions must be positive and at most {MAX_WIDTH}x{MAX_HEIGHT}"
+        ))
+        .into());
+    }
+    if options.frames == 0 || options.frames > MAX_FRAMES {
+        return Err(io::Error::other(format!("frames must be in 1..={MAX_FRAMES}")).into());
+    }
+    if options.fps == 0 || options.fps > MAX_FPS {
+        return Err(io::Error::other(format!("fps must be in 1..={MAX_FPS}")).into());
+    }
+    if !options.max_seconds.is_finite()
+        || options.max_seconds <= 0.0
+        || options.max_seconds > MAX_SECONDS
+    {
+        return Err(
+            io::Error::other(format!("max-seconds must be in (0,{MAX_SECONDS:.0}]")).into(),
+        );
+    }
+    if options.stills_every == Some(0) {
+        return Err(io::Error::other("stills-every must be positive").into());
+    }
+    Ok(options)
+}
+
+fn readback_rgba(
+    device: &GpuDevice,
+    target: &RenderTarget,
+    width: u32,
+    height: u32,
+    linear: bool,
+) -> Vec<u8> {
+    if linear {
+        readback_srgb_rgba8(device, &target.texture, width, height)
+    } else {
+        readback_tonemapped_rgba8(device, &target.texture, width, height)
+    }
+}
+
+fn warmup_assets(
+    runtime: &mut PresetRuntime,
+    target: &RenderTarget,
+    device: &GpuDevice,
+    options: &CaptureOptions,
+    overall_started: Instant,
+) -> CaptureResult<()> {
+    let started = Instant::now();
+    while runtime.warmup_pending() {
+        ensure_wall_limit(started, "asset warmup", 30.0)?;
+        ensure_wall_limit(overall_started, "capture", options.max_seconds)?;
+        thread::sleep(Duration::from_millis(10));
+        // Asset IO must settle without advancing the fluid or authored clock.
+        render_frame(runtime, target, device, 0, 0.0, 0.0, options)?;
+    }
+    Ok(())
+}
+
+fn run(options: &CaptureOptions) -> CaptureResult<()> {
+    fs::create_dir_all(&options.output_dir)?;
     let overall_started = Instant::now();
-    let json = water_basin_json()?;
+    let json = read_preset(&options.preset_path)?;
+    fs::write(options.output_dir.join("preset.json"), &json)?;
+    let preset = preset_settings(&json)?;
+    let frame_dt = 1.0 / f64::from(options.fps);
     let device = Arc::new(GpuDevice::new());
     let offline_target = RenderTarget::new(
         &device,
-        WIDTH,
-        HEIGHT,
+        options.width,
+        options.height,
         GpuTextureFormat::Rgba16Float,
         "fluid-capture-offline",
     );
     let offline_scope = PhysicsStepScope::for_render(true);
-    let mut offline_runtime = build_runtime(&json, &device)?;
-    let (initial_timings, initial_fluid) =
-        render_frame(&mut offline_runtime, &offline_target, &device, 0, 0.0, DT)?;
+    let mut offline_runtime = build_runtime(&json, &device, options.width, options.height)?;
+    let (initial_timings, initial_fluid) = render_frame(
+        &mut offline_runtime,
+        &offline_target,
+        &device,
+        0,
+        0.0,
+        frame_dt,
+        options,
+    )?;
+    warmup_assets(
+        &mut offline_runtime,
+        &offline_target,
+        &device,
+        options,
+        overall_started,
+    )?;
     if initial_fluid.simulation_time.abs() > 1e-4 {
         return Err(io::Error::other(format!(
             "offline initial simulation time is not zero: {}",
@@ -388,19 +604,28 @@ fn run(output_dir: &Path) -> CaptureResult<()> {
         .into());
     }
 
-    let mut offline_rows = Vec::with_capacity(OFFLINE_FRAMES as usize);
-    let mut offline_rgba_writer = BufWriter::new(File::create(output_dir.join("offline.rgba"))?);
+    let mut offline_rows = Vec::with_capacity(options.frames as usize);
+    let mut offline_rgba_writer = match options.stills_every {
+        None => Some(BufWriter::new(File::create(
+            options.output_dir.join("offline.rgba"),
+        )?)),
+        Some(_) => None,
+    };
+    if options.stills_every.is_some() {
+        fs::create_dir_all(options.output_dir.join("stills"))?;
+    }
     let mut capture_ms = 0.0;
-    for frame in 1..=OFFLINE_FRAMES {
-        ensure_overall_limit(overall_started, "offline pass")?;
-        let authored_time = f64::from(frame) * DT;
+    for frame in 1..=options.frames {
+        ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
+        let authored_time = f64::from(frame) * frame_dt;
         let (timings, fluid) = render_frame(
             &mut offline_runtime,
             &offline_target,
             &device,
             frame,
             authored_time,
-            DT,
+            frame_dt,
+            options,
         )?;
         if fluid.vertex_count < 3.0 {
             return Err(io::Error::other(format!(
@@ -408,41 +633,64 @@ fn run(output_dir: &Path) -> CaptureResult<()> {
             ))
             .into());
         }
-        if (fluid.simulation_time - authored_time).abs() > 1e-4 {
+        let expected_time = (authored_time * FIXED_HZ + 1e-8).floor() / FIXED_HZ;
+        if (fluid.simulation_time - expected_time).abs() > 1e-4 {
             return Err(io::Error::other(format!(
-                "offline frame {frame} simulation time {:.9} does not reach authored time {:.9}",
-                fluid.simulation_time, authored_time
+                "offline frame {frame} simulation time {:.9} does not reach fixed-tick time {:.9}",
+                fluid.simulation_time, expected_time
             ))
             .into());
         }
         let mut row = metric_row(frame, authored_time, timings, fluid, 0.0)?;
-        let capture_started = Instant::now();
-        let rgba = readback_tonemapped_rgba8(&device, &offline_target.texture, WIDTH, HEIGHT);
-        let expected_rgba_len = (WIDTH as usize)
-            .checked_mul(HEIGHT as usize)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .expect("offline RGBA size fits usize");
-        if rgba.len() != expected_rgba_len {
-            return Err(io::Error::other(format!(
-                "offline frame {frame} readback has {} bytes, expected {expected_rgba_len}",
-                rgba.len()
-            ))
-            .into());
+        let should_capture = options
+            .stills_every
+            .is_none_or(|every| frame % every == 0 || frame == options.frames || frame == 1);
+        if should_capture {
+            let capture_started = Instant::now();
+            let rgba = readback_rgba(
+                &device,
+                &offline_target,
+                options.width,
+                options.height,
+                options.linear,
+            );
+            let expected_rgba_len = (options.width as usize)
+                .checked_mul(options.height as usize)
+                .and_then(|pixels| pixels.checked_mul(4))
+                .expect("offline RGBA size fits usize");
+            if rgba.len() != expected_rgba_len {
+                return Err(io::Error::other(format!(
+                    "offline frame {frame} readback has {} bytes, expected {expected_rgba_len}",
+                    rgba.len()
+                ))
+                .into());
+            }
+            if let Some(writer) = offline_rgba_writer.as_mut() {
+                writer.write_all(&rgba)?;
+            } else {
+                let png = encode_rgba8_png(&rgba, options.width, options.height);
+                let path = options
+                    .output_dir
+                    .join("stills")
+                    .join(format!("frame_{frame:06}.png"));
+                fs::write(path, png)?;
+            }
+            row.capture_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
+            if !row.capture_ms.is_finite() || row.capture_ms < 0.0 {
+                return Err(io::Error::other(format!(
+                    "offline frame {frame} capture timing is invalid: {}",
+                    row.capture_ms
+                ))
+                .into());
+            }
+            capture_ms += row.capture_ms;
         }
-        offline_rgba_writer.write_all(&rgba)?;
-        row.capture_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
-        if !row.capture_ms.is_finite() || row.capture_ms < 0.0 {
-            return Err(io::Error::other(format!(
-                "offline frame {frame} capture timing is invalid: {}",
-                row.capture_ms
-            ))
-            .into());
-        }
-        capture_ms += row.capture_ms;
         offline_rows.push(row);
     }
-    ensure_overall_limit(overall_started, "offline pass")?;
-    offline_rgba_writer.flush()?;
+    ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
+    if let Some(mut writer) = offline_rgba_writer {
+        writer.flush()?;
+    }
     let offline_end_simulation_time = offline_rows
         .last()
         .expect("offline rows contain all stepped frames")
@@ -452,134 +700,171 @@ fn run(output_dir: &Path) -> CaptureResult<()> {
     drop(offline_runtime);
     drop(offline_scope);
 
-    let preview_target = RenderTarget::new(
-        &device,
-        WIDTH,
-        HEIGHT,
-        GpuTextureFormat::Rgba16Float,
-        "fluid-capture-preview",
-    );
-    let mut preview_runtime = build_runtime(&json, &device)?;
-    let preview_initial_timings;
-    {
-        let preview_warmup_scope = PhysicsStepScope::for_render(true);
-        let (warmup_timings, warmup_fluid) =
-            render_frame(&mut preview_runtime, &preview_target, &device, 0, 0.0, DT)?;
-        if warmup_fluid.simulation_time.abs() > 1e-4 {
-            return Err(io::Error::other(format!(
-                "preview warmup simulation time is not zero: {}",
-                warmup_fluid.simulation_time
-            ))
-            .into());
-        }
-        preview_initial_timings = InitialFrameTimings {
-            render_cpu_ms: warmup_timings.render_cpu_ms,
-            submit_wait_ms: warmup_timings.submit_wait_ms,
-            gpu_ms: warmup_timings.gpu_ms,
-            frame_ms: warmup_timings.frame_ms,
-        };
-        drop(preview_warmup_scope);
-    }
-
-    let preview_scope = PhysicsStepScope::for_render(false);
-    let preview_started = Instant::now();
-    let mut preview_rows = Vec::with_capacity(OFFLINE_FRAMES as usize);
-    let mut next_deadline = 0.0f64;
-    let mut previous_authored_time = 0.0f64;
-    let mut previous_frame_begin: Option<Instant> = None;
-    let mut last_simulation_time = 0.0f64;
-    let mut accepted_fluid_frames = 0u32;
-    let mut total_sim_ticks_advanced = 0u64;
-
-    while preview_started.elapsed().as_secs_f64() < PREVIEW_SECONDS
-        && preview_rows.len() < OFFLINE_FRAMES as usize
-    {
-        let now = preview_started.elapsed().as_secs_f64();
-        if now < next_deadline {
-            thread::sleep(Duration::from_secs_f64(next_deadline - now));
-        }
-        let frame_begin = Instant::now();
-        let authored_time = preview_started.elapsed().as_secs_f64();
-        let dt = authored_time - previous_authored_time;
-        let presentation_interval_ms = previous_frame_begin
-            .map(|previous| frame_begin.duration_since(previous).as_secs_f64() * 1000.0)
-            .unwrap_or(0.0);
-        let frame = (preview_rows.len() + 1) as u32;
-        let (timings, fluid) = render_frame(
-            &mut preview_runtime,
-            &preview_target,
+    let preview_metadata = if options.offline_only {
+        None
+    } else {
+        let preview_target = RenderTarget::new(
             &device,
-            frame,
-            authored_time,
-            dt,
-        )?;
-        preview_rows.push(metric_row(
-            frame,
-            authored_time,
-            timings,
-            fluid,
-            presentation_interval_ms,
-        )?);
-        if fluid.simulation_time > last_simulation_time + 1e-9 {
-            accepted_fluid_frames += 1;
-            let advanced = ((fluid.simulation_time - last_simulation_time) * FIXED_HZ).round();
-            if advanced.is_finite() && advanced > 0.0 {
-                total_sim_ticks_advanced = total_sim_ticks_advanced.saturating_add(advanced as u64);
+            options.width,
+            options.height,
+            GpuTextureFormat::Rgba16Float,
+            "fluid-capture-preview",
+        );
+        let mut preview_runtime = build_runtime(&json, &device, options.width, options.height)?;
+        let preview_initial_timings;
+        {
+            let preview_warmup_scope = PhysicsStepScope::for_render(true);
+            let (warmup_timings, warmup_fluid) = render_frame(
+                &mut preview_runtime,
+                &preview_target,
+                &device,
+                0,
+                0.0,
+                frame_dt,
+                options,
+            )?;
+            warmup_assets(
+                &mut preview_runtime,
+                &preview_target,
+                &device,
+                options,
+                overall_started,
+            )?;
+            if warmup_fluid.simulation_time.abs() > 1e-4 {
+                return Err(io::Error::other(format!(
+                    "preview warmup simulation time is not zero: {}",
+                    warmup_fluid.simulation_time
+                ))
+                .into());
             }
-            last_simulation_time = fluid.simulation_time;
+            preview_initial_timings = InitialFrameTimings {
+                render_cpu_ms: warmup_timings.render_cpu_ms,
+                submit_wait_ms: warmup_timings.submit_wait_ms,
+                gpu_ms: warmup_timings.gpu_ms,
+                frame_ms: warmup_timings.frame_ms,
+            };
+            drop(preview_warmup_scope);
         }
-        previous_authored_time = authored_time;
-        previous_frame_begin = Some(frame_begin);
-        let elapsed = preview_started.elapsed().as_secs_f64();
-        next_deadline += DT;
-        if next_deadline < elapsed {
-            next_deadline = (elapsed / DT).floor() * DT + DT;
+
+        let preview_scope = PhysicsStepScope::for_render(false);
+        let preview_started = Instant::now();
+        let mut preview_rows = Vec::with_capacity(options.frames as usize);
+        let mut next_deadline = 0.0f64;
+        let mut previous_authored_time = 0.0f64;
+        let mut previous_frame_begin: Option<Instant> = None;
+        let mut last_simulation_time = 0.0f64;
+        let mut accepted_fluid_frames = 0u32;
+        let mut total_sim_ticks_advanced = 0u64;
+
+        while preview_started.elapsed().as_secs_f64() < PREVIEW_SECONDS
+            && preview_rows.len() < options.frames as usize
+        {
+            let now = preview_started.elapsed().as_secs_f64();
+            if now < next_deadline {
+                thread::sleep(Duration::from_secs_f64(next_deadline - now));
+            }
+            let frame_begin = Instant::now();
+            let authored_time = preview_started.elapsed().as_secs_f64();
+            let dt = authored_time - previous_authored_time;
+            let presentation_interval_ms = previous_frame_begin
+                .map(|previous| frame_begin.duration_since(previous).as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
+            let frame = (preview_rows.len() + 1) as u32;
+            let (timings, fluid) = render_frame(
+                &mut preview_runtime,
+                &preview_target,
+                &device,
+                frame,
+                authored_time,
+                dt,
+                options,
+            )?;
+            preview_rows.push(metric_row(
+                frame,
+                authored_time,
+                timings,
+                fluid,
+                presentation_interval_ms,
+            )?);
+            if fluid.simulation_time > last_simulation_time + 1e-9 {
+                accepted_fluid_frames += 1;
+                let advanced = ((fluid.simulation_time - last_simulation_time) * FIXED_HZ).round();
+                if advanced.is_finite() && advanced > 0.0 {
+                    total_sim_ticks_advanced =
+                        total_sim_ticks_advanced.saturating_add(advanced as u64);
+                }
+                last_simulation_time = fluid.simulation_time;
+            }
+            previous_authored_time = authored_time;
+            previous_frame_begin = Some(frame_begin);
+            let elapsed = preview_started.elapsed().as_secs_f64();
+            next_deadline += frame_dt;
+            if next_deadline < elapsed {
+                next_deadline = (elapsed / frame_dt).floor() * frame_dt + frame_dt;
+            }
+            let preview_max_seconds = PREVIEW_MAX_SECONDS.min(options.max_seconds);
+            if elapsed > preview_max_seconds {
+                return Err(io::Error::other(format!(
+                    "preview pass exceeded wall limit of {preview_max_seconds:.0}s ({elapsed:.3}s)"
+                ))
+                .into());
+            }
         }
-        if elapsed > PREVIEW_MAX_SECONDS {
+        let preview_elapsed_s = preview_started.elapsed().as_secs_f64();
+        let preview_max_seconds = PREVIEW_MAX_SECONDS.min(options.max_seconds);
+        if preview_elapsed_s > preview_max_seconds {
             return Err(io::Error::other(format!(
-                "preview pass exceeded wall limit of {PREVIEW_MAX_SECONDS:.0}s ({elapsed:.3}s)"
-            ))
-            .into());
-        }
-    }
-    let preview_elapsed_s = preview_started.elapsed().as_secs_f64();
-    if preview_elapsed_s > PREVIEW_MAX_SECONDS {
-        return Err(io::Error::other(format!(
-            "preview pass exceeded wall limit of {PREVIEW_MAX_SECONDS:.0}s ({preview_elapsed_s:.3}s)"
+            "preview pass exceeded wall limit of {preview_max_seconds:.0}s ({preview_elapsed_s:.3}s)"
         ))
         .into());
-    }
-    let preview_final = preview_rows
-        .last()
-        .ok_or_else(|| io::Error::other("preview pass delivered no frames before its deadline"))?;
-    let preview_metadata = PreviewMetadata {
-        elapsed_s: preview_elapsed_s,
-        actual_frames: preview_rows.len() as u32,
-        initial_frame: preview_initial_timings,
-        accepted_fluid_frames,
-        total_sim_ticks_advanced,
-        start_simulation_time: 0.0,
-        end_simulation_time: preview_final.fluid.simulation_time,
-        final_authored_time: preview_final.authored_time,
-        final_lag_seconds: preview_final.fluid.lag_seconds,
+        }
+        let preview_final = preview_rows.last().ok_or_else(|| {
+            io::Error::other("preview pass delivered no frames before its deadline")
+        })?;
+        let preview_metadata = PreviewMetadata {
+            elapsed_s: preview_elapsed_s,
+            actual_frames: preview_rows.len() as u32,
+            fps: options.fps,
+            initial_frame: preview_initial_timings,
+            accepted_fluid_frames,
+            total_sim_ticks_advanced,
+            start_simulation_time: 0.0,
+            end_simulation_time: preview_final.fluid.simulation_time,
+            final_authored_time: preview_final.authored_time,
+            final_lag_seconds: preview_final.fluid.lag_seconds,
+        };
+        drop(preview_scope);
+        drop(preview_target);
+        drop(preview_runtime);
+        ensure_wall_limit(overall_started, "capture", options.max_seconds)?;
+        write_csv(&options.output_dir.join("preview.csv"), &preview_rows)?;
+        Some(preview_metadata)
     };
-    drop(preview_scope);
-    drop(preview_target);
-    drop(preview_runtime);
-    ensure_overall_limit(overall_started, "capture")?;
 
-    write_csv(&output_dir.join("offline.csv"), &offline_rows)?;
-    write_csv(&output_dir.join("preview.csv"), &preview_rows)?;
+    write_csv(&options.output_dir.join("offline.csv"), &offline_rows)?;
+    if options.offline_only {
+        write_csv(&options.output_dir.join("preview.csv"), &[])?;
+    }
     let metadata = Metadata {
+        preset_path: options.preset_path.display().to_string(),
         gpu_device_name: device.device_name(),
-        width: WIDTH,
-        height: HEIGHT,
-        grid: [RESOLUTION; 3],
-        cell_size: CELL_SIZE,
-        surface_detail: SURFACE_DETAIL,
+        width: options.width,
+        height: options.height,
+        grid: [preset.resolution; 3],
+        cell_size: preset.domain_size / f64::from(preset.resolution),
+        surface_detail: preset.surface_detail,
         native_fixed_hz: FIXED_HZ,
+        capture_fps: options.fps,
+        display_transform: if options.linear {
+            "linear_srgb"
+        } else {
+            "reinhard"
+        },
+        offline_only: options.offline_only,
+        stills_every: options.stills_every,
         offline: PassMetadata {
-            frames: OFFLINE_FRAMES,
+            frames: options.frames,
+            fps: options.fps,
             initial_frame: InitialFrameTimings {
                 render_cpu_ms: initial_timings.render_cpu_ms,
                 submit_wait_ms: initial_timings.submit_wait_ms,
@@ -592,30 +877,16 @@ fn run(output_dir: &Path) -> CaptureResult<()> {
         },
         preview: preview_metadata,
     };
-    let mut metadata_writer = BufWriter::new(File::create(output_dir.join("metadata.json"))?);
+    let mut metadata_writer =
+        BufWriter::new(File::create(options.output_dir.join("metadata.json"))?);
     serde_json::to_writer_pretty(&mut metadata_writer, &metadata)?;
     writeln!(metadata_writer)?;
     metadata_writer.flush()?;
-    ensure_overall_limit(overall_started, "capture")?;
+    ensure_wall_limit(overall_started, "capture", options.max_seconds)?;
     Ok(())
 }
 
 fn main() -> CaptureResult<()> {
-    let mut args = std::env::args_os();
-    let program = args.next().unwrap_or_else(|| "fluid_capture".into());
-    let Some(output_dir) = args.next() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("usage: {} OUTPUT_DIR", PathBuf::from(program).display()),
-        )
-        .into());
-    };
-    if args.next().is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "fluid_capture takes exactly one output directory argument",
-        )
-        .into());
-    }
-    run(&PathBuf::from(output_dir))
+    let options = parse_options()?;
+    run(&options)
 }

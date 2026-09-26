@@ -15,7 +15,7 @@ crate::primitive! {
     type_id: "node.fluid_surface",
     purpose: "Simulate a cubic liquid domain with the native FLIP Fluids CPU engine and output its reconstructed surface. Translate emitter and obstacle boxes through Transform inputs; use the accepted obstacle_pose to render the collider at the same simulation time as the liquid.",
     inputs: {
-        emitter: Transform optional, obstacle: Transform optional,
+        emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
         resolution: ScalarF32 optional, domain_size: ScalarF32 optional, fill_height: ScalarF32 optional,
         gravity: ScalarF32 optional, emission: ScalarF32 optional, inflow_speed: ScalarF32 optional,
         speed: ScalarF32 optional, reset: ScalarF32 optional, surface_subdivisions: ScalarF32 optional,
@@ -39,7 +39,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("max_capacity"), label: "Mesh Capacity", ty: ParamType::Int, default: ParamValue::Float(786432.0), range: Some((3.0, 3145728.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected. Domain size, resolution, fill, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Whitewater and two-way Box3D coupling are not part of this initial integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes.",
+    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Whitewater and two-way Box3D coupling are not part of this initial integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes.",
     examples: ["WaterBasin"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid, a pouring source and a moving box, and generate a surface for scene rendering.",
@@ -104,6 +104,7 @@ impl Primitive for FluidSurface {
             resolution: ctx.scalar_or_param("resolution", 24.0).round() as u32,
             domain_size: ctx.scalar_or_param("domain_size", 4.0),
             fill_height: ctx.scalar_or_param("fill_height", 0.4),
+            initial_volume: ctx.inputs.transform("initial_volume"),
             surface_subdivisions: ctx.scalar_or_param("surface_subdivisions", 0.0).round() as u32,
             apic: matches!(ctx.params.get("transfer"), Some(ParamValue::Enum(1))),
             max_vertices: (ctx

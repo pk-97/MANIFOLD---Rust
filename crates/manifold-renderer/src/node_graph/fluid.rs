@@ -18,6 +18,7 @@ pub struct FluidSettings {
     pub resolution: u32,
     pub domain_size: f32,
     pub fill_height: f32,
+    pub initial_volume: Option<Transform>,
     pub surface_subdivisions: u32,
     pub apic: bool,
     pub max_vertices: usize,
@@ -29,6 +30,7 @@ impl Default for FluidSettings {
             resolution: 24,
             domain_size: 4.0,
             fill_height: 0.4,
+            initial_volume: None,
             surface_subdivisions: 0,
             apic: false,
             max_vertices: 786432,
@@ -52,6 +54,32 @@ impl FluidSettings {
                 "Water: invalid domain, resolution, fill height, surface detail or mesh capacity"
                     .into(),
             );
+        }
+        if let Some(volume) = self.initial_volume {
+            if volume.billboard
+                || volume
+                    .rot_euler
+                    .iter()
+                    .any(|v| !v.is_finite() || v.abs() > 1e-6)
+            {
+                return Err(
+                    "Water: initial volume must be a translating axis-aligned box; rotation and billboarding are not supported".into(),
+                );
+            }
+            if volume.pos.iter().any(|v| !v.is_finite())
+                || volume.scale.iter().any(|v| !v.is_finite() || *v <= 0.0)
+            {
+                return Err(
+                    "Water: initial volume positions must be finite and sizes must be positive"
+                        .into(),
+                );
+            }
+            let bounds = self.bounds(volume);
+            if bounds.min.iter().any(|v| *v < 0.0)
+                || bounds.max.iter().any(|v| *v > self.domain_size)
+            {
+                return Err("Water: initial volume must be fully contained in the domain".into());
+            }
         }
         Ok(())
     }
@@ -188,6 +216,10 @@ impl Worker {
                         let size = request.settings.domain_size;
                         if request.settings.fill_height > 0.0 {
                             new.add_fluid_box(Bounds { min: [0.0; 3], max: [size, request.settings.fill_height, size] }, [0.0; 3])
+                                .map_err(|e| e.to_string())?;
+                        }
+                        if let Some(volume) = request.settings.initial_volume {
+                            new.add_fluid_box(request.settings.bounds(volume), [0.0; 3])
                                 .map_err(|e| e.to_string())?;
                         }
                         world = Some((request.epoch, new));
@@ -663,6 +695,101 @@ mod tests {
             runtime
                 .observe(settings, second, Seconds(1.1), 1.0, 0.0)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn fluid_initial_volume_validation_rejects_rotation_and_out_of_domain_boxes() {
+        let mut settings = FluidSettings {
+            initial_volume: Some(Transform {
+                rot_euler: [0.0, 0.1, 0.0],
+                ..Transform::default()
+            }),
+            ..FluidSettings::default()
+        };
+        assert!(settings.validate().is_err());
+        settings.initial_volume = Some(Transform {
+            pos: [0.0, 0.5, 0.0],
+            scale: [4.1, 1.0, 1.0],
+            ..Transform::default()
+        });
+        assert!(settings.validate().is_err());
+        for volume in [
+            Transform {
+                pos: [f32::NAN, 1.0, 0.0],
+                ..Transform::default()
+            },
+            Transform {
+                pos: [0.0, 1.0, 0.0],
+                scale: [0.0, 1.0, 1.0],
+                ..Transform::default()
+            },
+            Transform {
+                pos: [0.0, 1.0, 0.0],
+                billboard: true,
+                ..Transform::default()
+            },
+        ] {
+            settings.initial_volume = Some(volume);
+            assert!(settings.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn fluid_initial_volume_seeds_a_localized_column_without_emission() {
+        let settings = FluidSettings {
+            resolution: 12,
+            fill_height: 0.0,
+            initial_volume: Some(Transform {
+                pos: [-1.0, 1.0, 0.0],
+                scale: [0.8, 1.0, 1.0],
+                ..Transform::default()
+            }),
+            ..FluidSettings::default()
+        };
+        let controls = FluidControls {
+            gravity: 0.0,
+            emission: false,
+            inflow_speed: 0.0,
+            ..FluidControls::default()
+        };
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
+            .expect("initial volume should validate");
+        runtime
+            .advance(true)
+            .expect("initial volume should initialize");
+        runtime
+            .observe(settings, controls, Seconds(TICK), 1.0, 0.0)
+            .unwrap();
+        runtime.advance(true).expect("initial volume should step");
+        assert!(runtime.stats.particles > 0);
+        assert!(!runtime.vertices.is_empty());
+        assert!(
+            runtime
+                .vertices
+                .iter()
+                .all(|vertex| vertex.position[0] < -0.1)
+        );
+        let epoch = runtime.epoch;
+        let mut relocated = settings;
+        relocated.initial_volume.as_mut().unwrap().pos[0] = 1.0;
+        runtime
+            .observe(relocated, controls, Seconds(2.0 * TICK), 1.0, 0.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, epoch, "changing the seed restarts the world");
+        runtime.advance(true).unwrap();
+        runtime
+            .observe(relocated, controls, Seconds(3.0 * TICK), 1.0, 0.0)
+            .unwrap();
+        runtime.advance(true).unwrap();
+        assert!(!runtime.vertices.is_empty());
+        assert!(
+            runtime
+                .vertices
+                .iter()
+                .all(|vertex| vertex.position[0] > 0.1)
         );
     }
 }
