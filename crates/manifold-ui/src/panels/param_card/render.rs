@@ -617,9 +617,14 @@ impl ParamCardPanel {
                 ),
         );
         // Inspector modifier cards use the common enable and object-target
-        // controls. Object modifier cards deliberately omit both: enable and
-        // target selection belong to the owning object/stack context.
-        if !object_modifier {
+        // controls when the recipe actually has an object-scoped output.
+        // Object modifier cards deliberately omit both: enable and target
+        // selection belong to the owning object/stack context.
+        let show_modifier_header_toggle = self
+            .modifier
+            .as_ref()
+            .is_none_or(|modifier| modifier.enabled_label == "Enabled");
+        if !object_modifier && show_modifier_header_toggle {
             row = row.child(
                 View::button(if self.enabled { "ON" } else { "OFF" })
                     .fixed(TOGGLE_W, 16.0)
@@ -628,7 +633,11 @@ impl ParamCardPanel {
                     .key(KEY_TOGGLE),
             );
         }
-        if self.modifier.is_some() {
+        let show_object_targets = self
+            .modifier
+            .as_ref()
+            .is_some_and(|modifier| modifier.targets_all || !modifier.objects.is_empty());
+        if self.modifier.is_some() && show_object_targets {
             row = row
                 .child(
                     View::button("OBJ")
@@ -651,7 +660,7 @@ impl ParamCardPanel {
                     .inert()
                     .key(KEY_MODIFIER_REMOVE),
             );
-        } else if object_modifier {
+        } else if self.modifier.is_some() || object_modifier {
             row = row.child(
                 View::button("\u{2715}")
                     .fixed(CHEVRON_W, 16.0)
@@ -786,19 +795,27 @@ impl ParamCardPanel {
         // as wide as possible and a lone badge never floats mid-header.
         // Trailing order (right→left): chevron (always rightmost), cog, toggle —
         // matches the host View child order in `effect_header_row`. A modifier
-        // card keeps the cog and packs object-target and remove controls to its
-        // left.
+        // card keeps the cog and packs its remove control and, when the recipe
+        // has object-scoped output, its target control to the left.
         let chevron_x = x + w - PADDING - CHEVRON_W;
         let modifier = self.modifier.is_some() || self.object_modifier.is_some();
         let object_modifier = self.object_modifier.is_some();
+        let show_object_targets = self
+            .modifier
+            .as_ref()
+            .is_some_and(|modifier| modifier.targets_all || !modifier.objects.is_empty());
+        let show_modifier_header_toggle = self
+            .modifier
+            .as_ref()
+            .is_none_or(|modifier| modifier.enabled_label == "Enabled");
         let (badge_right, content_left) = if self.modifier.is_some() {
             let cog_x = chevron_x - GAP - COG_W;
             let remove_x = cog_x - GAP - CHEVRON_W;
-            let chrome_left = remove_x
-                - GAP
-                - OBJECTS_W
-                - GAP
-                - TOGGLE_W;
+            let target_width = if show_object_targets { OBJECTS_W } else { 0.0 };
+            let target_gap = if show_object_targets { GAP } else { 0.0 };
+            let toggle_width = if show_modifier_header_toggle { TOGGLE_W } else { 0.0 };
+            let toggle_gap = if show_modifier_header_toggle { GAP } else { 0.0 };
+            let chrome_left = remove_x - target_gap - target_width - toggle_gap - toggle_width;
             let content_left = x
                 + PADDING
                 + if self.context == CardContext::Perform {
@@ -2258,9 +2275,19 @@ impl ParamCardPanel {
         }
     }
 
-    pub fn sync_enabled(&mut self, _tree: &mut UITree, enabled: bool) {
-        // Just update the field — tree update happens in sync_values() dirty-check.
+    pub fn sync_enabled(&mut self, tree: &mut UITree, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
         self.enabled = enabled;
+        self.cached_enabled = enabled;
+        // Modifier cards with semantic body toggles deliberately have no
+        // header toggle node. Ordinary effect cards can update their compact
+        // ON/OFF control immediately during the value-sync pass.
+        if let Some(toggle_btn_id) = self.toggle_btn_id {
+            tree.set_style(toggle_btn_id, toggle_btn_style(enabled));
+            tree.set_text(toggle_btn_id, if enabled { "ON" } else { "OFF" });
+        }
     }
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {

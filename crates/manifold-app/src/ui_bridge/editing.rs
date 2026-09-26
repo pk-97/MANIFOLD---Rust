@@ -259,10 +259,9 @@ pub(super) fn dispatch_editing(
                         None,
                     );
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
+                            Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewLayer,
+                        ));
                     }
                 }
             }

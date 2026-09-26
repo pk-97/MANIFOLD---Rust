@@ -606,7 +606,7 @@ impl ParamCardPanel {
     }
 
     /// Snapshot metadata used by the app's typed scene-modifier object menu.
-    pub(crate) fn modifier_info(&self) -> Option<&crate::param_surface::ModifierCardInfo> {
+    pub fn modifier_info(&self) -> Option<&crate::param_surface::ModifierCardInfo> {
         self.modifier.as_ref()
     }
 
@@ -1089,9 +1089,18 @@ impl ParamCardPanel {
             .is_some_and(|p| p.mapping.ableton_display.is_some())
     }
 
-    /// Whether `node_id` is this card's drag handle (effect kind only).
+    /// Whether `node_id` is a neutral header surface that may begin this
+    /// card's drag (effect kind only).
+    ///
+    /// The drag icon is the explicit affordance, but the title/header is part
+    /// of the same grab surface. Keep the fixed controls out of this test so
+    /// their clicks still toggle, collapse, open the graph, or remove a card.
     pub fn is_drag_handle(&self, node_id: NodeId) -> bool {
-        self.is_live() && self.drag_icon_id == Some(node_id)
+        self.is_live()
+            && (self.drag_icon_id == Some(node_id)
+                || self.header_bg_id == Some(node_id)
+                || self.name_clip_id == Some(node_id)
+                || self.name_label_id == Some(node_id))
     }
 
     #[cfg(test)]
@@ -1877,11 +1886,18 @@ mod tests {
 
         let value_cell = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
         let drag_icon = panel.drag_icon_id.unwrap();
+        let header = panel.header_bg_id.unwrap();
+        let name = panel.name_label_id.unwrap();
         let border = panel.border_id.unwrap();
 
         // While live: the value cell opens a type-in and the drag icon is known.
         assert!(panel.value_cell_typein(value_cell, &tree).is_some());
         assert!(panel.is_drag_handle(drag_icon));
+        assert!(panel.is_drag_handle(header), "neutral header starts a card drag");
+        assert!(panel.is_drag_handle(name), "title starts a card drag");
+        assert!(!panel.is_drag_handle(panel.toggle_btn_id.unwrap()));
+        assert!(!panel.is_drag_handle(panel.chevron_btn_id.unwrap()));
+        assert!(!panel.is_drag_handle(panel.cog_btn_id.unwrap()));
 
         panel.clear_nodes();
         assert_eq!(panel.node_count(), 0);
@@ -2320,7 +2336,7 @@ mod tests {
         config.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: LayerId::new("layer-1"),
-            enabled_label: "Camera Travel".into(),
+            enabled_label: "Enabled".into(),
             stack_index: 0,
             stack_len: 1,
             targets_all: true,
@@ -3241,7 +3257,7 @@ mod tests {
         c.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: manifold_foundation::LayerId::new("layer-a"),
-            enabled_label: "Camera Travel".into(),
+            enabled_label: "Enabled".into(),
             stack_index: 1,
             stack_len: 3,
             targets_all: true,
@@ -3352,6 +3368,29 @@ mod tests {
         let toggle = tree.get_bounds(panel.toggle_btn_id.expect("modifier toggle built"));
         assert!((toggle.x - toggle_x).abs() < 0.01, "toggle left of objects: {toggle:?}");
         assert!((toggle.y - elem_y).abs() < 0.01, "toggle y: {toggle:?}");
+    }
+
+    #[test]
+    fn semantic_modifier_enable_uses_labeled_body_row_instead_of_tiny_header() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut config = effect_config();
+        config.rows[0].spec.name = "Camera Travel".into();
+        config.rows[0].spec.is_toggle = true;
+        config.modifier = Some(crate::param_surface::ModifierCardInfo {
+            instance_id: manifold_foundation::NodeId::new("modifier-camera"),
+            layer_id: manifold_foundation::LayerId::new("layer-camera"),
+            enabled_label: "Camera Travel".into(),
+            stack_index: 0,
+            stack_len: 1,
+            targets_all: true,
+            objects: Vec::new(),
+        });
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        assert!(panel.toggle_btn_id.is_none(), "semantic labels do not get clipped in header chrome");
+        assert!(panel.row_host.toggle_ids[0].is_some(), "Camera Travel remains an ordinary labeled toggle row");
     }
 
     #[test]

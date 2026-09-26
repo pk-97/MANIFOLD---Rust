@@ -611,6 +611,9 @@ impl Runner {
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
         if self.record_executed_commands(data) {
+            let mut active_layer = data.active.and_then(|index| data.project.timeline.layers.get(index)).map(|layer| layer.layer_id.clone());
+            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut active_layer);
+            data.active = active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
             self.needs_structural_sync = true;
             self.advance_frame(ui, data, zoom_ppb, render, false);
         }
@@ -649,6 +652,18 @@ impl Runner {
                 other => other,
             };
             match cmd {
+                ContentCommand::ExecuteSelecting(command, request) => {
+                    let pending = request.capture(&data.project);
+                    let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                    changed |= applied;
+                    if let Some(message) = self.undo.take_rejection() {
+                        let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                    } else if applied && let Some(selection) = pending.resolve(&data.project) {
+                        let sequence = data.content.edit_selection_update.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                        data.content.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
+                    }
+                }
                 ContentCommand::SceneModifier(action) => {
                     let error = match crate::scene_modifier_edit::build_action(&data.project, action) {
                         Ok(command) => {

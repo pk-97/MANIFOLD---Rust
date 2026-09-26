@@ -175,6 +175,9 @@ impl ScenePanel {
         for (card_index, card) in self.object_modifier_cards.iter_mut().enumerate() {
             card.update_selection_visual(tree, card_index == index);
         }
+        if let Some(bounds) = self.object_modifier_cards[index].live_bounds(tree) {
+            self.scroll.reveal_rect(tree, bounds);
+        }
         true
     }
 
