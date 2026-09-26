@@ -640,6 +640,12 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
+                ContentCommand::ObjectModifier(action) => {
+                    match crate::object_modifier_transfer::build_action(&data.project, action) {
+                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
                 other => other,
             };
             match cmd {

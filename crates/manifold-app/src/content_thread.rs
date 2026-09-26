@@ -205,6 +205,11 @@ pub struct ContentThread {
     /// Most recent rejected graph edit, retained until a newer rejection so
     /// every regular snapshot carries the diagnostic to the UI.
     pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
+    /// Most recent content-authoritative selection update for newly created
+    /// scene modifiers, retained until a newer update.
+    pub modifier_selection_update: Option<crate::content_state::ModifierSelectionUpdate>,
+    pub object_modifier_selection_update:
+        Option<crate::content_state::ObjectModifierSelectionUpdate>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -1440,6 +1445,8 @@ impl ContentThread {
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
             graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),
+            modifier_selection_update: self.modifier_selection_update.clone(),
+            object_modifier_selection_update: self.object_modifier_selection_update.clone(),
             ableton_session: if self.ableton_bridge.session_changed() {
                 Some(Arc::new(self.ableton_bridge.session().clone()))
             } else {

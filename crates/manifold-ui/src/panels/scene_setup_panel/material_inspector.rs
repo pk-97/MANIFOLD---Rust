@@ -1001,19 +1001,14 @@ impl ScenePanel {
         cy + ROW_H + ROW_GAP
     }
 
-    /// Object properties body: transform triplets, material quick knobs,
-    /// modifier stack — the body `build_object_row` used to render only when
-    /// expanded; now always rendered (there is no fold state left — the
-    /// outliner IS the fold).
+    /// Object properties body: transform/material rows followed by the
+    /// selected object's shared modifier cards. The body is always rendered
+    /// (there is no fold state left — the outliner IS the fold).
     /// P2 slice 2a: replaced the transform-triplet/material/metallic/
     /// roughness row builders with one `build_filtered_properties` pass over
-    /// `row.sections` (Transform + Material + the object's own section +
-    /// every modifier's own section — see `ObjectKnownRow::sections`'s doc
-    /// comment). The modifier STACK below stays a structural verb (add/
-    /// remove/reorder, unchanged) — only its per-modifier PARAM rows moved
-    /// into the unified pass above (each modifier's section is already part
-    /// of `row.sections`, so its rows render there, grouped under its own
-    /// section header).
+    /// `row.sections` while excluding modifier owners. Each modifier's full
+    /// parameter rows then live inside its own shared card, in stack order;
+    /// the add control remains the one structural affordance beneath them.
     fn build_object_properties_body(
         &mut self,
         tree: &mut UITree,
@@ -1022,6 +1017,29 @@ impl ScenePanel {
         mut cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
+        // Modifier rows are rendered only inside their retained shared cards;
+        // keep transform/object/material rows in the ordinary properties
+        // surface and exclude every known modifier id across the scene. A
+        // copied modifier can retain the source object's section name, so
+        // filtering only this selected row would leak another object's card
+        // controls as loose properties.
+        let modifier_ids: Vec<String> = match &self.state {
+            SceneSetupState::Live(vm) => vm
+                .objects
+                .iter()
+                .filter_map(|object| match object {
+                    ObjectRowVm::Known(row) => Some(row.as_ref()),
+                    ObjectRowVm::Custom { .. } => None,
+                })
+                .flat_map(|object| {
+                    object
+                        .modifiers
+                        .iter()
+                        .flat_map(|modifier| modifier.parameter_ids.iter().cloned())
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         self.active_material_info = row.material_inspector.clone();
         if let Some(material) = row.material_inspector.clone() {
             let context = self
@@ -1041,40 +1059,25 @@ impl ScenePanel {
             }
             self.sync_material_feature_order();
             cy = self.build_material_header(tree, inner_x, inner_w, cy, &material);
-            cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            cy = self.build_filtered_properties_excluding(
+                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            );
             cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &material);
             cy = self.build_material_inspector(tree, inner_x, inner_w, cy, row, row.skin.as_ref());
         } else if let Some(skin) = &row.skin {
             // Non-PBR materials still expose their layer-skin control, but
             // there is no material drawer to host it.
-            cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            cy = self.build_filtered_properties_excluding(
+                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            );
             cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
         } else {
-            cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            cy = self.build_filtered_properties_excluding(
+                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            );
         }
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Modifiers",
-            label_style(),
-        );
-        cy += ROW_H;
+        cy = self.build_object_modifier_cards(tree, inner_x, inner_w, cy, row.object_node_id);
         if row.modifiers_addable {
-            for m in &row.modifiers {
-                cy = self.build_modifier_stack_row(
-                    tree,
-                    inner_x,
-                    inner_w,
-                    cy,
-                    row.index,
-                    row.group_node_id.unwrap_or(row.object_node_id),
-                    m,
-                    row.modifiers.len(),
-                );
-            }
             cy = self.build_add_modifier_button(
                 tree,
                 inner_x,
