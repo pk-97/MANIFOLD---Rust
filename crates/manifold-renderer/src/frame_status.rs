@@ -30,6 +30,8 @@ pub enum FrameRenderFailure {
     Simulation,
     /// An object's geometry failed validation (counts, strides, weights).
     InvalidGeometry,
+    /// A surface-rendering scratch resource failed admission or allocation.
+    SurfaceAllocation,
     /// The RT update needed preparation the resident set did not cover.
     RtNeedsPreparation,
     /// An RT admission/allocation failure refused the update.

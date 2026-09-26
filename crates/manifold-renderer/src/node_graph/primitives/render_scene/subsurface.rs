@@ -6,6 +6,14 @@ use manifold_gpu::raytrace::{SubsurfaceMaterial, SubsurfaceParams};
 #[derive(Default)]
 pub(super) struct SubsurfacePass {
     pub(super) output: Option<manifold_gpu::GpuTexture>,
+    raw: Option<manifold_gpu::GpuTexture>,
+    guide: Option<manifold_gpu::GpuTexture>,
+    filter_scratch: Option<manifold_gpu::GpuTexture>,
+    history: [Option<manifold_gpu::GpuTexture>; 2],
+    history_count: [Option<manifold_gpu::GpuTexture>; 2],
+    history_ping: usize,
+    needs_reset: bool,
+    scene_key: Option<u64>,
     size: [u32; 2],
     materials: Option<manifold_gpu::GpuBuffer>,
     capacity: usize,
@@ -13,6 +21,12 @@ pub(super) struct SubsurfacePass {
 }
 
 impl SubsurfacePass {
+    pub(super) fn reset(&mut self) {
+        self.history_ping = 0;
+        self.needs_reset = true;
+        self.scene_key = None;
+    }
+
     pub(super) fn ensure(
         &mut self,
         device: &manifold_gpu::GpuDevice,
@@ -37,7 +51,10 @@ impl SubsurfacePass {
         }
         let table_bytes = (count * std::mem::size_of::<SubsurfaceMaterial>()) as u64;
         let additional_bytes = if resize {
-            u64::from(w) * u64::from(h) * 8
+            // Five Rgba16Float radiance textures (8 B/px), one Rgba32Float
+            // guide (16 B/px), and two R16Float history-count textures (2
+            // B/px): 60 B/px total. Counts are capped at 64 below.
+            u64::from(w) * u64::from(h) * 60
         } else {
             0
         } + if grow { table_bytes } else { 0 };
@@ -46,21 +63,79 @@ impl SubsurfacePass {
             additional_bytes,
         )
         .map_err(|error| format!("Subsurface resource admission failed: {error}"))?;
-        let output = if resize {
-            Some(device.try_create_texture(&manifold_gpu::GpuTextureDesc {
+        let make_texture = |format: manifold_gpu::GpuTextureFormat, label: &'static str| {
+            device.try_create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                format,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                     | manifold_gpu::GpuTextureUsage::SHADER_WRITE
                     | manifold_gpu::GpuTextureUsage::COPY_SRC,
-                label: "node.render_scene subsurface radiance",
+                label,
                 mip_levels: 1,
-            })?)
+            })
+        };
+        let output = if resize {
+            Some(make_texture(
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                "node.render_scene subsurface radiance",
+            )?)
         } else {
             None
+        };
+        let raw = if resize {
+            Some(make_texture(
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                "node.render_scene subsurface raw",
+            )?)
+        } else {
+            None
+        };
+        let guide = if resize {
+            Some(make_texture(
+                manifold_gpu::GpuTextureFormat::Rgba32Float,
+                "node.render_scene subsurface guide",
+            )?)
+        } else {
+            None
+        };
+        let filter_scratch = if resize {
+            Some(make_texture(
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                "node.render_scene subsurface filter scratch",
+            )?)
+        } else {
+            None
+        };
+        let history = if resize {
+            [
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    "node.render_scene subsurface history A",
+                )?),
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    "node.render_scene subsurface history B",
+                )?),
+            ]
+        } else {
+            [None, None]
+        };
+        let history_count = if resize {
+            [
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::R16Float,
+                    "node.render_scene subsurface history count A",
+                )?),
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::R16Float,
+                    "node.render_scene subsurface history count B",
+                )?),
+            ]
+        } else {
+            [None, None]
         };
         let materials = if grow {
             Some(device.try_create_buffer(table_bytes)?)
@@ -70,11 +145,19 @@ impl SubsurfacePass {
         // Publish the complete replacement only after both allocations succeed.
         if let Some(output) = output {
             self.output = Some(output);
+            self.raw = raw;
+            self.guide = guide;
+            self.filter_scratch = filter_scratch;
+            self.history = history;
+            self.history_count = history_count;
+            self.history_ping = 0;
+            self.needs_reset = true;
             self.size = [w, h];
         }
         if let Some(materials) = materials {
             self.materials = Some(materials);
             self.capacity = count;
+            self.needs_reset = true;
         }
         Ok(())
     }
@@ -82,7 +165,7 @@ impl SubsurfacePass {
 
 impl RenderScene {
     pub(super) fn subsurface_trace<'ctx, 'gpu>(
-        &self,
+        &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
         draws: &[&ObjectDraw<'ctx>],
@@ -119,6 +202,39 @@ impl RenderScene {
                 }
             })
             .collect();
+        // Static accumulation is deliberately invalidated on any semantic
+        // change. Unknown producer versions cannot promise a still scene.
+        use std::hash::{Hash, Hasher};
+        let mut key = ahash::AHasher::default();
+        key.write(bytemuck::cast_slice(&pre.view_proj));
+        key.write(bytemuck::cast_slice(&pre.light_data));
+        key.write(bytemuck::cast_slice(rows.as_slice()));
+        self.rt_accel_key.hash(&mut key);
+        self.rt_accel_topo_key.hash(&mut key);
+        let env_content = ctx.inputs.content_version("envmap");
+        env_content.hash(&mut key);
+        for draw in draws {
+            draw.vertices_content.hash(&mut key);
+            draw.instances_content.hash(&mut key);
+            draw.weights_content.hash(&mut key);
+            key.write(&draw.gain.to_ne_bytes());
+            key.write(bytemuck::cast_slice(&draw.map_uniforms));
+            key.write(bytemuck::bytes_of(&draw.uniforms.alpha_params));
+            key.write(bytemuck::bytes_of(&draw.uniforms.normal_uv_t));
+            for content in draw.rt_texture_content { content.hash(&mut key); }
+        }
+        let material_bytes = unsafe {
+            std::slice::from_raw_parts(gi_materials.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(gi_materials))
+        };
+        key.write(material_bytes);
+        let key = key.finish();
+        let known = draws.iter().all(|d| d.geometry_content_known && d.appearance_content_known)
+            && (ctx.inputs.texture_2d("envmap").is_none() || env_content.is_some());
+        if !known || self.subsurface_pass.scene_key != Some(key) {
+            self.subsurface_pass.reset();
+        }
+        self.subsurface_pass.scene_key = Some(key);
         let params = SubsurfaceParams {
             inv_view_proj,
             camera_pos: [pre.cam.pos[0], pre.cam.pos[1], pre.cam.pos[2], 0.0],
@@ -164,6 +280,29 @@ impl RenderScene {
             )
         };
         manifold_gpu::raytrace::encode_inline_copy(gpu.device, gpu.native_enc, gi_buffer, 0, bytes);
+        let read_idx = self.subsurface_pass.history_ping;
+        let write_idx = 1 - read_idx;
+        let reset = self.subsurface_pass.needs_reset;
+        let raw = self.subsurface_pass.raw.as_ref().expect("ensured");
+        let guide = self.subsurface_pass.guide.as_ref().expect("ensured");
+        let history_read = self.subsurface_pass.history[read_idx]
+            .as_ref()
+            .expect("ensured");
+        let history_write = self.subsurface_pass.history[write_idx]
+            .as_ref()
+            .expect("ensured");
+        let count_read = self.subsurface_pass.history_count[read_idx]
+            .as_ref()
+            .expect("ensured");
+        let count_write = self.subsurface_pass.history_count[write_idx]
+            .as_ref()
+            .expect("ensured");
+        let filter_scratch = self
+            .subsurface_pass
+            .filter_scratch
+            .as_ref()
+            .expect("ensured");
+        let output = self.subsurface_pass.output.as_ref().expect("ensured");
         self.rt_tracer
             .as_ref()
             .expect("ensured")
@@ -182,9 +321,19 @@ impl RenderScene {
                 textures,
                 self.opaque_depth_snapshot.as_ref().expect("ensured"),
                 environment,
-                self.subsurface_pass.output.as_ref().expect("ensured"),
+                raw,
+                guide,
+                history_read,
+                history_write,
+                count_read,
+                count_write,
+                filter_scratch,
+                output,
+                reset,
             );
         gpu.rt_dispatches += 1;
+        self.subsurface_pass.history_ping = write_idx;
+        self.subsurface_pass.needs_reset = false;
         true
     }
 }

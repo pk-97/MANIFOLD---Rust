@@ -36,6 +36,21 @@ static bool sss_boundary(
     return q.get_committed_intersection_type() == intersection_type::triangle;
 }
 
+// Smooth shading normals describe appearance, not the solid's boundary.
+// Entry samples must stay in the triangle's actual inward hemisphere.
+static float3 sss_boundary_normal(device RtNormalSource& src, uint primitive) {
+    uint3 corners = rt_triangle_corners(src,primitive);
+    device const uchar* base = (device const uchar*)src.vertex_base_addr;
+    float3 a = float3(*(device const packed_float3*)(base + ulong(corners.x)*src.vertex_stride));
+    float3 b = float3(*(device const packed_float3*)(base + ulong(corners.y)*src.vertex_stride));
+    float3 c = float3(*(device const packed_float3*)(base + ulong(corners.z)*src.vertex_stride));
+    float3x3 model = float3x3(float3(src.model_matrix_col0),float3(src.model_matrix_col1),float3(src.model_matrix_col2));
+    float3 ab = model*rti_apply_instance_dir(src,b-a);
+    float3 ac = model*rti_apply_instance_dir(src,c-a);
+    float3 n = cross(ab,ac);
+    return n/max(length(n),1e-20f);
+}
+
 static float3 sss_hg(float3 direction, float g, float2 u) {
     float c = 1.0f - 2.0f * u.x;
     if (abs(g) > 1e-3f) {
@@ -146,6 +161,32 @@ static float sss_projection_pdf(float3 delta, float3 hit_normal, float3 axis, fl
     return exp(-radius/d) / (2.0f*SSS_PI*d*d) * abs(dot(hit_normal,axis));
 }
 
+// The reconstruction guide keeps the normal in two octahedral coordinates
+// and the TLAS instance identity in two exact integer-valued float lanes.
+// Raw alpha remains the object id used by the raster composite contract.
+static float2 sss_oct_sign_not_zero(float2 value) {
+    return float2(value.x < 0.0f ? -1.0f : 1.0f,
+        value.y < 0.0f ? -1.0f : 1.0f);
+}
+
+static float2 sss_encode_oct_normal(float3 normal) {
+    normal /= max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1e-7f);
+    float2 encoded = normal.xy;
+    if (normal.z < 0.0f) {
+        encoded = (1.0f - abs(encoded.yx)) * sss_oct_sign_not_zero(encoded);
+    }
+    return encoded;
+}
+
+static float3 sss_decode_oct_normal(float2 encoded) {
+    float3 normal = float3(encoded, 1.0f - abs(encoded.x) - abs(encoded.y));
+    if (normal.z < 0.0f) {
+        float2 xy = (1.0f - abs(normal.yx)) * sss_oct_sign_not_zero(normal.xy);
+        normal.xy = xy;
+    }
+    return normalize(normal);
+}
+
 kernel void trace_subsurface(
     instance_acceleration_structure accel [[buffer(0)]],
     constant SubsurfaceParams& p [[buffer(1)]],
@@ -157,6 +198,7 @@ kernel void trace_subsurface(
     depth2d<float> depth [[texture(0)]],
     texture2d<float> environment [[texture(1)]],
     texture2d<float, access::write> output [[texture(2)]],
+    texture2d<float, access::write> guide [[texture(3)]],
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> textures [[texture(4)]],
     uint2 local_pixel [[thread_position_in_grid]])
 {
@@ -164,6 +206,7 @@ kernel void trace_subsurface(
     uint2 pixel = local_pixel + region.xy;
     if (any(pixel >= p.render_size)) return;
     output.write(float4(0.0f),pixel);
+    guide.write(float4(0.0f),pixel);
     bool valid;
     float3 position = world_pos_from_depth(pixel,p.render_size,depth.read(pixel,0),p.inv_view_proj,valid);
     if (!valid) return;
@@ -189,10 +232,25 @@ kernel void trace_subsurface(
     float3 normal = fetch_interpolated_normal(sources,instance,
         primary_q.get_committed_primitive_id(),primary_q.get_committed_triangle_barycentric_coord());
     if (dot(normal,primary.direction)>0.0f) normal=-normal;
+    float3 boundary_normal = sss_boundary_normal(sources[instance],primary_q.get_committed_primitive_id());
+    if (length_squared(boundary_normal)<0.5f) {
+        output.write(float4(0.0f,0.0f,0.0f,-1.0f),pixel);
+        return;
+    }
+    if (dot(boundary_normal,primary.direction)>0.0f) boundary_normal=-boundary_normal;
+    float2 encoded_normal = sss_encode_oct_normal(normal);
+    guide.write(float4(encoded_normal, float(instance & 0xffffu),
+        float(instance >> 16u)), pixel);
     float3 radius = max(material.radius_phase.xyz,float3(1e-5f));
     float3 color = clamp(material.color_weight.xyz,0.0f,1.0f);
     float g = clamp(material.radius_phase.w,-0.95f,0.95f);
-    float eps = max(1e-7f,2e-7f*max(1.0f,max(abs(position.x),max(abs(position.y),abs(position.z)))));
+    // The hit position is reconstructed from camera origin + t*direction.
+    // Its error depends on both operands, even when the resulting coordinate
+    // is near zero. Leave a few float ULPs of clearance at the boundary.
+    float3 position_error = abs(primary.origin) + abs(primary.direction)
+        * primary_q.get_committed_distance();
+    float eps = 8.0f * 1.1920929e-7f
+        * max(1.0f,max(position_error.x,max(position_error.y,position_error.z)));
     uint count = clamp(material.config.y,1u,64u);
     float3 total = float3(0.0f);
     bool invalid = false;
@@ -200,13 +258,18 @@ kernel void trace_subsurface(
         uint seed = 20000u+sample*4096u;
         float2 u = blue_noise_sample(pixel,p.frame_index,sample,count);
         if (material.config.x == 1u) {
-            uint channel = min(uint(rand2(pixel,p.frame_index,seed).x*3.0f),2u);
+            // Cycle the hero channel across samples and frames, then add a
+            // uniform random offset.  The offset keeps the estimator
+            // unbiased while the cycle prevents one channel from receiving
+            // a long unlucky run on a low-spp frame.
+            uint offset = min(uint(rand2(pixel,p.frame_index,seed).x*3.0f),2u);
+            uint channel = (sample + p.frame_index + offset) % 3u;
             float sigma_t = 1.0f/(radius[channel]*(1.0f-color[channel]*g));
             float throughput = 3.0f;
             ray r;
-            r.origin = position-normal*eps;
-            r.direction = cosine_hemisphere(-normal,u);
-            r.min_distance = eps*0.1f;
+            r.origin = position-boundary_normal*eps;
+            r.direction = cosine_hemisphere(-boundary_normal,u);
+            r.min_distance = 0.0f;
             r.max_distance = INFINITY;
             bool ended = false;
             for (uint event=0u;event<SSS_MAX_EVENTS;++event) {
@@ -270,9 +333,11 @@ kernel void trace_subsurface(
                     chosen_normal=fetch_interpolated_normal(sources,instance,q.get_committed_primitive_id(),
                         q.get_committed_triangle_barycentric_coord());
                 }
-                projection.origin=hit+axis*eps;
-                projection.max_distance-=edge+eps;
-                if (projection.max_distance<=0.0f) break;
+                // Keep one origin so distance remains monotonic. Re-basing
+                // on a rounded hit could re-intersect the same triangle up
+                // to the boundary limit, falsely marking closed meshes invalid.
+                projection.min_distance=max(nextafter(edge,INFINITY),edge+eps);
+                if (projection.min_distance>=projection.max_distance) break;
                 if (k+1u==SSS_MAX_BOUNDARIES) invalid=true;
             }
             if (hits==0u) continue;
@@ -291,4 +356,138 @@ kernel void trace_subsurface(
     if (!rt_finite(result.x) || !rt_finite(result.y) || !rt_finite(result.z)
         || max(result.x,max(result.y,result.z)) > 65504.0f) invalid=true;
     output.write(invalid ? float4(0.0f,0.0f,0.0f,-1.0f) : float4(result,float(object+1u)),pixel);
+}
+
+// Reconstruction is deliberately separate from the transport kernel.  The
+// raw value is written to history before any spatial filtering, and the
+// object id remains in alpha so invalid and background markers survive every
+// stage.  History length lives in a dedicated texture rather than stealing
+// that alpha channel.
+struct SubsurfaceReconstructionParams {
+    float4x4 inv_view_proj;
+    uint2 size;
+    uint reset;
+    uint max_history;
+    uint step;
+    float pixel_radius;
+    float filter_strength;
+    uint _pad;
+};
+
+static bool sss_same_surface(float4 center, float4 candidate,
+    float2 center_identity, float2 candidate_identity,
+    float center_depth,
+    float candidate_depth, constant SubsurfaceReconstructionParams& p,
+    uint2 center_pixel, uint2 candidate_pixel)
+{
+    if (center.a <= 0.0f || candidate.a <= 0.0f || center.a != candidate.a) return false;
+    if (center_identity.x != candidate_identity.x
+        || center_identity.y != candidate_identity.y) return false;
+    bool center_valid;
+    bool candidate_valid;
+    float3 center_world = world_pos_from_depth(center_pixel, p.size, center_depth,
+        p.inv_view_proj, center_valid);
+    float3 candidate_world = world_pos_from_depth(candidate_pixel, p.size, candidate_depth,
+        p.inv_view_proj, candidate_valid);
+    if (!center_valid || !candidate_valid) return false;
+    bool footprint_valid;
+    float3 adjacent = world_pos_from_depth(center_pixel + uint2(1,0), p.size,
+        center_depth, p.inv_view_proj, footprint_valid);
+    float threshold = length(adjacent-center_world)*p.pixel_radius*float(p.step);
+    return footprint_valid && length(candidate_world-center_world) <= threshold;
+}
+
+kernel void reconstruct_subsurface(
+    constant SubsurfaceReconstructionParams& p [[buffer(1)]],
+    texture2d<float> raw [[texture(0)]],
+    texture2d<float> guide [[texture(1)]],
+    texture2d<float> history_read [[texture(2)]],
+    texture2d<float, access::write> history_write [[texture(3)]],
+    texture2d<float> count_read [[texture(4)]],
+    texture2d<float, access::write> count_write [[texture(5)]],
+    texture2d<float, access::write> output [[texture(6)]],
+    uint2 pixel [[thread_position_in_grid]])
+{
+    if (any(pixel >= p.size)) return;
+    float4 cur = raw.read(pixel);
+    float count = 0.0f;
+    float4 result = cur;
+    if (cur.a > 0.0f) {
+        float4 previous = history_read.read(pixel);
+        float previous_count = count_read.read(pixel).r;
+        bool compatible = p.reset == 0u && previous_count > 0.0f
+            && previous.a == cur.a && previous.a > 0.0f;
+        if (compatible) {
+            count = min(previous_count + 1.0f, max(float(p.max_history), 1.0f));
+            float alpha = 1.0f / count;
+            result = float4(mix(previous.rgb, cur.rgb, alpha), cur.a);
+        } else {
+            count = 1.0f;
+            result = cur;
+        }
+    }
+    history_write.write(result, pixel);
+    count_write.write(count, pixel);
+    output.write(result, pixel);
+}
+
+kernel void filter_subsurface(
+    constant SubsurfaceReconstructionParams& p [[buffer(1)]],
+    depth2d<float> depth [[texture(0)]],
+    texture2d<float> guide [[texture(1)]],
+    texture2d<float> source [[texture(2)]],
+    texture2d<float, access::write> destination [[texture(3)]],
+    uint2 pixel [[thread_position_in_grid]])
+{
+    if (any(pixel >= p.size)) return;
+    float4 center = source.read(pixel);
+    if (center.a <= 0.0f) {
+        destination.write(center, pixel);
+        return;
+    }
+    float center_depth = depth.read(pixel, 0);
+    float4 center_guide = guide.read(pixel);
+    float3 center_normal = sss_decode_oct_normal(center_guide.xy);
+    if (center_depth <= 0.0f || length(center_normal) <= 1e-4f) {
+        destination.write(center, pixel);
+        return;
+    }
+    float3 sum = center.rgb;
+    float weight_sum = 1.0f;
+    int radius = 2;
+    for (int y = -radius; y <= radius; ++y) {
+        for (int x = -radius; x <= radius; ++x) {
+            if (x == 0 && y == 0) continue;
+            int2 offset = int2(x, y) * int(p.step);
+            int2 q = clamp(int2(pixel) + offset, int2(0), int2(p.size) - 1);
+            uint2 candidate_pixel = uint2(q);
+            float4 candidate = source.read(candidate_pixel);
+            float4 candidate_guide = guide.read(candidate_pixel);
+            float candidate_depth = depth.read(candidate_pixel, 0);
+            if (candidate_depth <= 0.0f || !sss_same_surface(center, candidate,
+                    center_guide.zw, candidate_guide.zw, center_depth,
+                    candidate_depth, p, pixel, candidate_pixel)) continue;
+            float3 candidate_normal = sss_decode_oct_normal(candidate_guide.xy);
+            float normal_weight = pow(max(dot(normalize(center_normal),
+                candidate_normal), 0.0f), 16.0f);
+            bool center_world_valid;
+            bool candidate_world_valid;
+            float3 center_world = world_pos_from_depth(pixel, p.size, center_depth,
+                p.inv_view_proj, center_world_valid);
+            float3 candidate_world = world_pos_from_depth(candidate_pixel, p.size,
+                candidate_depth, p.inv_view_proj, candidate_world_valid);
+            if (!center_world_valid || !candidate_world_valid) continue;
+            bool footprint_valid;
+            float3 adjacent = world_pos_from_depth(pixel + uint2(1,0), p.size,
+                center_depth, p.inv_view_proj, footprint_valid);
+            float threshold = max(length(adjacent-center_world)*p.pixel_radius*float(p.step),1e-7f);
+            float distance_weight = exp(-length(candidate_world-center_world)/threshold);
+            float spatial_weight = exp(-float(x*x + y*y) * 0.18f);
+            float weight = normal_weight * distance_weight * spatial_weight;
+            sum += candidate.rgb * weight;
+            weight_sum += weight;
+        }
+    }
+    destination.write(float4(mix(center.rgb, sum / weight_sum,
+        clamp(p.filter_strength, 0.0f, 1.0f)), center.a), pixel);
 }

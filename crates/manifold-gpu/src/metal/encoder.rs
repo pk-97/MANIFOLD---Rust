@@ -1316,9 +1316,7 @@ impl GpuEncoder {
     /// caller composite a sorted transparent group onto a prior opaque
     /// pass's already-resolved colour AND depth-test against that pass's
     /// depth, without re-clearing either attachment. Depth `StoreAction` is
-    /// always `DontCare` — unlike [`Self::draw_instanced_depth_only_batch`]
-    /// (the shadow-map primitive, whose Store IS the useful output),
-    /// nothing reads this pass's depth afterward.
+    /// `Store` so a following pass can reuse the resulting depth attachment.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth_batch(
         &mut self,
@@ -1351,7 +1349,7 @@ impl GpuEncoder {
         unsafe {
             depth.setTexture(Some(&depth_target.raw));
             depth.setLoadAction(convert_load_action(depth_load));
-            depth.setStoreAction(MTLStoreAction::DontCare);
+            depth.setStoreAction(MTLStoreAction::Store);
             depth.setClearDepth(depth_stencil_state.clear_depth);
         }
 
@@ -1583,6 +1581,17 @@ impl GpuEncoder {
         draws: &[DepthMsaaDraw],
         label: &str,
     ) {
+        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Clear, label);
+    }
+
+    fn draw_depth_only_batch(
+        &mut self,
+        depth_target: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        draws: &[DepthMsaaDraw],
+        load_action: MTLLoadAction,
+        label: &str,
+    ) {
         self.end_current();
 
         let desc = new_render_pass_descriptor();
@@ -1592,7 +1601,7 @@ impl GpuEncoder {
         let depth = unsafe { desc.depthAttachment() };
         unsafe {
             depth.setTexture(Some(&depth_target.raw));
-            depth.setLoadAction(MTLLoadAction::Clear);
+            depth.setLoadAction(load_action);
             depth.setStoreAction(MTLStoreAction::Store);
             depth.setClearDepth(depth_stencil_state.clear_depth);
             desc.setRenderTargetWidth(depth_target.width as usize);
@@ -1646,6 +1655,22 @@ impl GpuEncoder {
             enc.popDebugGroup();
             enc.endEncoding();
         }
+    }
+
+    /// Draw a depth-only batch while preserving the existing depth attachment.
+    /// This is the camera-space companion to
+    /// [`Self::draw_instanced_depth_only_batch`]: the caller seeds
+    /// `depth_target` with an earlier depth snapshot, then this pass writes
+    /// the nearest visible surface for one object. The depth result remains
+    /// available to the following colour pass.
+    pub fn draw_instanced_depth_only_batch_loaded(
+        &mut self,
+        depth_target: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        draws: &[DepthMsaaDraw],
+        label: &str,
+    ) {
+        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Load, label);
     }
 
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.

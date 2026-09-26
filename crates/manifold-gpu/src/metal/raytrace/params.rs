@@ -193,10 +193,10 @@ pub struct ShadowRayParams {
     /// identical copies); production sets it to the object count via
     /// [`ShadowRayParams::with_slot_row_base`].
     pub slot_row_base: u32,
-    /// Alignment pad to the 16-byte multiple the MSL mirror rounds to
-    /// (float4x4 member): 400 + 4 + 12 = 416. P4a: the D8
-    /// `emissive_entries_are_local` word moved into the GPU stats buffer.
-    pub _pad_slot: [u32; 3],
+    /// Number of entries in the complete raster light table.
+    pub light_count: u32,
+    /// GPU address of that table. Zero selects legacy caster-only callers.
+    pub light_data_addr: u64,
 }
 
 /// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
@@ -254,7 +254,8 @@ impl ShadowRayParams {
             _pad_emissive: [0; 3],
             inv_view_proj,
             slot_row_base: 0,
-            _pad_slot: [0; 3],
+            light_count: 0,
+            light_data_addr: 0,
         }
     }
 
@@ -264,6 +265,13 @@ impl ShadowRayParams {
     /// discipline as `AccumulateParams`' flag setters.
     pub fn with_slot_row_base(mut self, base: u32) -> Self {
         self.slot_row_base = base;
+        self
+    }
+
+    /// Attach the GPU light table used by the extended secondary-hit path.
+    pub fn with_lights(mut self, light_count: u32, light_data_addr: u64) -> Self {
+        self.light_count = light_count;
+        self.light_data_addr = light_data_addr;
         self
     }
 }
@@ -292,10 +300,28 @@ pub struct GiMaterial {
     pub translucency: [f32; 4],
     /// Dielectric normal-incidence reflectance (RGB), grazing weight (A).
     pub specular: [f32; 4],
+    /// Clearcoat: weight, roughness, normal-map scale, unused.
+    pub clearcoat: [f32; 4],
+    /// Sheen: RGB colour and roughness.
+    pub sheen: [f32; 4],
+    /// Iridescence: weight, IOR, minimum thickness, maximum thickness.
+    pub iridescence: [f32; 4],
+    /// Transmission: factor, IOR, thickness, dispersion.
+    pub transmission: [f32; 4],
+    /// Volume attenuation: RGB colour and attenuation distance.
+    pub attenuation: [f32; 4],
+    /// Surface miscellany: occlusion strength, then reserved values.
+    pub surface_misc: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GiMaterial>() == 80);
+const _: () = assert!(std::mem::size_of::<GiMaterial>() == 176);
 const _: () = assert!(std::mem::offset_of!(GiMaterial, specular) == 64);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, clearcoat) == 80);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, sheen) == 96);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, iridescence) == 112);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, transmission) == 128);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, attenuation) == 144);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, surface_misc) == 160);
 
 impl GiMaterial {
     pub fn new(
@@ -312,12 +338,38 @@ impl GiMaterial {
             metallic_roughness,
             translucency,
             specular: [0.04, 0.04, 0.04, 1.0],
+            clearcoat: [0.0, 0.0, 1.0, 0.0],
+            sheen: [0.0; 4],
+            iridescence: [0.0, 1.3, 100.0, 400.0],
+            transmission: [0.0, 1.5, 0.0, 0.0],
+            attenuation: [1.0, 1.0, 1.0, 1.0e6],
+            surface_misc: [1.0, 0.0, 0.0, 0.0],
         }
     }
 
     pub fn with_surface(mut self, kind: f32, specular: [f32; 4]) -> Self {
         self.kind = kind;
         self.specular = specular;
+        self
+    }
+
+    /// Set authored extension factors while preserving the existing
+    /// constructor and its neutral defaults for older callers.
+    pub fn with_extensions(
+        mut self,
+        clearcoat: [f32; 4],
+        sheen: [f32; 4],
+        iridescence: [f32; 4],
+        transmission: [f32; 4],
+        attenuation: [f32; 4],
+        surface_misc: [f32; 4],
+    ) -> Self {
+        self.clearcoat = clearcoat;
+        self.sheen = sheen;
+        self.iridescence = iridescence;
+        self.transmission = transmission;
+        self.attenuation = attenuation;
+        self.surface_misc = surface_misc;
         self
     }
 }
@@ -330,12 +382,12 @@ impl GiMaterial {
 // RS-A (caster cap 4 -> 8): casters grew from 4×32=128B to 8×32=256B;
 // inv_view_proj offset and total size recomputed. 336 % 16 == 0.
 // RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
-// (offset 400) with 12 bytes of pad — 416 total, a 16-byte multiple on the
-// MSL side (float4x4 member alignment) matching this side's 416 exactly.
-// P4a: the D8 emissive_entries_are_local word (was 404) moved into the GPU
-// stats buffer; the words are pad again.
+// (offset 400). The light table count/address then occupy offsets 404/408;
+// the u64 naturally rounds the complete payload to 416 bytes.
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_count) == 404);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_data_addr) == 408);
 const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
@@ -360,7 +412,11 @@ const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
 /// Column-major, 3 `packed_float3` columns in MSL.
 /// Optional vertex attributes and map addressing for ray hits. Sampling rows
 /// are base/normal/MR/AO/emission/anisotropy/specular-weight/specular-color:
-/// UV set, wrap U, wrap V, linear filter.
+/// UV set, wrap U, wrap V, linear filter. Rows 0..=7 retain the original
+/// base/normal/MR/AO/emission/anisotropy/specular-weight/specular-color
+/// order; rows 8..=18 follow the authored extension map raster indices
+/// 5, 6, 7, 8, 10, 11, 12, 15, 16, 17, 18, and row 19 mirrors AO's
+/// canonical raster index 3.
 /// Wrap codes match the renderer sidecar: clamp 0, repeat 1, mirror 2, border 3.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -369,11 +425,13 @@ pub struct RtMaterialAttributes {
     pub color_offset: u32,
     /// Sampling metadata for base, normal, metallic-roughness, occlusion,
     /// emission, anisotropy, specular-weight, and specular-color maps.
-    pub sampling: [[u32; 4]; 8],
-    /// KHR_texture_transform folds for anisotropy, specular-weight, and
-    /// specular-color maps, in the same `(m00, m01, m10, m11, tx, ty)`
-    /// convention as the core map transforms.
-    pub extension_uv_transforms: [[f32; 6]; 3],
+    pub sampling: [[u32; 4]; 20],
+    /// KHR_texture_transform folds for the 15 extension maps, in the same
+    /// `(m00, m01, m10, m11, tx, ty)` convention as the core map transforms.
+    /// The first three retain anisotropy/specular-weight/specular-color order;
+    /// the remaining eleven use the raster-index order documented above,
+    /// followed by AO's canonical raster index 3.
+    pub extension_uv_transforms: [[f32; 6]; 15],
 }
 
 impl Default for RtMaterialAttributes {
@@ -381,8 +439,8 @@ impl Default for RtMaterialAttributes {
         Self {
             uv1_offset: u32::MAX,
             color_offset: u32::MAX,
-            sampling: [[0, 1, 1, 1]; 8],
-            extension_uv_transforms: [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 3],
+            sampling: [[0, 1, 1, 1]; 20],
+            extension_uv_transforms: [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 15],
         }
     }
 }
@@ -502,17 +560,19 @@ pub struct RtNormalSource {
     /// Sign of the model matrix determinant (`-1` for mirrored transforms).
     pub model_handedness: f32,
     pub material_attributes: RtMaterialAttributes,
-    /// Shared material-texture-table indices for anisotropy, specular
-    /// weight, and specular color maps, in that order.
-    pub extra_tex_indices: [u32; 3],
+    /// Shared material-texture-table indices for the 15 extension maps. The
+    /// first three retain anisotropy/specular-weight/specular-color order;
+    /// the remaining eleven follow the authored raster-index order, followed
+    /// by AO's canonical raster index 3.
+    pub extra_tex_indices: [u32; 15],
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 496);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 1024);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, material_attributes) == 276);
-const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 208);
+const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 688);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
-const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 136);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 484);
+const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 328);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 964);
 // RT_INSTANCING_DESIGN.md D3: the consumed `_pad2` words become
 // object_index (108) + instance_addr (112) — asserted, not hand-counted.
 // P4b: the appended appearance/index fields — asserted the same way.

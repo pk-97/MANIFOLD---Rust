@@ -44,10 +44,16 @@ material effects.
   Russian roulette after event 8. Missing boundaries and exhausted walks produce
   an invalid-result marker, not a silent diffusion fallback. The renderer must
   expose the invalid result. Closed meshes are required for RandomWalk.
-- **D5 — Per-frame estimates.** Samples are independent per frame; no new
-  temporal history, locks or thread. Reuse existing frame jitter/blue-noise
-  utilities. Sample count trades GPU work for variance. Diffusion is the cheaper
-  approximation; section 8 records the bounded measurement.
+- **D5 — Reconstruct scattered radiance.** Independent transport samples feed
+  dedicated raw-radiance history, capped at 64 frames while the scene is still.
+  Camera, geometry, instances, material, lighting and environment changes reset
+  that history; disabling scattering resets it too. Two bounded spatial passes
+  use exact instance identity, depth and geometric normals to reduce residual noise.
+  They never filter surface reflections or feed filtered radiance back into
+  history. This supersedes the raw-per-frame presentation rejected by Peter on
+  2026-09-26. Motion receives spatial reconstruction immediately, then a held
+  scene converges. Allocation is optional and admitted before publication;
+  the disabled path has no dispatch. The transport modes remain distinct.
 
 ## 3. Data and rendering seam
 
@@ -126,7 +132,8 @@ reduction. Transparent/point draws cannot use this opaque depth result.
 Transport coefficients per channel, with colour `a`, phase `g`, radius `r`:
 `sigma_t = 1 / (r * (1 - a*g))`, `sigma_s = a*sigma_t`,
 `sigma_a = (1-a)*sigma_t`. The random walk chooses RGB hero channels uniformly
-and compensates by 3. It starts with an inward cosine direction; samples
+and compensates by 3. It starts with an inward cosine direction about the actual
+triangle boundary normal (smooth normals remain for illumination/reconstruction); samples
 exponential free-flight distances; multiplies throughput by albedo at a volume
 event; samples HG for the next direction; and evaluates illumination at the
 first boundary exit. Roulette divides throughput by survival probability.
@@ -140,11 +147,15 @@ interreflection is outside this homogeneous BSSRDF estimator.
 Diffusion uses reduced coefficients, the classic dipole profile and three
 projection axes (normal 1/2, tangent/bitangent 1/4 each). Sampled projected
 points are ray-intersected with the same instance, with bounded candidate
-selection. Its finite support and diffusion approximation are intentional;
+selection. Projection rays keep their origin and advance their minimum distance
+past each committed hit; rebasing on a rounded surface position can repeatedly
+hit the same triangle. Its finite support and diffusion approximation are intentional;
 thin features and low-albedo media should use RandomWalk.
 
-Cost: one cached full-resolution RGBA16F output (about 16 MiB at 1080p), a
-48-byte table row per opaque object, existing acceleration maintenance, and
+Cost: five full-resolution RGBA16F radiance textures, one RGBA32F
+normal/instance guide and two R16F history-count textures (60 bytes per pixel,
+about 119 MiB at 1080p), a 48-byte table row per opaque object, existing
+acceleration maintenance, and
 per-pixel queries proportional to samples and scattering events. Diffusion
 still has a geometry-query cost; it is not free. Zero weight avoids the SSS
 allocation and dispatch. Accurate mode can be much slower and noisy at low
@@ -223,3 +234,21 @@ exhausted-event marker is implemented but does not yet have a deterministic
 GPU fixture; the open-surface marker is exercised. Point primitives and
 transparent draws reject SSS explicitly because the opaque depth/boundary
 contract cannot represent them.
+
+The September 26 reconstruction repair additionally passes low-sample static
+noise/energy, camera/light/material history reset, and a closed smooth sphere
+in both modes (128×128, 64 samples, all pixels across eight frames). The
+curved proof requires finite, nonzero scattered light and no invalid markers;
+the open-quad proof still requires the marker. Native app-presentation renders
+of the original slab and a curved imported mesh were inspected at 384×256 and
+480×360. The severe grain is removed; low-frequency Monte Carlo variation
+remains. Fixed-origin projection traversal and geometric-normal entry sampling
+removed false invalid pixels on the closed curved mesh.
+
+A bounded three-warm-frame comparison on that 480×360 curved scene measured
+4.57 ms median wall time for Diffusion at 8 samples and 595.74 ms for RandomWalk
+at 64 samples, including CPU encoding and completion of all GPU chunks. These
+are headless development-build scene timings, not 1080p or full-app throughput.
+The final-command-buffer GPU time excludes earlier SSS chunks and is deliberately
+not reported as total GPU cost. Both modes still trace at full render resolution,
+and their cost remains strongly dependent on the medium.
