@@ -15,12 +15,11 @@
 //! feel. The level is a pure function of beats-into-clip, so the walk holds no
 //! per-frame envelope state — a clip loop re-triggers naturally as elapsed resets.
 
-use std::collections::HashMap;
-
-use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
+use manifold_core::audio_features::{
+    AudioFeatureSnapshot, AudioHopStamp, SendFeatures,
+};
 use manifold_core::audio_mod::{AudioFeatureKind, TriggerAction, WrapMode, random_step_value};
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
-use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
@@ -430,17 +429,23 @@ pub fn evaluate_modulation(
     clip_edge_layers: &[i32],
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
+    // Retained hops are advanced before the reset so Step/Random shadows and
+    // trigger counters are visible on this same display tick. Their continuous
+    // outputs are applied after drivers below, preserving the existing
+    // precedence. An empty hop_batches vector is the legacy snapshot contract.
+    let retained_hops = !audio.hop_batches.is_empty();
+    if retained_hops {
+        advance_audio_hops(project, audio, trigger_pulses, clip_edge_layers);
+    }
+
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
 
     // Phase 1.5: Apply any armed step/random audio-mod shadow values (PARAM_
     // STEP_ACTIONS D4). Runs BEFORE drivers/continuous-mods/envelopes so a
     // step *replaces* the base exactly like a hand-moved slider — everything
-    // downstream stacks on top unchanged. The shadow itself is only ever
-    // advanced by this tick's `evaluate_all_audio_mods` call below, so a fire
-    // surfaces here on the NEXT tick (one-frame latency, imperceptible at
-    // 60fps, and it keeps the step arm from having to special-case "did I
-    // just fire this same tick").
+    // downstream stacks on top unchanged. Retained hops advance these shadows
+    // above; legacy snapshot-only callers retain their next-frame behavior.
     let any_stepped = apply_step_values(project);
 
     // Phase 1.6: Apply any armed Step/Random envelope shadow values.
@@ -463,8 +468,11 @@ pub fn evaluate_modulation(
     // ACTIONS D5) is the engine-computed set of `timeline.layers` indices
     // with a clip-start edge since this function's last call — the Step/
     // Random arm's second fire source, gated by `trigger_mode` (D3).
-    let any_audio =
-        evaluate_all_audio_mods(project, audio, dt, trigger_pulses, clip_edge_layers, fire_meters);
+    let any_audio = if retained_hops {
+        apply_retained_audio_mods(project, fire_meters)
+    } else {
+        evaluate_all_audio_mods(project, audio, dt, trigger_pulses, clip_edge_layers, fire_meters)
+    };
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
@@ -538,6 +546,300 @@ pub fn apply_step_values(project: &mut Project) -> bool {
 // Phase 2.5: Evaluate audio modulations (live audio features → effective)
 // =====================================================================
 
+/// Advance each retained analysis hop exactly once. This is deliberately a
+/// separate phase from [`apply_retained_audio_mods`]: the former runs before
+/// reset/apply-step-values, while the latter runs after drivers.
+fn advance_audio_hops(
+    project: &mut Project,
+    snapshot: &AudioFeatureSnapshot,
+    pulses: &mut Vec<TriggerPulse>,
+    clip_edge_layers: &[i32],
+) {
+    pulses.clear();
+    let sends = &project.audio_setup.sends;
+    for fx in project.settings.master_effects.iter_mut() {
+        advance_instance_audio_hops(fx, sends, snapshot, None, false, pulses);
+    }
+    for (layer_index, layer) in project.timeline.layers.iter_mut().enumerate() {
+        let layer_id = layer.layer_id.clone();
+        let clip_edge = clip_edge_layers.contains(&(layer_index as i32));
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                advance_instance_audio_hops(
+                    fx, sends, snapshot, Some(&layer_id), clip_edge, pulses,
+                );
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut() {
+            advance_instance_audio_hops(
+                gp, sends, snapshot, Some(&layer_id), clip_edge, pulses,
+            );
+        }
+    }
+}
+
+fn advance_instance_audio_hops(
+    fx: &mut PresetInstance,
+    sends: &[manifold_core::audio_setup::AudioSend],
+    snapshot: &AudioFeatureSnapshot,
+    layer_id: Option<&manifold_core::id::LayerId>,
+    clip_edge: bool,
+    pulses: &mut Vec<TriggerPulse>,
+) {
+    if !fx.enabled {
+        return;
+    }
+    let Some(mods) = fx.audio_mods.as_mut().filter(|mods| !mods.is_empty()) else {
+        return;
+    };
+    let params = &mut fx.params;
+    for m in mods.iter_mut().filter(|m| m.enabled) {
+        let source_changed = m.audio_hop_source.as_ref() != Some(&m.source);
+        if source_changed {
+            m.audio_hop_source = Some(m.source.clone());
+            m.audio_hop_cursor = Default::default();
+            reset_audio_conditioning(m);
+        }
+        let Some(send_index) = sends.iter().position(|send| send.id == m.source.send_id) else {
+            reset_audio_conditioning(m);
+            continue;
+        };
+        let Some(batch) = snapshot.hop_batches.get(send_index) else {
+            reset_audio_conditioning(m);
+            continue;
+        };
+        if batch.epoch() != 0 && batch.epoch() < m.audio_hop_cursor.epoch() {
+            // A delayed stale/faulted batch must not erase a newer held value.
+            continue;
+        }
+        if m.audio_hop_cursor.begin_epoch(batch.epoch()) {
+            // A producer can publish a new epoch with no completed hop yet.
+            // Clear the old signal immediately and reject late older batches.
+            reset_audio_conditioning(m);
+        }
+        if batch.epoch() == 0 || batch.failure().is_some() {
+            reset_audio_conditioning(m);
+            continue;
+        }
+        let Some(p) = params.get(m.param_id.as_ref()) else {
+            continue;
+        };
+        let info = AudioParamInfo {
+            min: p.spec.min,
+            max: p.spec.max,
+            is_trigger: p.spec.is_trigger,
+            is_trigger_gate: p.spec.is_trigger_gate,
+            whole_numbers: p.whole_numbers(),
+            base: p.base,
+        };
+        let mut accepted_any = false;
+        for (hop_index, hop) in batch.hops().iter().enumerate() {
+            let Some(new_epoch) = m.audio_hop_cursor.accept(hop.stamp) else {
+                continue;
+            };
+            if new_epoch {
+                reset_audio_conditioning(m);
+            }
+            accepted_any = true;
+            let on_last_hop = clip_edge && hop_index + 1 == batch.hops().len();
+            let output = process_audio_sample(
+                &fx.id, m, info, &hop.features, hop.dt, Some(hop.stamp), on_last_hop, layer_id, pulses,
+            );
+            if let Some(output) = output {
+                m.audio_held_output = Some(output);
+            }
+        }
+        if clip_edge && !accepted_any && !info.is_trigger && !info.is_trigger_gate
+            && matches!(m.action, TriggerAction::Step { .. } | TriggerAction::Random)
+        {
+            // A clip edge is an event in its own right. It fires Step/Random
+            // once without conditioning a stale snapshot value.
+            m.audio_held_output = None;
+            apply_audio_action(m, info, None, true);
+        }
+    }
+}
+
+fn reset_audio_conditioning(m: &mut manifold_core::audio_mod::ParameterAudioMod) {
+    m.smoothed = 0.0;
+    m.prev_raw = 0.0;
+    m.trigger_edge.clear();
+    m.audio_held_output = None;
+    m.audio_held_meter = 0.0;
+}
+
+#[derive(Clone, Copy)]
+struct AudioParamInfo {
+    min: f32,
+    max: f32,
+    is_trigger: bool,
+    is_trigger_gate: bool,
+    whole_numbers: bool,
+    base: f32,
+}
+
+fn process_audio_sample(
+    owner_id: &manifold_core::id::EffectId,
+    m: &mut manifold_core::audio_mod::ParameterAudioMod,
+    info: AudioParamInfo,
+    features: &SendFeatures,
+    dt: Seconds,
+    audio_stamp: Option<AudioHopStamp>,
+    clip_edge: bool,
+    layer_id: Option<&manifold_core::id::LayerId>,
+    pulses: &mut Vec<TriggerPulse>,
+) -> Option<f32> {
+    let dt_s = dt.0 as f32;
+    let raw = m.source.feature.extract(features);
+    let previous_raw = m.prev_raw;
+    let conditioned = m.shape.condition(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
+    let out_norm = m.shape.map_range(conditioned);
+    let impulse_action = !info.is_trigger
+        && !info.is_trigger_gate
+        && matches!(m.action, TriggerAction::Step { .. } | TriggerAction::Random)
+        && matches!(m.source.feature.kind, AudioFeatureKind::Kick | AudioFeatureKind::Transients);
+    let action_conditioned = if impulse_action {
+        let mut action_shape = m.shape;
+        action_shape.attack_ms = 0.0;
+        action_shape.release_ms = 0.0;
+        let mut action_smoothed = 0.0;
+        let mut action_prev_raw = previous_raw;
+        action_shape.condition(raw, dt_s, &mut action_smoothed, &mut action_prev_raw)
+    } else {
+        conditioned
+    };
+
+    if info.is_trigger_gate {
+        let edge_level = if m.shape.rate_of_change {
+            let rate = (raw - previous_raw) / dt_s.max(1e-4);
+            (0.5 + rate * m.shape.sensitivity).clamp(0.0, 1.0)
+        } else {
+            (raw * m.shape.sensitivity).clamp(0.0, 1.0)
+        };
+        m.audio_held_meter = edge_level;
+        if m.trigger_edge.advance(edge_level, 0.5)
+            && m.trigger_mode.unwrap_or(TriggerFireMode::Both).wants_transient()
+        {
+            pulses.push(TriggerPulse {
+                layer_id: layer_id.cloned(),
+                owner_id: owner_id.clone(),
+                param_key: fire_meter_key_for_param("", m.param_id.as_ref()),
+                audio_stamp,
+            });
+        }
+        return None;
+    }
+
+    m.audio_held_meter = action_conditioned;
+    if info.is_trigger {
+        if m.trigger_edge.advance(conditioned, 0.5) {
+            m.fire_count = m.fire_count.wrapping_add(1);
+        }
+        return Some(info.base + m.fire_count as f32);
+    }
+    match m.action {
+        TriggerAction::Continuous => Some(info.min + (info.max - info.min) * out_norm),
+        TriggerAction::Step { .. } | TriggerAction::Random => {
+            m.audio_held_output = None;
+            apply_audio_action(m, info, Some(action_conditioned), clip_edge);
+            None
+        }
+    }
+}
+
+fn apply_audio_action(
+    m: &mut manifold_core::audio_mod::ParameterAudioMod,
+    info: AudioParamInfo,
+    action_conditioned: Option<f32>,
+    clip_edge: bool,
+) {
+    let audio_edge = action_conditioned.is_some_and(|value| m.trigger_edge.advance(value, 0.5));
+    let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
+    let fires = (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
+    if !fires {
+        return;
+    }
+    let (mut lo, mut hi) = m.shape.zone(info.min, info.max);
+    if info.whole_numbers {
+        let lo_i = lo.ceil();
+        let hi_i = hi.floor();
+        if hi_i < lo_i {
+            let collapsed = ((lo + hi) * 0.5).round().clamp(info.min, info.max);
+            lo = collapsed;
+            hi = collapsed;
+        } else {
+            lo = lo_i;
+            hi = hi_i;
+        }
+    }
+    let current = m.step_value.unwrap_or(info.base).clamp(lo, hi);
+    match m.action {
+        TriggerAction::Step { amount, wrap } => {
+            m.step_value = Some(advance_step(
+                current, amount, wrap, &mut m.step_dir, lo, hi, info.whole_numbers,
+            ));
+        }
+        TriggerAction::Random => {
+            m.step_value = Some(advance_random(
+                &mut m.fire_count, lo, hi, info.whole_numbers, current,
+            ));
+        }
+        TriggerAction::Continuous => {}
+    }
+}
+
+/// Apply values retained by the hop phase after drivers have written their
+/// values. A valid empty batch holds its last output; an inactive or failed
+/// batch applies no continuous held output or legacy snapshot. Trigger counts
+/// stay monotonic through these intervals.
+fn apply_retained_audio_mods(
+    project: &mut Project,
+    fire_meters: &mut FireMeterCapture,
+) -> bool {
+    let mut any = false;
+    for fx in project.settings.master_effects.iter_mut() {
+        any |= apply_instance_retained_audio(fx, fire_meters);
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                any |= apply_instance_retained_audio(fx, fire_meters);
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut() {
+            any |= apply_instance_retained_audio(gp, fire_meters);
+        }
+    }
+    any
+}
+
+fn apply_instance_retained_audio(
+    fx: &mut PresetInstance,
+    fire_meters: &mut FireMeterCapture,
+) -> bool {
+    if !fx.enabled { return false; }
+    let Some(mods) = fx.audio_mods.as_ref() else { return false; };
+    let params = &mut fx.params;
+    let mut any = false;
+    for m in mods.iter().filter(|m| m.enabled) {
+        let Some(p) = params.get_mut(m.param_id.as_ref()) else { continue; };
+        // Advancing the input phase already invalidated missing/faulted
+        // continuous signals. Counters stay monotonic through those intervals.
+        if p.spec.is_trigger && !p.spec.is_trigger_gate {
+            p.value = p.base + m.fire_count as f32;
+            any = true;
+        } else if !p.spec.is_trigger_gate
+            && matches!(m.action, TriggerAction::Continuous)
+            && let Some(output) = m.audio_held_output
+        {
+            p.value = output;
+            any = true;
+        }
+        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), m.audio_held_meter);
+    }
+    any
+}
+
 /// Evaluate every audio modulation on master effects, layer effects, and
 /// generator params, using the latest per-send feature `snapshot`. Returns true
 /// if any modulation wrote a value (compositor should be marked dirty).
@@ -550,17 +852,11 @@ pub fn apply_step_values(project: &mut Project) -> bool {
 /// features yet) is skipped, leaving its param at the base value from
 /// `reset_all_effectives` — the orphan policy, matching drivers/envelopes.
 ///
-/// `clip_edge_layers` (PARAM_STEP_ACTIONS D5) is the engine's list of
-/// `timeline.layers` indices with a clip-start edge since this was last
-/// called — a Clip/Both-mode Step or Random mod on that layer fires this
-/// tick (D3). Master-chain instances have no layer index, so they never
-/// see a clip contribution (D3/D5's "clip contribution is 0" rule) —
-/// **note:** this early-return (inherited from P1, unchanged here) still
-/// gates a pure Clip-mode step on `by_send` resolving the mod's configured
-/// source, because every `ParameterAudioMod` is fundamentally send-sourced
-/// (P1 scope); a step mod whose bound send has no feature data yet won't
-/// fire on a clip edge either. Not a P2 regression — flagging so it isn't
-/// mistaken for one.
+/// `clip_edge_layers` lists layer indices with a clip-start edge. Step/Random
+/// mods admit that contribution once per call, including a valid retained
+/// batch with no new audio. Master-chain instances have no layer contribution.
+/// An unresolved send or failed/inactive batch cannot provide an audio action.
+/// Legacy snapshot-only calls keep their existing orphan/source behavior.
 pub fn evaluate_all_audio_mods(
     project: &mut Project,
     snapshot: &AudioFeatureSnapshot,
@@ -570,27 +866,23 @@ pub fn evaluate_all_audio_mods(
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
     pulses.clear();
+    if !snapshot.hop_batches.is_empty() {
+        advance_audio_hops(project, snapshot, pulses, clip_edge_layers);
+        return apply_retained_audio_mods(project, fire_meters);
+    }
     if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
         return false;
     }
 
-    // Resolve send id → features once (owned), from the AudioSetup's send order
-    // (the worker's frame index). Built under an immutable borrow that ends
-    // before the mutable instance walk below.
-    let mut by_send: HashMap<AudioSendId, SendFeatures> = HashMap::new();
-    for (i, send) in project.audio_setup.sends.iter().enumerate() {
-        if let Some(f) = snapshot.get(i) {
-            by_send.insert(send.id.clone(), *f);
-        }
-    }
-    if by_send.is_empty() {
+    let sends = &project.audio_setup.sends;
+    if snapshot.sends.is_empty() {
         return false;
     }
 
     let mut any = false;
 
     for fx in project.settings.master_effects.iter_mut() {
-        if evaluate_instance_audio_mods(fx, &by_send, dt, None, false, pulses, fire_meters) {
+        if evaluate_instance_audio_mods(fx, sends, snapshot, dt, None, false, pulses, fire_meters) {
             any = true;
         }
     }
@@ -601,7 +893,8 @@ pub fn evaluate_all_audio_mods(
             for fx in effects.iter_mut() {
                 if evaluate_instance_audio_mods(
                     fx,
-                    &by_send,
+                    sends,
+                    snapshot,
                     dt,
                     Some(layer_id.clone()),
                     clip_edge,
@@ -615,7 +908,8 @@ pub fn evaluate_all_audio_mods(
         if let Some(gp) = layer.gen_params_mut()
             && evaluate_instance_audio_mods(
                 gp,
-                &by_send,
+                sends,
+                snapshot,
                 dt,
                 Some(layer_id),
                 clip_edge,
@@ -639,271 +933,40 @@ pub fn evaluate_all_audio_mods(
 /// (`layer_id: None`), matching D3's "master chains have no layer" rule.
 fn evaluate_instance_audio_mods(
     fx: &mut PresetInstance,
-    by_send: &HashMap<AudioSendId, SendFeatures>,
+    sends: &[manifold_core::audio_setup::AudioSend],
+    snapshot: &AudioFeatureSnapshot,
     dt: Seconds,
     layer_id: Option<manifold_core::id::LayerId>,
     clip_edge: bool,
     pulses: &mut Vec<TriggerPulse>,
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
-    if !fx.enabled {
-        return false;
-    }
-    if !fx.has_audio_mods() {
-        return false;
-    }
-
-    // Single pass over two disjoint fields: `audio_mods` (mutable — each active
-    // follower advances its smoothing state) and `params` (the id-keyed
-    // manifest). This drops the old per-frame scratch `Vec` and the registry
-    // def lookup; the range is self-contained on each `Param.spec`, so there is
-    // no positional slot to resolve. Existence is checked (via the range read)
-    // BEFORE the follower advances, matching the old pass-1 filter so an
-    // unresolved mod does not advance its smoothing.
-    let dt_s = dt.0 as f32;
-    // Fused guard+use (BUG-35vd): the caller-side `has_audio_mods()` check and
-    // this unwrap were one future edit away from separating. Unreachable in
-    // practice; structured so it stays that way.
-    let Some(mods) = fx.audio_mods.as_mut().filter(|m| !m.is_empty()) else {
+    if !fx.enabled { return false; }
+    let Some(mods) = fx.audio_mods.as_mut().filter(|mods| !mods.is_empty()) else {
         return false;
     };
     let params = &mut fx.params;
     let mut wrote = false;
     for m in mods.iter_mut().filter(|m| m.enabled) {
-        let Some(features) = by_send.get(&m.source.send_id) else {
-            continue;
+        let Some(features) = sends.iter().position(|send| send.id == m.source.send_id)
+            .and_then(|index| snapshot.get(index)) else { continue; };
+        let Some(p) = params.get_mut(m.param_id.as_ref()) else { continue; };
+        let info = AudioParamInfo {
+            min: p.spec.min,
+            max: p.spec.max,
+            is_trigger: p.spec.is_trigger,
+            is_trigger_gate: p.spec.is_trigger_gate,
+            whole_numbers: p.whole_numbers(),
+            base: p.base,
         };
-        let (min, max, is_trigger, is_trigger_gate, whole_numbers) = match params.get(m.param_id.as_ref()) {
-            Some(p) => (p.spec.min, p.spec.max, p.spec.is_trigger, p.spec.is_trigger_gate, p.whole_numbers()),
-            None => continue,
-        };
-        let raw = m.source.feature.extract(features);
-        let shape = m.shape;
-        // BUG-242: `m.prev_raw` before `condition()` mutates it — the
-        // trigger-gate arm below needs the pre-tick value to recompute the
-        // sensitivity-scaled raw level for edge detection.
-        let prev_raw_before_condition = m.prev_raw;
-        // `conditioned` is the pre-range-map signal (sensitivity, smoothing,
-        // invert, curve) — edge detection (trigger/Step/Random fire arms
-        // below) reads THIS, never the range-mapped `out_norm`, so the trim
-        // handles never distort whether/when a mod fires (BUG: range_min >=
-        // 0.5 fired once and never re-armed; range_max <= 0.5 never fired at
-        // all). `out_norm` stays the range-mapped value for Continuous, which
-        // is exactly what the range map is for. Trigger-gate cards edge-detect
-        // the sensitivity-scaled RAW level (BUG-242), and Step/Random actions
-        // on Kick/Transients use a local unsmoothed condition below, so an
-        // envelope release cannot swallow a second detector onset.
-        let conditioned = shape.condition(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
-        let out_norm = shape.map_range(conditioned);
-
-        // D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
-        // BUG-082's fix; widened 2026-07-11 — this used to sit inside the
-        // `is_trigger_gate` arm below, so a continuous/Step/Random drawer's
-        // Amount meter never had a level to show): capture the SAME
-        // pre-range-map signal any edge detector below reads, keyed on this
-        // mod's owning effect/generator + param — the drawer meter shows
-        // exactly what the mod is reading, gate or not. The push happens per
-        // arm below (2026-07-19, param-drawer unification): the
-        // `is_trigger_gate` arm fires on the sensitivity-scaled RAW edge
-        // (BUG-242), so its meter shows THAT, not the shaped envelope the
-        // gate ignores — tuning sensitivity against a smoothed meter lied
-        // about where the fire threshold sat. Continuous and non-impulse
-        // action arms keep `conditioned`; impulse Step/Random arms use the
-        // local unsmoothed condition computed below.
-        if is_trigger_gate {
-            // section 9 U1: the mod's target is a trigger-gate card (e.g.
-            // `clip_trigger`) — never write the toggle's value (R2's
-            // continuous-mod flapping stays dead; the toggle is a user
-            // control). Same D5b fire chassis as `is_trigger` below, but a
-            // fire pushes a pulse for the renderer's `audio_count` instead of
-            // a monotonic count. Mode gates only whether the pulse EMITS, not
-            // whether the edge advances, so switching mode live never leaves
-            // the armed flag out of sync with the audio signal.
-            //
-            // BUG-242: detection runs on the sensitivity-scaled RAW level,
-            // not `conditioned` — the shape's attack/release envelope
-            // (release defaults to 120 ms) otherwise gates how fast the edge
-            // can re-arm, deafening dense material. Same sensitivity/
-            // rate-of-change step `AudioModShape::condition`'s `target`
-            // computes internally (manifold-core's `audio_mod.rs`); trim
-            // handles (range_min/range_max) still never distort firing since
-            // this is pre-range-map either way.
-            let edge_level = if shape.rate_of_change {
-                let rate = (raw - prev_raw_before_condition) / dt_s.max(1e-4);
-                (0.5 + rate * shape.sensitivity).clamp(0.0, 1.0)
-            } else {
-                (raw * shape.sensitivity).clamp(0.0, 1.0)
-            };
-            fire_meters.push(
-                fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()),
-                edge_level,
-            );
-            if m.trigger_edge.advance(edge_level, 0.5)
-                && m.trigger_mode.unwrap_or(TriggerFireMode::Both).wants_transient()
-            {
-                pulses.push(TriggerPulse {
-                    layer_id: layer_id.clone(), owner_id: fx.id.clone(), param_key: fire_meter_key_for_param("", m.param_id.as_ref()),
-                });
-            }
-            continue;
+        let output = process_audio_sample(
+            &fx.id, m, info, features, dt, None, clip_edge, layer_id.as_ref(), pulses,
+        );
+        if let Some(output) = output {
+            p.value = output;
+            wrote = true;
         }
-
-        // Kick and Transients are already decaying detector impulses. Step and
-        // Random must see each detector onset directly, while Continuous and
-        // non-impulse actions retain the shape's attack/release feel. Reuse the
-        // core condition path with a local follower so sensitivity, rate of
-        // change, inversion, curves, and non-finite sanitization stay identical
-        // without replacing the displayed continuous signal's smoothing state.
-        let impulse_action = !is_trigger
-            && matches!(m.action, TriggerAction::Step { .. } | TriggerAction::Random)
-            && matches!(m.source.feature.kind, AudioFeatureKind::Kick | AudioFeatureKind::Transients);
-        let action_conditioned = if impulse_action {
-            let mut action_shape = shape;
-            action_shape.attack_ms = 0.0;
-            action_shape.release_ms = 0.0;
-            let mut action_smoothed = 0.0;
-            let mut action_prev_raw = prev_raw_before_condition;
-            action_shape.condition(raw, dt_s, &mut action_smoothed, &mut action_prev_raw)
-        } else {
-            conditioned
-        };
-        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), action_conditioned);
-
-        if is_trigger {
-            // section 8 D5b: a fire-button target wants a monotonic count, not a
-            // level — edge-detect the shaped signal (rising through
-            // mid-range) instead of overwriting continuously. Downstream
-            // `last_count`-style consumers edge-detect the written value
-            // unchanged. `action` is irrelevant here — the drawer never
-            // offers an Action row on an `is_trigger`/`is_trigger_gate` card
-            // (D8), so this arm's behavior is untouched by PARAM_STEP_ACTIONS.
-            // Detection runs on `conditioned` (pre-range-map) so trim handles
-            // never distort firing.
-            if let Some(p) = params.get_mut(m.param_id.as_ref()) {
-                if m.trigger_edge.advance(conditioned, 0.5) {
-                    m.fire_count = m.fire_count.wrapping_add(1);
-                }
-                p.value = p.base + m.fire_count as f32;
-                wrote = true;
-            }
-            continue;
-        }
-
-        match m.action {
-            TriggerAction::Continuous => {
-                if let Some(p) = params.get_mut(m.param_id.as_ref()) {
-                    p.value = min + (max - min) * out_norm;
-                    wrote = true;
-                }
-            }
-            TriggerAction::Step { amount, wrap } => {
-                // PARAM_STEP_ACTIONS D4/D2: a fire advances the runtime shadow
-                // only — it does NOT write `p.value` this tick (that's Phase
-                // 1.5's job, next tick). First fire seeds from the committed
-                // `base` (D4's lifecycle), never from `p.value` (which may
-                // already be mid-frame-modulated by an earlier phase).
-                //
-                // D3: `trigger_edge.advance` always runs (keeps the armed/
-                // re-arm state tracking the live signal regardless of mode,
-                // exactly like the is_trigger_gate arm above) — `trigger_mode`
-                // only gates which of the two admitted edges actually fires
-                // the step. `None` defaults to Transient here, NOT `Both`
-                // like gate cards (D3: a step mod with no audio intent is
-                // meaningless — arming it required opening an audio drawer).
-                // Detection runs on the conditioned (pre-range-map) signal so
-                // trim handles never distort firing. Detector impulses use the
-                // local unsmoothed condition above; other sources retain the
-                // configured follower.
-                let audio_edge = m.trigger_edge.advance(action_conditioned, 0.5);
-                let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
-                let fires =
-                    (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
-                if fires {
-                    // The trim-handle zone is what Step travels within, not
-                    // the param's full min/max rails — a trimmed handle bounds
-                    // Step/Random exactly the way it already bounds Continuous.
-                    let (mut lo, mut hi) = shape.zone(min, max);
-                    if whole_numbers {
-                        // Snap the zone rails to the integer grid inside it.
-                        let lo_i = lo.ceil();
-                        let hi_i = hi.floor();
-                        if hi_i < lo_i {
-                            // No integer lands inside this (sub-1-wide) zone —
-                            // collapse to the nearest integer to its center.
-                            let collapsed = ((lo + hi) * 0.5).round().clamp(min, max);
-                            lo = collapsed;
-                            hi = collapsed;
-                        } else {
-                            lo = lo_i;
-                            hi = hi_i;
-                        }
-                    }
-                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(lo);
-                    // A base outside the zone (e.g. left over from before the
-                    // handles were trimmed) enters at the nearest rail.
-                    let current = m.step_value.unwrap_or(base).clamp(lo, hi);
-                    // A discrete zone's reachable set is the INCLUSIVE integer
-                    // grid {lo, lo+1, ..., hi} — hi-lo+1 positions, one more
-                    // than a continuous cycle's hi-lo. `Wrap` must land
-                    // one-past-hi exactly on lo, so its cycle length needs
-                    // that +1; `Bounce`/`Clamp` reflect/saturate at the true
-                    // hi regardless (hi IS a reachable, real rail either way).
-                    let wrap_max = if whole_numbers && matches!(wrap, WrapMode::Wrap) {
-                        hi + 1.0
-                    } else {
-                        hi
-                    };
-                    let (mut next, dir) = wrap.advance(current, amount, m.step_dir, lo, wrap_max);
-                    if whole_numbers {
-                        next = next.round();
-                    }
-                    m.step_dir = dir;
-                    m.step_value = Some(next.clamp(lo, hi));
-                }
-            }
-            TriggerAction::Random => {
-                // D7: fire_count doubles as the deterministic hash ordinal
-                // here — this arm and the `is_trigger` monotonic-count arm
-                // above are mutually exclusive per mod (is_trigger `continue`s
-                // before this match), so there's no shared-meaning collision.
-                // D3 event-source gating: same shape as the Step arm above.
-                // Detection runs on the conditioned (pre-range-map) signal so
-                // trim handles never distort firing. Detector impulses use the
-                // local unsmoothed condition above; other sources retain the
-                // configured follower.
-                let audio_edge = m.trigger_edge.advance(action_conditioned, 0.5);
-                let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
-                let fires =
-                    (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
-                if fires {
-                    m.fire_count = m.fire_count.wrapping_add(1);
-                    // Same trim-handle zone as Step: Random jumps within the
-                    // rails the handles define, not the param's full range.
-                    let (mut lo, mut hi) = shape.zone(min, max);
-                    if whole_numbers {
-                        let lo_i = lo.ceil();
-                        let hi_i = hi.floor();
-                        if hi_i < lo_i {
-                            let collapsed = ((lo + hi) * 0.5).round().clamp(min, max);
-                            lo = collapsed;
-                            hi = collapsed;
-                        } else {
-                            lo = lo_i;
-                            hi = hi_i;
-                        }
-                    }
-                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(lo);
-                    let current = m.step_value.unwrap_or(base).clamp(lo, hi);
-                    let discrete_count =
-                        whole_numbers.then(|| ((hi - lo).round().max(0.0) as u32) + 1);
-                    let current_index = discrete_count
-                        .map(|n| ((current - lo).round().max(0.0) as u32).min(n.saturating_sub(1)))
-                        .unwrap_or(0);
-                    let next = random_step_value(m.fire_count, lo, hi, discrete_count, current_index);
-                    m.step_value = Some(next.clamp(lo, hi));
-                }
-            }
-        }
+        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), m.audio_held_meter);
     }
     wrote
 }
@@ -916,13 +979,16 @@ fn evaluate_instance_audio_mods(
 /// "master/global chains have no layer... audio fires still work") — the
 /// renderer keys a master-scoped counter off that sentinel. Collected by
 /// [`evaluate_all_audio_mods`] itself now — no separate walk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TriggerPulse {
     pub layer_id: Option<manifold_core::id::LayerId>,
     /// Preserve the firing gate's owner through renderer dispatch.
     pub owner_id: manifold_core::id::EffectId,
     /// Allocation-free parameter token; owner identity is carried separately.
     pub param_key: u64,
+    /// Source analysis hop for retained-hop fires; `None` for legacy snapshot
+    /// evaluation and clip-only fires.
+    pub audio_stamp: Option<AudioHopStamp>,
 }
 
 /// BUG-051 fix (section 8 D4, still true post-section 9): drop every audio-mod's trigger
@@ -1466,7 +1532,9 @@ mod tests {
 
     // ── audio modulation ─────────────────────────────────────────────────
 
-    use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
+    use manifold_core::audio_features::{
+        AudioFeatureHop, AudioFeatureSnapshot, AudioHopBatch, AudioHopStamp, SendFeatures,
+    };
     use manifold_core::audio_mod::{
         AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, ParameterAudioMod,
     };
@@ -1491,6 +1559,131 @@ mod tests {
         AudioFeatureSnapshot {
             sends: vec![SendFeatures { bands, ..Default::default() }], ..Default::default()
         }
+    }
+
+    fn snapshot_low_hop(low: f32, epoch: u64, end_sample: u64) -> AudioFeatureSnapshot {
+        let mut snapshot = snapshot_low(low);
+        let mut batch = AudioHopBatch::with_capacity(8);
+        batch.begin(epoch);
+        batch
+            .push(AudioFeatureHop {
+                stamp: AudioHopStamp {
+                    epoch,
+                    end_sample,
+                    sample_rate: 48_000,
+                    timeline_time: None,
+                },
+                dt: Seconds(512.0 / 48_000.0),
+                features: snapshot.sends[0],
+            })
+            .unwrap();
+        snapshot.hop_batches.push(batch);
+        snapshot
+    }
+
+    fn empty_hop_snapshot(epoch: u64) -> AudioFeatureSnapshot {
+        let mut snapshot = snapshot_low(0.0);
+        let mut batch = AudioHopBatch::with_capacity(8);
+        batch.begin(epoch);
+        snapshot.hop_batches.push(batch);
+        snapshot
+    }
+
+    fn low_hop_batch(levels: &[f32], epoch: u64, offset: usize) -> AudioFeatureSnapshot {
+        let mut snapshot = empty_hop_snapshot(epoch);
+        for (index, &level) in levels.iter().enumerate() {
+            let sample = snapshot_low_hop(level, epoch, ((offset + index + 1) * 512) as u64);
+            snapshot.hop_batches[0].push(sample.hop_batches[0].hops()[0]).unwrap();
+        }
+        snapshot
+    }
+
+    fn retained_tick(project: &mut Project, snapshot: &AudioFeatureSnapshot, dt: Seconds, clip: &[i32])
+        -> (Vec<TriggerPulse>, FireMeterCapture)
+    {
+        let mut pulses = Vec::new();
+        let mut meters = FireMeterCapture::default();
+        evaluate_modulation(project, Beats::ZERO, Seconds::ZERO, dt, snapshot,
+            &mut Vec::new(), &mut pulses, clip, &mut meters);
+        (pulses, meters)
+    }
+
+    #[test]
+    fn retained_modulation_all_actions_are_partition_invariant_and_redraw_safe() {
+        for mode in 0..5 {
+            let run = |chunk_size: usize, display_dt: Seconds| {
+                let (mut project, send_id) = project_with_audio_send();
+                attach_full_range_low_mod(&mut project, &send_id);
+                let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+                fx.params.get_mut("amount").unwrap().spec.is_trigger = mode == 1;
+                fx.params.get_mut("amount").unwrap().spec.is_trigger_gate = mode == 2;
+                let m = &mut fx.audio_mods.as_mut().unwrap()[0];
+                if mode == 0 { m.shape.attack_ms = 70.0; m.shape.release_ms = 180.0; }
+                if mode == 3 { m.action = TriggerAction::Step { amount: 0.2, wrap: WrapMode::Clamp }; }
+                if mode == 4 { m.action = TriggerAction::Random; }
+                let mut fired = Vec::new();
+                let levels = [0.0, 1.0, 0.0, 1.0, 0.0, 0.8, 0.0];
+                for (chunk, samples) in levels.chunks(chunk_size).enumerate() {
+                    let snapshot = low_hop_batch(samples, 1, chunk * chunk_size);
+                    let (pulses, meters) = retained_tick(&mut project, &snapshot, display_dt, &[]);
+                    fired.extend(pulses.into_iter().map(|pulse| pulse.audio_stamp.unwrap().end_sample));
+                    let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+                    let m = &fx.audio_mods.as_ref().unwrap()[0];
+                    let state = (m.smoothed, m.prev_raw, m.fire_count, m.step_value, fx.params.get("amount").unwrap().value);
+                    let meter = meters.get(fire_meter_key_for_param(fx.id.as_str(), "amount"));
+                    assert_eq!(meter, Some(m.audio_held_meter));
+                    let (replayed, held_meters) = retained_tick(&mut project, &snapshot, Seconds(9.0), &[]);
+                    assert!(replayed.is_empty());
+                    let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+                    let m = &fx.audio_mods.as_ref().unwrap()[0];
+                    assert_eq!((m.smoothed, m.prev_raw, m.fire_count, m.step_value, fx.params.get("amount").unwrap().value), state);
+                    assert_eq!(held_meters.get(fire_meter_key_for_param(fx.id.as_str(), "amount")), meter);
+                }
+                let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+                let m = &fx.audio_mods.as_ref().unwrap()[0];
+                if mode == 2 { assert_eq!(fired, [1024, 2048, 3072]); }
+                (fx.params.get("amount").unwrap().value, m.smoothed, m.fire_count, m.step_value, fired)
+            };
+            let baseline = run(1, Seconds(1.0 / 60.0));
+            assert_eq!(run(4, Seconds(1.0 / 24.0)), baseline);
+            assert_eq!(run(7, Seconds(0.75)), baseline);
+        }
+    }
+
+    #[test]
+    fn retained_faults_and_source_changes_preserve_counters_without_reviving_old_state() {
+        use manifold_core::audio_features::AudioHopError;
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].params.get_mut("amount").unwrap().spec.is_trigger = true;
+        retained_tick(&mut project, &snapshot_low_hop(1.0, 10, 512), Seconds(0.1), &[]);
+        let mut fault = empty_hop_snapshot(10);
+        fault.hop_batches[0].invalidate(AudioHopError::CapacityExceeded);
+        for snapshot in [&fault, &empty_hop_snapshot(0), &empty_hop_snapshot(20), &snapshot_low_hop(0.0, 10, 1024)] {
+            retained_tick(&mut project, snapshot, Seconds(0.1), &[]);
+            let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+            assert_eq!(fx.params.get("amount").unwrap().value, 1.0);
+            assert_eq!(fx.audio_mods.as_ref().unwrap()[0].audio_held_meter, 0.0);
+        }
+        // Choosing a different existing send may select a lower analyzer epoch.
+        let other = AudioSend::new("Other");
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].audio_mods.as_mut().unwrap()[0].source.send_id = other.id.clone();
+        project.audio_setup.sends[0] = other;
+        retained_tick(&mut project, &snapshot_low_hop(1.0, 2, 512), Seconds(0.1), &[]);
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value, 2.0);
+    }
+
+    #[test]
+    fn retained_clip_contribution_fires_once_per_batch_or_without_new_audio() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        let m = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0].audio_mods.as_mut().unwrap()[0];
+        m.action = TriggerAction::Step { amount: 0.125, wrap: WrapMode::Clamp };
+        m.trigger_mode = Some(TriggerFireMode::Both);
+        retained_tick(&mut project, &low_hop_batch(&[1.0, 0.0, 1.0, 0.0], 1, 0), Seconds(0.1), &[0]);
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value, 0.375);
+        retained_tick(&mut project, &empty_hop_snapshot(1), Seconds(0.1), &[0]);
+        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value, 0.5);
     }
 
     /// Attach an audio mod on `amount` reading the send's low-band amplitude,
@@ -1541,6 +1734,65 @@ mod tests {
             "amount driven to 1.0, got {}",
             fx.params.get("amount").unwrap().value
         );
+    }
+
+    #[test]
+    fn retained_hop_is_deduplicated_and_held_between_batches() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        let mut pulses = Vec::new();
+        let mut meters = FireMeterCapture::default();
+
+        let first = snapshot_low_hop(0.75, 1, 512);
+        assert!(evaluate_all_audio_mods(&mut project, &first, Seconds(0.016), &mut pulses, &[], &mut meters));
+        let amount = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params.get("amount").unwrap().value;
+        assert!((amount - 0.75).abs() < 1e-6);
+
+        // A redraw with an empty retained batch holds the last shaped output.
+        let empty = empty_hop_snapshot(1);
+        assert!(evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016), &mut pulses, &[], &mut meters));
+        let amount = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params.get("amount").unwrap().value;
+        assert!((amount - 0.75).abs() < 1e-6);
+
+        // Replaying the old batch is stale and must not condition a second time.
+        assert!(evaluate_all_audio_mods(&mut project, &first, Seconds(0.016), &mut pulses, &[], &mut meters));
+        let amount = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params.get("amount").unwrap().value;
+        assert!((amount - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn retained_step_shadow_is_visible_on_the_same_display_tick() {
+        let (mut project, send_id) = project_with_audio_send();
+        let mut m = ParameterAudioMod::new(
+            "amount".into(),
+            send_id,
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
+        );
+        m.shape = AudioModShape { attack_ms: 0.0, release_ms: 0.0, ..Default::default() };
+        m.action = TriggerAction::Step { amount: 0.25, wrap: WrapMode::Clamp };
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].audio_mods_mut().push(m);
+
+        let snap = snapshot_low_hop(1.0, 2, 512);
+        let mut timing = Vec::new();
+        let mut pulses = Vec::new();
+        let mut meters = FireMeterCapture::default();
+        evaluate_modulation(
+            &mut project,
+            Beats::ZERO,
+            Seconds::ZERO,
+            Seconds(0.016),
+            &snap,
+            &mut timing,
+            &mut pulses,
+            &[],
+            &mut meters,
+        );
+        let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params.get("amount").unwrap().value;
+        assert!((value - 0.25).abs() < 1e-6, "step shadow must apply this tick, got {value}");
     }
 
     #[test]
@@ -1796,6 +2048,7 @@ mod tests {
             layer_id: Some(layer_id),
             owner_id: project.timeline.layers[0].gen_params().unwrap().id.clone(),
             param_key: fire_meter_key_for_param("", "clip_trigger"),
+            audio_stamp: None,
         }]);
     }
 
@@ -1858,6 +2111,7 @@ mod tests {
         evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert_eq!(pulses, vec![TriggerPulse {
             layer_id: None, owner_id: project.settings.master_effects[0].id.clone(), param_key: fire_meter_key_for_param("", "clip_trigger"),
+            audio_stamp: None,
         }]);
     }
 

@@ -509,6 +509,15 @@ pub struct ParameterAudioMod {
     /// Runtime state, not serialized.
     #[serde(skip)]
     pub prev_raw: f32,
+    #[serde(skip)]
+    pub audio_hop_cursor: crate::audio_features::AudioHopCursor,
+    #[serde(skip)]
+    pub audio_hop_source: Option<AudioModSource>,
+    /// Last effective audio output and normalized meter level, held between hops.
+    #[serde(skip)]
+    pub audio_held_output: Option<f32>,
+    #[serde(skip)]
+    pub audio_held_meter: f32,
     /// section 8 D5b: when this mod's target param is `is_trigger`, evaluation
     /// switches from continuous overwrite to edge detection over the shaped
     /// `out_norm` (rising through 0.5). Runtime state, not serialized —
@@ -571,6 +580,10 @@ impl ParameterAudioMod {
             shape: AudioModShape::default(),
             smoothed: 0.0,
             prev_raw: 0.0,
+            audio_hop_cursor: crate::audio_features::AudioHopCursor::default(),
+            audio_hop_source: None,
+            audio_held_output: None,
+            audio_held_meter: 0.0,
             trigger_edge: crate::audio_trigger::TransientEdge::default(),
             fire_count: 0,
             trigger_mode: None,

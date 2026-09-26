@@ -646,6 +646,7 @@ impl ContentThread {
                     project,
                     audio,
                     export_config.fps as f64,
+                    start_seconds,
                 )
             });
 
@@ -971,8 +972,13 @@ impl ContentThread {
         // `snap.sends` unconditionally on every live tick (including its
         // `active == false` branch, which still clears+resizes), so
         // export-written features cannot leak into subsequent live playback.
-        if let Some(driver) = offline_audio_mod.as_deref_mut() {
-            driver.feed_frame(frame_idx, &mut self.engine);
+        if let Some(driver) = offline_audio_mod.as_deref_mut()
+            && let Err(error) = driver.feed_frame(frame_idx, &mut self.engine)
+        {
+            return Some(ExportFrameFailure {
+                message: format!("Export stopped at frame {frame_idx}: {error}."),
+                gpu: false,
+            });
         }
         let tick_result = self.engine.tick(ctx);
 

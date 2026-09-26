@@ -1,17 +1,15 @@
 //! Live audio trigger evaluator — turns per-send transient impulses into
 //! one-shot clip fires, in real time, with no lookahead.
 //!
-//! Each analysis block the engine hands this the latest
-//! [`AudioFeatureSnapshot`], the project's [`AudioSetup`] (to resolve a
-//! config's `AudioSendId` to a snapshot index), and the project's layers. For
-//! every enabled [`LayerClipTrigger`](manifold_core::audio_trigger::LayerClipTrigger)
-//! it shapes the config's source feature through the SAME
-//! `AudioModShape::condition()` chassis the param-trigger evaluator uses
-//! (`manifold-playback::modulation`), edge-detects the shaped signal at the
-//! fixed 0.5 threshold, and emits a [`FireRequest`] naming the owning layer
-//! directly. See `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-//! D2/D3/section 3.3 (P2) and `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` (the original
-//! send-owned design this replaces).
+//! Each update supplies an [`AudioFeatureSnapshot`], the project's
+//! [`AudioSetup`] (to resolve a config's `AudioSendId`), and the project's
+//! layers. Retained analyzed hops are consumed once per follower; legacy
+//! snapshots are sampled once per update. Every enabled
+//! [`LayerClipTrigger`](manifold_core::audio_trigger::LayerClipTrigger) uses
+//! the shared `AudioModShape::condition()` chassis and edge-detects the
+//! sensitivity-scaled raw signal at the fixed 0.5 threshold. See
+//! `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D2/D3/section 3.3
+//! (P2) and `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
 //!
 //! **Why this is just edge detection:** the upstream transient detector already
 //! emits one decaying impulse per onset and holds its own ~106 ms refractory
@@ -25,8 +23,8 @@
 //! shape's attack/release smoothing (release defaults to 120 ms) used to gate
 //! `advance()` too, so a second onset landing inside the first one's decay
 //! tail never re-armed the edge, deafening triggers on dense material. The
-//! conditioned signal remains the fire-meter's source of truth; only the edge
-//! decoupled. (section 8, 2026-07-07: the edge itself moved to
+//! meter and edge both expose that same raw edge level. (section 8, 2026-07-07:
+//! the edge itself moved to
 //! `manifold_core::audio_trigger::TransientEdge` so the param-trigger
 //! evaluator could share it; P2, 2026-07-10: this module's own state moved
 //! from send×band keys to layer×index keys when clip triggers became
@@ -34,7 +32,8 @@
 
 use ahash::AHashMap;
 
-use manifold_core::audio_features::AudioFeatureSnapshot;
+use manifold_core::audio_features::{AudioFeatureSnapshot, AudioHopCursor, AudioHopStamp};
+use manifold_core::audio_mod::AudioModSource;
 use manifold_core::audio_setup::AudioSetup;
 use manifold_core::audio_trigger::{FireMeterCapture, TransientEdge, fire_meter_key_for_clip_trigger};
 use manifold_core::id::LayerId;
@@ -51,6 +50,9 @@ pub struct FireRequest {
     pub target_layer: LayerId,
     /// How long the fired one-shot clip holds.
     pub one_shot_beats: Beats,
+    /// The analyzed hop which caused this fire. Legacy snapshot-only
+    /// evaluation has no source timeline and leaves this absent.
+    pub audio_stamp: Option<AudioHopStamp>,
 }
 
 /// Runtime envelope-follower + edge state for one clip-trigger config. Mirrors
@@ -58,11 +60,23 @@ pub struct FireRequest {
 /// `trigger_edge` — `audio_mod.rs`); kept out-of-line here because
 /// `LayerClipTrigger` is a pure data model (section 3.1 of the design doc), not a
 /// struct that already carried follower state.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct ClipTriggerFollower {
     edge: TransientEdge,
     smoothed: f32,
     prev_raw: f32,
+    cursor: AudioHopCursor,
+    held_meter: f32,
+    source: Option<AudioModSource>,
+}
+
+impl ClipTriggerFollower {
+    fn clear_conditioning(&mut self) {
+        self.edge.clear();
+        self.smoothed = 0.0;
+        self.prev_raw = 0.0;
+        self.held_meter = 0.0;
+    }
 }
 
 /// Runtime edge-detection state for every live clip trigger. Owned by the
@@ -125,7 +139,6 @@ impl LiveTriggerState {
         fire_enabled: bool,
     ) -> Vec<FireRequest> {
         let mut fires = Vec::new();
-        let dt_s = dt.0 as f32;
         for layer in layers {
             if layer.clip_triggers.is_empty() {
                 continue;
@@ -139,71 +152,137 @@ impl LiveTriggerState {
                 else {
                     continue;
                 };
-                let Some(features) = snapshot.get(send_idx) else {
-                    continue;
-                };
-                let raw = cfg.source.feature.extract(features);
                 let follower = self.armed.entry((layer.layer_id.clone(), idx)).or_default();
-                // BUG-242: `prev_raw` before `condition()` mutates it — the
-                // edge level below needs the pre-tick value to recompute the
-                // sensitivity-scaled raw signal for edge detection.
-                let prev_raw_before_condition = follower.prev_raw;
-                // The return value is unused (firing AND the meter both read
-                // `edge_level`), but
-                // the call itself is load-bearing: it advances
-                // `follower.prev_raw`, which the rate-of-change arm of
-                // `edge_level` differences against next tick.
-                let _conditioned = cfg.shape.condition(
-                    raw,
-                    dt_s,
-                    &mut follower.smoothed,
-                    &mut follower.prev_raw,
-                );
-                // BUG-242: the edge advances on the sensitivity-scaled RAW
-                // signal, not `conditioned` — the shape's attack/release
-                // envelope (release defaults to 120 ms) otherwise smears two
-                // onsets that land inside one impulse's decay tail into a
-                // single fire, deafening triggers on dense material (measured
-                // recall 0.204 vs 0.673 achievable on a 128bpm kit). Same
-                // sensitivity/rate-of-change step `AudioModShape::condition`'s
-                // `target` computes internally (manifold-core's
-                // `audio_mod.rs`) — reused verbatim, not reinvented.
-                // `conditioned` above is untouched and still drives the
-                // fire-meter push below.
-                let edge_level = if cfg.shape.rate_of_change {
-                    let rate = (raw - prev_raw_before_condition) / dt_s.max(1e-4);
-                    (0.5 + rate * cfg.shape.sensitivity).clamp(0.0, 1.0)
+                if follower.source.as_ref() != Some(&cfg.source) {
+                    follower.source = Some(cfg.source.clone());
+                    follower.cursor = AudioHopCursor::default();
+                    follower.clear_conditioning();
+                }
+
+                if snapshot.hop_batches.is_empty() {
+                    let Some(features) = snapshot.get(send_idx) else {
+                        continue;
+                    };
+                    Self::sample(
+                        follower,
+                        cfg,
+                        layer,
+                        features,
+                        dt,
+                        None,
+                        fire_enabled,
+                        &mut fires,
+                    );
+                    Self::push_meter(layer, idx, follower.held_meter, fire_meters);
                 } else {
-                    (raw * cfg.shape.sensitivity).clamp(0.0, 1.0)
-                };
-                // D6 (P3c, BUG-082's fix): capture the signal the edge check
-                // below reads, keyed on the owning layer + this config's
-                // index — the drawer meter shows exactly what decides whether
-                // the clip fires. Pushed before the edge check so the meter
-                // reflects the level every tick, not only on a fire — and,
-                // since BUG-109, whether or not `fire_enabled` is set, so the
-                // meter breathes with the music while stopped. That signal is
-                // `edge_level`, NOT `conditioned`: BUG-242 moved firing onto
-                // the sensitivity-scaled raw edge, and a meter showing the
-                // shaped envelope lied about where the threshold sat.
-                fire_meters.push(
-                    fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64),
-                    edge_level,
-                );
-                if fire_enabled && follower.edge.advance(edge_level, 0.5) {
-                    fires.push(FireRequest {
-                        target_layer: layer.layer_id.clone(),
-                        one_shot_beats: cfg.one_shot_beats,
-                    });
+                    let Some(batch) = snapshot.hop_batches.get(send_idx) else {
+                        follower.clear_conditioning();
+                        Self::push_meter(layer, idx, follower.held_meter, fire_meters);
+                        continue;
+                    };
+                    if follower.cursor.begin_epoch(batch.epoch()) {
+                        follower.clear_conditioning();
+                    }
+                    if batch.epoch() == 0
+                        || (batch.failure().is_some() && batch.epoch() >= follower.cursor.epoch())
+                    {
+                        follower.clear_conditioning();
+                    } else {
+                        for hop in batch.hops() {
+                            let Some(new_epoch) = follower.cursor.accept(hop.stamp) else {
+                                continue;
+                            };
+                            if new_epoch {
+                                follower.clear_conditioning();
+                            }
+                            Self::sample(
+                                follower,
+                                cfg,
+                                layer,
+                                &hop.features,
+                                hop.dt,
+                                Some(hop.stamp),
+                                fire_enabled,
+                                &mut fires,
+                            );
+                        }
+                    }
+                    Self::push_meter(layer, idx, follower.held_meter, fire_meters);
+                }
+            }
+        }
+        if fires.iter().all(|fire| fire.audio_stamp.and_then(|stamp| stamp.timeline_time).is_some()) {
+            // Stable insertion sort keeps the established layer/config/hop order
+            // for equal timestamps and uses no scratch allocation.
+            for index in 1..fires.len() {
+                let mut position = index;
+                while position > 0 {
+                    let left = fires[position - 1]
+                        .audio_stamp
+                        .and_then(|stamp| stamp.timeline_time)
+                        .expect("all fires have timeline times");
+                    let right = fires[position]
+                        .audio_stamp
+                        .and_then(|stamp| stamp.timeline_time)
+                        .expect("all fires have timeline times");
+                    if left.0 <= right.0 {
+                        break;
+                    }
+                    fires.swap(position - 1, position);
+                    position -= 1;
                 }
             }
         }
         fires
     }
 
-    /// Drop all armed state — call on transport stop / project reset so a stale
-    /// "fired, not yet re-armed" flag can't suppress the first onset next time
-    /// (BUG-051).
+    fn sample(
+        follower: &mut ClipTriggerFollower,
+        cfg: &manifold_core::audio_trigger::LayerClipTrigger,
+        layer: &Layer,
+        features: &manifold_core::audio_features::SendFeatures,
+        dt: Seconds,
+        audio_stamp: Option<AudioHopStamp>,
+        fire_enabled: bool,
+        fires: &mut Vec<FireRequest>,
+    ) {
+        let raw = cfg.source.feature.extract(features);
+        let prev_raw_before_condition = follower.prev_raw;
+        let _conditioned = cfg.shape.condition(
+            raw,
+            dt.0 as f32,
+            &mut follower.smoothed,
+            &mut follower.prev_raw,
+        );
+        let edge_level = if cfg.shape.rate_of_change {
+            let rate = (raw - prev_raw_before_condition) / (dt.0 as f32).max(1e-4);
+            (0.5 + rate * cfg.shape.sensitivity).clamp(0.0, 1.0)
+        } else {
+            (raw * cfg.shape.sensitivity).clamp(0.0, 1.0)
+        };
+        follower.held_meter = edge_level;
+        if fire_enabled && follower.edge.advance(edge_level, 0.5) {
+            fires.push(FireRequest {
+                target_layer: layer.layer_id.clone(),
+                one_shot_beats: cfg.one_shot_beats,
+                audio_stamp,
+            });
+        }
+    }
+
+    fn push_meter(
+        layer: &Layer,
+        idx: usize,
+        level: f32,
+        fire_meters: &mut FireMeterCapture,
+    ) {
+        fire_meters.push(fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64), level);
+    }
+
+    /// Re-arm fire edges on transport stop / project reset so a stale "fired,
+    /// not yet re-armed" flag cannot suppress the first new onset (BUG-051).
+    /// Hop cursors remain advanced so retained batches are not replayed when
+    /// playback resumes.
     pub fn clear(&mut self) {
         for f in self.armed.values_mut() {
             f.edge.clear();
@@ -215,6 +294,7 @@ impl LiveTriggerState {
 mod tests {
     use super::*;
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
+    use manifold_core::audio_features::{AudioFeatureHop, AudioHopBatch, AudioHopError};
     use manifold_core::audio_setup::AudioSend;
     use manifold_core::audio_trigger::LayerClipTrigger;
     use manifold_core::types::LayerType;
@@ -254,6 +334,49 @@ mod tests {
         AudioFeatureSnapshot { sends: vec![f], ..Default::default() }
     }
 
+    fn snapshot_with_hops(
+        band: AudioBand,
+        levels: &[f32],
+        epoch: u64,
+        first_end_sample: u64,
+        timeline_start: Option<f64>,
+    ) -> AudioFeatureSnapshot {
+        let mut batch = AudioHopBatch::with_capacity(levels.len().max(1));
+        batch.begin(epoch);
+        for (index, &level) in levels.iter().enumerate() {
+            let mut features = manifold_core::SendFeatures::default();
+            features.bands[band.index()].transients = level;
+            let end_sample = first_end_sample + index as u64 * 480;
+            batch
+                .push(AudioFeatureHop {
+                    stamp: AudioHopStamp {
+                        epoch,
+                        end_sample,
+                        sample_rate: 48_000,
+                        timeline_time: timeline_start.map(|time| Seconds(time + index as f64 * 0.01)),
+                    },
+                    dt: Seconds(0.01),
+                    features,
+                })
+                .unwrap();
+        }
+        AudioFeatureSnapshot {
+            sends: vec![manifold_core::SendFeatures::default()],
+            hop_batches: vec![batch],
+            ..Default::default()
+        }
+    }
+
+    fn empty_batch_snapshot(epoch: u64) -> AudioFeatureSnapshot {
+        let mut batch = AudioHopBatch::default();
+        batch.begin(epoch);
+        AudioFeatureSnapshot {
+            sends: vec![manifold_core::SendFeatures::default()],
+            hop_batches: vec![batch],
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn fires_once_on_rising_edge_then_holds_until_rearm() {
         let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
@@ -273,6 +396,195 @@ mod tests {
 
         // Next onset fires again.
         assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+    }
+
+    #[test]
+    fn retained_batch_consumes_each_hop_once_and_emits_each_onset() {
+        let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
+        let snapshot = snapshot_with_hops(AudioBand::Full, &[0.9, 0.0, 0.9], 10, 480, None);
+        let mut state = LiveTriggerState::default();
+
+        let fires = state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        assert_eq!(fires.len(), 2);
+        assert!(fires.iter().all(|fire| fire.audio_stamp.is_some()));
+        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+    }
+
+    #[test]
+    fn retained_hops_are_partition_invariant_for_rate_of_change() {
+        let (setup, mut layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
+        layers[0].clip_triggers[0].shape.rate_of_change = true;
+        layers[0].clip_triggers[0].shape.attack_ms = 0.0;
+        layers[0].clip_triggers[0].shape.release_ms = 0.0;
+
+        let whole = snapshot_with_hops(AudioBand::Full, &[0.0, 1.0, 0.0, 1.0], 11, 480, None);
+        let mut whole_state = LiveTriggerState::default();
+        let whole_fires = whole_state.evaluate(&whole, &setup, &layers, DT, &mut FireMeterCapture::default());
+
+        let mut split_state = LiveTriggerState::default();
+        let mut split_fires = Vec::new();
+        for (index, &level) in [0.0, 1.0, 0.0, 1.0].iter().enumerate() {
+            let snapshot = snapshot_with_hops(
+                AudioBand::Full,
+                &[level],
+                11,
+                480 + index as u64 * 480,
+                None,
+            );
+            split_fires.extend(split_state.evaluate(
+                &snapshot,
+                &setup,
+                &layers,
+                DT,
+                &mut FireMeterCapture::default(),
+            ));
+        }
+        assert_eq!(whole_fires.len(), 2);
+        assert_eq!(split_fires.len(), whole_fires.len());
+    }
+
+    #[test]
+    fn source_switch_resets_cursor_but_removal_and_readd_do_not_replay() {
+        let send_a = AudioSend::new("A");
+        let send_a_id = send_a.id.clone();
+        let send_b = AudioSend::new("B");
+        let send_b_id = send_b.id.clone();
+        let mut setup = AudioSetup::default();
+        setup.sends.extend([send_a, send_b]);
+        let mut layer = Layer::new("Layer".to_string(), LayerType::Video, 0);
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id: send_a_id,
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        });
+        cfg.enabled = true;
+        cfg.shape.attack_ms = 0.0;
+        cfg.shape.release_ms = 0.0;
+        layer.clip_triggers.push(cfg);
+        let mut layers = vec![layer];
+
+        let mut snapshot = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 480, None);
+        let mut b_snapshot = snapshot_with_hops(AudioBand::Full, &[0.9], 2, 480, None);
+        snapshot.sends.push(manifold_core::SendFeatures::default());
+        snapshot.hop_batches.push(b_snapshot.hop_batches.remove(0));
+        let mut state = LiveTriggerState::default();
+        assert_eq!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+
+        layers[0].clip_triggers[0].source.send_id = send_b_id;
+        assert_eq!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+
+        setup.sends.remove(1);
+        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        setup.sends.push(AudioSend::new("B"));
+        setup.sends[1].id = layers[0].clip_triggers[0].source.send_id.clone();
+        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+    }
+
+    #[test]
+    fn stale_fault_is_ignored_but_new_empty_epoch_clears_meter() {
+        let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
+        let mut state = LiveTriggerState::default();
+        let valid = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 480, None);
+        assert_eq!(state.evaluate(&valid, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+
+        let mut stale_fault = empty_batch_snapshot(9);
+        stale_fault.hop_batches[0].invalidate(AudioHopError::InvalidInput);
+        let mut meters = FireMeterCapture::default();
+        state.evaluate(&stale_fault, &setup, &layers, DT, &mut meters);
+        let key = fire_meter_key_for_clip_trigger(layers[0].layer_id.as_str(), 0);
+        assert!(meters.get(key).unwrap() > 0.5);
+
+        let fresh_empty = empty_batch_snapshot(11);
+        let mut meters = FireMeterCapture::default();
+        state.evaluate(&fresh_empty, &setup, &layers, DT, &mut meters);
+        assert_eq!(meters.get(key), Some(0.0));
+    }
+
+    #[test]
+    fn missing_or_inactive_batch_clears_meter_without_using_latest_snapshot() {
+        let send_a = AudioSend::new("A");
+        let send_b = AudioSend::new("B");
+        let send_b_id = send_b.id.clone();
+        let mut setup = AudioSetup::default();
+        setup.sends.extend([send_a, send_b]);
+        let mut layer = Layer::new("B".to_string(), LayerType::Video, 0);
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id: send_b_id,
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        });
+        cfg.enabled = true;
+        cfg.shape.attack_ms = 0.0;
+        cfg.shape.release_ms = 0.0;
+        layer.clip_triggers.push(cfg);
+        let layers = vec![layer];
+        let mut state = LiveTriggerState::default();
+
+        let mut missing = snapshot_with_hops(AudioBand::Full, &[0.9], 30, 480, None);
+        missing.sends.push(manifold_core::SendFeatures::default());
+        let mut meters = FireMeterCapture::default();
+        state.evaluate(&missing, &setup, &layers, DT, &mut meters);
+        let key = fire_meter_key_for_clip_trigger(layers[0].layer_id.as_str(), 0);
+        assert_eq!(meters.get(key), Some(0.0));
+
+        let mut inactive = empty_batch_snapshot(0);
+        inactive.sends.push(manifold_core::SendFeatures::default());
+        inactive.hop_batches.push(AudioHopBatch::default());
+        let mut meters = FireMeterCapture::default();
+        state.evaluate(&inactive, &setup, &layers, DT, &mut meters);
+        assert_eq!(meters.get(key), Some(0.0));
+    }
+
+    #[test]
+    fn clear_does_not_replay_retained_hops_on_resume() {
+        let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
+        let snapshot = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 480, None);
+        let mut state = LiveTriggerState::default();
+        state.evaluate_meter_only(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        state.clear();
+        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+
+        let fresh = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 960, None);
+        assert_eq!(state.evaluate(&fresh, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+    }
+
+    #[test]
+    fn timestamped_fires_sort_chronologically_and_keep_equal_order() {
+        let send_a = AudioSend::new("A");
+        let send_a_id = send_a.id.clone();
+        let send_b = AudioSend::new("B");
+        let send_b_id = send_b.id.clone();
+        let mut setup = AudioSetup::default();
+        setup.sends.extend([send_a, send_b]);
+        let mut layers = Vec::new();
+        for (name, send_id) in [("A", send_a_id), ("B", send_b_id)] {
+            let mut layer = Layer::new(name.to_string(), LayerType::Video, 0);
+            let mut cfg = LayerClipTrigger::new(AudioModSource {
+                send_id,
+                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+            });
+            cfg.enabled = true;
+        cfg.shape.attack_ms = 0.0;
+            cfg.shape.release_ms = 0.0;
+            layer.clip_triggers.push(cfg);
+            layers.push(layer);
+        }
+
+        let mut snapshot = snapshot_with_hops(AudioBand::Full, &[0.9], 20, 480, Some(2.0));
+        let mut second = snapshot_with_hops(AudioBand::Full, &[0.9], 21, 480, Some(1.0));
+        snapshot.sends.push(manifold_core::SendFeatures::default());
+        snapshot.hop_batches.push(second.hop_batches.remove(0));
+        let mut state = LiveTriggerState::default();
+        let fires = state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        assert_eq!(fires[0].target_layer, layers[1].layer_id);
+        assert_eq!(fires[1].target_layer, layers[0].layer_id);
+
+        let mut equal = snapshot_with_hops(AudioBand::Full, &[0.9], 22, 960, Some(3.0));
+        let mut equal_second = snapshot_with_hops(AudioBand::Full, &[0.9], 23, 960, Some(3.0));
+        equal.sends.push(manifold_core::SendFeatures::default());
+        equal.hop_batches.push(equal_second.hop_batches.remove(0));
+        let mut state = LiveTriggerState::default();
+        let fires = state.evaluate(&equal, &setup, &layers, DT, &mut FireMeterCapture::default());
+        assert_eq!(fires[0].target_layer, layers[0].layer_id);
+        assert_eq!(fires[1].target_layer, layers[1].layer_id);
     }
 
     #[test]
