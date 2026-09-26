@@ -637,6 +637,11 @@ impl Runner {
         let mut changed = false;
         while let Ok(cmd) = self._content_rx.try_recv() {
             let cmd = match cmd {
+                ContentCommand::FireParameter { target, param_id } => {
+                    ContentCommand::ExecuteOnContent(Box::new(
+                        manifold_editing::commands::effects::FireGraphParamCommand::new(target, param_id),
+                    ))
+                }
                 ContentCommand::ChangeGeneratorType { layer_id, new_type } => {
                     match crate::generator_change::build_change(&data.project, layer_id, new_type) {
                         Ok(command) => ContentCommand::ExecuteOnContent(command),

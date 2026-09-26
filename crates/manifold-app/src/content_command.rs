@@ -22,6 +22,12 @@ pub enum ContentCommand {
     /// An unexecuted command; UI snapshots wait for content publication. Unlike
     /// legacy optimistic Execute producers, headless UI must execute this too.
     ExecuteOnContent(Box<dyn Command + Send>),
+    /// Increment a trigger against the authoritative content project. A UI
+    /// snapshot supplies only its identity, never the next counter value.
+    FireParameter {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+    },
     /// Publish selection only after this insertion succeeds on the content thread.
     ExecuteSelecting(Box<dyn Command + Send>, crate::edit_selection::SelectAfterEdit),
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),

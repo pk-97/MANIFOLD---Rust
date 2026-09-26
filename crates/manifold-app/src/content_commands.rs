@@ -1138,6 +1138,11 @@ impl ContentThread {
             ContentCommand::FinishAutomationRecording => {
                 self.commit_automation_recording(true);
             }
+            ContentCommand::FireParameter { target, param_id } => {
+                self.handle_command(ContentCommand::ExecuteOnContent(Box::new(
+                    manifold_editing::commands::effects::FireGraphParamCommand::new(target, param_id),
+                )));
+            }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
                 self.engine.clear_automation_previews();
                 let cmd = crate::scene_modifier_edit::with_admission_device(
