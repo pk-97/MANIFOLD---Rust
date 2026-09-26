@@ -2,18 +2,18 @@
 //!
 //! Port of C# DriverController + ParameterDriverManager + EnvelopeEvaluator.
 //!
-//! Execution order each frame (after SyncClipsToTime, before compositor):
-//!   1. reset_all_effectives(project)         — base → effective
-//!   2. evaluate_all_drivers(project, beat)    — LFO → effective
-//!   3. evaluate_all_envelopes(project, beat)  — decay → effective (additive);
-//!      one walk visits every layer's effects AND its generator instance
-//!      (the former separate `evaluate_gen_param_envelopes` pass is folded in)
-//!   4. If any_dirty → mark compositor dirty
-//!
-//! Envelopes are clip-triggered decays: depth is the per-envelope
-//! `target_normalized` ("Amount"), the fall-off is the fixed `ENVELOPE_DECAY_BEATS`
-//! feel. The level is a pure function of beats-into-clip, so the walk holds no
-//! per-frame envelope state — a clip loop re-triggers naturally as elapsed resets.
+//! After automation, retained audio advances once at each source hop. Value
+//! composition applies base/reset → audio steps → envelope steps → drivers →
+//! audio values/counters → continuous envelopes. Clip-triggered envelope steps
+//! advance afterward for the next update, preserving the existing edge timing.
+//! The pure composition pass can be sampled without re-firing those events.
+
+pub mod composition;
+
+use composition::{
+    AudioControlState, ControlSample, ControlSources, apply_envelope_offset,
+    compose_controls, driver_target_value,
+};
 
 use manifold_core::audio_features::{
     AudioFeatureSnapshot, AudioHopStamp, SendFeatures,
@@ -24,59 +24,13 @@ use manifold_core::audio_mod::{
 };
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
 use manifold_core::{Beats, Seconds};
-use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
+use manifold_core::effects::{PresetInstance, ParamEnvelope};
 use manifold_core::project::Project;
 
 // ── Shared modulation core ──────────────────────────────────────────────────
 //
-// The effect-side and generator-side walks below differ only in how they
-// *resolve* a target param (effect: registry + user-binding tail; generator:
-// registry only) and in their outer iteration (effects locate a target effect
-// by type within the layer; generators operate on the single gen-param state).
-// The arithmetic that maps a driver/envelope onto a slot value is identical on
-// both sides. These helpers hold that arithmetic in exactly one place so a
-// modulation fix lands once. Byte-for-byte the prior inline logic — extracted,
-// not changed.
-
-/// Map a driver's normalized output onto a target parameter's value range.
-fn driver_target_value(
-    driver: &ParameterDriver, current_beat: Beats, time: Seconds,
-    bpm: manifold_core::Bpm, fps: f32, min: f32, max: f32,
-) -> f32 {
-    // `period_beats()` is the free period when the driver is in free mode, else
-    // the sync division's period (dotted/triplet baked into the variant).
-    let mut normalized = if driver.frame_aligned {
-        driver.evaluate_frame_aligned(time, bpm, fps)
-    } else { ParameterDriver::evaluate_with_period(
-        current_beat,
-        driver.period_beats(),
-        driver.waveform,
-        driver.phase,
-    ) };
-    if driver.reversed {
-        normalized = 1.0 - normalized;
-    }
-    // Apply trim: map [0,1] to [lo, hi] within param range
-    let lo = min + (max - min) * driver.trim_min;
-    let hi = min + (max - min) * driver.trim_max;
-    lo + (hi - lo) * normalized
-}
-
-/// Apply an envelope's additive decay offset to a single param slot value.
-/// `level` is the decay curve [0,1]; the value is pulled `level` of the way from
-/// its base toward the depth target. Returns true if the value changed.
-fn apply_envelope_offset(value: &mut f32, min: f32, max: f32, target_norm: f32, level: f32) -> bool {
-    let current = *value;
-    let target = min + (max - min) * target_norm.clamp(0.0, 1.0);
-    let offset = (target - current) * level;
-    let final_value = (current + offset).clamp(min, max);
-    if (final_value - current).abs() > f32::EPSILON {
-        *value = final_value;
-        true
-    } else {
-        false
-    }
-}
+// Value-only math lives in composition. Stateful Step/Random advancement stays
+// here so historical value evaluation cannot consume an input edge twice.
 
 /// Advance a stepped value by `amount` within `[lo, hi]`, mirroring the audio-mod
 /// Step arm (`ParameterAudioMod::Step`) exactly — same wrap-mode semantics and
@@ -131,9 +85,12 @@ fn advance_random(
 /// restart where `active_elapsed` resets while the clip stays active); the shadow
 /// is written to `p.value` by [`apply_envelope_step_values`] before this walk,
 /// exactly like audio-mod stepped values.
+/// `compose_continuous` is false after the retained path's pure composition;
+/// that call updates edge state only.
 fn apply_instance_envelopes(
     inst: &mut PresetInstance,
     active_elapsed: Beats,
+    compose_continuous: bool,
 ) -> bool {
     let Some(envelopes) = inst.envelopes.as_mut() else {
         return false;
@@ -167,9 +124,11 @@ fn apply_instance_envelopes(
 
         match env.action {
             TriggerAction::Continuous => {
-                let level = ParamEnvelope::decay_level(active_elapsed, env.decay_beats);
-                if apply_envelope_offset(&mut p.value, min, max, env.target_normalized, level) {
-                    any_modulated = true;
+                if compose_continuous {
+                    let level = ParamEnvelope::decay_level(active_elapsed, env.decay_beats);
+                    if apply_envelope_offset(&mut p.value, min, max, env.target_normalized, level) {
+                        any_modulated = true;
+                    }
                 }
             }
             TriggerAction::Step { amount, wrap } => {
@@ -396,7 +355,7 @@ pub fn evaluate_all_envelopes(
                 if !fx.enabled {
                     continue;
                 }
-                if apply_instance_envelopes(fx, active_elapsed) {
+                if apply_instance_envelopes(fx, active_elapsed, true) {
                     any_modulated = true;
                 }
             }
@@ -405,7 +364,7 @@ pub fn evaluate_all_envelopes(
         // Generator instance (the layer's singleton gen_params) — the same
         // walk, no separate generator pass.
         if let Some(gp) = layer.gen_params_mut()
-            && apply_instance_envelopes(gp, active_elapsed)
+            && apply_instance_envelopes(gp, active_elapsed, true)
         {
             any_modulated = true;
         }
@@ -419,7 +378,7 @@ pub fn evaluate_all_envelopes(
 // Port of C# DriverController.Update()
 // =====================================================================
 
-/// Run the full modulation pipeline: reset → drivers → envelopes → gen envelopes.
+/// Advance input state once, then compose effective parameter values.
 /// Returns true if any modulation was applied (compositor should be marked dirty).
 pub fn evaluate_modulation(
     project: &mut Project,
@@ -439,16 +398,22 @@ pub fn evaluate_modulation(
     let retained_hops = !audio.hop_batches.is_empty();
     if retained_hops {
         advance_audio_hops(project, audio, trigger_pulses, clip_edge_layers, Some(current_time));
+        reset_all_effectives(project);
+        compute_active_clip_timing(&project.timeline.layers, current_beat, timing_scratch);
+        return compose_retained_controls(
+            project, current_beat, current_time, timing_scratch, fire_meters,
+        );
     }
 
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
 
+    // Legacy snapshot-only callers retain the existing staged evaluation.
     // Phase 1.5: Apply any armed step/random audio-mod shadow values (PARAM_
     // STEP_ACTIONS D4). Runs BEFORE drivers/continuous-mods/envelopes so a
     // step *replaces* the base exactly like a hand-moved slider — everything
-    // downstream stacks on top unchanged. Retained hops advance these shadows
-    // above; legacy snapshot-only callers retain their next-frame behavior.
+    // downstream stacks on top unchanged. Snapshot-only callers retain their
+    // next-frame shadow behavior.
     let any_stepped = apply_step_values(project);
 
     // Phase 1.6: Apply any armed Step/Random envelope shadow values.
@@ -471,11 +436,9 @@ pub fn evaluate_modulation(
     // ACTIONS D5) is the engine-computed set of `timeline.layers` indices
     // with a clip-start edge since this function's last call — the Step/
     // Random arm's second fire source, gated by `trigger_mode` (D3).
-    let any_audio = if retained_hops {
-        apply_retained_audio_mods(project, fire_meters)
-    } else {
-        evaluate_all_audio_mods(project, audio, dt, trigger_pulses, clip_edge_layers, fire_meters)
-    };
+    let any_audio = evaluate_all_audio_mods(
+        project, audio, dt, trigger_pulses, clip_edge_layers, fire_meters,
+    );
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
@@ -487,6 +450,74 @@ pub fn evaluate_modulation(
     let any_enveloped = evaluate_all_envelopes(project, timing_scratch);
 
     any_stepped || any_envelope_stepped || any_driven || any_audio || any_enveloped
+}
+
+/// Compose each instance using the same pure path that accepts captured audio
+/// state. Event advancement and meter publication stay on the content update;
+/// historical value sampling must not run either again.
+fn compose_retained_controls(
+    project: &mut Project,
+    beat: Beats,
+    time: Seconds,
+    timing: &[(Beats, Beats)],
+    fire_meters: &mut FireMeterCapture,
+) -> bool {
+    let sample = ControlSample {
+        beat, time, bpm: project.settings.bpm, fps: project.settings.frame_rate,
+        active_elapsed: None,
+    };
+    let mut any = false;
+    for fx in &mut project.settings.master_effects {
+        any |= compose_instance_retained_controls(fx, sample, fire_meters);
+    }
+    for (index, layer) in project.timeline.layers.iter_mut().enumerate() {
+        let elapsed = timing.get(index).map_or(Beats(-1.0), |(elapsed, _)| *elapsed);
+        if let Some(effects) = layer.effects.as_mut() {
+            for fx in effects {
+                let sample = ControlSample { active_elapsed: fx.enabled.then_some(elapsed), ..sample };
+                any |= compose_instance_retained_controls(fx, sample, fire_meters);
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut() {
+            let sample = ControlSample { active_elapsed: Some(elapsed), ..sample };
+            any |= compose_instance_retained_controls(gp, sample, fire_meters);
+        }
+    }
+    any
+}
+
+fn compose_instance_retained_controls(
+    instance: &mut PresetInstance,
+    sample: ControlSample,
+    fire_meters: &mut FireMeterCapture,
+) -> bool {
+    let any = compose_controls(
+        &mut instance.params,
+        ControlSources {
+            enabled: instance.enabled,
+            drivers: instance.drivers.as_deref().unwrap_or_default(),
+            envelopes: instance.envelopes.as_deref().unwrap_or_default(),
+            audio_mods: instance.audio_mods.as_deref().unwrap_or_default(),
+        },
+        sample,
+        |_, m| AudioControlState::current(m),
+    );
+    if instance.enabled {
+        for m in instance.audio_mods.iter().flatten().filter(|m| m.enabled) {
+            if instance.params.get(m.param_id.as_ref()).is_some() {
+                fire_meters.push(
+                    fire_meter_key_for_param(instance.id.as_str(), m.param_id.as_ref()),
+                    m.audio_held_meter,
+                );
+            }
+        }
+    }
+    if let Some(elapsed) = sample.active_elapsed {
+        // Step/Random envelopes retain their existing next-update visibility.
+        // Continuous values have already been composed above.
+        apply_instance_envelopes(instance, elapsed, false);
+    }
+    any
 }
 
 // =====================================================================
@@ -1169,7 +1200,7 @@ fn compute_active_clip_timing(
 mod tests {
     use super::*;
     use manifold_core::effect_registration::EffectMetadata;
-    use manifold_core::effects::{DEFAULT_ENVELOPE_DECAY_BEATS, ParamEnvelope};
+    use manifold_core::effects::{DEFAULT_ENVELOPE_DECAY_BEATS, ParamEnvelope, ParameterDriver};
     use manifold_core::{BeatDivision, DriverWaveform};
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
     use manifold_core::layer::Layer;
@@ -1686,6 +1717,109 @@ mod tests {
         evaluate_modulation(project, Beats::ZERO, Seconds::ZERO, dt, snapshot,
             &mut Vec::new(), &mut pulses, clip, &mut meters);
         (pulses, meters)
+    }
+
+    #[test]
+    fn retained_composition_preserves_staged_values_meters_and_envelope_edges() {
+        fn configure(instance: &mut PresetInstance, continuous: &'static str, stepped: &'static str) {
+            instance.ensure_base_values();
+            instance.params.get_mut(continuous).unwrap().base = 0.15;
+            instance.params.get_mut(stepped).unwrap().base = 2.0;
+            instance.params.get_mut(continuous).unwrap().touched = true;
+            let mut driver = ParameterDriver::new(continuous, BeatDivision::Quarter, DriverWaveform::Sawtooth);
+            driver.reversed = true;
+            driver.trim_min = 0.1;
+            driver.trim_max = 0.8;
+            instance.drivers = Some(vec![driver]);
+            let mut audio = ParameterAudioMod::new(
+                continuous.into(), AudioSendId::new("composition-test"),
+                AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
+            );
+            audio.audio_held_output = Some(0.6);
+            // Preserve the existing handling of a stale shadow after changing
+            // an action; the continuous write subsequently takes precedence.
+            audio.step_value = Some(0.3);
+            audio.audio_held_meter = 0.75;
+            instance.audio_mods = Some(vec![audio]);
+            let mut decay = full_depth_env(continuous);
+            decay.target_normalized = 0.8;
+            let step = step_env(stepped, 1.0, WrapMode::Bounce);
+            let mut random = ParamEnvelope::new(stepped);
+            random.action = TriggerAction::Random;
+            instance.envelopes = Some(vec![decay, step, random]);
+        }
+        fn instances(project: &Project) -> Vec<&PresetInstance> {
+            project.settings.master_effects.iter().chain(
+                project.timeline.layers.iter().flat_map(|layer| {
+                    layer.effects.iter().flatten().chain(layer.gen_params())
+                }),
+            ).collect()
+        }
+        for disabled in [false, true] {
+            let mut project = project_with(layer_with_one_effect());
+            project.settings.master_effects.push(create_default(&TEST_FX));
+            project.timeline.layers.push(generator_layer());
+            configure(&mut project.settings.master_effects[0], "amount", "segs");
+            configure(&mut project.timeline.layers[0].effects.as_mut().unwrap()[0], "amount", "segs");
+            configure(project.timeline.layers[1].gen_params_mut().unwrap(), "speed", "count");
+            project.settings.master_effects[0].enabled = !disabled;
+            project.timeline.layers[0].effects.as_mut().unwrap()[0].enabled = !disabled;
+            project.timeline.layers[1].gen_params_mut().unwrap().enabled = !disabled;
+            let mut staged = project.clone();
+
+            // Inactive, initial edge, decay, loop restart, completion, re-entry.
+            for (index, elapsed) in [-1.0, 0.0, 0.25, 0.75, 0.0, 1.25, -1.0, 0.0].into_iter().enumerate() {
+                let beat = Beats(index as f64 * 0.25);
+                let time = Seconds(beat.0 * 0.5);
+                let timing = [(Beats(elapsed), Beats(8.0)); 2];
+                reset_all_effectives(&mut project);
+                reset_all_effectives(&mut staged);
+                let mut composed_meters = FireMeterCapture::default();
+                let composed_dirty = compose_retained_controls(
+                    &mut project, beat, time, &timing, &mut composed_meters,
+                );
+                let mut staged_meters = FireMeterCapture::default();
+                let mut staged_dirty = apply_step_values(&mut staged);
+                staged_dirty |= apply_envelope_step_values(&mut staged);
+                staged_dirty |= evaluate_all_drivers(&mut staged, beat, time);
+                staged_dirty |= apply_retained_audio_mods(&mut staged, &mut staged_meters);
+                staged_dirty |= evaluate_all_envelopes(&mut staged, &timing);
+                assert_eq!(composed_dirty, staged_dirty);
+                for (actual, expected) in instances(&project).into_iter().zip(instances(&staged)) {
+                    assert_eq!(actual.params, expected.params, "disabled={disabled}, elapsed={elapsed}");
+                    for (a, b) in actual.envelopes.iter().flatten().zip(expected.envelopes.iter().flatten()) {
+                        assert_eq!(
+                            (a.step_value, a.step_dir, a.fire_count, a.was_clip_active, a.prev_active_elapsed),
+                            (b.step_value, b.step_dir, b.fire_count, b.was_clip_active, b.prev_active_elapsed),
+                        );
+                    }
+                    for m in actual.audio_mods.iter().flatten() {
+                        let key = fire_meter_key_for_param(actual.id.as_str(), m.param_id.as_ref());
+                        assert_eq!(composed_meters.get(key), staged_meters.get(key));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retained_pipeline_advances_envelope_step_once_after_value_composition() {
+        let mut project = project_with(effect_layer_with_env(step_env("amount", 0.2, WrapMode::Clamp)));
+        project.timeline.layers[0].clips.push(manifold_core::clip::TimelineClip::new_generator(
+            Beats::ZERO, Beats(4.0),
+        ));
+        let snapshot = empty_hop_snapshot(1);
+        for (beat, expected_value, expected_shadow) in [
+            (0.0, 0.0, 0.2), (0.25, 0.2, 0.2), (0.0, 0.2, 0.4), (0.25, 0.4, 0.4),
+        ] {
+            evaluate_modulation(
+                &mut project, Beats(beat), Seconds(beat * 0.5), Seconds(0.125),
+                &snapshot, &mut Vec::new(), &mut Vec::new(), &[], &mut FireMeterCapture::default(),
+            );
+            let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+            assert_eq!(fx.params.get("amount").unwrap().value, expected_value);
+            assert_eq!(fx.envelopes.as_ref().unwrap()[0].step_value, Some(expected_shadow));
+        }
     }
 
     #[test]
@@ -3512,6 +3646,7 @@ mod tests {
 #[cfg(test)]
 mod frame_alignment_pipeline_tests {
     use super::*;
+    use manifold_core::effects::ParameterDriver;
     use manifold_core::{Bpm, types::{BeatDivision, DriverWaveform}};
 
     #[test]
