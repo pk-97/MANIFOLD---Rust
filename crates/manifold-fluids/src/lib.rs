@@ -23,6 +23,98 @@ pub struct Config {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceOptions {
+    pub particle_scale: f64,
+    pub smoothing: f64,
+    pub smoothing_iterations: u32,
+}
+
+impl Default for SurfaceOptions {
+    fn default() -> Self {
+        Self {
+            particle_scale: 3.0,
+            smoothing: 0.5,
+            smoothing_iterations: 2,
+        }
+    }
+}
+
+impl SurfaceOptions {
+    pub fn validate(self) -> Result<(), FluidError> {
+        if !self.particle_scale.is_finite()
+            || self.particle_scale <= 0.0
+            || self.particle_scale > 10.0
+        {
+            return Err(FluidError::input(
+                "surface particle_scale must be finite and in (0, 10]",
+            ));
+        }
+        if !self.smoothing.is_finite() || !(0.0..=1.0).contains(&self.smoothing) {
+            return Err(FluidError::input(
+                "surface smoothing must be finite and in 0..=1",
+            ));
+        }
+        if self.smoothing_iterations > 100 {
+            return Err(FluidError::input(
+                "surface smoothing_iterations must be in 0..=100",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WhitewaterOptions {
+    pub enabled: bool,
+    pub max_particles: u32,
+    pub wavecrest_rate: f64,
+    pub turbulence_rate: f64,
+    pub min_energy: f64,
+    pub max_energy: f64,
+}
+
+impl Default for WhitewaterOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_particles: 10_000_000,
+            wavecrest_rate: 175.0,
+            turbulence_rate: 175.0,
+            min_energy: 0.1,
+            max_energy: 60.0,
+        }
+    }
+}
+
+impl WhitewaterOptions {
+    pub fn validate(self) -> Result<(), FluidError> {
+        if self.max_particles == 0 {
+            return Err(FluidError::input(
+                "whitewater max_particles must be positive",
+            ));
+        }
+        for (value, name) in [
+            (self.wavecrest_rate, "whitewater wavecrest_rate"),
+            (self.turbulence_rate, "whitewater turbulence_rate"),
+            (self.min_energy, "whitewater min_energy"),
+            (self.max_energy, "whitewater max_energy"),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(FluidError::input(format!(
+                    "{name} must be finite and non-negative"
+                )));
+            }
+        }
+        if self.max_energy <= self.min_energy {
+            return Err(FluidError::input(
+                "whitewater max_energy must be greater than min_energy",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bounds {
     pub min: [f32; 3],
     pub max: [f32; 3],
@@ -32,6 +124,31 @@ pub struct Bounds {
 pub struct SurfaceVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WhitewaterKind {
+    Bubble = 0,
+    Foam = 1,
+    Spray = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WhitewaterParticle {
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    pub lifetime: f32,
+    pub kind: WhitewaterKind,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct NativeWhitewaterParticle {
+    position: [f32; 3],
+    velocity: [f32; 3],
+    lifetime: f32,
+    kind: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -100,6 +217,21 @@ unsafe extern "C" {
         velocity: *const f32,
     ) -> i32;
     fn manifold_fluids_world_set_gravity(world: *mut std::ffi::c_void, gravity: *const f32) -> i32;
+    fn manifold_fluids_world_set_surface_options(
+        world: *mut std::ffi::c_void,
+        particle_scale: f64,
+        smoothing: f64,
+        smoothing_iterations: u32,
+    ) -> i32;
+    fn manifold_fluids_world_set_whitewater_options(
+        world: *mut std::ffi::c_void,
+        enabled: i32,
+        max_particles: u32,
+        wavecrest_rate: f64,
+        turbulence_rate: f64,
+        min_energy: f64,
+        max_energy: f64,
+    ) -> i32;
     fn manifold_fluids_world_set_emitter(
         world: *mut std::ffi::c_void,
         min: *const f32,
@@ -126,6 +258,16 @@ unsafe extern "C" {
         data_out: *mut *const u8,
         len_out: *mut usize,
     ) -> i32;
+    fn manifold_fluids_world_whitewater_count(
+        world: *mut std::ffi::c_void,
+        count_out: *mut usize,
+    ) -> i32;
+    fn manifold_fluids_world_whitewater(
+        world: *mut std::ffi::c_void,
+        particles: *mut NativeWhitewaterParticle,
+        capacity: usize,
+        count_out: *mut usize,
+    ) -> i32;
     fn manifold_fluids_last_error() -> *const std::ffi::c_char;
 }
 
@@ -135,6 +277,7 @@ pub struct FluidWorld {
     vertex_scratch: Vec<[f32; 3]>,
     triangle_scratch: Vec<[u32; 3]>,
     normal_scratch: Vec<[f32; 3]>,
+    whitewater_scratch: Vec<NativeWhitewaterParticle>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
 }
@@ -167,8 +310,38 @@ impl FluidWorld {
             vertex_scratch: Vec::new(),
             triangle_scratch: Vec::new(),
             normal_scratch: Vec::new(),
+            whitewater_scratch: Vec::new(),
             _not_sync: PhantomData,
         })
+    }
+
+    pub fn set_surface_options(&mut self, options: SurfaceOptions) -> Result<(), FluidError> {
+        options.validate()?;
+        let ok = unsafe {
+            manifold_fluids_world_set_surface_options(
+                self.native,
+                options.particle_scale,
+                options.smoothing,
+                options.smoothing_iterations,
+            )
+        };
+        native_result(ok, "setting surface options")
+    }
+
+    pub fn set_whitewater_options(&mut self, options: WhitewaterOptions) -> Result<(), FluidError> {
+        options.validate()?;
+        let ok = unsafe {
+            manifold_fluids_world_set_whitewater_options(
+                self.native,
+                i32::from(options.enabled),
+                options.max_particles,
+                options.wavecrest_rate,
+                options.turbulence_rate,
+                options.min_energy,
+                options.max_energy,
+            )
+        };
+        native_result(ok, "setting whitewater options")
     }
 
     pub fn add_fluid_box(&mut self, bounds: Bounds, velocity: [f32; 3]) -> Result<(), FluidError> {
@@ -273,6 +446,50 @@ impl FluidWorld {
             &mut self.triangle_scratch,
             &mut self.normal_scratch,
         )
+    }
+
+    pub fn whitewater(&mut self, output: &mut Vec<WhitewaterParticle>) -> Result<(), FluidError> {
+        let mut count = 0usize;
+        let ok = unsafe { manifold_fluids_world_whitewater_count(self.native, &mut count) };
+        native_result(ok, "reading whitewater particle count")?;
+        self.whitewater_scratch
+            .resize(count, NativeWhitewaterParticle::default());
+        let mut copied = 0usize;
+        let ok = unsafe {
+            manifold_fluids_world_whitewater(
+                self.native,
+                self.whitewater_scratch.as_mut_ptr(),
+                self.whitewater_scratch.capacity(),
+                &mut copied,
+            )
+        };
+        native_result(ok, "reading whitewater particles")?;
+        if copied != count {
+            return Err(FluidError::native(
+                "FLIP Fluids whitewater count changed during snapshot",
+            ));
+        }
+        output.clear();
+        output.reserve(count);
+        for particle in self.whitewater_scratch.iter().take(count) {
+            let kind = match particle.kind {
+                0 => WhitewaterKind::Bubble,
+                1 => WhitewaterKind::Foam,
+                2 => WhitewaterKind::Spray,
+                _ => {
+                    return Err(FluidError::native(
+                        "FLIP Fluids returned an unknown whitewater type",
+                    ));
+                }
+            };
+            output.push(WhitewaterParticle {
+                position: particle.position,
+                velocity: particle.velocity,
+                lifetime: particle.lifetime,
+                kind,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -494,7 +711,10 @@ fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
-    use super::{Bounds, Config, Seconds, SurfaceVertex, decode_surface};
+    use super::{
+        Bounds, Config, Seconds, SurfaceOptions, SurfaceVertex, WhitewaterKind, WhitewaterOptions,
+        decode_surface,
+    };
 
     fn bobj(vertices: &[[f32; 3]], triangles: &[[i32; 3]]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -586,6 +806,163 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_surface_and_whitewater_options() {
+        assert_eq!(SurfaceOptions::default().particle_scale, 3.0);
+        assert_eq!(SurfaceOptions::default().smoothing, 0.5);
+        assert_eq!(SurfaceOptions::default().smoothing_iterations, 2);
+        assert!(
+            SurfaceOptions {
+                particle_scale: f64::NAN,
+                ..SurfaceOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SurfaceOptions {
+                particle_scale: 0.0,
+                ..SurfaceOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SurfaceOptions {
+                particle_scale: 10.1,
+                ..SurfaceOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SurfaceOptions {
+                smoothing: 1.1,
+                ..SurfaceOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert_eq!(WhitewaterOptions::default().max_particles, 10_000_000);
+        assert_eq!(WhitewaterOptions::default().wavecrest_rate, 175.0);
+        assert_eq!(WhitewaterOptions::default().turbulence_rate, 175.0);
+        assert_eq!(WhitewaterOptions::default().min_energy, 0.1);
+        assert_eq!(WhitewaterOptions::default().max_energy, 60.0);
+        assert!(
+            WhitewaterOptions {
+                max_particles: 0,
+                ..WhitewaterOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            WhitewaterOptions {
+                min_energy: 2.0,
+                max_energy: 1.0,
+                ..WhitewaterOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            WhitewaterOptions {
+                min_energy: 2.0,
+                max_energy: 2.0,
+                ..WhitewaterOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn whitewater_is_empty_when_disabled() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [8, 8, 8],
+            cell_size: 0.5,
+            surface_subdivisions: 0,
+            apic: true,
+        })
+        .expect("native world");
+        world
+            .set_whitewater_options(WhitewaterOptions::default())
+            .expect("whitewater defaults");
+        let mut particles = vec![super::WhitewaterParticle {
+            position: [1.0; 3],
+            velocity: [2.0; 3],
+            lifetime: 3.0,
+            kind: WhitewaterKind::Spray,
+        }];
+        world.whitewater(&mut particles).expect("empty snapshot");
+        assert!(particles.is_empty());
+    }
+
+    #[test]
+    fn whitewater_emission_is_finite_typed_and_capped() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [24, 24, 24],
+            cell_size: 0.25,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native world");
+        world
+            .set_whitewater_options(WhitewaterOptions {
+                enabled: true,
+                max_particles: 256,
+                wavecrest_rate: 1_000.0,
+                turbulence_rate: 1_000.0,
+                min_energy: 0.0,
+                max_energy: 60.0,
+            })
+            .expect("whitewater options");
+        world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.5, 0.5, 0.5],
+                    max: [5.5, 2.0, 5.5],
+                },
+                [0.0, 0.0, 0.0],
+            )
+            .expect("fluid box");
+        world
+            .set_emitter(
+                Bounds {
+                    min: [2.0, 3.5, 2.0],
+                    max: [3.0, 4.0, 3.0],
+                },
+                [0.0, -8.0, 0.0],
+                true,
+            )
+            .expect("emitter");
+        for _ in 0..60 {
+            world.step(Seconds(1.0 / 60.0)).expect("native step");
+        }
+        let mut particles = Vec::new();
+        world
+            .whitewater(&mut particles)
+            .expect("whitewater snapshot");
+        assert!(
+            !particles.is_empty(),
+            "native impact scene emitted no whitewater"
+        );
+        assert!(particles.len() <= 256, "whitewater cap was exceeded");
+        assert!(particles.iter().all(|particle| {
+            particle
+                .position
+                .iter()
+                .chain(particle.velocity.iter())
+                .chain(std::iter::once(&particle.lifetime))
+                .all(|value| value.is_finite())
+                && matches!(
+                    particle.kind,
+                    WhitewaterKind::Bubble | WhitewaterKind::Foam | WhitewaterKind::Spray
+                )
+        }));
     }
 
     #[test]

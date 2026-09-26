@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "fluidsimulation.h"
+#include "aabb.h"
 #include "meshfluidsource.h"
 #include "meshobject.h"
 #include "threadutils.h"
@@ -133,6 +134,10 @@ struct NativeWorld {
     std::unique_ptr<MeshFluidSource> emitter;
     std::unique_ptr<MeshObject> obstacle;
     std::vector<char> empty_surface;
+    std::vector<vmath::vec3> whitewater_positions;
+    std::vector<vmath::vec3> whitewater_velocities;
+    std::vector<float> whitewater_lifetimes;
+    std::vector<char> whitewater_types;
     uint32_t isize;
     uint32_t jsize;
     uint32_t ksize;
@@ -141,10 +146,72 @@ struct NativeWorld {
     bool emitter_has_bounds = false;
     bool emitter_has_enabled = false;
     bool emitter_enabled = false;
+    bool whitewater_enabled = false;
     Bounds emitter_bounds{};
     vmath::vec3 emitter_velocity{0.0f, 0.0f, 0.0f};
     bool obstacle_added = false;
 };
+
+void validate_nonnegative(double value, const char *name) {
+    if (!std::isfinite(value) || value < 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be finite and non-negative");
+    }
+}
+
+void validate_surface_options(double marker_particle_scale, double smoothing,
+                              uint32_t smoothing_iterations) {
+    if (!std::isfinite(marker_particle_scale) || marker_particle_scale <= 0.0 ||
+        marker_particle_scale > 10.0) {
+        throw std::invalid_argument("marker particle scale must be finite and in (0, 10]");
+    }
+    if (!std::isfinite(smoothing) || smoothing < 0.0 || smoothing > 1.0) {
+        throw std::invalid_argument("surface smoothing must be finite and in [0, 1]");
+    }
+    if (smoothing_iterations > 100) {
+        throw std::invalid_argument("surface smoothing iterations must be in 0..=100");
+    }
+}
+
+void validate_whitewater_options(uint32_t max_particles, double wavecrest_rate,
+                                 double turbulence_rate, double min_energy,
+                                 double max_energy) {
+    if (max_particles == 0) {
+        throw std::invalid_argument("whitewater max particles must be positive");
+    }
+    validate_nonnegative(wavecrest_rate, "whitewater wavecrest rate");
+    validate_nonnegative(turbulence_rate, "whitewater turbulence rate");
+    validate_nonnegative(min_energy, "whitewater minimum energy");
+    validate_nonnegative(max_energy, "whitewater maximum energy");
+    if (max_energy <= min_energy) {
+        throw std::invalid_argument("whitewater maximum energy must be greater than minimum energy");
+    }
+}
+
+void refresh_whitewater(NativeWorld &native) {
+    native.whitewater_positions.clear();
+    native.whitewater_velocities.clear();
+    native.whitewater_lifetimes.clear();
+    native.whitewater_types.clear();
+    if (!native.whitewater_enabled) {
+        return;
+    }
+    const size_t count = native.simulation->getNumDiffuseParticles();
+    if (count == 0) {
+        return;
+    }
+    native.whitewater_positions.resize(count);
+    native.whitewater_velocities.resize(count);
+    native.whitewater_lifetimes.resize(count);
+    native.whitewater_types.resize(count);
+    native.simulation->getDiffuseParticlePositionDataRange(
+        0, count, reinterpret_cast<char *>(native.whitewater_positions.data()));
+    native.simulation->getDiffuseParticleVelocityDataRange(
+        0, count, reinterpret_cast<char *>(native.whitewater_velocities.data()));
+    native.simulation->getDiffuseParticleLifetimeDataRange(
+        0, count, reinterpret_cast<char *>(native.whitewater_lifetimes.data()));
+    native.simulation->getDiffuseParticleTypeDataRange(
+        0, count, native.whitewater_types.data());
+}
 
 void write_stats(const FluidSimulationFrameStats &native, ManifoldFluidsFrameStats *stats) {
     if (stats == nullptr) {
@@ -210,6 +277,57 @@ extern "C" int manifold_fluids_world_set_gravity(void *world, const float *gravi
         auto *native = static_cast<NativeWorld *>(world);
         native->simulation->resetBodyForce();
         native->simulation->addBodyForce(g);
+    });
+}
+
+extern "C" int manifold_fluids_world_set_surface_options(void *world,
+                                                             double marker_particle_scale,
+                                                             double smoothing,
+                                                             uint32_t smoothing_iterations) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        validate_surface_options(marker_particle_scale, smoothing, smoothing_iterations);
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->setMarkerParticleScale(marker_particle_scale);
+        native->simulation->setSurfaceSmoothingValue(smoothing);
+        native->simulation->setSurfaceSmoothingIterations(
+            static_cast<int>(smoothing_iterations));
+    });
+}
+
+extern "C" int manifold_fluids_world_set_whitewater_options(
+    void *world, int enabled, uint32_t max_particles, double wavecrest_rate,
+    double turbulence_rate, double min_energy, double max_energy) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        validate_whitewater_options(max_particles, wavecrest_rate, turbulence_rate, min_energy,
+                                    max_energy);
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->setMaxNumDiffuseParticles(max_particles);
+        native->simulation->setDiffuseEmitterGenerationBounds(
+            AABB(0.0, 0.0, 0.0, native->isize * native->cell_size,
+                 native->jsize * native->cell_size, native->ksize * native->cell_size));
+        native->simulation->setDiffuseParticleWavecrestEmissionRate(wavecrest_rate);
+        native->simulation->setDiffuseParticleTurbulenceEmissionRate(turbulence_rate);
+        native->simulation->setMinDiffuseEmitterEnergy(min_energy);
+        native->simulation->setMaxDiffuseEmitterEnergy(max_energy);
+        native->simulation->enableDiffuseFoam();
+        native->simulation->enableDiffuseBubbles();
+        native->simulation->enableDiffuseSpray();
+        native->simulation->disableDiffuseDust();
+        native->simulation->disableBoundaryDiffuseDustEmission();
+        if (enabled != 0) {
+            native->simulation->enableDiffuseMaterialOutput();
+            native->simulation->enableDiffuseParticleEmission();
+        } else {
+            native->simulation->disableDiffuseMaterialOutput();
+            native->simulation->disableDiffuseParticleEmission();
+        }
+        native->whitewater_enabled = enabled != 0;
     });
 }
 
@@ -313,6 +431,56 @@ extern "C" int manifold_fluids_world_surface(void *world, const uint8_t **data_o
         }
         *data_out = reinterpret_cast<const uint8_t *>(data->data());
         *len_out = data->size();
+    });
+}
+
+extern "C" int manifold_fluids_world_whitewater_count(void *world, size_t *count_out) {
+    return guarded([&] {
+        if (world == nullptr || count_out == nullptr) {
+            throw std::invalid_argument("whitewater output pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        *count_out = native->whitewater_enabled ? native->simulation->getNumDiffuseParticles() : 0;
+    });
+}
+
+extern "C" int manifold_fluids_world_whitewater(void *world,
+                                                   ManifoldFluidsWhitewaterParticle *particles,
+                                                   size_t capacity, size_t *count_out) {
+    return guarded([&] {
+        if (world == nullptr || count_out == nullptr) {
+            throw std::invalid_argument("whitewater output pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        refresh_whitewater(*native);
+        const size_t count = native->whitewater_positions.size();
+        *count_out = count;
+        if (count > capacity) {
+            throw std::invalid_argument("whitewater output capacity is too small");
+        }
+        if (count != 0 && particles == nullptr) {
+            throw std::invalid_argument("whitewater particle output pointer must be non-null");
+        }
+        for (size_t index = 0; index < count; ++index) {
+            const vmath::vec3 &position = native->whitewater_positions[index];
+            const vmath::vec3 &velocity = native->whitewater_velocities[index];
+            const float lifetime = native->whitewater_lifetimes[index];
+            const unsigned char type = static_cast<unsigned char>(native->whitewater_types[index]);
+            if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+                !std::isfinite(position.z) || !std::isfinite(velocity.x) ||
+                !std::isfinite(velocity.y) || !std::isfinite(velocity.z) ||
+                !std::isfinite(lifetime) || type > 2) {
+                throw std::runtime_error("FLIP Fluids returned invalid whitewater particle data");
+            }
+            particles[index].position[0] = position.x;
+            particles[index].position[1] = position.y;
+            particles[index].position[2] = position.z;
+            particles[index].velocity[0] = velocity.x;
+            particles[index].velocity[1] = velocity.y;
+            particles[index].velocity[2] = velocity.z;
+            particles[index].lifetime = lifetime;
+            particles[index].type = type;
+        }
     });
 }
 

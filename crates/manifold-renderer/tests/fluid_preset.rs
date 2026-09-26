@@ -15,6 +15,46 @@ use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_runtime::PresetRuntime;
 
 const WATER_BASIN_JSON: &str = include_str!("../assets/generator-presets/WaterBasin.json");
+const WATER_DAM_BREAK_JSON: &str = include_str!("../assets/generator-presets/WaterDamBreak.json");
+
+#[test]
+fn water_dam_break_compiles_with_separate_whitewater_populations() {
+    let registry = PrimitiveRegistry::with_builtin();
+    PresetRuntime::from_json_str(WATER_DAM_BREAK_JSON, &registry)
+        .expect("WaterDamBreak must compile through the production loader");
+    let def: EffectGraphDef = serde_json::from_str(WATER_DAM_BREAK_JSON).unwrap();
+    let nodes = nodes_by_id(&def);
+    let fluid = nodes["fluid_surface"];
+    assert_eq!(float_param(fluid, "whitewater"), 1.0);
+    for (population, count, object) in [
+        ("foam", "foam_count", "foam_object"),
+        ("bubbles", "bubble_count", "bubble_object"),
+        ("spray", "spray_count", "spray_object"),
+    ] {
+        assert!(has_wire(
+            &def,
+            fluid.id,
+            population,
+            nodes[object].id,
+            "instances"
+        ));
+        assert!(has_wire(
+            &def,
+            fluid.id,
+            count,
+            nodes[object].id,
+            "instance_count"
+        ));
+    }
+    assert_eq!(float_param(nodes["environment_select"], "selector"), 0.0);
+    let metadata = def.preset_metadata.as_ref().unwrap();
+    assert!(
+        metadata
+            .string_params
+            .iter()
+            .all(|param| param.default_value.is_empty())
+    );
+}
 
 fn parse() -> EffectGraphDef {
     serde_json::from_str(WATER_BASIN_JSON).expect("WaterBasin preset must parse")

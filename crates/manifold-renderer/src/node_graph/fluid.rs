@@ -4,10 +4,13 @@ use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use manifold_core::Seconds;
-use manifold_fluids::{Bounds, Config, FluidWorld, FrameStats, SurfaceVertex};
+use manifold_fluids::{
+    Bounds, Config, FluidWorld, FrameStats, SurfaceOptions, SurfaceVertex, WhitewaterKind,
+    WhitewaterOptions, WhitewaterParticle,
+};
 
 use super::transform::Transform;
-use crate::generators::mesh_common::MeshVertex;
+use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
 pub const TICK: f64 = 1.0 / 60.0;
 const HISTORY_CAPACITY: usize = 8192;
@@ -20,6 +23,8 @@ pub struct FluidSettings {
     pub fill_height: f32,
     pub initial_volume: Option<Transform>,
     pub surface_subdivisions: u32,
+    pub surface: SurfaceOptions,
+    pub whitewater: WhitewaterOptions,
     pub apic: bool,
     pub max_vertices: usize,
 }
@@ -32,6 +37,11 @@ impl Default for FluidSettings {
             fill_height: 0.4,
             initial_volume: None,
             surface_subdivisions: 0,
+            surface: SurfaceOptions::default(),
+            whitewater: WhitewaterOptions {
+                max_particles: 100_000,
+                ..WhitewaterOptions::default()
+            },
             apic: false,
             max_vertices: 786432,
         }
@@ -40,6 +50,13 @@ impl Default for FluidSettings {
 
 impl FluidSettings {
     pub fn validate(self) -> Result<(), String> {
+        self.surface.validate().map_err(|error| error.to_string())?;
+        self.whitewater
+            .validate()
+            .map_err(|error| error.to_string())?;
+        if self.whitewater.max_particles > 250_000 {
+            return Err("Water: whitewater capacity must not exceed 250000 particles".into());
+        }
         if !(8..=96).contains(&self.resolution)
             || !self.domain_size.is_finite()
             || !(0.5..=20.0).contains(&self.domain_size)
@@ -173,6 +190,58 @@ struct Step {
     next: FluidControls,
 }
 
+/// Separate populations share the mesh publication epoch and tick. Each can use
+/// an ordinary scene object with its own material, mesh and live instance count.
+#[derive(Default)]
+pub struct WhitewaterFrame {
+    pub foam: Vec<InstanceTransform>,
+    pub bubbles: Vec<InstanceTransform>,
+    pub spray: Vec<InstanceTransform>,
+}
+
+impl WhitewaterFrame {
+    fn clear(&mut self) {
+        self.foam.clear();
+        self.bubbles.clear();
+        self.spray.clear();
+    }
+
+    fn prepare(&mut self, capacity: usize) {
+        self.clear();
+        // Reserve on the worker when a world is initialized. Every population
+        // may contain the whole bounded native population; publication reuses
+        // both banks without allocations as its mix changes.
+        for values in [&mut self.foam, &mut self.bubbles, &mut self.spray] {
+            if values.capacity() < capacity {
+                values.reserve_exact(capacity);
+            }
+        }
+    }
+
+    fn fill(&mut self, particles: &[WhitewaterParticle], half_domain: f32) {
+        self.clear();
+        for particle in particles {
+            // Native lifetime is remaining time. Shrink the last 0.2 seconds
+            // instead of leaving a full-sized particle until its removal.
+            let fade = (particle.lifetime / 0.2).clamp(0.0, 1.0);
+            let instance = InstanceTransform {
+                pos_scale: [
+                    particle.position[0] - half_domain,
+                    particle.position[1],
+                    particle.position[2] - half_domain,
+                    fade.sqrt(),
+                ],
+                rot_pad: [0.0; 4],
+            };
+            match particle.kind {
+                WhitewaterKind::Foam => self.foam.push(instance),
+                WhitewaterKind::Bubble => self.bubbles.push(instance),
+                WhitewaterKind::Spray => self.spray.push(instance),
+            }
+        }
+    }
+}
+
 struct Request {
     epoch: u64,
     settings: FluidSettings,
@@ -181,12 +250,14 @@ struct Request {
     count: usize,
     steps: [Step; BATCH],
     recycle: Vec<MeshVertex>,
+    recycle_whitewater: WhitewaterFrame,
 }
 
 struct Reply {
     epoch: u64,
     tick: u64,
     vertices: Vec<MeshVertex>,
+    whitewater: WhitewaterFrame,
     obstacle: Transform,
     stats: FrameStats,
     error: Option<String>,
@@ -204,6 +275,7 @@ impl Worker {
         std::thread::Builder::new().name("fluid-reference".into()).spawn(move || {
             let mut world: Option<(u64, FluidWorld)> = None;
             let mut surface = Vec::<SurfaceVertex>::new();
+            let mut whitewater = Vec::<WhitewaterParticle>::new();
             while let Ok(mut request) = receiver.recv() {
                 let mut stats = FrameStats::default();
                 let mut pose = request.initial.obstacle;
@@ -213,6 +285,8 @@ impl Worker {
                         // it off the content thread along with all native work.
                         world = None;
                         let mut new = FluidWorld::new(request.settings.config()).map_err(|e| e.to_string())?;
+                        new.set_surface_options(request.settings.surface).map_err(|e| e.to_string())?;
+                        new.set_whitewater_options(request.settings.whitewater).map_err(|e| e.to_string())?;
                         let size = request.settings.domain_size;
                         if request.settings.fill_height > 0.0 {
                             new.add_fluid_box(Bounds { min: [0.0; 3], max: [size, request.settings.fill_height, size] }, [0.0; 3])
@@ -236,6 +310,9 @@ impl Worker {
                         pose = step.next.obstacle;
                     }
                     request.recycle.clear();
+                    request.recycle_whitewater.prepare(if request.settings.whitewater.enabled {
+                        request.settings.whitewater.max_particles as usize
+                    } else { 0 });
                     if request.count > 0 {
                         native.surface(&mut surface).map_err(|e| e.to_string())?;
                         if surface.len() > request.settings.max_vertices {
@@ -248,11 +325,19 @@ impl Worker {
                             uv: [v.position[0] / request.settings.domain_size, v.position[2] / request.settings.domain_size],
                             _pad2: [0.0; 2], tangent: [0.0; 4],
                         }));
+                        if request.settings.whitewater.enabled {
+                            native.whitewater(&mut whitewater).map_err(|e| e.to_string())?;
+                            if whitewater.len() > request.settings.whitewater.max_particles as usize {
+                                return Err("Water whitewater snapshot exceeds its configured capacity".into());
+                            }
+                            request.recycle_whitewater.fill(&whitewater, half);
+                        }
                     }
                     Ok(())
                 })();
                 let reply = Reply { epoch: request.epoch, tick: request.start_tick + request.count as u64,
-                    vertices: request.recycle, obstacle: pose, stats, error: result.err() };
+                    vertices: request.recycle, whitewater: request.recycle_whitewater,
+                    obstacle: pose, stats, error: result.err() };
                 if sender.send(reply).is_err() { break; }
             }
         }).map_err(|e| format!("Water worker could not start: {e}"))?;
@@ -271,8 +356,10 @@ pub struct FluidRuntime {
     busy: bool,
     initialized: bool,
     spare: Option<Vec<MeshVertex>>,
+    spare_whitewater: Option<WhitewaterFrame>,
     failure: Option<String>,
     pub vertices: Vec<MeshVertex>,
+    pub whitewater: WhitewaterFrame,
     pub version: u64,
     pub completed_tick: u64,
     pub obstacle: Transform,
@@ -292,8 +379,10 @@ impl Default for FluidRuntime {
             busy: false,
             initialized: false,
             spare: Some(Vec::new()),
+            spare_whitewater: Some(WhitewaterFrame::default()),
             failure: None,
             vertices: Vec::new(),
+            whitewater: WhitewaterFrame::default(),
             version: 0,
             completed_tick: 0,
             obstacle: FluidControls::default().obstacle,
@@ -313,6 +402,7 @@ impl FluidRuntime {
         self.initialized = false;
         self.failure = None;
         self.vertices.clear();
+        self.whitewater.clear();
         self.stats = FrameStats::default();
         self.version = self.version.wrapping_add(1);
     }
@@ -430,14 +520,17 @@ impl FluidRuntime {
         self.busy = false;
         if reply.epoch != self.epoch {
             self.spare = Some(reply.vertices);
+            self.spare_whitewater = Some(reply.whitewater);
             return Ok(());
         }
         if let Some(error) = reply.error {
             self.spare = Some(reply.vertices);
+            self.spare_whitewater = Some(reply.whitewater);
             self.failure = Some(error.clone());
             return Err(error);
         }
         self.spare = Some(std::mem::replace(&mut self.vertices, reply.vertices));
+        self.spare_whitewater = Some(std::mem::replace(&mut self.whitewater, reply.whitewater));
         self.completed_tick = reply.tick;
         self.obstacle = reply.obstacle;
         self.stats = reply.stats;
@@ -513,6 +606,10 @@ impl FluidRuntime {
                 count,
                 steps,
                 recycle: self.spare.take().expect("one recycled mesh per request"),
+                recycle_whitewater: self
+                    .spare_whitewater
+                    .take()
+                    .expect("one recycled whitewater frame per request"),
             };
             self.worker
                 .as_ref()
@@ -531,6 +628,81 @@ impl FluidRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fluid_whitewater_classifies_and_publishes_with_mesh_epoch() {
+        let mut whitewater = WhitewaterFrame::default();
+        whitewater.prepare(3);
+        whitewater.fill(
+            &[
+                WhitewaterParticle {
+                    position: [1.0, 0.5, 3.0],
+                    velocity: [0.0; 3],
+                    lifetime: 1.0,
+                    kind: WhitewaterKind::Foam,
+                },
+                WhitewaterParticle {
+                    position: [2.0, 0.4, 2.0],
+                    velocity: [0.0; 3],
+                    lifetime: 0.05,
+                    kind: WhitewaterKind::Bubble,
+                },
+                WhitewaterParticle {
+                    position: [3.0, 2.5, 1.0],
+                    velocity: [0.0; 3],
+                    lifetime: 0.0,
+                    kind: WhitewaterKind::Spray,
+                },
+            ],
+            2.0,
+        );
+        assert_eq!(whitewater.foam[0].pos_scale, [-1.0, 0.5, 1.0, 1.0]);
+        assert_eq!(whitewater.bubbles[0].pos_scale, [0.0, 0.4, 0.0, 0.5]);
+        assert_eq!(whitewater.spray[0].pos_scale, [1.0, 2.5, -1.0, 0.0]);
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .observe(
+                FluidSettings::default(),
+                FluidControls::default(),
+                Seconds(0.0),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        runtime
+            .accept(Reply {
+                epoch: runtime.epoch,
+                tick: 7,
+                vertices: Vec::new(),
+                whitewater,
+                obstacle: Transform::default(),
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.completed_tick, 7);
+        assert_eq!(runtime.whitewater.foam.len(), 1);
+        assert_eq!(runtime.whitewater.bubbles.len(), 1);
+        assert_eq!(runtime.whitewater.spray.len(), 1);
+        let old_epoch = runtime.epoch;
+        let stale = std::mem::take(&mut runtime.whitewater);
+        runtime.clear();
+        runtime
+            .accept(Reply {
+                epoch: old_epoch,
+                tick: 8,
+                vertices: Vec::new(),
+                whitewater: stale,
+                obstacle: Transform::default(),
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.completed_tick, 0);
+        assert!(runtime.whitewater.foam.is_empty());
+        assert!(runtime.whitewater.bubbles.is_empty());
+        assert!(runtime.whitewater.spray.is_empty());
+    }
 
     #[test]
     fn fluid_preview_debt_and_offline_batches_reach_same_state() {
@@ -661,6 +833,7 @@ mod tests {
                 epoch: old,
                 tick: 123,
                 vertices: Vec::new(),
+                whitewater: WhitewaterFrame::default(),
                 obstacle: Transform::default(),
                 stats: FrameStats::default(),
                 error: Some("stale failure".into()),
@@ -670,6 +843,7 @@ mod tests {
         assert!(!runtime.initialized);
         assert!(runtime.failure.is_none());
         assert!(runtime.spare.is_some());
+        assert!(runtime.spare_whitewater.is_some());
     }
 
     #[test]

@@ -1,26 +1,10 @@
 use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, RigidSimulation};
 use crate::node_graph::primitive::Primitive;
-use bytemuck::Zeroable;
-use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
-
-const INSTANCE_UPLOAD_WGSL: &str = include_str!("shaders/physics_instance_upload.wgsl");
-const UPLOAD_TRANSFORMS: usize = 64;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceUploadParams {
-    start: u32,
-    count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    values: [[f32; 4]; UPLOAD_TRANSFORMS * 2],
-}
-
-const _: () = assert!(std::mem::size_of::<InstanceUploadParams>() <= 4096);
 
 const ZERO_INSTANCE: InstanceTransform = InstanceTransform {
     pos_scale: [0.0; 4],
@@ -44,88 +28,38 @@ fn read_copy_layout(ctx: &EffectNodeContext<'_, '_>) -> f32 {
 }
 
 pub struct InstanceUploadState {
-    pipeline: Option<manifold_gpu::GpuComputePipeline>,
     data: Vec<InstanceTransform>,
-    last_output_identity: Option<usize>,
-    uploaded_count: usize,
+    snapshot: InstanceSnapshotUpload,
+    next_version: u64,
 }
 
 impl Default for InstanceUploadState {
     fn default() -> Self {
         Self {
-            pipeline: None,
             data: vec![ZERO_INSTANCE; MAX_COPIES],
-            last_output_identity: None,
-            uploaded_count: 0,
+            snapshot: InstanceSnapshotUpload::default(),
+            next_version: 0,
         }
     }
 }
 
 impl InstanceUploadState {
-    fn install_pipeline(&mut self, device: &manifold_gpu::GpuDevice) {
-        if self.pipeline.is_none() {
-            self.pipeline = Some(device.create_compute_pipeline(
-                INSTANCE_UPLOAD_WGSL,
-                "cs_main",
-                "node.physics_world.instances",
-            ));
-        }
-    }
-
     fn upload(
         &mut self,
         gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
         out: &manifold_gpu::GpuBuffer,
         active_count: usize,
-    ) {
-        let pipeline = self
-            .pipeline
-            .as_ref()
-            .expect("physics world instance upload pipeline must be installed before upload");
-        let output_identity = out.identity_key();
-        let full_upload = self.last_output_identity != Some(output_identity);
-        let ranges = if full_upload {
-            [(0, MAX_COPIES), (0, 0)]
-        } else if active_count < self.uploaded_count {
-            [(0, active_count), (active_count, self.uploaded_count)]
-        } else {
-            [(0, active_count), (0, 0)]
-        };
-        let mut params = InstanceUploadParams::zeroed();
-        for (start_index, end_index) in ranges {
-            for start in (start_index..end_index).step_by(UPLOAD_TRANSFORMS) {
-                let count = (end_index - start).min(UPLOAD_TRANSFORMS);
-                params.start = start as u32;
-                params.count = count as u32;
-                for index in 0..count {
-                    let transform = if start + index < active_count {
-                        self.data[start + index]
-                    } else {
-                        ZERO_INSTANCE
-                    };
-                    params.values[index * 2] = transform.pos_scale;
-                    params.values[index * 2 + 1] = transform.rot_pad;
-                }
-                gpu.native_enc.dispatch_compute(
-                    pipeline,
-                    &[
-                        GpuBinding::Bytes {
-                            binding: 0,
-                            data: bytemuck::bytes_of(&params),
-                        },
-                        GpuBinding::Buffer {
-                            binding: 1,
-                            buffer: out,
-                            offset: 0,
-                        },
-                    ],
-                    [count.div_ceil(64) as u32, 1, 1],
-                    "node.physics_world.instances",
-                );
-            }
-        }
-        self.last_output_identity = Some(output_identity);
-        self.uploaded_count = active_count;
+        version: u64,
+        retained: bool,
+    ) -> Result<bool, &'static str> {
+        self.snapshot
+            .upload(gpu, out, &self.data[..active_count], version, retained)
+    }
+
+    fn next_version(&mut self) -> u64 {
+        let version = self.next_version;
+        self.next_version = self.next_version.wrapping_add(1);
+        version
     }
 }
 crate::primitive! {
@@ -198,11 +132,7 @@ ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamTy
 impl PhysicsWorldNode {
     /// CPU pose upload is an IO boundary, so the atom codegen sweep cannot warm it.
     pub(crate) fn prewarm_pipeline(device: &manifold_gpu::GpuDevice) {
-        device.create_compute_pipeline(
-            INSTANCE_UPLOAD_WGSL,
-            "cs_main",
-            "node.physics_world.instances",
-        );
+        InstanceSnapshotUpload::prewarm(device);
     }
 }
 
@@ -288,12 +218,23 @@ impl Primitive for PhysicsWorldNode {
                 rot_pad: [pose.rot_euler[0], pose.rot_euler[1], pose.rot_euler[2], 0.0],
             };
         }
-        let Some(gpu) = ctx.gpu.as_deref_mut() else {
-            return;
+        let version = self.upload.next_version();
+        let retained = ctx.outputs_retained();
+        let result = {
+            let Some(gpu) = ctx.gpu.as_deref_mut() else {
+                return;
+            };
+            self.upload.upload(
+                gpu,
+                out,
+                self.simulation.active_copy_count,
+                version,
+                retained,
+            )
         };
-        self.upload.install_pipeline(gpu.device);
-        self.upload
-            .upload(gpu, out, self.simulation.active_copy_count);
+        if let Err(error) = result {
+            ctx.error(error.to_string());
+        }
     }
 }
 
@@ -322,8 +263,9 @@ mod gpu_tests {
         let mut encoder = device.create_encoder("physics-world-upload-proof");
         {
             let mut gpu = GpuEncoder::new(&mut encoder, &device);
-            state.install_pipeline(&device);
-            state.upload(&mut gpu, &output, 130);
+            state
+                .upload(&mut gpu, &output, 130, 1, true)
+                .expect("instance upload");
         }
         encoder.commit_and_wait_completed();
         let first = read_instances(&output);
@@ -345,8 +287,9 @@ mod gpu_tests {
         let mut encoder = device.create_encoder("physics-world-upload-shrink-proof");
         {
             let mut gpu = GpuEncoder::new(&mut encoder, &device);
-            state.install_pipeline(&device);
-            state.upload(&mut gpu, &output, 3);
+            state
+                .upload(&mut gpu, &output, 3, 2, true)
+                .expect("instance upload");
         }
         encoder.commit_and_wait_completed();
         let shrunk = read_instances(&output);

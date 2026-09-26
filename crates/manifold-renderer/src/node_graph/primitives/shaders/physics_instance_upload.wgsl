@@ -1,8 +1,8 @@
 struct UploadParams {
     start: u32,
     count: u32,
+    source_count: u32,
     _pad0: u32,
-    _pad1: u32,
     values: array<vec4<f32>, 128>,
 };
 
@@ -14,8 +14,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.count {
         return;
     }
-    let source = id.x * 2u;
     let destination = (params.start + id.x) * 2u;
-    instances[destination] = params.values[source];
-    instances[destination + 1u] = params.values[source + 1u];
+    if params.start + id.x >= params.source_count {
+        instances[destination] = vec4(0.0);
+        instances[destination + 1u] = vec4(0.0);
+    } else {
+        let source = id.x * 2u;
+        instances[destination] = params.values[source];
+        instances[destination + 1u] = params.values[source + 1u];
+    }
 }

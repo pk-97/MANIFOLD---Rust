@@ -51,14 +51,17 @@ const MAX_HEIGHT: u32 = 2160;
 const MAX_FRAMES: u32 = 600;
 const MAX_FPS: u32 = 60;
 const MAX_SECONDS: f64 = 900.0;
-const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms";
-const METRIC_NAMES: [&str; 6] = [
+const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count";
+const METRIC_NAMES: [&str; 9] = [
     "simulation_time",
     "lag_seconds",
     "simulation_ms",
     "meshing_ms",
     "particle_count",
     "vertex_count",
+    "foam_count",
+    "bubble_count",
+    "spray_count",
 ];
 
 type CaptureResult<T> = Result<T, Box<dyn Error>>;
@@ -92,6 +95,9 @@ struct FluidMetrics {
     meshing_ms: f64,
     particle_count: f64,
     vertex_count: f64,
+    foam_count: f64,
+    bubble_count: f64,
+    spray_count: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -312,6 +318,9 @@ fn read_fluid_metrics(runtime: &PresetRuntime) -> CaptureResult<FluidMetrics> {
         meshing_ms: values[3],
         particle_count: values[4],
         vertex_count: values[5],
+        foam_count: values[6],
+        bubble_count: values[7],
+        spray_count: values[8],
     })
 }
 
@@ -409,7 +418,7 @@ fn write_csv(path: &Path, rows: &[MetricRow]) -> CaptureResult<()> {
     for row in rows {
         writeln!(
             writer,
-            "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.6},{:.6}",
+            "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.6},{:.6},{:.0},{:.0},{:.0}",
             row.frame,
             row.authored_time,
             row.fluid.simulation_time,
@@ -424,6 +433,9 @@ fn write_csv(path: &Path, rows: &[MetricRow]) -> CaptureResult<()> {
             row.fluid.vertex_count,
             row.capture_ms,
             row.presentation_interval_ms,
+            row.fluid.foam_count,
+            row.fluid.bubble_count,
+            row.fluid.spray_count,
         )?;
     }
     writer.flush()?;
