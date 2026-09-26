@@ -369,9 +369,13 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32, aperture:
     if !near_field && !empty_far && guide.r * max_radius < 0.5 && guide.g * max_radius < 0.5 {
         return vec4<f32>(center.rgb/max(center.a,1e-6),center.a);
     }
-    let lod = max(log2(radius / 2.0),0.0);
     let sample_count = 16u << min(quality,2u);
     let sample_base = sample_count - 16u;
+    // Match the mip footprint to the area represented by one aperture tap.
+    // radius/2 discarded the same detail at every quality and sampled broad
+    // square patches even when enough taps were available to resolve them.
+    let footprint = radius * sqrt(3.141592654 / f32(sample_count));
+    let lod = max(log2(footprint),0.0);
     var rgb = vec3<f32>(0.0);
     var coverage = 0.0;
     var weights = 0.0;

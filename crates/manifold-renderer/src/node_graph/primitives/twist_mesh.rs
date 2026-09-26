@@ -67,7 +67,7 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("angle"),
             label: "Angle",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(1.0),
             range: None,
             enum_values: &[],
@@ -239,6 +239,7 @@ mod tests {
     #[test]
     fn twist_mesh_angle_is_unbounded() {
         let angle = TwistMesh::PARAMS.iter().find(|p| p.name == "angle").unwrap();
+        assert_eq!(angle.ty, ParamType::Angle, "angle is displayed in degrees");
         assert_eq!(angle.range, None, "angle must be unbounded (BUG-039 class)");
     }
 

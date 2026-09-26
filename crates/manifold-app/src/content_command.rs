@@ -22,6 +22,8 @@ pub enum ContentCommand {
     /// An unexecuted command; UI snapshots wait for content publication. Unlike
     /// legacy optimistic Execute producers, headless UI must execute this too.
     ExecuteOnContent(Box<dyn Command + Send>),
+    /// Publish selection only after this insertion succeeds on the content thread.
+    ExecuteSelecting(Box<dyn Command + Send>, crate::edit_selection::SelectAfterEdit),
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
     ObjectModifier(crate::object_modifier_transfer::ObjectModifierAction),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },

@@ -1,7 +1,7 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
 **Status:** SHIPPED (closed 2026-07-16) — P0–P6 all landed; as-built record in section 7. Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down (VD-020-CINEMATIC closed); any look issue from here is filed as a new BUG_BACKLOG entry, never reopened as a gate. OPEN: BUG-136 (cinematic-motion-blur-no-visible-effect) — see section 7's escalation note. · 2026-07-12**
-**D10 upgrade:** Implemented and checked on tiger-lily and satsuki-azalea photoscans with 3D camera DoF (2026-09-26): layered half-resolution gathers, transparent silhouette coverage, aperture/quality controls and Smooth broad blur. Contracts and validation are in D10 below.
+**D10 upgrade:** Layered DoF and Smooth blur (2026-09-26). BUG-imds exposed an alpha mismatch missed by initial photoscan captures. App-path repairs, contracts and validation: D10 below.
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -76,12 +76,12 @@ world units are meters for lens physics, `WORLD_TO_MM = 1000.0`;
 
 ```text
 f_mm    = SENSOR_H_MM / (2 · tan(fov_y / 2))          // from the Camera wire's fov
-A_mm    = f_mm / f_stop                                // aperture diameter
+A_mm    = f_mm / (2 · f_stop)                          // aperture radius
 D_mm    = linearize_depth(raw_depth, near, far) · WORLD_TO_MM
 S_mm    = focus_distance · WORLD_TO_MM
 coc_mm  = A_mm · f_mm · |D_mm − S_mm| / (D_mm · max(S_mm − f_mm, 1.0))
 coc_px  = clamp(coc_mm / SENSOR_H_MM · viewport_h, 0.0, max_radius)
-out.r   = coc_px  (in variable_blur's width unit — the VERIFY-AT-IMPL above)
+out.r   = coc_px / max_radius                         // normalized radius
 ```
 
 `f_stop = INFINITY` (pinhole default) → `A = 0` → CoC 0 everywhere →
@@ -331,20 +331,36 @@ reduction so odd dimensions cannot discard an interior texel. Half-resolution
 opaque far gathers use the receiving surface radius so neighboring tile maxima
 cannot select overly coarse color mips; bounds never replace source CoC
 in acceptance weights. A separate max-CoC pyramid matches the color sampling
-footprint, so coarse color mips cannot erase thin foreground coverage. Canonical
+footprint, so coarse color mips cannot erase thin foreground coverage. Color mip
+footprints follow aperture area per tap (`radius · sqrt(pi / sample_count)` in
+half-resolution pixels), and only the required mip levels are dispatched. Canonical
 saved graphs and fresh imports feed original CoC directly; external dilation is
 removed from this path. Separate aperture gathers feed depth-aware full-resolution
 reconstruction. Foreground coverage can cross a depth edge; background color
 cannot blur a focused foreground surface. Zero-CoC detail is preserved. Camera DoF enables `blur_alpha`: source
-color is premultiplied by opacity before reduction, blurred coverage expands
-beyond transparent silhouettes, and reconstruction returns straight RGBA.
+RGB is already premultiplied, as required by the layer compositor. Reduction
+preserves that RGB and filters alpha as coverage; reconstruction also returns
+premultiplied RGBA. It must neither multiply source RGB by alpha a second time
+nor divide output RGB by coverage. Blurred coverage expands beyond transparent
+silhouettes; invisible source RGB is excluded from the pyramids.
 General texture use keeps the legacy alpha-preserving default. Saved camera
 graphs gain this setting unless it was explicitly authored. No frame-dependent random rotation or temporal history is introduced. The focus
-blend begins at a one-source-pixel radius, matching the gather support.
+blend uses a full-resolution 3×3 circle for radii 0.5–2 pixels, with continuous
+signed-CoC rejection at depth boundaries, then transitions into the half-resolution
+gather over radii 1–2. This avoids retaining an unfiltered sharp copy under small blur.
 Aperture-area normalization preserves opacity through small-radius transitions.
 Resource allocation occurs on creation/resize; radius changes reuse resources.
 Helper pipelines participate in startup prewarming. Dependent reduction passes
 retain the existing `BarrieredReduction` exemption and generated gather kernel.
+
+BUG-1mhg corrects a diameter/radius error in the original lens math: `f/f_stop`
+is the aperture diameter; the radius consumed by the gather requires
+`f/(2·f_stop)`, consistent with the [thin-lens radius equation](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/depth-of-field/#calculating-the-circle-of-confusion-radius).
+Saved parameter values and schemas are unchanged. This deliberately halves
+unclamped blur radius at a given f-stop; halving the f-stop reproduces the former
+blur extent for visual comparisons. A generated-GPU oracle checks a 50 mm f/2
+lens at 1 m focus and 2 m object distance against 14.802632 pixels of radius on
+a 24 mm sensor at 1080p.
 
 `node.blur` appends Smooth as mode 3, preserving Gaussian/Box/Radial numbers.
 Smooth uses a Dual Kawase pyramid, exact area downsampling, normalized eight-tap
@@ -370,6 +386,18 @@ portable performance guarantee; this amendment makes no claim of SOTA parity.
 Enforcement: production-path `bokeh_gather::gpu_tests` cover focused identity,
 HDR/alpha, thin foreground coverage, far-spill rejection, aperture shapes, odd
 dimensions, resizing, motion/focus continuity and an independent numeric oracle.
+Camera transparency proofs include partial coverage and normal compositing over
+black and coloured layers. `render-import --app-presentation` reproduces the
+production layer compositor and ACES SDR presentation mapper for edge comparisons.
+Japanese wisteria was also exported through the app's `export-repro` command
+(project load, warmup, content-thread rendering, compositing and SDR encoding):
+96 frames at 1920×1080, f/2, orbit 38–54° and focus 5.5–9.5, plus fixed-camera
+f/8 captures and an equal-extent f/4 comparison against the former f/8 output.
+These inspect the alpha, sampling and lens-radius corrections together. The legacy Reinhard
+readback assumes straight alpha and cannot validate these app edges. Live-window
+verification remained blocked by macOS display-link startup error -6661.
+The single-depth reconstruction still approximates occlusion at overlapping
+surfaces; these repairs do not establish reference-lens or SOTA parity.
 `filter::gpu_tests` cover Smooth's identity, HDR, impulse mass/moment and odd
 sizes. `render-import --benchmark-frames N` measures 1–120 static warm frames
 after IO and image convergence, with five extra warm frames and no timed

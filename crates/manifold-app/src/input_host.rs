@@ -2071,9 +2071,13 @@ mod automation_clipboard_host_tests {
         let before = serde_json::to_vec(&h.project.settings).unwrap();
         assert!(h.host().handle_effect_paste());
         assert_eq!(before, serde_json::to_vec(&h.project.settings).unwrap());
-        let ContentCommand::ExecuteOnContent(command) = h.rx.try_recv().unwrap() else { panic!("atomic paste"); };
+        assert_eq!(h.ui_root.inspector.selected_effect_ids(), ids, "keep selection until paste succeeds");
+        let ContentCommand::ExecuteSelecting(command, request) = h.rx.try_recv().unwrap() else { panic!("atomic paste"); };
+        let pending = request.capture(&h.project);
         let mut service = EditingService::new();
         service.execute(command, &mut h.project);
+        let update = crate::edit_selection::EditSelectionUpdate { sequence: 1, selection: pending.resolve(&h.project).expect("accepted paste") };
+        crate::edit_selection::apply_update(&mut h.ui_root, &h.project, Some(&update), &mut h.selection, &mut h.active_layer);
         let effects = &h.project.settings.master_effects;
         assert_eq!(effects.len(), 4);
         let pasted_ids: Vec<_> = effects[2..].iter().map(|effect| effect.id.clone()).collect();
@@ -2137,7 +2141,7 @@ mod automation_clipboard_host_tests {
         assert!(h.host().handle_effect_paste());
         assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before_paste);
         let paste_command = match h.rx.try_recv().expect("paste command") {
-            ContentCommand::ExecuteOnContent(command) => command,
+            ContentCommand::ExecuteSelecting(command, _) => command,
             other => panic!("expected atomic effect paste, got {:?}", std::mem::discriminant(&other)),
         };
         service.execute(paste_command, &mut authoritative);
@@ -2237,7 +2241,7 @@ mod automation_clipboard_host_tests {
         assert!(h.ui_root.scene_modifier_clipboard.is_none());
         h.ui_root.inspector.clear_effect_selection(&mut h.ui_root.tree);
         assert!(h.host().handle_effect_paste());
-        let ContentCommand::ExecuteOnContent(mut command) = h.rx.try_recv().unwrap() else { panic!("expected paste command"); };
+        let ContentCommand::ExecuteSelecting(mut command, _) = h.rx.try_recv().unwrap() else { panic!("expected paste command"); };
         assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 1);
         command.execute(&mut h.project);
         assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 2);

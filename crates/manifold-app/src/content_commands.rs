@@ -800,7 +800,15 @@ impl ContentThread {
 
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
+        let (cmd, pending_selection) = match cmd {
+            ContentCommand::ExecuteSelecting(command, request) => {
+                let pending = self.engine.project().map(|project| request.capture(project));
+                (ContentCommand::ExecuteOnContent(command), pending)
+            }
+            cmd => (cmd, None),
+        };
         match cmd {
+            ContentCommand::ExecuteSelecting(..) => unreachable!("selection request normalized above"),
             ContentCommand::Shutdown => return true,
 
             ContentCommand::WatchEffectGraph(effect_id) => {
@@ -1142,6 +1150,13 @@ impl ContentThread {
                     );
                 }
                 if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
+                if let Some(pending) = pending_selection
+                    && let Some(project) = self.engine.project()
+                    && let Some(selection) = pending.resolve(project)
+                {
+                    let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
+                    self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
+                }
                 // Refresh the compositor even while paused: a blend-mode change,
                 // effect edit, or reorder that doesn't alter clip membership
                 // won't be picked up by the sync path alone.
@@ -1374,6 +1389,7 @@ impl ContentThread {
             // ── Project lifecycle ──────────────────────────────────
             ContentCommand::LoadProject(project) => {
                 self.commit_automation_recording(true);
+                self.edit_selection_update = None;
                 self.modifier_selection_update = None;
                 self.object_modifier_selection_update = None;
                 if let Some(ref mut alp) = self.audio_layer_playback {

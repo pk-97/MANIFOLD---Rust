@@ -46,6 +46,7 @@ pub(super) struct BokehSettings {
     pub radius: f32,
     pub aperture: u32,
     pub quality: u32,
+    /// Filter premultiplied scene RGB and alpha together for the compositor.
     pub blur_alpha: bool,
 }
 
@@ -54,9 +55,12 @@ pub(super) struct BokehSettings {
 fn mip_level_count(w: u32, h: u32) -> u32 {
     w.max(h).max(1).ilog2() + 1
 }
-fn active_mip_levels(radius: f32, available: usize) -> usize {
-    // half-res radius / 2-texel footprint, plus the trilinear upper level.
-    (((radius.max(1.0) * 0.25).log2().ceil().max(0.0) as usize) + 1).min(available)
+fn active_mip_levels(radius: f32, quality: u32, available: usize) -> usize {
+    // One aperture tap represents pi*r^2/sample_count half-resolution pixels.
+    // Include the trilinear upper level; finer quality needs fewer coarse mips.
+    let sample_count = (16u32 << quality.min(2)) as f32;
+    let footprint = radius.max(1.0) * 0.5 * (std::f32::consts::PI / sample_count).sqrt();
+    ((footprint.log2().ceil().max(0.0) as usize) + 1).min(available)
 }
 
 pub struct BokehResources {
@@ -329,7 +333,7 @@ impl BokehGather {
             "bokeh separate layers",
         );
         for views in [&r.far_views, &r.near_views] {
-            for l in 1..active_mip_levels(radius, views.len()) {
+            for l in 1..active_mip_levels(radius, settings.quality, views.len()) {
                 let dst = &views[l];
                 gpu.native_enc.dispatch_compute(
                     &p.downsample,
@@ -412,7 +416,7 @@ impl BokehGather {
             grid,
             "bokeh packed guide",
         );
-        for l in 1..active_mip_levels(radius, r.packed_views.len()) {
+        for l in 1..active_mip_levels(radius, settings.quality, r.packed_views.len()) {
             let dst = &r.packed_views[l];
             gpu.native_enc.dispatch_compute(
                 &p.guide_downsample,
@@ -568,9 +572,12 @@ mod tests {
     fn bounded_mips_cover_all_accessible_radii() {
         assert_eq!(mip_level_count(1, 1), 1);
         assert_eq!(mip_level_count(1920, 1080), 11);
-        assert_eq!(active_mip_levels(24.0, 5), 4);
-        assert_eq!(active_mip_levels(64.0, 5), 5);
-        assert_eq!(active_mip_levels(0.0, 5), 1);
+        assert_eq!(active_mip_levels(24.0, 0, 5), 4);
+        assert_eq!(active_mip_levels(24.0, 1, 5), 3);
+        assert_eq!(active_mip_levels(24.0, 2, 5), 3);
+        assert_eq!(active_mip_levels(64.0, 1, 5), 5);
+        assert_eq!(active_mip_levels(64.0, 2, 5), 4);
+        assert_eq!(active_mip_levels(0.0, 1, 5), 1);
     }
     #[test]
     fn uniform_and_existing_ports_are_compatible() {

@@ -622,6 +622,10 @@ where
                 spec.name = meta_entry.label.clone();
                 changed = true;
             }
+            if spec.is_angle != meta_entry.is_angle {
+                spec.is_angle = meta_entry.is_angle;
+                changed = true;
+            }
             // Value labels are a stamp-time copy of the primitive metadata,
             // just like the name and range above. Refresh them for every
             // exact auto-stamp, including scene light modes whose enum set
@@ -1353,6 +1357,133 @@ mod tests {
             ),
             "second migration run is a no-op once repaired"
         );
+        assert_eq!(def, after_repair);
+    }
+
+    /// Angular primitive descriptors used to be stamped as plain 0..1
+    /// floats. Repair the auto-generated card metadata in place when the
+    /// descriptor becomes an angle, while leaving a user-authored exposure
+    /// targeting the same node parameter untouched.
+    #[test]
+    fn migrate_repairs_auto_angle_descriptor_without_touching_user_range() {
+        struct AngleProvider;
+        impl SceneExposureMetadataProvider for AngleProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id != "node.bend_mesh" {
+                    return Vec::new();
+                }
+                vec![SceneParamMetadata {
+                    name: "angle".to_string(),
+                    label: "Angle".to_string(),
+                    min: -std::f32::consts::TAU,
+                    max: std::f32::consts::TAU,
+                    default_value: SerializedParamValue::Float { value: 0.5 },
+                    is_angle: true,
+                    wraps: false,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: Vec::new(),
+                    convert: ParamConvert::Float,
+                    material_role: None,
+                }]
+            }
+        }
+
+        let node = make_node(7, "node.bend_mesh");
+        let node_id = node.node_id.clone();
+        let auto_spec = ParamSpecDef {
+            id: "7_angle".to_string(),
+            name: "Angle".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.5,
+            is_angle: false,
+            ..Default::default()
+        };
+        let auto_binding = BindingDef {
+            id: "7_angle".to_string(),
+            label: "Angle".to_string(),
+            default_value: 0.5,
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "angle".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+        let user_spec = ParamSpecDef {
+            id: "user_angle".to_string(),
+            name: "My Angle".to_string(),
+            min: -9.0,
+            max: 9.0,
+            default_value: 2.0,
+            is_angle: false,
+            ..Default::default()
+        };
+        let user_binding = BindingDef {
+            id: "user_angle".to_string(),
+            label: "My Angle".to_string(),
+            default_value: 2.0,
+            target: BindingTarget::Node {
+                node_id,
+                param: "angle".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: true,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        };
+
+        let mut meta = empty_scene_preset_metadata();
+        meta.params = vec![auto_spec, user_spec];
+        meta.bindings = vec![auto_binding, user_binding];
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(meta),
+            scene_modifiers: Vec::new(),
+            nodes: vec![node],
+            wires: Vec::new(),
+        };
+
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &["node.bend_mesh"],
+            |_node| "Modifier".to_string(),
+            &AngleProvider,
+        ));
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        let auto = metadata
+            .params
+            .iter()
+            .find(|param| param.id == "7_angle")
+            .unwrap();
+        assert!(auto.is_angle);
+        assert_eq!(
+            (auto.min, auto.max),
+            (-std::f32::consts::TAU, std::f32::consts::TAU)
+        );
+        let user = metadata
+            .params
+            .iter()
+            .find(|param| param.id == "user_angle")
+            .unwrap();
+        assert!(!user.is_angle);
+        assert_eq!((user.min, user.max), (-9.0, 9.0));
+
+        let after_repair = def.clone();
+        assert!(!migrate_scene_exposures(
+            &mut def,
+            &["node.bend_mesh"],
+            |_node| "Modifier".to_string(),
+            &AngleProvider,
+        ));
         assert_eq!(def, after_repair);
     }
 

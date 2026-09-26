@@ -2608,6 +2608,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 embedded_presets_fingerprint: 0,
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
+                edit_selection_update: None,
                 modifier_selection_update: None,
                 object_modifier_selection_update: None,
                 #[cfg(feature = "profiling")]
@@ -2840,6 +2841,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Cursor left window → cancel in-progress drags ────────
             WindowEvent::CursorLeft { .. } => {
+                if is_graph_editor { self.cancel_editor_pointer_capture(window_id); }
                 if is_primary && self.perform_handle_cursor_left() {
                     return;
                 }
@@ -2873,6 +2875,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Focus loss → cancel in-progress drags ──────────────
             WindowEvent::Focused(false) => {
+                if is_graph_editor { self.cancel_editor_pointer_capture(window_id); }
                 // Synthesize a PointerUp to cancel any drag that was in
                 // progress when the user alt-tabbed away. Without this the
                 // drag state stays active forever because no real PointerUp

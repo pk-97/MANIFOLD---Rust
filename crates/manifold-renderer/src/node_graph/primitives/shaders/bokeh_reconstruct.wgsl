@@ -54,10 +54,49 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // coverage and must not fade the original silhouette toward transparent.
     let blur_amount = smoothstep(1.0,2.0,radius);
     if u.blur_alpha != 0u {
-        // Straight-alpha scene output needs optical coverage beyond the
-        // original silhouette. Composite in premultiplied space, then undo
-        // premultiplication once; hidden transparent RGB never enters a mip.
-        let original_pm = vec4<f32>(original.rgb*original.a,original.a);
+        // Scene textures and the layer compositor use premultiplied alpha.
+        // Preserve that convention through reconstruction: unpremultiplying
+        // here makes faint optical coverage display as solid rims (BUG-imds).
+        var original_pm = original;
+
+        // The half-resolution gather has no support below one source pixel.
+        // A bounded full-resolution disc bridges that gap for camera alpha
+        // blur. Keep taps on the same original CoC surface so a focused
+        // foreground cannot pull in an unrelated far colour. Feed this
+        // filtered value into the existing reconstruction below; near
+        // coverage must not be composited over the same foreground twice.
+        let small_blur = radius >= 0.5 && radius < 2.0;
+        if small_blur {
+            let source_dims = textureDimensions(source);
+            let coc_dims = textureDimensions(coc);
+            var small_rgb = vec3<f32>(0.0);
+            var small_alpha = 0.0;
+            var small_weight = 0.0;
+            for(var oy:i32=-1;oy<=1;oy++) {
+                for(var ox:i32=-1;ox<=1;ox++) {
+                    let sp = clamp(vec2<i32>(id.xy)+vec2<i32>(ox,oy),vec2<i32>(0),vec2<i32>(source_dims)-1);
+                    let sample = textureLoad(source,sp,0);
+                    let sample_cp = min(vec2<u32>((vec2<f32>(sp)+0.5)*vec2<f32>(coc_dims)/vec2<f32>(source_dims)),coc_dims-1u);
+                    let sample_z = textureLoad(coc,vec2<i32>(sample_cp),0);
+                    let sample_radius = clamp(sample_z.r,0.0,1.0)*u.radius;
+                    let sample_near = sample_z.g >= 0.5;
+                    let signed_radius = select(radius,-radius,is_near);
+                    let sample_signed_radius = select(sample_radius,-sample_radius,sample_near);
+                    // A continuous signed-CoC comparison also spans the
+                    // focus plane without a categorical near/far jump.
+                    let compatibility = 1.0-smoothstep(0.5,1.5,abs(sample_signed_radius-signed_radius));
+                    let distance = length(vec2<f32>(f32(ox),f32(oy)));
+                    let weight = clamp(radius-distance+0.5,0.0,1.0)*compatibility;
+                    // Transparent texels can retain undefined RGB in source
+                    // textures; only premultiplied coverage may contribute.
+                    let sample_rgb = select(vec3<f32>(0.0),sample.rgb,sample.a > 1e-6);
+                    small_rgb += sample_rgb*weight;
+                    small_alpha += sample.a*weight;
+                    small_weight += weight;
+                }
+            }
+            original_pm = vec4<f32>(small_rgb/max(small_weight,1e-6),small_alpha/max(small_weight,1e-6));
+        }
         let far_pm = vec4<f32>(far_rgb,far_weight)/max(far_support,1e-6);
         var background = mix(original_pm,far_pm,blur_amount);
         // The half-resolution color filter alone must not expand a focused
@@ -68,10 +107,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         if is_near {
             result = mix(original_pm,near_rgba+far_pm*(1.0-near_rgba.a),blur_amount);
         }
-        if blur_amount == 0.0 && near_rgba.a == 0.0 && (original.a > 0.0 || result.a == 0.0) {
+
+        if radius <= 0.5 && near_rgba.a == 0.0 && (original.a > 0.0 || result.a == 0.0) {
             textureStore(output_tex,vec2<i32>(id.xy),original);
         } else {
-            textureStore(output_tex,vec2<i32>(id.xy),vec4<f32>(result.rgb/max(result.a,1e-6),clamp(result.a,0.0,1.0)));
+            textureStore(output_tex,vec2<i32>(id.xy),vec4<f32>(result.rgb,clamp(result.a,0.0,1.0)));
         }
         return;
     }

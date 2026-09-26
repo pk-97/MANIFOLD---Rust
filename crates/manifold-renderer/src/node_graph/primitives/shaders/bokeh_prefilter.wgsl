@@ -1,5 +1,6 @@
 // Classify each full-resolution texel BEFORE reducing. RGB is premultiplied
-// by layer coverage; alpha is coverage, not the source image's alpha.
+// by layer coverage. Camera input is already premultiplied; multiplying it
+// by opacity again would darken partially covered silhouettes (BUG-imds).
 // Exact loads preserve one-pixel silhouettes and categorical near/far flags.
 @group(0) @binding(0) var color: texture_2d<f32>;
 @group(0) @binding(1) var coc: texture_2d<f32>;
@@ -23,7 +24,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             let cp = min(vec2<u32>((vec2<f32>(p) + 0.5) * vec2<f32>(coc_dims) / vec2<f32>(color_dims)), coc_dims - 1u);
             let c = textureLoad(color, vec2<i32>(p), 0);
             let opacity = select(1.0,clamp(c.a,0.0,1.0),u.blur_alpha != 0u);
-            let premul = vec4<f32>(c.rgb*opacity,opacity);
+            let rgb = select(c.rgb,vec3<f32>(0.0),u.blur_alpha != 0u && opacity == 0.0);
+            let premul = vec4<f32>(rgb,opacity);
             let z = textureLoad(coc, vec2<i32>(cp), 0);
             let r = select(0.0,clamp(z.r, 0.0, 1.0),opacity > 0.0);
             if z.g >= 0.5 && r > 0.0 {

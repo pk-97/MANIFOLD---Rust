@@ -18,6 +18,9 @@ impl InspectorCompositePanel {
         self.selected_modifier_ids.clear();
         self.selected_modifier_ids.extend(ids.iter().cloned());
         self.last_clicked_modifier = ids.last().cloned();
+        self.pending_reveal = self.modifier_cards.iter().find(|card|
+            card.modifier_info().is_some_and(|info| ids.first() == Some(&info.instance_id)))
+            .map(|card| card.effect_id().clone());
     }
 
     pub fn select_modifier_for_context_menu(&mut self, layer: &LayerId, id: &manifold_foundation::NodeId) {
@@ -34,6 +37,22 @@ impl InspectorCompositePanel {
         self.selected_modifier_ids.clear();
         self.selection_set_mut(tab).extend(ids.iter().cloned());
         self.last_effect_tab = tab;
+        self.pending_reveal = ids.first().cloned();
+    }
+
+    pub fn reveal_pending_selection(&mut self, tree: &mut UITree) {
+        let Some(id) = self.pending_reveal.as_ref() else { return; };
+        let group_bounds = self.rack_groups[Self::scope_idx(self.active_tab)].iter()
+            .find(|group| group.collapsed && group.member_ids.contains(id))
+            .and_then(|group| self.group_nodes.iter().find(|nodes| nodes.group_id == group.id))
+            .map(|nodes| tree.get_bounds(nodes.header));
+        let bounds = group_bounds.or_else(|| self.cards_for_tab(self.active_tab).iter()
+            .chain(self.modifier_cards.iter()).find(|card| card.effect_id() == id)
+            .and_then(|card| card.live_bounds(tree)));
+        let Some(bounds) = bounds else { return; };
+        let scroll = if self.active_tab == InspectorTab::Master { &mut self.master_scroll } else { &mut self.layer_scroll };
+        self.scrolled_in_place |= scroll.reveal_rect(tree, bounds);
+        self.pending_reveal = None;
     }
 
     pub fn inspected_layer_id(&self) -> Option<&LayerId> {
@@ -485,7 +504,9 @@ impl InspectorCompositePanel {
         }
         // Tab strip — selecting a tab mirrors the timeline selection.
         if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
-            return vec![PanelAction::Root(RootAction::SelectInspectorTab(*tab))];
+            let tab = *tab;
+            self.set_active_tab(tab);
+            return vec![PanelAction::Root(RootAction::SelectInspectorTab(tab))];
         }
         // Collapse-all / expand-all — resolve the target state from the active
         // column's current cards (collapse if any open, else expand).
