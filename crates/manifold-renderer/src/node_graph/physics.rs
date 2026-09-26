@@ -17,6 +17,7 @@ thread_local! {
     // A preview budget only yields work; it never discards simulation time.
     static PREVIEW_STEP_BUDGET: std::cell::Cell<Option<std::time::Duration>> = const { std::cell::Cell::new(None) };
     static SAMPLE_AUTHORED_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static HISTORY_DRAIN_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(crate) fn authored_sample_only() -> bool {
@@ -28,9 +29,12 @@ pub(crate) fn offline_simulation() -> bool {
     PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
 }
 
-/// Record a historical graph pose without advancing the native solver. The
-/// generator host uses this while evaluating only the physics input ancestry
-/// at fixed times between delivered render frames.
+pub(crate) fn history_drain_requested() -> bool {
+    HISTORY_DRAIN_REQUESTED.with(std::cell::Cell::get) && offline_simulation()
+}
+
+/// Evaluate historical physics inputs without publishing graph outputs. Native
+/// state is retained unless an explicit offline history-drain scope is active.
 #[must_use]
 pub struct PhysicsAuthoredSampleScope {
     previous: bool,
@@ -56,6 +60,31 @@ impl Default for PhysicsAuthoredSampleScope {
 impl Drop for PhysicsAuthoredSampleScope {
     fn drop(&mut self) {
         SAMPLE_AUTHORED_ONLY.with(|current| current.set(self.previous));
+    }
+}
+
+/// Allow a bounded historical input batch to advance the native simulation.
+/// Live preview remains observe-only even if a caller accidentally holds this
+/// scope, and the scope never changes graph output publication policy.
+#[must_use]
+pub(crate) struct PhysicsHistoryDrainScope {
+    previous: bool,
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl PhysicsHistoryDrainScope {
+    pub(crate) fn new() -> Self {
+        let previous = HISTORY_DRAIN_REQUESTED.with(|current| current.replace(true));
+        Self {
+            previous,
+            _thread_bound: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for PhysicsHistoryDrainScope {
+    fn drop(&mut self) {
+        HISTORY_DRAIN_REQUESTED.with(|current| current.set(self.previous));
     }
 }
 
@@ -615,7 +644,10 @@ impl RigidSimulation {
         if SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get) {
             // A topology edit or seek rebuilds at the next full graph frame;
             // old trajectories cannot safely be spliced into a new world.
-            if self.world.is_some() && !topology_changed && !copy_topology_changed && !reset {
+            if self.world.is_none() || topology_changed || copy_topology_changed || reset {
+                return Ok(());
+            }
+            if !history_drain_requested() {
                 let elapsed = now.0 - self.last_time.unwrap_or(now).0;
                 let elapsed_simulation = elapsed * f64::from(speed);
                 let authored_time = self.authored_time + elapsed_simulation;
@@ -631,8 +663,8 @@ impl RigidSimulation {
                 self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
                 self.last_time = Some(now);
+                return Ok(());
             }
-            return Ok(());
         }
         let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset;
         if rebuild {
@@ -3857,6 +3889,50 @@ mod tests {
             assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), Some(budget));
         }
         assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
+    }
+
+    #[test]
+    fn offline_history_drain_scope_guards_live_preview_and_restores_state() {
+        assert!(!history_drain_requested());
+        {
+            let _drain = PhysicsHistoryDrainScope::new();
+            assert!(history_drain_requested());
+            {
+                let _live =
+                    PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+                assert!(!history_drain_requested());
+            }
+            assert!(history_drain_requested());
+        }
+        assert!(!history_drain_requested());
+    }
+
+    #[test]
+    fn offline_history_drain_keeps_authored_history_bounded() {
+        let bodies = one_body([0.0, 4.0, 0.0]);
+        let mut simulation = RigidSimulation::default();
+        simulation
+            .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
+            .unwrap();
+
+        for sample in 1..=1024 {
+            let _authored = PhysicsAuthoredSampleScope::new();
+            let time = Seconds(sample as f64 / 240.0);
+            if sample % 64 == 0 {
+                let _drain = PhysicsHistoryDrainScope::new();
+                simulation
+                    .advance(bodies.clone(), GRAVITY, time, 1.0, 0.0)
+                    .unwrap();
+            } else {
+                simulation
+                    .advance(bodies.clone(), GRAVITY, time, 1.0, 0.0)
+                    .unwrap();
+            }
+            assert!(simulation.authored_samples.len() <= AUTHORED_HISTORY_CAPACITY);
+        }
+
+        assert!(simulation.physics_time > 0.0);
+        assert!(simulation.poses[0].pos[1] < 4.0);
     }
 
     #[test]

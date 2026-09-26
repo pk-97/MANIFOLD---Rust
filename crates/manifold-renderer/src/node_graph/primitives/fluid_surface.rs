@@ -381,7 +381,8 @@ impl Primitive for FluidSurface {
             Self::report_failure(&mut self.domain_failure, ctx, error);
             return;
         }
-        if crate::node_graph::physics::authored_sample_only() {
+        let history_drain = crate::node_graph::physics::history_drain_requested();
+        if crate::node_graph::physics::authored_sample_only() && !history_drain {
             return;
         }
         if let Err(error) = self
@@ -389,6 +390,9 @@ impl Primitive for FluidSurface {
             .advance(crate::node_graph::physics::offline_simulation())
         {
             Self::report_failure(&mut self.domain_failure, ctx, error);
+            return;
+        }
+        if crate::node_graph::physics::authored_sample_only() {
             return;
         }
         let lag = self.runtime.lag_seconds() as f32;

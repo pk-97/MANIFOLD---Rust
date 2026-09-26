@@ -2,10 +2,15 @@
 
 use super::*;
 use crate::node_graph::ParamValues;
+use crate::node_graph::physics::{PhysicsHistoryDrainScope, offline_simulation};
 
 #[cfg(test)]
 #[path = "physics_sampling_inputs_tests.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "physics_history_drain_tests.rs"]
+mod drain_tests;
 
 /// The last observed external inputs to the stateless physics ancestry. Keys
 /// and storage are prepared with the graph; capturing another frame only
@@ -158,7 +163,9 @@ impl PresetRuntime {
     /// external parameters at their last observed values. Today's parameters
     /// must not be substituted into an earlier tick. The final left-limit
     /// sample closes the old interval before the full frame applies edits at
-    /// the same timestamp; InputHistory preserves that discontinuity.
+    /// the same timestamp; InputHistory preserves that discontinuity. Offline
+    /// catch-up drains native ticks in bounded input batches without publishing
+    /// intermediate graph outputs. Preview continues to retain its time debt.
     pub(super) fn sample_physics_history(&mut self, current: FrameTime) {
         let (Some(inputs), Some(steps)) = (
             self.physics_input_snapshot.as_mut(),
@@ -175,7 +182,28 @@ impl PresetRuntime {
             inputs.capture(&self.graph, &self.plan);
             return;
         }
+        let drain_offline = offline_simulation();
+        if drain_offline {
+            // An offline render may inherit a preview backlog. Drain the
+            // already-observed prefix before inserting another sample into a
+            // nearly-full history; the current edit must not reach that prefix.
+            let _drain = PhysicsHistoryDrainScope::new();
+            let sample = FrameTime { delta: Seconds::ZERO, ..previous };
+            inputs.set_sample_time(sample);
+            self.executor.execute_physics_sample_frame(
+                &mut self.graph,
+                &self.plan,
+                sample,
+                steps,
+                &inputs.values,
+            );
+        }
         const SAMPLE_RATE: f64 = 240.0;
+        // Leave room for the retained tick endpoints and edit discontinuities.
+        // This bounds input storage, not the amount of requested offline time.
+        const DRAIN_INTERVAL: usize =
+            crate::node_graph::physics::AUTHORED_HISTORY_CAPACITY / 4;
+        let mut samples_since_drain = 0;
         let mut grid = (previous.seconds.0 * SAMPLE_RATE).floor() + 1.0;
         let mut last_time = previous.seconds.0;
         while grid / SAMPLE_RATE < current.seconds.0 {
@@ -189,6 +217,9 @@ impl PresetRuntime {
                 frame_count: current.frame_count,
             };
             inputs.set_sample_time(sample);
+            samples_since_drain += 1;
+            let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
+            let _drain = drain.then(PhysicsHistoryDrainScope::new);
             self.executor.execute_physics_sample_frame(
                 &mut self.graph,
                 &self.plan,
@@ -196,6 +227,9 @@ impl PresetRuntime {
                 steps,
                 &inputs.values,
             );
+            if drain {
+                samples_since_drain = 0;
+            }
             last_time = time;
             grid += 1.0;
         }
@@ -204,6 +238,7 @@ impl PresetRuntime {
             ..current
         };
         inputs.set_sample_time(closing);
+        let _drain = drain_offline.then(PhysicsHistoryDrainScope::new);
         self.executor.execute_physics_sample_frame(
             &mut self.graph,
             &self.plan,

@@ -665,8 +665,9 @@ impl FluidRuntime {
         }
     }
 
-    /// Historical graph evaluations call only observe; native stepping and
-    /// publication happen once in the real render frame.
+    /// Historical graph evaluations retain inputs. Explicit offline drains may
+    /// advance the worker between bounded batches; graph output publication
+    /// happens only in the real render frame.
     pub fn observe(
         &mut self,
         settings: FluidSettings,

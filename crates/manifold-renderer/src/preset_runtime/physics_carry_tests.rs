@@ -257,6 +257,48 @@ fn physics_targeted_field_graph_without_recipient_stays_pending() {
 }
 
 #[test]
+fn offline_history_drain_long_gap_matches_native_rigid_frame_sequence() {
+    let mut reference = runtime_with_field_port(50.0, false, Some("body_acceleration_0"));
+    let mut expected = Transform::default();
+    for tick in 0..=180 {
+        expected = frame(&mut reference, tick as f64 / 60.0);
+    }
+    let expected_peer = PEER_POSE.get().unwrap();
+    let mut jumped = runtime_with_field_port(50.0, false, Some("body_acceleration_0"));
+    frame(&mut jumped, 0.0);
+    let actual = frame(&mut jumped, 3.0);
+    assert!(POSE_READY.get());
+    assert!(actual.pos[0] > 10.0, "fixture must have accelerated");
+    for (actual, expected) in [(actual, expected), (PEER_POSE.get().unwrap(), expected_peer)] {
+        for axis in 0..3 {
+            assert!((actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
+                "offline gap changed the native trajectory: {actual:?} vs {expected:?}");
+        }
+    }
+}
+
+#[test]
+fn offline_history_drain_consumes_preview_debt_before_long_gap() {
+    use crate::node_graph::physics::PhysicsStepScope;
+    let mut expected_runtime = runtime_with_field(50.0, false, true);
+    frame(&mut expected_runtime, 0.0);
+    let expected = frame(&mut expected_runtime, 3.0);
+
+    let mut jumped = runtime_with_field(50.0, false, true);
+    {
+        let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+        frame(&mut jumped, 0.0);
+        let behind = frame(&mut jumped, 0.9);
+        assert!(behind.pos[1] > 49.0, "preview must leave unpaid ticks");
+    }
+    let actual = frame(&mut jumped, 3.0);
+    for axis in 0..3 {
+        assert!((actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
+            "offline drain lost preview debt: {actual:?} vs {expected:?}");
+    }
+}
+
+#[test]
 fn physics_carry_rejects_setup_changes_and_output_resize() {
     let mut prior = runtime(5.0, false);
     frame(&mut prior, 0.0);

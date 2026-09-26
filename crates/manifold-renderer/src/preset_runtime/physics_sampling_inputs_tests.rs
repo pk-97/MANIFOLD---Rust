@@ -7,6 +7,7 @@ use std::{borrow::Cow, cell::RefCell};
 struct Observation {
     time: FrameTime,
     values: [f32; 5],
+    draining: bool,
 }
 
 thread_local! {
@@ -60,6 +61,7 @@ impl EffectNode for ObservedPhysics {
             observations.push(Observation {
                 time: ctx.time,
                 values,
+                draining: crate::node_graph::physics::history_drain_requested(),
             })
         });
     }
@@ -138,8 +140,8 @@ fn physics_history_holds_external_edits_while_authored_motion_advances() {
     let observations = frame(&mut runtime, end, 9.0, 3.0);
     assert_eq!(
         observations.len(),
-        9,
-        "eight historical samples and the live frame"
+        10,
+        "drain the previous observation, eight historical samples and the live frame"
     );
     let (current, historical) = observations.split_last().unwrap();
     for sample in historical {
@@ -174,7 +176,7 @@ fn physics_history_survives_compatible_generator_rebuild() {
     let mut rebuilt = runtime();
     rebuilt.carry_generator_state_from(&mut prior);
     let observations = frame(&mut rebuilt, 1.0 / 30.0, 9.0, 3.0);
-    assert_eq!(observations.len(), 9, "rebuild lost the open input interval");
+    assert_eq!(observations.len(), 10, "rebuild lost the open input interval");
     let (current, historical) = observations.split_last().unwrap();
     assert!(historical.iter().all(|sample| sample.values[0] == 1.0 && sample.values[3] == 0.0));
     assert_eq!(current.values[0], 9.0);
@@ -205,4 +207,39 @@ fn physics_history_reanchors_paused_edits_and_backward_seeks() {
             .iter()
             .all(|sample| sample.values[0] == 4.0 && sample.values[3] == 3.0)
     );
+}
+
+#[test]
+fn offline_history_drain_keeps_old_controls_and_bounds_input_batches() {
+    let mut runtime = runtime();
+    frame(&mut runtime, 0.0, 1.0, 0.0);
+    let observations = frame(&mut runtime, 3.0, 9.0, 3.0);
+    let (current, historical) = observations.split_last().unwrap();
+    assert!(!current.draining, "drain scope must not escape into the full frame");
+    assert_eq!(current.values[0], 9.0);
+    assert_eq!(current.values[3], 3.0);
+    assert_eq!(historical[0].time.seconds, Seconds::ZERO);
+    assert!(historical[0].draining, "drain the retained preview prefix first");
+    let mut batch = 0;
+    for sample in &historical[1..] {
+        assert_eq!(sample.values[0], 1.0);
+        assert_eq!(sample.values[3], 0.0);
+        batch += 1;
+        assert!(batch <= crate::node_graph::physics::AUTHORED_HISTORY_CAPACITY / 4);
+        if sample.draining {
+            batch = 0;
+        }
+    }
+    assert_eq!(batch, 0, "close and drain the old interval before applying edits");
+    assert!(historical.len() > crate::node_graph::physics::AUTHORED_HISTORY_CAPACITY);
+}
+
+#[test]
+fn offline_history_drain_is_never_requested_by_preview_sampling() {
+    let _preview = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    let mut runtime = runtime();
+    frame(&mut runtime, 0.0, 1.0, 0.0);
+    let observations = frame(&mut runtime, 3.0, 9.0, 3.0);
+    assert!(observations.iter().all(|sample| !sample.draining));
+    assert!(observations[0].time.seconds > Seconds::ZERO);
 }
