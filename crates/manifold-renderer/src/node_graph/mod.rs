@@ -43,6 +43,7 @@ pub(crate) mod execution;
 mod execution_plan;
 pub mod freeze;
 pub mod fluid;
+pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;
 mod graph;

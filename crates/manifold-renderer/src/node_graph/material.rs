@@ -270,6 +270,15 @@ pub struct Material {
     /// `KHR_materials_volume`'s `attenuationColor` (default `[1,1,1]`,
     /// neutral).
     pub volume_attenuation_color: [f32; 3],
+    /// Enables the screen-space geometric-volume approximation for this
+    /// material. Disabled by default so existing materials are unchanged.
+    pub volume_geometry: bool,
+    /// Homogeneous volume extinction/scattering density per world metre.
+    pub volume_scattering_density: f32,
+    /// RGB tint applied by the geometric-volume scattering approximation.
+    pub volume_scattering_color: [f32; 3],
+    /// Additional localized density contributed by embedded particle sources.
+    pub volume_particle_density: f32,
 
     // ---- Per-map-family samplers (GLB_XFAIL_BURNDOWN_DESIGN.md D3).
     // Replaces `render_scene`'s single hardcoded REPEAT `material_sampler`
@@ -327,8 +336,13 @@ impl Material {
             translucency: 0.0,
             transmission_factor: 0.0,
             volume_thickness_factor: 0.0,
-            volume_attenuation_distance: crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_distance:
+                crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_geometry: false,
+            volume_scattering_density: 0.0,
+            volume_scattering_color: [1.0, 1.0, 1.0],
+            volume_particle_density: 0.0,
             base_color_sampler: MapSamplerDesc::default(),
             normal_sampler: MapSamplerDesc::default(),
             mr_sampler: MapSamplerDesc::default(),
@@ -340,11 +354,7 @@ impl Material {
     /// Build an Unlit material from the standard outer-card surface.
     /// `emission_rgb` is the un-multiplied colour; this function
     /// premultiplies `emission_intensity` into the stored `emission`.
-    pub fn unlit(
-        color_rgba: [f32; 4],
-        emission_rgb: [f32; 3],
-        emission_intensity: f32,
-    ) -> Self {
+    pub fn unlit(color_rgba: [f32; 4], emission_rgb: [f32; 3], emission_intensity: f32) -> Self {
         let mut m = Self::default_unlit_white();
         m.kind = MaterialKind::Unlit;
         m.base_color = color_rgba;
@@ -443,7 +453,12 @@ impl Material {
 }
 
 fn premultiply_emission(rgb: [f32; 3], intensity: f32) -> [f32; 4] {
-    [rgb[0] * intensity, rgb[1] * intensity, rgb[2] * intensity, 1.0]
+    [
+        rgb[0] * intensity,
+        rgb[1] * intensity,
+        rgb[2] * intensity,
+        1.0,
+    ]
 }
 
 #[cfg(test)]
@@ -566,12 +581,12 @@ mod tests {
         // GLB_CONFORMANCE_DESIGN.md G-P4's five per-map UV transforms
         // (5 × 24 B), then 256 → 336 for
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's sheen/iridescence/
-        // anisotropy/dispersion/transmission+volume fields (17 × 4 B =
-        // 68 B, plus struct padding) — a ~300-byte Copy per wire per frame
+        // anisotropy/dispersion/transmission+volume fields plus the
+        // geometric-volume controls — a ~300-byte Copy per wire per frame
         // is still far below anything measurable next to a single texture
         // bind.
         let sz = std::mem::size_of::<Material>();
-        assert!(sz <= 336, "Material grew unexpectedly large: {sz} bytes");
+        assert!(sz <= 384, "Material grew unexpectedly large: {sz} bytes");
         let m = Material::default_unlit_white();
         let _copy = m;
         let _another = m;

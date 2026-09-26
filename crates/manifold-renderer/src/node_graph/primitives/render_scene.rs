@@ -67,6 +67,8 @@
 //! scene.
 
 mod rt_changes;
+#[path = "volume_optics.rs"]
+mod volume_optics;
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
@@ -659,6 +661,9 @@ struct RenderSceneUniforms {
     /// it, so Rendered/Solid/Wireframe renders are byte-identical whatever
     /// value rides here. `y/z/w` reserved.
     render_mode: [f32; 4],
+    /// Closed volume flag, homogeneous scattering density, embedded particle density, reserved.
+    volume_optics: [f32; 4],
+    volume_scattering_color: [f32; 4],
 }
 
 // 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -680,7 +685,8 @@ struct RenderSceneUniforms {
 // 816 after SCENE_RENDER_MODE_DESIGN.md D8: `render_mode` (+16) — the
 // Points mode point-size slot, appended at the tail so every existing
 // field keeps its offset (appending is the byte-identical contract).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 816);
+// 848 after optional closed-volume optics and scattering colour (+32).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 848);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -1039,6 +1045,7 @@ pub struct RenderScene {
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
+    volume_optics: volume_optics::VolumeOptics,
     /// RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the resident RT scene
     /// (one BLAS per object instanced into one TLAS) + its dirty-check
     /// key (hash of every object's vertex-buffer identity + triangle
@@ -4064,9 +4071,9 @@ impl RenderScene {
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 47]> = draws
-            .iter()
-            .map(|draw| {
+        let binding_sets: Vec<[GpuBinding; 50]> = draws
+            .iter().enumerate()
+            .map(|(draw_index, draw)| {
                 [
                     GpuBinding::Bytes {
                         binding: 0,
@@ -4316,6 +4323,9 @@ impl RenderScene {
                         buffer: draw.weights.unwrap_or(draw.vertices),
                         offset: 0,
                     },
+                    GpuBinding::Texture { binding: 47, texture: self.volume_optics.path(draw_index).unwrap_or(dummy) },
+                    GpuBinding::Texture { binding: 48, texture: self.volume_optics.density().unwrap_or(dummy) },
+                    GpuBinding::Texture { binding: 49, texture: self.volume_optics.nearest(draw_index).unwrap_or(dummy_depth) },
                 ]
             })
             .collect();
@@ -5925,6 +5935,7 @@ impl RenderScene {
             opaque_scene_color_width: 0,
             opaque_scene_color_height: 0,
             opaque_scene_color_format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            volume_optics: volume_optics::VolumeOptics::default(),
             opaque_depth_snapshot: None,
             opaque_depth_snapshot_width: 0,
             opaque_depth_snapshot_height: 0,
@@ -8324,6 +8335,8 @@ fn build_uniforms(
         // uniform field changes no pixel, so Rendered parity holds whatever
         // value rides here.
         render_mode: [point_size, 0.0, 0.0, 0.0],
+        volume_optics: [if material.volume_geometry && material.transmission_factor > 0.0 { 1.0 } else { 0.0 }, material.volume_scattering_density, material.volume_particle_density, 0.0],
+        volume_scattering_color: [material.volume_scattering_color[0], material.volume_scattering_color[1], material.volume_scattering_color[2], 0.0],
     }
 }
 
@@ -8636,6 +8649,16 @@ impl EffectNode for RenderScene {
         // `opaque_depth_snapshot_pass`) — Pass B's depth test source and the
         // RT shadow-ray pass's depth source.
         self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission);
+        if has_transmission {
+            let gpu = ctx.gpu_encoder();
+            if let Err(error) = self.volume_optics.encode(gpu.device, gpu.native_enc, &draws,
+                self.opaque_depth_snapshot.as_ref().expect("transmission depth ensured"),
+                self.identity_instance_stub.as_ref().expect("identity ensured")) {
+                ctx.error(error);
+                return;
+            }
+        }
+
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
         // shadow-ray dispatch + depth-aware upsample, reading the opaque-

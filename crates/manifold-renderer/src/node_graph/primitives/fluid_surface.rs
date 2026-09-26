@@ -6,6 +6,7 @@ use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidControls, FluidRuntime, FluidSettings};
+use crate::node_graph::fluid_cache::CacheMode;
 use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -54,9 +55,11 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("whitewater_capacity"), label: "Whitewater Capacity", ty: ParamType::Int, default: ParamValue::Float(100000.0), range: Some((1.0, 250000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("transfer"), label: "Transfer", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["FLIP", "APIC"] },
         ParamDef { name: Cow::Borrowed("max_capacity"), label: "Mesh Capacity", ty: ParamType::Int, default: ParamValue::Float(786432.0), range: Some((3.0, 3145728.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("cache_mode"), label: "Cache Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Live", "Record", "Playback"] },
+        ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Surface/whitewater settings restart the world. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes.",
+    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Surface/whitewater settings restart the world. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
     examples: ["WaterBasin", "WaterDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid, a pouring source and a moving box, and generate a surface for scene rendering.",
@@ -170,6 +173,30 @@ impl Primitive for FluidSurface {
                 / 3)
                 * 3,
         };
+        let cache_mode = match ctx.params.get("cache_mode") {
+            Some(ParamValue::Enum(value)) => CacheMode::from_enum(*value),
+            None => Some(CacheMode::Live),
+            _ => None,
+        };
+        let Some(cache_mode) = cache_mode else {
+            Self::report_failure(
+                ctx,
+                "Water: cache mode must be Live, Record or Playback".into(),
+            );
+            return;
+        };
+        let cache_path = match ctx.params.get("cache_path") {
+            Some(ParamValue::String(path)) => path.as_str(),
+            Some(ParamValue::Float(_)) | None => "",
+            _ => {
+                Self::report_failure(ctx, "Water: cache path must be a String".into());
+                return;
+            }
+        };
+        if let Err(error) = self.runtime.set_cache(cache_mode, cache_path) {
+            Self::report_failure(ctx, error);
+            return;
+        }
         let defaults = FluidControls::default();
         let controls = FluidControls {
             emitter: ctx.inputs.transform("emitter").unwrap_or(defaults.emitter),

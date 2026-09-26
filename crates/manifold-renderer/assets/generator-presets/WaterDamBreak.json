@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "name": "Water — Dam Break",
-  "description": "Offline water study: a collapsing CPU FLIP column wraps around a bronze obstacle, with native foam, bubbles and spray. Clear transmission and adjustable surface reconstruction. Lower Resolution for draft exploration; changing resolution restarts the simulation and can change the trajectory.",
+  "name": "Water \u2014 Dam Break",
+  "description": "CPU FLIP dam break with native whitewater, geometric depth absorption and localized bubble scattering. Live, Record and Playback share the same baked physics. Offline cinematic capture adds temporal and spatial sampling.",
   "presetMetadata": {
     "id": "WaterDamBreak",
-    "displayName": "Water — Dam Break",
+    "displayName": "Water \u2014 Dam Break",
     "category": "Sim",
     "oscPrefix": "waterdambreak",
     "available": true,
@@ -130,6 +130,58 @@
         "formatString": "F3",
         "section": "Water Detail",
         "cardVisible": true
+      },
+      {
+        "id": "cache_mode",
+        "name": "Cache: Live / Record / Playback",
+        "min": 0,
+        "max": 2,
+        "defaultValue": 0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Cache",
+        "cardVisible": true
+      },
+      {
+        "id": "water_attenuation",
+        "name": "Water Absorption Distance",
+        "min": 0.1,
+        "max": 20,
+        "defaultValue": 3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Water",
+        "cardVisible": true
+      },
+      {
+        "id": "water_scattering",
+        "name": "Water Scattering",
+        "min": 0,
+        "max": 2,
+        "defaultValue": 0.055,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Water",
+        "cardVisible": true
+      },
+      {
+        "id": "bubble_density",
+        "name": "Bubble Scattering",
+        "min": 0,
+        "max": 200,
+        "defaultValue": 70,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Water",
+        "cardVisible": true
       }
     ],
     "bindings": [
@@ -249,6 +301,58 @@
         "convert": {
           "type": "Float"
         }
+      },
+      {
+        "id": "cache_mode",
+        "label": "Cache: Live / Record / Playback",
+        "defaultValue": 0,
+        "target": {
+          "kind": "node",
+          "nodeId": "fluid_surface",
+          "param": "cache_mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "water_attenuation",
+        "label": "Water Absorption Distance",
+        "defaultValue": 3,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_material",
+          "param": "volume_attenuation_distance"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "water_scattering",
+        "label": "Water Scattering",
+        "defaultValue": 0.055,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_material",
+          "param": "volume_scattering_density"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "bubble_density",
+        "label": "Bubble Scattering",
+        "defaultValue": 70,
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_material",
+          "param": "volume_particle_density"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
     "stringParams": [
@@ -257,6 +361,14 @@
         "name": "HDRI File",
         "defaultValue": "",
         "isFilePicker": true,
+        "file_path": true,
+        "useDropdown": false
+      },
+      {
+        "id": "cache_path",
+        "name": "Cache Directory",
+        "defaultValue": "",
+        "isFilePicker": false,
         "file_path": true,
         "useDropdown": false
       }
@@ -270,6 +382,16 @@
           "kind": "node",
           "nodeId": "sky_environment",
           "param": "path"
+        }
+      },
+      {
+        "id": "cache_path",
+        "label": "Cache Directory",
+        "defaultValue": "",
+        "target": {
+          "kind": "node",
+          "nodeId": "fluid_surface",
+          "param": "cache_path"
         }
       }
     ]
@@ -598,6 +720,26 @@
         "volume_attenuation_color_b": {
           "type": "Float",
           "value": 0.8
+        },
+        "volume_geometry": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "volume_scattering_density": {
+          "type": "Float",
+          "value": 0.055
+        },
+        "volume_scattering_color_r": {
+          "type": "Float",
+          "value": 0.68
+        },
+        "volume_scattering_color_g": {
+          "type": "Float",
+          "value": 0.86
+        },
+        "volume_scattering_color_b": {
+          "type": "Float",
+          "value": 0.92
         }
       }
     },
@@ -1194,6 +1336,10 @@
         "ior": {
           "type": "Float",
           "value": 1.333
+        },
+        "volume_particle_density": {
+          "type": "Float",
+          "value": 70.0
         }
       }
     },

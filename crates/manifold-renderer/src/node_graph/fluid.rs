@@ -1,6 +1,8 @@
 //! CPU FLIP reference runtime. Native state belongs exclusively to a worker;
 //! the content thread retains bounded control history and immutable mesh frames.
 use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use manifold_core::Seconds;
@@ -9,6 +11,7 @@ use manifold_fluids::{
     WhitewaterOptions, WhitewaterParticle,
 };
 
+use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
@@ -192,7 +195,7 @@ struct Step {
 
 /// Separate populations share the mesh publication epoch and tick. Each can use
 /// an ordinary scene object with its own material, mesh and live instance count.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct WhitewaterFrame {
     pub foam: Vec<InstanceTransform>,
     pub bubbles: Vec<InstanceTransform>,
@@ -251,6 +254,8 @@ struct Request {
     steps: [Step; BATCH],
     recycle: Vec<MeshVertex>,
     recycle_whitewater: WhitewaterFrame,
+    cache_mode: CacheMode,
+    cache_path: Arc<PathBuf>,
 }
 
 struct Reply {
@@ -276,10 +281,57 @@ impl Worker {
             let mut world: Option<(u64, FluidWorld)> = None;
             let mut surface = Vec::<SurfaceVertex>::new();
             let mut whitewater = Vec::<WhitewaterParticle>::new();
+            let mut writer: Option<CacheWriter> = None;
+            let mut playback: Option<CacheReader> = None;
+            let mut cache_epoch = None;
             while let Ok(mut request) = receiver.recv() {
                 let mut stats = FrameStats::default();
                 let mut pose = request.initial.obstacle;
+                let mut setup_error = None;
+                if cache_epoch != Some(request.epoch) {
+                    writer = None;
+                    world = None;
+                    playback = None;
+                    cache_epoch = Some(request.epoch);
+                    if setup_error.is_none() {
+                        match request.cache_mode {
+                            CacheMode::Live => {}
+                            CacheMode::Record => match CacheWriter::create(
+                                request.cache_path.clone(),
+                                request.settings,
+                            ) {
+                                Ok(new_writer) => writer = Some(new_writer),
+                                Err(error) => setup_error = Some(error),
+                            },
+                            CacheMode::Playback => match CacheReader::open(
+                                request.cache_path.clone(),
+                                request.settings,
+                            ) {
+                                Ok(reader) => playback = Some(reader),
+                                Err(error) => setup_error = Some(error),
+                            },
+                        }
+                    }
+                }
                 let result = (|| -> Result<(), String> {
+                    if let Some(error) = setup_error {
+                        return Err(error);
+                    }
+                    if request.cache_mode == CacheMode::Playback {
+                        request.recycle.clear();
+                        request.recycle_whitewater.clear();
+                        if request.count > 0 {
+                            let cache = playback.as_ref().expect("playback initialized");
+                            (pose, stats) = cache.read_into(
+                                request.start_tick + request.count as u64,
+                                &mut request.recycle,
+                                &mut request.recycle_whitewater,
+                            )?;
+                            stats.simulation_ms = 0.0;
+                            stats.meshing_ms = 0.0;
+                        }
+                        return Ok(());
+                    }
                     if world.as_ref().is_none_or(|(epoch, _)| *epoch != request.epoch) {
                         // Dropping/rebuilding an old world can take time too; keep
                         // it off the content thread along with all native work.
@@ -298,8 +350,12 @@ impl Worker {
                         }
                         world = Some((request.epoch, new));
                     }
+                    request.recycle.clear();
+                    request.recycle_whitewater.prepare(if request.settings.whitewater.enabled {
+                        request.settings.whitewater.max_particles as usize
+                    } else { 0 });
                     let native = &mut world.as_mut().expect("world initialized").1;
-                    for step in request.steps.iter().take(request.count) {
+                    for (index, step) in request.steps.iter().take(request.count).enumerate() {
                         native.set_gravity([0.0, step.current.gravity, 0.0]).map_err(|e| e.to_string())?;
                         native.set_emitter(request.settings.bounds(step.current.emitter),
                             [0.0, -step.current.inflow_speed, 0.0], step.current.emission).map_err(|e| e.to_string())?;
@@ -308,29 +364,39 @@ impl Worker {
                             .map_err(|e| e.to_string())?;
                         stats = native.step(Seconds(TICK)).map_err(|e| e.to_string())?;
                         pose = step.next.obstacle;
-                    }
-                    request.recycle.clear();
-                    request.recycle_whitewater.prepare(if request.settings.whitewater.enabled {
-                        request.settings.whitewater.max_particles as usize
-                    } else { 0 });
-                    if request.count > 0 {
-                        native.surface(&mut surface).map_err(|e| e.to_string())?;
-                        if surface.len() > request.settings.max_vertices {
-                            return Err(format!("Water surface needs {} vertices; capacity is {}. Lower resolution/detail or increase mesh capacity and reset.", surface.len(), request.settings.max_vertices));
-                        }
-                        let half = request.settings.domain_size * 0.5;
-                        request.recycle.extend(surface.iter().map(|v| MeshVertex {
-                            position: [v.position[0] - half, v.position[1], v.position[2] - half],
-                            _pad0: 0.0, normal: v.normal, _pad1: 0.0,
-                            uv: [v.position[0] / request.settings.domain_size, v.position[2] / request.settings.domain_size],
-                            _pad2: [0.0; 2], tangent: [0.0; 4],
-                        }));
-                        if request.settings.whitewater.enabled {
-                            native.whitewater(&mut whitewater).map_err(|e| e.to_string())?;
-                            if whitewater.len() > request.settings.whitewater.max_particles as usize {
-                                return Err("Water whitewater snapshot exceeds its configured capacity".into());
+                        let last = index + 1 == request.count;
+                        if request.cache_mode == CacheMode::Record || last {
+                            native.surface(&mut surface).map_err(|e| e.to_string())?;
+                            if surface.len() > request.settings.max_vertices {
+                                return Err(format!("Water surface needs {} vertices; capacity is {}. Lower resolution/detail or increase mesh capacity and reset.", surface.len(), request.settings.max_vertices));
                             }
-                            request.recycle_whitewater.fill(&whitewater, half);
+                            let half = request.settings.domain_size * 0.5;
+                            request.recycle.extend(surface.iter().map(|v| MeshVertex {
+                                position: [v.position[0] - half, v.position[1], v.position[2] - half],
+                                _pad0: 0.0, normal: v.normal, _pad1: 0.0,
+                                uv: [v.position[0] / request.settings.domain_size, v.position[2] / request.settings.domain_size],
+                                _pad2: [0.0; 2], tangent: [0.0; 4],
+                            }));
+                            if request.settings.whitewater.enabled {
+                                native.whitewater(&mut whitewater).map_err(|e| e.to_string())?;
+                                if whitewater.len() > request.settings.whitewater.max_particles as usize {
+                                    return Err("Water whitewater snapshot exceeds its configured capacity".into());
+                                }
+                                request.recycle_whitewater.fill(&whitewater, half);
+                            }
+                            if request.cache_mode == CacheMode::Record {
+                                writer.as_ref().expect("record writer initialized").append(
+                                    request.start_tick + index as u64 + 1,
+                                    &request.recycle,
+                                    &request.recycle_whitewater,
+                                    pose,
+                                    stats,
+                                )?;
+                            }
+                            if !last {
+                                request.recycle.clear();
+                                request.recycle_whitewater.clear();
+                            }
                         }
                     }
                     Ok(())
@@ -364,6 +430,8 @@ pub struct FluidRuntime {
     pub completed_tick: u64,
     pub obstacle: Transform,
     pub stats: FrameStats,
+    cache_mode: CacheMode,
+    cache_path: Arc<PathBuf>,
 }
 
 impl Default for FluidRuntime {
@@ -387,11 +455,31 @@ impl Default for FluidRuntime {
             completed_tick: 0,
             obstacle: FluidControls::default().obstacle,
             stats: FrameStats::default(),
+            cache_mode: CacheMode::Live,
+            cache_path: Arc::new(PathBuf::new()),
         }
     }
 }
 
 impl FluidRuntime {
+    /// Select a worker cache. The path is copied only when the mode or path
+    /// changes; ordinary frame evaluation therefore does not churn path
+    /// allocations. Record and playback never fall back to live simulation.
+    pub(crate) fn set_cache(&mut self, mode: CacheMode, path: &str) -> Result<(), String> {
+        if mode != CacheMode::Live && path.is_empty() {
+            return Err("Water cache path is required for record and playback".into());
+        }
+        if self.cache_mode == mode && self.cache_path.as_path() == std::path::Path::new(path) {
+            return Ok(());
+        }
+        self.cache_mode = mode;
+        if self.cache_path.as_path() != std::path::Path::new(path) {
+            self.cache_path = Arc::new(PathBuf::from(path));
+        }
+        self.clear();
+        Ok(())
+    }
+
     pub fn clear(&mut self) {
         self.settings = None;
         self.last_transport = None;
@@ -428,7 +516,9 @@ impl FluidRuntime {
         reset: f32,
     ) -> Result<(), String> {
         settings.validate()?;
-        controls.validate()?;
+        if self.cache_mode != CacheMode::Playback {
+            controls.validate()?;
+        }
         if !transport.0.is_finite()
             || !speed.is_finite()
             || !(0.0..=4.0).contains(&speed)
@@ -451,7 +541,9 @@ impl FluidRuntime {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
-        if let Some(previous) = self.last_transport {
+        if self.cache_mode == CacheMode::Playback {
+            self.target_time = (transport.0 * speed as f64).max(0.0);
+        } else if let Some(previous) = self.last_transport {
             self.target_time += (transport.0 - previous).max(0.0) * speed as f64;
         }
         self.last_transport = Some(transport.0);
@@ -574,9 +666,15 @@ impl FluidRuntime {
                     return Ok(());
                 }
             }
-            let due = ((self.target_time / TICK + 1e-8).floor() as u64)
-                .saturating_sub(self.completed_tick);
-            if self.initialized && due == 0 {
+            let target_tick = (self.target_time / TICK + 1e-8).floor() as u64;
+            let due = target_tick.saturating_sub(self.completed_tick);
+            if self.initialized
+                && (if self.cache_mode == CacheMode::Playback {
+                    target_tick == self.completed_tick
+                } else {
+                    due == 0
+                })
+            {
                 return Ok(());
             }
             let initial = self.history.front().expect("observed controls").controls;
@@ -585,12 +683,22 @@ impl FluidRuntime {
                 current: initial,
                 next: initial,
             }; BATCH];
-            let count = if self.initialized {
+            let count = if self.cache_mode == CacheMode::Playback {
+                usize::from(target_tick > 0)
+            } else if self.initialized {
                 due.min(if blocking { BATCH as u64 } else { 1 }) as usize
             } else {
                 0
             };
-            for (index, step) in steps.iter_mut().take(count).enumerate() {
+            for (index, step) in steps
+                .iter_mut()
+                .take(if self.cache_mode == CacheMode::Playback {
+                    0
+                } else {
+                    count
+                })
+                .enumerate()
+            {
                 let current = (self.completed_tick + index as u64) as f64 * TICK;
                 *step = Step {
                     previous: self.at((current - TICK).max(0.0)),
@@ -602,7 +710,11 @@ impl FluidRuntime {
                 epoch: self.epoch,
                 settings,
                 initial,
-                start_tick: self.completed_tick,
+                start_tick: if self.cache_mode == CacheMode::Playback {
+                    target_tick.saturating_sub(count as u64)
+                } else {
+                    self.completed_tick
+                },
                 count,
                 steps,
                 recycle: self.spare.take().expect("one recycled mesh per request"),
@@ -610,6 +722,8 @@ impl FluidRuntime {
                     .spare_whitewater
                     .take()
                     .expect("one recycled whitewater frame per request"),
+                cache_mode: self.cache_mode,
+                cache_path: self.cache_path.clone(),
             };
             self.worker
                 .as_ref()
@@ -810,6 +924,130 @@ mod tests {
             .observe(settings, controls, Seconds(1.0), 1.0, 0.0)
             .unwrap();
         assert_eq!(runtime.target_time, 0.0);
+    }
+
+    #[test]
+    fn fluid_playback_uses_absolute_transport_and_supports_backward_seek() {
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .set_cache(CacheMode::Playback, "/tmp/fluid-playback-test")
+            .unwrap();
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        runtime
+            .observe(settings, controls, Seconds(2.0), 2.0, 0.0)
+            .unwrap();
+        assert!((runtime.target_time - 4.0).abs() < 1e-9);
+        let epoch = runtime.epoch;
+        runtime
+            .observe(settings, controls, Seconds(1.0), 2.0, 0.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, epoch);
+        assert!((runtime.target_time - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fluid_playback_loads_only_requested_ticks_and_reports_no_solver_work() {
+        let directory = std::env::temp_dir().join(format!(
+            "manifold-fluid-runtime-cache-{}",
+            std::process::id()
+        ));
+        let settings = FluidSettings::default();
+        let writer = CacheWriter::create(Arc::new(directory.clone()), settings).unwrap();
+        let vertices = vec![bytemuck::Zeroable::zeroed(); 3];
+        let pose = Transform {
+            pos: [0.25, 0.5, 0.75],
+            ..Transform::default()
+        };
+        let stats = FrameStats {
+            particles: 17,
+            triangles: 1,
+            substeps: 1,
+            simulation_ms: 12.0,
+            meshing_ms: 6.0,
+        };
+        for tick in [2, 120] {
+            writer
+                .append(tick, &vertices, &WhitewaterFrame::default(), pose, stats)
+                .unwrap();
+        }
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .set_cache(CacheMode::Playback, directory.to_str().unwrap())
+            .unwrap();
+        for tick in [120, 2, 120] {
+            runtime
+                .observe(
+                    settings,
+                    FluidControls::default(),
+                    Seconds(tick as f64 * TICK),
+                    1.0,
+                    0.0,
+                )
+                .unwrap();
+            runtime.advance(true).unwrap();
+            assert_eq!(runtime.completed_tick, tick);
+            assert_eq!(runtime.vertices.len(), 3);
+            assert_eq!(runtime.obstacle, pose);
+            assert_eq!(runtime.stats.particles, 17);
+            assert_eq!(runtime.stats.simulation_ms, 0.0);
+            assert_eq!(runtime.stats.meshing_ms, 0.0);
+        }
+        runtime
+            .observe(
+                settings,
+                FluidControls::default(),
+                Seconds(3.0 * TICK),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        assert!(runtime.advance(true).unwrap_err().contains("tick 3"));
+        drop(runtime);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fluid_record_bakes_every_tick_in_a_batch_without_accumulating_meshes() {
+        let directory = std::env::temp_dir().join(format!(
+            "manifold-fluid-record-batch-{}",
+            std::process::id()
+        ));
+        let settings = FluidSettings {
+            resolution: 8,
+            ..FluidSettings::default()
+        };
+        let controls = FluidControls {
+            emission: false,
+            ..FluidControls::default()
+        };
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .set_cache(CacheMode::Record, directory.to_str().unwrap())
+            .unwrap();
+        runtime
+            .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        runtime.advance(true).unwrap();
+        runtime
+            .observe(settings, controls, Seconds(4.0 * TICK), 1.0, 0.0)
+            .unwrap();
+        runtime.advance(true).unwrap();
+        let reader = CacheReader::open(Arc::new(directory.clone()), settings).unwrap();
+        let mut vertices = Vec::new();
+        let mut whitewater = WhitewaterFrame::default();
+        for tick in 1..=4 {
+            let (_, stats) = reader
+                .read_into(tick, &mut vertices, &mut whitewater)
+                .unwrap();
+            assert_eq!(vertices.len(), stats.triangles as usize * 3);
+        }
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&vertices),
+            bytemuck::cast_slice::<_, u8>(&runtime.vertices)
+        );
+        drop(runtime);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

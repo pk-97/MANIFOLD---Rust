@@ -2515,6 +2515,7 @@ dependencies = [
  "sha2",
  "syn 2.0.117",
  "tiff 0.9.1",
+ "zstd",
 ]
 
 [[package]]

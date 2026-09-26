@@ -14,7 +14,8 @@
 //!
 //! Run with one output directory and optional `--preset`, `--width`, `--height`,
 //! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
-//! and `--linear` flags. Defaults preserve the shipped Water Basin workflow.
+//! `--linear`, `--cinematic`, and `--supersample` flags. Defaults preserve the
+//! shipped Water Basin workflow.
 
 use std::error::Error;
 use std::fs::{self, File};
@@ -48,9 +49,9 @@ const PREVIEW_SECONDS: f64 = 8.0;
 const PREVIEW_MAX_SECONDS: f64 = 10.0;
 const MAX_WIDTH: u32 = 3840;
 const MAX_HEIGHT: u32 = 2160;
-const MAX_FRAMES: u32 = 600;
+const MAX_FRAMES: u32 = 900;
 const MAX_FPS: u32 = 60;
-const MAX_SECONDS: f64 = 900.0;
+const MAX_SECONDS: f64 = 3600.0;
 const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count";
 const METRIC_NAMES: [&str; 9] = [
     "simulation_time",
@@ -78,6 +79,8 @@ struct CaptureOptions {
     max_seconds: f64,
     stills_every: Option<u32>,
     linear: bool,
+    cinematic: bool,
+    supersample: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +111,15 @@ struct FrameTimings {
     frame_ms: f64,
 }
 
+impl FrameTimings {
+    fn add_assign(&mut self, other: Self) {
+        self.render_cpu_ms += other.render_cpu_ms;
+        self.submit_wait_ms += other.submit_wait_ms;
+        self.gpu_ms += other.gpu_ms;
+        self.frame_ms += other.frame_ms;
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct MetricRow {
     frame: u32,
@@ -134,6 +146,10 @@ struct PassMetadata {
     start_simulation_time: f64,
     end_simulation_time: f64,
     capture_ms: f64,
+    output_frame_generation_ms: f64,
+    sample_count: u32,
+    shutter_interval_s: f64,
+    spatial_sampling: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -156,12 +172,18 @@ struct Metadata {
     gpu_device_name: String,
     width: u32,
     height: u32,
+    render_width: u32,
+    render_height: u32,
     grid: [u32; 3],
     cell_size: f64,
     surface_detail: u32,
     native_fixed_hz: f64,
     capture_fps: u32,
     display_transform: &'static str,
+    cinematic: bool,
+    sample_count: u32,
+    shutter_interval_s: f64,
+    spatial_sampling: u32,
     offline_only: bool,
     stills_every: Option<u32>,
     offline: PassMetadata,
@@ -219,25 +241,19 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     })
 }
 
-fn build_runtime(
-    json: &str,
-    device: &Arc<GpuDevice>,
-    width: u32,
-    height: u32,
-) -> CaptureResult<PresetRuntime> {
-    // The compiler omits unwired scalar outputs. Diagnostic consumers retain
-    // their bindings on the live fluid node; these orphan math nodes are not
-    // executed. The shipped preset, simulation and rendering stay unchanged.
+fn instrument_preset(json: &str, cinematic: bool, supersample: u32) -> CaptureResult<String> {
     let mut instrumented: serde_json::Value = serde_json::from_str(json)?;
-    let nodes = instrumented["nodes"]
-        .as_array_mut()
-        .ok_or_else(|| io::Error::other("Water Basin nodes must be an array"))?;
+    let mut nodes = instrumented["nodes"]
+        .take()
+        .as_array()
+        .cloned()
+        .ok_or_else(|| io::Error::other("preset nodes must be an array"))?;
     let fluid_id = nodes
         .iter()
         .find(|node| node["nodeId"] == "fluid_surface")
         .and_then(|node| node["id"].as_u64())
-        .ok_or_else(|| io::Error::other("Water Basin fluid_surface node is missing"))?;
-    let first_probe_id = nodes
+        .ok_or_else(|| io::Error::other("preset fluid_surface node is missing"))?;
+    let mut next_id = nodes
         .iter()
         .filter_map(|node| node["id"].as_u64())
         .max()
@@ -245,25 +261,101 @@ fn build_runtime(
         + 1;
     for (index, name) in METRIC_NAMES.iter().enumerate() {
         nodes.push(serde_json::json!({
-            "id": first_probe_id + index as u64,
+            "id": next_id + index as u64,
             "nodeId": format!("capture_metric_{name}"),
             "typeId": "node.math",
             "handle": format!("Capture {name}"),
         }));
     }
-    let wires = instrumented["wires"]
-        .as_array_mut()
-        .ok_or_else(|| io::Error::other("Water Basin wires must be an array"))?;
+    next_id += METRIC_NAMES.len() as u64;
+    let mut wires = instrumented["wires"]
+        .take()
+        .as_array()
+        .cloned()
+        .ok_or_else(|| io::Error::other("preset wires must be an array"))?;
     for (index, name) in METRIC_NAMES.iter().enumerate() {
         wires.push(serde_json::json!({
             "fromNode": fluid_id, "fromPort": name,
-            "toNode": first_probe_id + index as u64, "toPort": "a",
+            "toNode": next_id - METRIC_NAMES.len() as u64 + index as u64, "toPort": "a",
         }));
     }
-    let instrumented = serde_json::to_string(&instrumented)?;
+
+    if cinematic {
+        let scene_id = nodes
+            .iter()
+            .find(|node| node["typeId"] == "node.render_scene")
+            .and_then(|node| node["id"].as_u64())
+            .ok_or_else(|| io::Error::other("cinematic preset has no render_scene node"))?;
+        let tone_id = nodes
+            .iter()
+            .find(|node| node["typeId"] == "node.tone_map")
+            .and_then(|node| node["id"].as_u64())
+            .ok_or_else(|| io::Error::other("cinematic preset has no tone_map node"))?;
+        let scene_to_tone = wires
+            .iter()
+            .position(|wire| {
+                wire["fromNode"] == scene_id
+                    && wire["fromPort"] == "color"
+                    && wire["toNode"] == tone_id
+                    && wire["toPort"] == "in"
+            })
+            .ok_or_else(|| {
+                io::Error::other("tone_map is not wired directly from render_scene color")
+            })?;
+        wires.remove(scene_to_tone);
+
+        let feedback_id = next_id;
+        let mix_id = next_id + 1;
+        next_id += 2;
+        nodes.push(serde_json::json!({
+            "id": feedback_id,
+            "nodeId": "cinematic_feedback",
+            "typeId": "node.feedback",
+            "handle": "Cinematic Temporal Sample",
+            "params": {"copy_capture": {"type": "Bool", "value": true}},
+        }));
+        nodes.push(serde_json::json!({
+            "id": mix_id,
+            "nodeId": "cinematic_temporal_mix",
+            "typeId": "node.mix",
+            "handle": "Cinematic Temporal Average",
+            "params": {
+                "amount": {"type": "Float", "value": 0.5},
+                "mode": {"type": "Enum", "value": 0},
+            },
+        }));
+        wires.push(serde_json::json!({"fromNode": scene_id, "fromPort": "color", "toNode": feedback_id, "toPort": "in"}));
+        wires.push(serde_json::json!({"fromNode": scene_id, "fromPort": "color", "toNode": mix_id, "toPort": "a"}));
+        wires.push(serde_json::json!({"fromNode": feedback_id, "fromPort": "out", "toNode": mix_id, "toPort": "b"}));
+        let mut tone_input = mix_id;
+        if supersample == 2 {
+            let downsample_id = next_id;
+            nodes.push(serde_json::json!({
+                "id": downsample_id,
+                "nodeId": "cinematic_downsample",
+                "typeId": "node.downsample",
+                "handle": "Cinematic Spatial Downsample",
+                "params": {"factor": {"type": "Enum", "value": 0}},
+            }));
+            wires.push(serde_json::json!({"fromNode": mix_id, "fromPort": "out", "toNode": downsample_id, "toPort": "in"}));
+            tone_input = downsample_id;
+        }
+        wires.push(serde_json::json!({"fromNode": tone_input, "fromPort": "out", "toNode": tone_id, "toPort": "in"}));
+    }
+    instrumented["nodes"] = serde_json::Value::Array(nodes);
+    instrumented["wires"] = serde_json::Value::Array(wires);
+    serde_json::to_string(&instrumented).map_err(Into::into)
+}
+
+fn build_runtime(
+    instrumented_json: &str,
+    device: &Arc<GpuDevice>,
+    width: u32,
+    height: u32,
+) -> CaptureResult<PresetRuntime> {
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &instrumented,
+        instrumented_json,
         &registry,
         Arc::clone(device),
         width,
@@ -271,21 +363,68 @@ fn build_runtime(
         GpuTextureFormat::Rgba16Float,
         None,
     )
-    .map_err(|error| io::Error::other(format!("build Water Basin runtime: {error}")))?;
+    .map_err(|error| io::Error::other(format!("build preset runtime: {error}")))?;
     let fluid_node = NodeId::from("fluid_surface");
     runtime.set_preview_node(Some(&fluid_node));
     Ok(runtime)
 }
 
-fn context(frame: u32, authored_time: f64, dt: f64, width: u32, height: u32) -> PresetContext {
+// RenderScene uses the graph canvas size; per-port scale overrides do not resize it.
+fn render_dimensions(width: u32, height: u32, supersample: u32) -> (u32, u32) {
+    (width * supersample, height * supersample)
+}
+
+fn verify_cinematic_dimensions(
+    runtime: &PresetRuntime,
+    options: &CaptureOptions,
+) -> CaptureResult<()> {
+    let render = render_dimensions(options.width, options.height, options.supersample);
+    let mut expected = vec![
+        ("node.render_scene", "color", render),
+        ("node.feedback", "out", render),
+        ("node.mix", "out", render),
+        ("node.tone_map", "out", (options.width, options.height)),
+    ];
+    if options.supersample == 2 {
+        expected.push(("node.downsample", "out", (options.width, options.height)));
+    }
+    let textures = runtime.dump_textures_all();
+    let mut verified = Vec::new();
+    for (type_id, port, dimensions) in expected {
+        let (name, _, _, texture) = textures
+            .iter()
+            .find(|(_, p, t, _)| p == port && t == type_id)
+            .ok_or_else(|| {
+                io::Error::other(format!("missing cinematic texture {type_id}.{port}"))
+            })?;
+        if (texture.width, texture.height) != dimensions {
+            return Err(io::Error::other(format!(
+                "{name}.{port} is {}x{}, expected {}x{}",
+                texture.width, texture.height, dimensions.0, dimensions.1
+            ))
+            .into());
+        }
+        verified.push(serde_json::json!({
+            "node": name, "port": port, "width": texture.width, "height": texture.height,
+        }));
+    }
+    fs::write(
+        options.output_dir.join("verified-dimensions.json"),
+        serde_json::to_vec_pretty(&verified)?,
+    )?;
+    Ok(())
+}
+
+fn context(frame: u32, authored_time: f64, dt: f64, options: &CaptureOptions) -> PresetContext {
+    let (width, height) = render_dimensions(options.width, options.height, options.supersample);
     PresetContext {
         time: authored_time,
         beat: authored_time * 2.0,
         dt: dt as f32,
         width,
         height,
-        output_width: width,
-        output_height: height,
+        output_width: options.width,
+        output_height: options.height,
         aspect: width as f32 / height as f32,
         owner_key: 0,
         is_clip_level: false,
@@ -341,7 +480,7 @@ fn render_frame(
         runtime.render(
             &mut gpu,
             &target.texture,
-            &context(frame, authored_time, dt, options.width, options.height),
+            &context(frame, authored_time, dt, options),
             &ParamManifest::default(),
         );
         gpu.frame_status()
@@ -388,6 +527,67 @@ fn render_frame(
     Ok((timings, fluid))
 }
 
+fn render_output_frame(
+    runtime: &mut PresetRuntime,
+    target: &RenderTarget,
+    device: &GpuDevice,
+    frame: u32,
+    authored_time: f64,
+    dt: f64,
+    options: &CaptureOptions,
+) -> CaptureResult<(FrameTimings, FluidMetrics)> {
+    let sample_count = if options.cinematic { 2 } else { 1 };
+    let mut total_timings = FrameTimings {
+        render_cpu_ms: 0.0,
+        submit_wait_ms: 0.0,
+        gpu_ms: 0.0,
+        frame_ms: 0.0,
+    };
+    let mut final_fluid = None;
+    let mut simulation_ms = 0.0;
+    let mut meshing_ms = 0.0;
+    let temporal_samples = temporal_samples(authored_time);
+    for (sample, &temporal_sample) in temporal_samples.iter().enumerate().take(sample_count) {
+        let (sample_time, sample_dt) = if options.cinematic {
+            temporal_sample
+        } else {
+            (authored_time, dt)
+        };
+        let sample_frame = if options.cinematic {
+            frame.saturating_mul(2).saturating_sub(1) + sample as u32
+        } else {
+            frame
+        };
+        let (timings, fluid) = render_frame(
+            runtime,
+            target,
+            device,
+            sample_frame,
+            sample_time,
+            sample_dt,
+            options,
+        )?;
+        total_timings.add_assign(timings);
+        simulation_ms += fluid.simulation_ms;
+        meshing_ms += fluid.meshing_ms;
+        final_fluid = Some(fluid);
+    }
+    let mut fluid = final_fluid.expect("output frame renders at least one sample");
+    fluid.simulation_ms = simulation_ms;
+    fluid.meshing_ms = meshing_ms;
+    Ok((total_timings, fluid))
+}
+
+fn temporal_samples(authored_time: f64) -> [(f64, f64); 2] {
+    let first_time = (authored_time - 1.0 / FIXED_HZ).max(0.0);
+    let first_dt = if first_time == 0.0 {
+        0.0
+    } else {
+        1.0 / FIXED_HZ
+    };
+    [(first_time, first_dt), (authored_time, 1.0 / FIXED_HZ)]
+}
+
 fn metric_row(
     frame: u32,
     authored_time: f64,
@@ -412,12 +612,20 @@ fn metric_row(
     Ok(row)
 }
 
-fn write_csv(path: &Path, rows: &[MetricRow]) -> CaptureResult<()> {
-    let mut writer = BufWriter::new(File::create(path)?);
-    writeln!(writer, "{CSV_HEADER}")?;
-    for row in rows {
+struct CsvWriter {
+    writer: BufWriter<File>,
+}
+
+impl CsvWriter {
+    fn create(path: &Path) -> CaptureResult<Self> {
+        let mut writer = BufWriter::new(File::create(path)?);
+        writeln!(writer, "{CSV_HEADER}")?;
+        Ok(Self { writer })
+    }
+
+    fn write_row(&mut self, row: &MetricRow) -> CaptureResult<()> {
         writeln!(
-            writer,
+            self.writer,
             "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.6},{:.6},{:.0},{:.0},{:.0}",
             row.frame,
             row.authored_time,
@@ -437,9 +645,22 @@ fn write_csv(path: &Path, rows: &[MetricRow]) -> CaptureResult<()> {
             row.fluid.bubble_count,
             row.fluid.spray_count,
         )?;
+        self.writer.flush()?;
+        Ok(())
     }
-    writer.flush()?;
-    Ok(())
+
+    fn flush(&mut self) -> CaptureResult<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
+fn write_csv(path: &Path, rows: &[MetricRow]) -> CaptureResult<()> {
+    let mut writer = CsvWriter::create(path)?;
+    for row in rows {
+        writer.write_row(row)?;
+    }
+    writer.flush()
 }
 
 fn ensure_wall_limit(started: Instant, label: &str, max_seconds: f64) -> CaptureResult<()> {
@@ -473,6 +694,8 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         max_seconds: DEFAULT_MAX_SECONDS,
         stills_every: None,
         linear: false,
+        cinematic: false,
+        supersample: 1,
     };
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| -> CaptureResult<String> {
@@ -497,6 +720,10 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             }
             "--offline-only" => options.offline_only = true,
             "--linear" => options.linear = true,
+            "--cinematic" => options.cinematic = true,
+            "--supersample" => {
+                options.supersample = parse_u32(&value("--supersample")?, "--supersample")?
+            }
             flag if flag.starts_with('-') => {
                 return Err(io::Error::other(format!("unsupported argument `{flag}`")).into());
             }
@@ -510,7 +737,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2]",
         )
     })?;
     if options.width == 0
@@ -528,6 +755,20 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     if options.fps == 0 || options.fps > MAX_FPS {
         return Err(io::Error::other(format!("fps must be in 1..={MAX_FPS}")).into());
+    }
+    if options.supersample != 1 && options.supersample != 2 {
+        return Err(io::Error::other("supersample must be 1 or 2").into());
+    }
+    if options.cinematic && (options.fps != 30 || !options.linear) {
+        return Err(io::Error::other("--cinematic requires --fps 30 and --linear").into());
+    }
+    if options.supersample == 2 && !options.cinematic {
+        return Err(io::Error::other("--supersample 2 requires --cinematic").into());
+    }
+    let (render_width, render_height) =
+        render_dimensions(options.width, options.height, options.supersample);
+    if render_width > MAX_WIDTH || render_height > MAX_HEIGHT {
+        return Err(io::Error::other("supersampled render must fit within 3840x2160").into());
     }
     if !options.max_seconds.is_finite()
         || options.max_seconds <= 0.0
@@ -580,6 +821,13 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     let overall_started = Instant::now();
     let json = read_preset(&options.preset_path)?;
     fs::write(options.output_dir.join("preset.json"), &json)?;
+    let instrumented_json = instrument_preset(&json, options.cinematic, options.supersample)?;
+    if options.cinematic {
+        fs::write(
+            options.output_dir.join("preset.instrumented.json"),
+            &instrumented_json,
+        )?;
+    }
     let preset = preset_settings(&json)?;
     let frame_dt = 1.0 / f64::from(options.fps);
     let device = Arc::new(GpuDevice::new());
@@ -591,7 +839,11 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         "fluid-capture-offline",
     );
     let offline_scope = PhysicsStepScope::for_render(true);
-    let mut offline_runtime = build_runtime(&json, &device, options.width, options.height)?;
+    let (render_width, render_height) =
+        render_dimensions(options.width, options.height, options.supersample);
+    let mut offline_runtime =
+        build_runtime(&instrumented_json, &device, render_width, render_height)?;
+    offline_runtime.set_dump_all(options.cinematic);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
         &offline_target,
@@ -608,6 +860,10 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         options,
         overall_started,
     )?;
+    if options.cinematic {
+        verify_cinematic_dimensions(&offline_runtime, options)?;
+        offline_runtime.set_dump_all(false);
+    }
     if initial_fluid.simulation_time.abs() > 1e-4 {
         return Err(io::Error::other(format!(
             "offline initial simulation time is not zero: {}",
@@ -617,6 +873,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     }
 
     let mut offline_rows = Vec::with_capacity(options.frames as usize);
+    let mut offline_csv = CsvWriter::create(&options.output_dir.join("offline.csv"))?;
     let mut offline_rgba_writer = match options.stills_every {
         None => Some(BufWriter::new(File::create(
             options.output_dir.join("offline.rgba"),
@@ -630,7 +887,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     for frame in 1..=options.frames {
         ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
         let authored_time = f64::from(frame) * frame_dt;
-        let (timings, fluid) = render_frame(
+        let (timings, fluid) = render_output_frame(
             &mut offline_runtime,
             &offline_target,
             &device,
@@ -697,12 +954,14 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             }
             capture_ms += row.capture_ms;
         }
+        offline_csv.write_row(&row)?;
         offline_rows.push(row);
     }
     ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
     if let Some(mut writer) = offline_rgba_writer {
         writer.flush()?;
     }
+    offline_csv.flush()?;
     let offline_end_simulation_time = offline_rows
         .last()
         .expect("offline rows contain all stepped frames")
@@ -722,7 +981,8 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             GpuTextureFormat::Rgba16Float,
             "fluid-capture-preview",
         );
-        let mut preview_runtime = build_runtime(&json, &device, options.width, options.height)?;
+        let mut preview_runtime =
+            build_runtime(&instrumented_json, &device, render_width, render_height)?;
         let preview_initial_timings;
         {
             let preview_warmup_scope = PhysicsStepScope::for_render(true);
@@ -782,7 +1042,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
                 .map(|previous| frame_begin.duration_since(previous).as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
             let frame = (preview_rows.len() + 1) as u32;
-            let (timings, fluid) = render_frame(
+            let (timings, fluid) = render_output_frame(
                 &mut preview_runtime,
                 &preview_target,
                 &device,
@@ -853,15 +1113,26 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         Some(preview_metadata)
     };
 
-    write_csv(&options.output_dir.join("offline.csv"), &offline_rows)?;
     if options.offline_only {
         write_csv(&options.output_dir.join("preview.csv"), &[])?;
     }
+    let sample_count = if options.cinematic { 2 } else { 1 };
+    let shutter_interval_s = if options.cinematic {
+        1.0 / FIXED_HZ
+    } else {
+        0.0
+    };
+    let output_frame_generation_ms = offline_rows
+        .iter()
+        .map(|row| row.timings.frame_ms + row.capture_ms)
+        .sum();
     let metadata = Metadata {
         preset_path: options.preset_path.display().to_string(),
         gpu_device_name: device.device_name(),
         width: options.width,
         height: options.height,
+        render_width,
+        render_height,
         grid: [preset.resolution; 3],
         cell_size: preset.domain_size / f64::from(preset.resolution),
         surface_detail: preset.surface_detail,
@@ -872,6 +1143,10 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         } else {
             "reinhard"
         },
+        cinematic: options.cinematic,
+        sample_count,
+        shutter_interval_s,
+        spatial_sampling: options.supersample,
         offline_only: options.offline_only,
         stills_every: options.stills_every,
         offline: PassMetadata {
@@ -886,6 +1161,10 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             start_simulation_time: 0.0,
             end_simulation_time: offline_end_simulation_time,
             capture_ms,
+            output_frame_generation_ms,
+            sample_count,
+            shutter_interval_s,
+            spatial_sampling: options.supersample,
         },
         preview: preview_metadata,
     };
@@ -901,4 +1180,70 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
 fn main() -> CaptureResult<()> {
     let options = parse_options()?;
     run(&options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temporal_samples_cover_two_fixed_ticks() {
+        for frame in [1, 2, 450] {
+            let samples = temporal_samples(f64::from(frame) / 30.0);
+            assert!((samples[0].0 * 60.0 - f64::from(frame * 2 - 1)).abs() < 1e-10);
+            assert!((samples[1].0 * 60.0 - f64::from(frame * 2)).abs() < 1e-10);
+            assert!((samples[0].1 - 1.0 / 60.0).abs() < 1e-12);
+            assert!((samples[1].1 - 1.0 / 60.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn cinematic_graph_inserts_average_and_spatial_resolve() {
+        let source = serde_json::json!({
+            "nodes": [
+                {"id": 0, "nodeId": "fluid_surface", "typeId": "node.fluid_surface", "params": {
+                    "resolution": {"type": "Int", "value": 24},
+                    "domain_size": {"type": "Float", "value": 4.0},
+                    "surface_subdivisions": {"type": "Int", "value": 0}
+                }},
+                {"id": 1, "nodeId": "scene", "typeId": "node.render_scene"},
+                {"id": 2, "nodeId": "tone", "typeId": "node.tone_map"}
+            ],
+            "wires": [{"fromNode": 1, "fromPort": "color", "toNode": 2, "toPort": "in"}]
+        });
+        let instrumented = serde_json::from_str::<serde_json::Value>(
+            &instrument_preset(&source.to_string(), true, 2).unwrap(),
+        )
+        .unwrap();
+        let nodes = instrumented["nodes"].as_array().unwrap();
+        let feedback = nodes
+            .iter()
+            .find(|node| node["nodeId"] == "cinematic_feedback")
+            .unwrap();
+        let mix = nodes
+            .iter()
+            .find(|node| node["nodeId"] == "cinematic_temporal_mix")
+            .unwrap();
+        let downsample = nodes
+            .iter()
+            .find(|node| node["nodeId"] == "cinematic_downsample")
+            .unwrap();
+        assert_eq!(feedback["params"]["copy_capture"]["value"], true);
+        assert_eq!(mix["params"]["amount"]["value"], 0.5);
+        assert!(feedback.get("outputCanvasScales").is_none());
+        assert!(mix.get("outputCanvasScales").is_none());
+        assert_eq!(render_dimensions(1920, 1080, 2), (3840, 2160));
+        assert_eq!(downsample["params"]["factor"]["value"], 0);
+        assert!(
+            instrumented["wires"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|wire| {
+                    wire["fromNode"] == downsample["id"]
+                        && wire["toNode"] == 2
+                        && wire["toPort"] == "in"
+                })
+        );
+    }
 }
