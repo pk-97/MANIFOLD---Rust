@@ -29,7 +29,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.object.roughness_value"
+          "name": "param_row.10_roughness.value"
         }
       },
       "check": "Exists"
@@ -39,19 +39,51 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.object.roughness_track"
+          "name": "param_row.10_roughness.slider"
         }
       },
       "gesture": {
         "Drag": {
           "to": {
-            "Point": {
-              "x": 902.75,
-              "y": 728.0
+            "Query": {
+              "text": "Roughness"
             }
           },
           "steps": 8
         }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value",
+          "text": "1.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
       }
     }
   },
@@ -60,7 +92,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.object.roughness_driver_btn"
+          "name": "param_row.10_roughness.driver_btn"
         }
       },
       "check": "Exists"
@@ -70,7 +102,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.object.roughness_driver_btn"
+          "name": "param_row.10_roughness.driver_btn"
         }
       },
       "gesture": {
@@ -85,7 +117,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.object.pos_x"
+          "name": "param_row.13_pos_x.value",
+          "nth": 1
         }
       },
       "check": "Exists"
@@ -95,7 +128,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.object.pos_x_track"
+          "name": "param_row.13_pos_x.slider",
+          "nth": 1
         }
       },
       "gesture": {
@@ -108,6 +142,41 @@
           },
           "steps": 8
         }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.13_pos_x.value",
+          "nth": 1,
+          "text": "-0.02"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.13_pos_x.value",
+          "nth": 1
+        }
+      },
+      "check": {
+        "TextEquals": "-0.02"
       }
     }
   },
