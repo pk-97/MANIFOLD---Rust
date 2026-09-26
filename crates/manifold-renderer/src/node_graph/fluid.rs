@@ -3,12 +3,13 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use manifold_core::Seconds;
 use manifold_fluids::{
     Bounds, Config, FluidWorld, FrameStats, LiquidOptions, SurfaceOptions, SurfaceVertex,
-    WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
+    TimeStepOptions, WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
 };
 
 use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
@@ -27,6 +28,7 @@ pub struct FluidSettings {
     pub initial_volume: Option<Transform>,
     pub surface_subdivisions: u32,
     pub liquid: LiquidOptions,
+    pub time_steps: TimeStepOptions,
     pub surface: SurfaceOptions,
     pub whitewater: WhitewaterOptions,
     pub apic: bool,
@@ -42,6 +44,7 @@ impl Default for FluidSettings {
             initial_volume: None,
             surface_subdivisions: 0,
             liquid: LiquidOptions::default(),
+            time_steps: TimeStepOptions::default(),
             surface: SurfaceOptions::default(),
             whitewater: WhitewaterOptions {
                 max_particles: 100_000,
@@ -56,6 +59,9 @@ impl Default for FluidSettings {
 impl FluidSettings {
     pub fn validate(self) -> Result<(), String> {
         self.liquid.validate().map_err(|error| error.to_string())?;
+        self.time_steps
+            .validate()
+            .map_err(|error| error.to_string())?;
         self.surface.validate().map_err(|error| error.to_string())?;
         self.whitewater
             .validate()
@@ -196,6 +202,23 @@ struct Step {
     next: FluidControls,
 }
 
+fn request_count(
+    cache_mode: CacheMode,
+    blocking: bool,
+    due: u64,
+    target_tick: u64,
+    initialized: bool,
+) -> Result<usize, String> {
+    if cache_mode == CacheMode::Playback {
+        return Ok(usize::from(target_tick > 0));
+    }
+    if !initialized {
+        return Ok(0);
+    }
+    let due = if blocking { due.min(BATCH as u64) } else { due };
+    usize::try_from(due).map_err(|_| "Water preview catch-up request is too large".to_owned())
+}
+
 /// Separate populations share the mesh publication epoch and tick. Each can use
 /// an ordinary scene object with its own material, mesh and live instance count.
 #[derive(Default, Clone)]
@@ -254,7 +277,7 @@ struct Request {
     initial: FluidControls,
     start_tick: u64,
     count: usize,
-    steps: [Step; BATCH],
+    history: Vec<Sample>,
     recycle: Vec<MeshVertex>,
     recycle_whitewater: WhitewaterFrame,
     cache_mode: CacheMode,
@@ -264,6 +287,7 @@ struct Request {
 struct Reply {
     epoch: u64,
     tick: u64,
+    history: Vec<Sample>,
     vertices: Vec<MeshVertex>,
     whitewater: WhitewaterFrame,
     obstacle: Transform,
@@ -271,13 +295,28 @@ struct Reply {
     error: Option<String>,
 }
 
+fn cancelled_reply(request: Request) -> Reply {
+    Reply {
+        epoch: request.epoch,
+        tick: request.start_tick,
+        history: request.history,
+        vertices: request.recycle,
+        whitewater: request.recycle_whitewater,
+        obstacle: request.initial.obstacle,
+        stats: FrameStats::default(),
+        error: None,
+    }
+}
+
 struct Worker {
     requests: SyncSender<Request>,
     replies: Receiver<Reply>,
+    cancel_epoch: Arc<AtomicU64>,
 }
 
 impl Worker {
-    fn spawn() -> Result<Self, String> {
+    fn spawn(cancel_epoch: Arc<AtomicU64>) -> Result<Self, String> {
+        let worker_cancel_epoch = Arc::clone(&cancel_epoch);
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let (sender, replies) = mpsc::sync_channel::<Reply>(1);
         std::thread::Builder::new().name("fluid-reference".into()).spawn(move || {
@@ -288,9 +327,16 @@ impl Worker {
             let mut playback: Option<CacheReader> = None;
             let mut cache_epoch = None;
             while let Ok(mut request) = receiver.recv() {
+                if worker_cancel_epoch.load(Ordering::Acquire) != request.epoch {
+                    if sender.send(cancelled_reply(request)).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 let mut stats = FrameStats::default();
                 let mut pose = request.initial.obstacle;
                 let mut setup_error = None;
+                let mut completed_count = 0usize;
                 if cache_epoch != Some(request.epoch) {
                     writer = None;
                     world = None;
@@ -316,6 +362,12 @@ impl Worker {
                         }
                     }
                 }
+                if worker_cancel_epoch.load(Ordering::Acquire) != request.epoch {
+                    if sender.send(cancelled_reply(request)).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 let result = (|| -> Result<(), String> {
                     if let Some(error) = setup_error {
                         return Err(error);
@@ -330,6 +382,7 @@ impl Worker {
                                 &mut request.recycle,
                                 &mut request.recycle_whitewater,
                             )?;
+                            completed_count = request.count;
                             stats.simulation_ms = 0.0;
                             stats.meshing_ms = 0.0;
                         }
@@ -341,6 +394,7 @@ impl Worker {
                         world = None;
                         let mut new = FluidWorld::new(request.settings.config()).map_err(|e| e.to_string())?;
                         new.set_liquid_options(request.settings.liquid).map_err(|e| e.to_string())?;
+                        new.set_time_step_options(request.settings.time_steps).map_err(|e| e.to_string())?;
                         new.set_surface_options(request.settings.surface).map_err(|e| e.to_string())?;
                         new.set_whitewater_options(request.settings.whitewater).map_err(|e| e.to_string())?;
                         let size = request.settings.domain_size;
@@ -359,7 +413,12 @@ impl Worker {
                         request.settings.whitewater.max_particles as usize
                     } else { 0 });
                     let native = &mut world.as_mut().expect("world initialized").1;
-                    for (index, step) in request.steps.iter().take(request.count).enumerate() {
+                    for index in 0..request.count {
+                        if worker_cancel_epoch.load(Ordering::Acquire) != request.epoch {
+                            break;
+                        }
+                        let tick = request.start_tick + index as u64;
+                        let step = FluidRuntime::step_at(&request.history, tick);
                         native.set_gravity([0.0, step.current.gravity, 0.0]).map_err(|e| e.to_string())?;
                         native.set_emitter(request.settings.bounds(step.current.emitter),
                             [0.0, -step.current.inflow_speed, 0.0], step.current.emission).map_err(|e| e.to_string())?;
@@ -367,6 +426,7 @@ impl Worker {
                             request.settings.bounds(step.current.obstacle), request.settings.bounds(step.next.obstacle))
                             .map_err(|e| e.to_string())?;
                         stats = native.step(Seconds(TICK)).map_err(|e| e.to_string())?;
+                        completed_count += 1;
                         pose = step.next.obstacle;
                         let last = index + 1 == request.count;
                         if request.cache_mode == CacheMode::Record || last {
@@ -405,13 +465,24 @@ impl Worker {
                     }
                     Ok(())
                 })();
-                let reply = Reply { epoch: request.epoch, tick: request.start_tick + request.count as u64,
+                let reply = Reply { epoch: request.epoch, tick: request.start_tick + completed_count as u64,
+                    history: request.history,
                     vertices: request.recycle, whitewater: request.recycle_whitewater,
                     obstacle: pose, stats, error: result.err() };
                 if sender.send(reply).is_err() { break; }
             }
         }).map_err(|e| format!("Water worker could not start: {e}"))?;
-        Ok(Self { requests, replies })
+        Ok(Self {
+            requests,
+            replies,
+            cancel_epoch,
+        })
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.cancel_epoch.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -423,10 +494,12 @@ pub struct FluidRuntime {
     previous_reset: f32,
     target_time: f64,
     epoch: u64,
+    cancel_epoch: Arc<AtomicU64>,
     busy: bool,
     initialized: bool,
     spare: Option<Vec<MeshVertex>>,
     spare_whitewater: Option<WhitewaterFrame>,
+    spare_history: Option<Vec<Sample>>,
     failure: Option<String>,
     pub vertices: Vec<MeshVertex>,
     pub whitewater: WhitewaterFrame,
@@ -448,10 +521,12 @@ impl Default for FluidRuntime {
             previous_reset: 0.0,
             target_time: 0.0,
             epoch: 0,
+            cancel_epoch: Arc::new(AtomicU64::new(0)),
             busy: false,
             initialized: false,
             spare: Some(Vec::new()),
             spare_whitewater: Some(WhitewaterFrame::default()),
+            spare_history: Some(Vec::with_capacity(HISTORY_CAPACITY)),
             failure: None,
             vertices: Vec::new(),
             whitewater: WhitewaterFrame::default(),
@@ -462,6 +537,12 @@ impl Default for FluidRuntime {
             cache_mode: CacheMode::Live,
             cache_path: Arc::new(PathBuf::new()),
         }
+    }
+}
+
+impl Drop for FluidRuntime {
+    fn drop(&mut self) {
+        self.cancel_epoch.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -491,6 +572,7 @@ impl FluidRuntime {
         self.target_time = 0.0;
         self.completed_tick = 0;
         self.epoch = self.epoch.wrapping_add(1);
+        self.cancel_epoch.store(self.epoch, Ordering::Release);
         self.initialized = false;
         self.failure = None;
         self.vertices.clear();
@@ -577,9 +659,9 @@ impl FluidRuntime {
         }
     }
 
-    fn at(&self, time: f64) -> FluidControls {
-        let mut previous = *self.history.front().expect("observe before advance");
-        for next in self.history.iter().skip(1) {
+    fn controls_at<'a>(mut history: impl Iterator<Item = &'a Sample>, time: f64) -> FluidControls {
+        let mut previous = *history.next().expect("observe before advance");
+        for next in history {
             if next.time >= time {
                 let alpha = if next.time > previous.time {
                     ((time - previous.time) / (next.time - previous.time)).clamp(0.0, 1.0) as f32
@@ -612,21 +694,33 @@ impl FluidRuntime {
         previous.controls
     }
 
+    fn step_at(history: &[Sample], tick: u64) -> Step {
+        let current = tick as f64 * TICK;
+        Step {
+            previous: Self::controls_at(history.iter(), (current - TICK).max(0.0)),
+            current: Self::controls_at(history.iter(), current),
+            next: Self::controls_at(history.iter(), current + TICK),
+        }
+    }
+
     fn accept(&mut self, reply: Reply) -> Result<(), String> {
         self.busy = false;
         if reply.epoch != self.epoch {
             self.spare = Some(reply.vertices);
             self.spare_whitewater = Some(reply.whitewater);
+            self.spare_history = Some(reply.history);
             return Ok(());
         }
         if let Some(error) = reply.error {
             self.spare = Some(reply.vertices);
             self.spare_whitewater = Some(reply.whitewater);
+            self.spare_history = Some(reply.history);
             self.failure = Some(error.clone());
             return Err(error);
         }
         self.spare = Some(std::mem::replace(&mut self.vertices, reply.vertices));
         self.spare_whitewater = Some(std::mem::replace(&mut self.whitewater, reply.whitewater));
+        self.spare_history = Some(reply.history);
         self.completed_tick = reply.tick;
         self.obstacle = reply.obstacle;
         self.stats = reply.stats;
@@ -644,7 +738,7 @@ impl FluidRuntime {
             return Ok(());
         };
         if self.worker.is_none() {
-            self.worker = Some(Worker::spawn()?);
+            self.worker = Some(Worker::spawn(Arc::clone(&self.cancel_epoch))?);
         }
         loop {
             if self.busy {
@@ -682,34 +776,19 @@ impl FluidRuntime {
                 return Ok(());
             }
             let initial = self.history.front().expect("observed controls").controls;
-            let mut steps = [Step {
-                previous: initial,
-                current: initial,
-                next: initial,
-            }; BATCH];
-            let count = if self.cache_mode == CacheMode::Playback {
-                usize::from(target_tick > 0)
-            } else if self.initialized {
-                due.min(if blocking { BATCH as u64 } else { 1 }) as usize
-            } else {
-                0
-            };
-            for (index, step) in steps
-                .iter_mut()
-                .take(if self.cache_mode == CacheMode::Playback {
-                    0
-                } else {
-                    count
-                })
-                .enumerate()
-            {
-                let current = (self.completed_tick + index as u64) as f64 * TICK;
-                *step = Step {
-                    previous: self.at((current - TICK).max(0.0)),
-                    current: self.at(current),
-                    next: self.at(current + TICK),
-                };
-            }
+            let count = request_count(
+                self.cache_mode,
+                blocking,
+                due,
+                target_tick,
+                self.initialized,
+            )?;
+            let mut history = self
+                .spare_history
+                .take()
+                .expect("one recycled history snapshot per request");
+            history.clear();
+            history.extend(self.history.iter().copied());
             let request = Request {
                 epoch: self.epoch,
                 settings,
@@ -720,7 +799,7 @@ impl FluidRuntime {
                     self.completed_tick
                 },
                 count,
-                steps,
+                history,
                 recycle: self.spare.take().expect("one recycled mesh per request"),
                 recycle_whitewater: self
                     .spare_whitewater
@@ -729,12 +808,16 @@ impl FluidRuntime {
                 cache_mode: self.cache_mode,
                 cache_path: self.cache_path.clone(),
             };
-            self.worker
-                .as_ref()
-                .expect("worker exists")
-                .requests
-                .send(request)
-                .map_err(|_| "Water worker disconnected".to_owned())?;
+            let worker = self.worker.as_ref().expect("worker exists");
+            if let Err(error) = worker.requests.send(request) {
+                let request = error.0;
+                self.spare = Some(request.recycle);
+                self.spare_whitewater = Some(request.recycle_whitewater);
+                self.spare_history = Some(request.history);
+                let message = "Water worker disconnected".to_owned();
+                self.failure = Some(message.clone());
+                return Err(message);
+            }
             self.busy = true;
             if !blocking {
                 return Ok(());
@@ -746,6 +829,143 @@ impl FluidRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fluid_preview_scheduler_requests_all_due_ticks_across_display_rates() {
+        for display_fps in [5.0, 15.0, 24.0, 30.0, 60.0, 120.0] {
+            let (request_sender, request_receiver) = mpsc::sync_channel::<Request>(1);
+            let (reply_sender, reply_receiver) = mpsc::sync_channel::<Reply>(1);
+            let mut runtime = FluidRuntime::default();
+            runtime
+                .observe(
+                    FluidSettings::default(),
+                    FluidControls::default(),
+                    Seconds(0.0),
+                    1.0,
+                    0.0,
+                )
+                .unwrap();
+            runtime.worker = Some(Worker {
+                requests: request_sender,
+                replies: reply_receiver,
+                cancel_epoch: Arc::clone(&runtime.cancel_epoch),
+            });
+            runtime.advance(false).unwrap();
+            let init = request_receiver.recv().unwrap();
+            reply_sender
+                .send(Reply {
+                    epoch: init.epoch,
+                    tick: init.start_tick + init.count as u64,
+                    history: init.history,
+                    vertices: init.recycle,
+                    whitewater: init.recycle_whitewater,
+                    obstacle: init.initial.obstacle,
+                    stats: FrameStats::default(),
+                    error: None,
+                })
+                .unwrap();
+            runtime.advance(false).unwrap();
+
+            let frame_count = (4.0 * display_fps) as usize;
+            let mut counts = Vec::new();
+            for frame in 1..=frame_count {
+                let elapsed = frame as f64 / display_fps;
+                runtime
+                    .observe(
+                        FluidSettings::default(),
+                        FluidControls::default(),
+                        Seconds(elapsed),
+                        1.0,
+                        0.0,
+                    )
+                    .unwrap();
+                runtime.advance(false).unwrap();
+                match request_receiver.try_recv() {
+                    Ok(request) => {
+                        counts.push(request.count);
+                        reply_sender
+                            .send(Reply {
+                                epoch: request.epoch,
+                                tick: request.start_tick + request.count as u64,
+                                history: request.history,
+                                vertices: request.recycle,
+                                whitewater: request.recycle_whitewater,
+                                obstacle: request.initial.obstacle,
+                                stats: FrameStats::default(),
+                                error: None,
+                            })
+                            .unwrap();
+                        runtime.advance(false).unwrap();
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => panic!("request channel disconnected"),
+                }
+            }
+            assert_eq!(runtime.completed_tick, 240, "display FPS {display_fps}");
+            assert!(counts.iter().all(|count| *count <= 60));
+            if display_fps == 120.0 {
+                assert_eq!(counts.first(), Some(&1));
+            }
+        }
+
+        let (request_sender, request_receiver) = mpsc::sync_channel::<Request>(1);
+        let (reply_sender, reply_receiver) = mpsc::sync_channel::<Reply>(1);
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .observe(
+                FluidSettings::default(),
+                FluidControls::default(),
+                Seconds(0.0),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        runtime.worker = Some(Worker {
+            requests: request_sender,
+            replies: reply_receiver,
+            cancel_epoch: Arc::clone(&runtime.cancel_epoch),
+        });
+        runtime.advance(false).unwrap();
+        let init = request_receiver.recv().unwrap();
+        reply_sender
+            .send(Reply {
+                epoch: init.epoch,
+                tick: init.start_tick,
+                history: init.history,
+                vertices: init.recycle,
+                whitewater: init.recycle_whitewater,
+                obstacle: init.initial.obstacle,
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        runtime.advance(false).unwrap();
+        runtime
+            .observe(
+                FluidSettings::default(),
+                FluidControls::default(),
+                Seconds(17.0 * TICK),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        runtime.advance(false).unwrap();
+        let hitch = request_receiver.recv().unwrap();
+        assert_eq!(hitch.count, 17);
+        reply_sender
+            .send(Reply {
+                epoch: hitch.epoch,
+                tick: hitch.start_tick + hitch.count as u64,
+                history: hitch.history,
+                vertices: hitch.recycle,
+                whitewater: hitch.recycle_whitewater,
+                obstacle: hitch.initial.obstacle,
+                stats: FrameStats::default(),
+                error: None,
+            })
+            .unwrap();
+        runtime.advance(false).unwrap();
+    }
 
     #[test]
     fn fluid_whitewater_classifies_and_publishes_with_mesh_epoch() {
@@ -791,6 +1011,7 @@ mod tests {
             .accept(Reply {
                 epoch: runtime.epoch,
                 tick: 7,
+                history: Vec::new(),
                 vertices: Vec::new(),
                 whitewater,
                 obstacle: Transform::default(),
@@ -809,6 +1030,7 @@ mod tests {
             .accept(Reply {
                 epoch: old_epoch,
                 tick: 8,
+                history: Vec::new(),
                 vertices: Vec::new(),
                 whitewater: stale,
                 obstacle: Transform::default(),
@@ -831,24 +1053,38 @@ mod tests {
         };
         let mut offline = FluidRuntime::default();
         let mut preview = FluidRuntime::default();
-        for sample in 0..=32 {
-            let seconds = sample as f64 / 240.0;
-            let mut controls = FluidControls::default();
-            controls.obstacle.pos[0] += (seconds * 4.0).sin() as f32 * 0.3;
+        let initial = FluidControls::default();
+        for runtime in [&mut offline, &mut preview] {
+            runtime
+                .observe(settings, initial, Seconds(0.0), 1.0, 0.0)
+                .unwrap();
+            runtime.advance(true).unwrap();
+        }
+
+        let mut controls = Vec::with_capacity(12);
+        for sample in 1..=12 {
+            let seconds = sample as f64 * TICK;
+            let mut next = initial;
+            next.obstacle.pos[0] += (seconds * 4.0).sin() as f32 * 0.3;
+            next.gravity += (seconds * 2.0).cos() as f32;
+            controls.push((seconds, next));
             for runtime in [&mut offline, &mut preview] {
                 runtime
-                    .observe(settings, controls, Seconds(seconds), 1.0, 0.0)
+                    .observe(settings, next, Seconds(seconds), 1.0, 0.0)
                     .unwrap();
             }
-            if sample % 4 == 0 {
-                offline.advance(true).unwrap();
-                // This only polls/submits. Native work may still be pending
-                // when the next authored control sample arrives.
-                preview.advance(false).unwrap();
-            }
         }
+
+        // The reference consumes one tick at a time from the complete control
+        // history, while the preview submits the same history as one hitch.
+        offline.target_time = 0.0;
+        for (index, _) in controls.iter().enumerate() {
+            offline.target_time = (index + 1) as f64 * TICK;
+            offline.advance(true).unwrap();
+        }
+        preview.advance(false).unwrap();
         preview.advance(true).unwrap();
-        assert_eq!(offline.completed_tick, 8);
+        assert_eq!(offline.completed_tick, 12);
         assert_eq!(preview.completed_tick, offline.completed_tick);
         assert_eq!(preview.obstacle, offline.obstacle);
         assert!(preview.lag_seconds() < 1e-8);
@@ -975,6 +1211,56 @@ mod tests {
     }
 
     #[test]
+    fn fluid_time_step_settings_default_validate_and_restart() {
+        let defaults = FluidSettings::default();
+        assert_eq!(defaults.time_steps, TimeStepOptions::default());
+        assert!(defaults.validate().is_ok());
+
+        for time_steps in [
+            TimeStepOptions {
+                min_substeps: 0,
+                ..TimeStepOptions::default()
+            },
+            TimeStepOptions {
+                max_substeps: 0,
+                ..TimeStepOptions::default()
+            },
+            TimeStepOptions {
+                cfl: 0,
+                ..TimeStepOptions::default()
+            },
+            TimeStepOptions {
+                min_substeps: 7,
+                max_substeps: 6,
+                ..TimeStepOptions::default()
+            },
+        ] {
+            let invalid = FluidSettings {
+                time_steps,
+                ..defaults
+            };
+            assert!(invalid.validate().is_err());
+        }
+
+        let mut runtime = FluidRuntime::default();
+        runtime
+            .observe(defaults, FluidControls::default(), Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        let epoch = runtime.epoch;
+        let changed = FluidSettings {
+            time_steps: TimeStepOptions {
+                adaptive_obstacles: true,
+                ..defaults.time_steps
+            },
+            ..defaults
+        };
+        runtime
+            .observe(changed, FluidControls::default(), Seconds(TICK), 1.0, 0.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, epoch);
+    }
+
+    #[test]
     fn fluid_playback_loads_only_requested_ticks_and_reports_no_solver_work() {
         let directory = std::env::temp_dir().join(format!(
             "manifold-fluid-runtime-cache-{}",
@@ -994,7 +1280,7 @@ mod tests {
             simulation_ms: 12.0,
             meshing_ms: 6.0,
         };
-        for tick in [2, 120] {
+        for tick in [2, 3, 4, 120] {
             writer
                 .append(tick, &vertices, &WhitewaterFrame::default(), pose, stats)
                 .unwrap();
@@ -1021,6 +1307,19 @@ mod tests {
             assert_eq!(runtime.stats.simulation_ms, 0.0);
             assert_eq!(runtime.stats.meshing_ms, 0.0);
         }
+        // A positive absolute playback target still needs a request when a
+        // speed change makes it earlier than the completed tick.
+        runtime
+            .observe(
+                settings,
+                FluidControls::default(),
+                Seconds(2.0 * TICK),
+                2.0,
+                0.0,
+            )
+            .unwrap();
+        runtime.advance(true).unwrap();
+        assert_eq!(runtime.completed_tick, 4);
         runtime
             .observe(
                 settings,
@@ -1030,7 +1329,18 @@ mod tests {
                 0.0,
             )
             .unwrap();
-        assert!(runtime.advance(true).unwrap_err().contains("tick 3"));
+        runtime.advance(true).unwrap();
+        assert_eq!(runtime.completed_tick, 3);
+        runtime
+            .observe(
+                settings,
+                FluidControls::default(),
+                Seconds(5.0 * TICK),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        assert!(runtime.advance(true).unwrap_err().contains("tick 5"));
         drop(runtime);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -1091,13 +1401,17 @@ mod tests {
             )
             .unwrap();
         let old = runtime.epoch;
+        let old_cancel = runtime.cancel_epoch.load(Ordering::Acquire);
         runtime.clear();
+        assert_ne!(runtime.cancel_epoch.load(Ordering::Acquire), old_cancel);
         runtime.busy = true;
         runtime.spare = None;
+        runtime.spare_history = None;
         runtime
             .accept(Reply {
                 epoch: old,
                 tick: 123,
+                history: Vec::new(),
                 vertices: Vec::new(),
                 whitewater: WhitewaterFrame::default(),
                 obstacle: Transform::default(),
@@ -1110,6 +1424,7 @@ mod tests {
         assert!(runtime.failure.is_none());
         assert!(runtime.spare.is_some());
         assert!(runtime.spare_whitewater.is_some());
+        assert!(runtime.spare_history.is_some());
     }
 
     #[test]
@@ -1126,10 +1441,10 @@ mod tests {
         runtime
             .observe(settings, second, Seconds(1.0), 1.0, 0.0)
             .unwrap();
-        let middle = runtime.at(0.5);
+        let middle = FluidRuntime::controls_at(runtime.history.iter(), 0.5);
         assert!((middle.obstacle.pos[0] - first.obstacle.pos[0] - 0.5).abs() < 1e-6);
         assert!(middle.emission);
-        assert!(!runtime.at(1.0).emission);
+        assert!(!FluidRuntime::controls_at(runtime.history.iter(), 1.0).emission);
         second.obstacle.rot_euler[1] = 0.1;
         assert!(
             runtime

@@ -13,7 +13,8 @@ use manifold_fluids::FrameStats;
 
 const MAGIC: &[u8; 8] = b"MFLUIDC1";
 const LEGACY_FORMAT_VERSION: u32 = 3;
-const FORMAT_VERSION: u32 = 4;
+const LEGACY_LIQUID_FORMAT_VERSION: u32 = 4;
+const FORMAT_VERSION: u32 = 5;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
 const MAX_WHITEWATER: usize = 250_000;
@@ -212,7 +213,10 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid magic"));
     }
     let version = read_u32(reader)?;
-    if !matches!(version, LEGACY_FORMAT_VERSION | FORMAT_VERSION) {
+    if !matches!(
+        version,
+        LEGACY_FORMAT_VERSION | LEGACY_LIQUID_FORMAT_VERSION | FORMAT_VERSION
+    ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unsupported format version",
@@ -232,7 +236,12 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             "fixed tick does not match 60 Hz",
         ));
     }
-    if read_settings(reader, version == FORMAT_VERSION)? != settings {
+    if read_settings(
+        reader,
+        version >= LEGACY_LIQUID_FORMAT_VERSION,
+        version == FORMAT_VERSION,
+    )? != settings
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "physical settings do not match",
@@ -259,10 +268,18 @@ fn write_settings(writer: &mut impl Write, settings: FluidSettings) -> io::Resul
     write_bool(writer, settings.apic)?;
     write_u64(writer, settings.max_vertices as u64)?;
     write_f64(writer, settings.liquid.viscosity)?;
-    write_f64(writer, settings.liquid.surface_tension)
+    write_f64(writer, settings.liquid.surface_tension)?;
+    write_u32(writer, settings.time_steps.min_substeps)?;
+    write_u32(writer, settings.time_steps.max_substeps)?;
+    write_u32(writer, settings.time_steps.cfl)?;
+    write_bool(writer, settings.time_steps.adaptive_obstacles)
 }
 
-fn read_settings(reader: &mut impl Read, includes_liquid: bool) -> io::Result<FluidSettings> {
+fn read_settings(
+    reader: &mut impl Read,
+    includes_liquid: bool,
+    includes_time_steps: bool,
+) -> io::Result<FluidSettings> {
     let settings = FluidSettings {
         resolution: read_u32(reader)?,
         domain_size: read_f32(reader)?,
@@ -290,7 +307,27 @@ fn read_settings(reader: &mut impl Read, includes_liquid: bool) -> io::Result<Fl
                 surface_tension: read_f64(reader)?,
             }
         } else {
-            manifold_fluids::LiquidOptions::default()
+            // v3 predates liquid coefficients; its historical values are fixed.
+            manifold_fluids::LiquidOptions {
+                viscosity: 0.0,
+                surface_tension: 0.0,
+            }
+        },
+        time_steps: if includes_time_steps {
+            manifold_fluids::TimeStepOptions {
+                min_substeps: read_u32(reader)?,
+                max_substeps: read_u32(reader)?,
+                cfl: read_u32(reader)?,
+                adaptive_obstacles: read_bool(reader)?,
+            }
+        } else {
+            // Preserve v3/v4 physics identity even if future runtime defaults change.
+            manifold_fluids::TimeStepOptions {
+                min_substeps: 1,
+                max_substeps: 6,
+                cfl: 5,
+                adaptive_obstacles: false,
+            }
         },
     };
     Ok(settings)
@@ -587,9 +624,30 @@ mod tests {
         0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
+    // Fixed bytes from the committed pre-TimeStepOptions v4 manifest layout
+    // at bbbbdb060; this fixture must stay independent of the current v5 writer.
+    const LEGACY_V4_LIQUID_MANIFEST: &[u8] = &[
+        0x4d, 0x46, 0x4c, 0x55, 0x49, 0x44, 0x43, 0x31, 0x04, 0x00, 0x00, 0x00, 0x37, 0x30, 0x61,
+        0x30, 0x65, 0x39, 0x35, 0x34, 0x30, 0x31, 0x38, 0x66, 0x65, 0x33, 0x39, 0x65, 0x31, 0x66,
+        0x39, 0x63, 0x33, 0x36, 0x33, 0x31, 0x32, 0x36, 0x34, 0x39, 0x38, 0x39, 0x35, 0x36, 0x39,
+        0x37, 0x35, 0x32, 0x62, 0x62, 0x37, 0x61, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x91, 0x3f,
+        0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x40, 0xcd, 0xcc, 0xcc, 0x3e, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xe0, 0x3f, 0x02, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xe0, 0x65, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x65, 0x40, 0x9a, 0x99,
+        0x99, 0x99, 0x99, 0x99, 0xb9, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e, 0x40, 0x00,
+        0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0,
+        0x3f, 0x9a, 0x99, 0x99, 0x99, 0x99, 0x99, 0xb9, 0x3f,
+    ];
+
     fn write_v3_manifest(directory: &Path) {
         fs::create_dir_all(directory).unwrap();
         fs::write(directory.join(MANIFEST), LEGACY_V3_DEFAULT_MANIFEST).unwrap();
+    }
+
+    fn write_v4_liquid_manifest(directory: &Path) {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(directory.join(MANIFEST), LEGACY_V4_LIQUID_MANIFEST).unwrap();
     }
 
     #[test]
@@ -600,6 +658,12 @@ mod tests {
             liquid: manifold_fluids::LiquidOptions {
                 viscosity: 0.25,
                 surface_tension: 0.1,
+            },
+            time_steps: manifold_fluids::TimeStepOptions {
+                min_substeps: 2,
+                max_substeps: 8,
+                cfl: 4,
+                adaptive_obstacles: true,
             },
             ..FluidSettings::default()
         };
@@ -667,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_v4_rejects_each_liquid_coefficient_mismatch() {
+    fn cache_v5_rejects_each_liquid_and_time_step_mismatch() {
         let root = std::env::temp_dir().join(format!(
             "manifold-fluid-cache-liquid-mismatch-{}",
             std::process::id()
@@ -677,6 +741,12 @@ mod tests {
             liquid: manifold_fluids::LiquidOptions {
                 viscosity: 0.25,
                 surface_tension: 0.1,
+            },
+            time_steps: manifold_fluids::TimeStepOptions {
+                min_substeps: 2,
+                max_substeps: 8,
+                cfl: 4,
+                adaptive_obstacles: true,
             },
             ..FluidSettings::default()
         };
@@ -689,7 +759,23 @@ mod tests {
 
         let mut changed_surface_tension = settings;
         changed_surface_tension.liquid.surface_tension = 0.2;
-        assert!(CacheReader::open(directory, changed_surface_tension).is_err());
+        assert!(CacheReader::open(directory.clone(), changed_surface_tension).is_err());
+
+        let mut changed_min_substeps = settings;
+        changed_min_substeps.time_steps.min_substeps = 3;
+        assert!(CacheReader::open(directory.clone(), changed_min_substeps).is_err());
+
+        let mut changed_max_substeps = settings;
+        changed_max_substeps.time_steps.max_substeps = 9;
+        assert!(CacheReader::open(directory.clone(), changed_max_substeps).is_err());
+
+        let mut changed_cfl = settings;
+        changed_cfl.time_steps.cfl = 6;
+        assert!(CacheReader::open(directory.clone(), changed_cfl).is_err());
+
+        let mut changed_adaptive_obstacles = settings;
+        changed_adaptive_obstacles.time_steps.adaptive_obstacles = false;
+        assert!(CacheReader::open(directory, changed_adaptive_obstacles).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -711,6 +797,32 @@ mod tests {
             viscosity: 0.0,
             surface_tension: 0.1,
         };
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed).is_err());
+        changed.liquid = manifold_fluids::LiquidOptions::default();
+        changed.time_steps.cfl = 2;
+        assert!(CacheReader::open(Arc::new(directory), changed).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v4_preserves_liquid_and_defaults_time_steps() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v4-time-steps-{}",
+            std::process::id()
+        ));
+        let directory = root.join("frames");
+        let settings = FluidSettings {
+            liquid: manifold_fluids::LiquidOptions {
+                viscosity: 0.25,
+                surface_tension: 0.1,
+            },
+            ..FluidSettings::default()
+        };
+        write_v4_liquid_manifest(&directory);
+        assert!(CacheReader::open(Arc::new(directory.clone()), settings).is_ok());
+
+        let mut changed = settings;
+        changed.time_steps.min_substeps = 2;
         assert!(CacheReader::open(Arc::new(directory), changed).is_err());
         fs::remove_dir_all(root).unwrap();
     }

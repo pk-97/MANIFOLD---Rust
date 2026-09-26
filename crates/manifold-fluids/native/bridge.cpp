@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -188,6 +189,22 @@ void validate_whitewater_options(uint32_t max_particles, double wavecrest_rate,
     }
 }
 
+void validate_time_step_options(uint32_t min_substeps, uint32_t max_substeps, uint32_t cfl) {
+    const uint32_t max_i32 = static_cast<uint32_t>(std::numeric_limits<int>::max());
+    if (min_substeps == 0 || min_substeps > max_i32) {
+        throw std::invalid_argument("time-step min substeps must fit a positive i32");
+    }
+    if (max_substeps == 0 || max_substeps > max_i32) {
+        throw std::invalid_argument("time-step max substeps must fit a positive i32");
+    }
+    if (cfl == 0 || cfl > max_i32) {
+        throw std::invalid_argument("time-step CFL must fit a positive i32");
+    }
+    if (min_substeps > max_substeps) {
+        throw std::invalid_argument("time-step min substeps must not exceed max substeps");
+    }
+}
+
 void refresh_whitewater(NativeWorld &native) {
     native.whitewater_positions.clear();
     native.whitewater_velocities.clear();
@@ -312,6 +329,26 @@ extern "C" int manifold_fluids_world_set_liquid_options(void *world, double visc
             native->viscosity_configured = true;
         }
         native->simulation->setSurfaceTension(surface_tension);
+    });
+}
+
+extern "C" int manifold_fluids_world_set_time_step_options(
+    void *world, uint32_t min_substeps, uint32_t max_substeps, uint32_t cfl,
+    int adaptive_obstacles) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        validate_time_step_options(min_substeps, max_substeps, cfl);
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->setMinTimeStepsPerFrame(static_cast<int>(min_substeps));
+        native->simulation->setMaxTimeStepsPerFrame(static_cast<int>(max_substeps));
+        native->simulation->setCFLConditionNumber(static_cast<int>(cfl));
+        if (adaptive_obstacles != 0) {
+            native->simulation->enableAdaptiveObstacleTimeStepping();
+        } else {
+            native->simulation->disableAdaptiveObstacleTimeStepping();
+        }
     });
 }
 

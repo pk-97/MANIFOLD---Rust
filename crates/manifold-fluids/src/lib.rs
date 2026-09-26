@@ -87,6 +87,54 @@ impl LiquidOptions {
     }
 }
 
+/// Adaptive integration within each `step` call, independent of presentation FPS.
+/// Defaults preserve the pinned engine settings. Changing these may change motion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TimeStepOptions {
+    pub min_substeps: u32,
+    pub max_substeps: u32,
+    /// Maximum grid-cell travel used by native adaptive timestep selection.
+    pub cfl: u32,
+    /// Include obstacle velocity when selecting the timestep.
+    pub adaptive_obstacles: bool,
+}
+
+impl Default for TimeStepOptions {
+    fn default() -> Self {
+        Self {
+            min_substeps: 1,
+            max_substeps: 6,
+            cfl: 5,
+            adaptive_obstacles: false,
+        }
+    }
+}
+
+impl TimeStepOptions {
+    pub fn validate(self) -> Result<(), FluidError> {
+        let max_i32 = i32::MAX as u32;
+        if self.min_substeps == 0 || self.min_substeps > max_i32 {
+            return Err(FluidError::input(
+                "time-step min_substeps must fit a positive i32",
+            ));
+        }
+        if self.max_substeps == 0 || self.max_substeps > max_i32 {
+            return Err(FluidError::input(
+                "time-step max_substeps must fit a positive i32",
+            ));
+        }
+        if self.cfl == 0 || self.cfl > max_i32 {
+            return Err(FluidError::input("time-step cfl must fit a positive i32"));
+        }
+        if self.min_substeps > self.max_substeps {
+            return Err(FluidError::input(
+                "time-step min_substeps must not exceed max_substeps",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhitewaterOptions {
     pub enabled: bool,
@@ -252,6 +300,13 @@ unsafe extern "C" {
         viscosity: f64,
         surface_tension: f64,
     ) -> i32;
+    fn manifold_fluids_world_set_time_step_options(
+        world: *mut std::ffi::c_void,
+        min_substeps: u32,
+        max_substeps: u32,
+        cfl: u32,
+        adaptive_obstacles: i32,
+    ) -> i32;
     fn manifold_fluids_world_set_whitewater_options(
         world: *mut std::ffi::c_void,
         enabled: i32,
@@ -367,6 +422,20 @@ impl FluidWorld {
             )
         };
         native_result(ok, "setting liquid options")
+    }
+
+    pub fn set_time_step_options(&mut self, options: TimeStepOptions) -> Result<(), FluidError> {
+        options.validate()?;
+        let ok = unsafe {
+            manifold_fluids_world_set_time_step_options(
+                self.native,
+                options.min_substeps,
+                options.max_substeps,
+                options.cfl,
+                i32::from(options.adaptive_obstacles),
+            )
+        };
+        native_result(ok, "setting time-step options")
     }
 
     pub fn set_whitewater_options(&mut self, options: WhitewaterOptions) -> Result<(), FluidError> {
@@ -753,8 +822,8 @@ fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, Config, LiquidOptions, Seconds, SurfaceOptions, SurfaceVertex, WhitewaterKind,
-        WhitewaterOptions, decode_surface,
+        Bounds, Config, LiquidOptions, Seconds, SurfaceOptions, SurfaceVertex, TimeStepOptions,
+        WhitewaterKind, WhitewaterOptions, decode_surface,
     };
 
     fn bobj(vertices: &[[f32; 3]], triangles: &[[i32; 3]]) -> Vec<u8> {
@@ -963,6 +1032,76 @@ mod tests {
     }
 
     #[test]
+    fn validates_time_step_options() {
+        assert_eq!(
+            TimeStepOptions::default(),
+            TimeStepOptions {
+                min_substeps: 1,
+                max_substeps: 6,
+                cfl: 5,
+                adaptive_obstacles: false,
+            }
+        );
+        assert!(
+            TimeStepOptions {
+                min_substeps: 0,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TimeStepOptions {
+                max_substeps: 0,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TimeStepOptions {
+                cfl: 0,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TimeStepOptions {
+                min_substeps: 3,
+                max_substeps: 2,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TimeStepOptions {
+                min_substeps: i32::MAX as u32 + 1,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TimeStepOptions {
+                max_substeps: i32::MAX as u32 + 1,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TimeStepOptions {
+                cfl: i32::MAX as u32 + 1,
+                ..TimeStepOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
     fn native_liquid_options_support_surface_tension_and_viscosity_reset() {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
@@ -1027,6 +1166,51 @@ mod tests {
             .unwrap();
         let stats = world.step(Seconds(1.0 / 60.0)).expect("empty step");
         assert_eq!(stats.particles, 0);
+    }
+
+    #[test]
+    fn native_time_step_options_respect_fixed_substeps() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [8, 8, 8],
+            cell_size: 0.5,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native world");
+        world
+            .set_time_step_options(TimeStepOptions {
+                min_substeps: 2,
+                max_substeps: 2,
+                cfl: 5,
+                adaptive_obstacles: false,
+            })
+            .expect("time-step options");
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.5, 0.5, 0.5],
+                    max: [2.5, 2.0, 2.5],
+                },
+                [0.0, 0.0, 0.0],
+            )
+            .expect("fluid box");
+        let stats = world.step(Seconds(1.0 / 60.0)).expect("fixed substeps");
+        assert_eq!(stats.substeps, 2);
+        assert!(stats.simulation_ms.is_finite());
+        assert!(stats.meshing_ms.is_finite());
+        let mut surface = Vec::new();
+        world.surface(&mut surface).expect("surface");
+        assert!(
+            !surface.is_empty(),
+            "fixed-substep scene produced no surface"
+        );
+        assert!(surface.iter().all(|vertex| {
+            vertex
+                .position
+                .iter()
+                .chain(vertex.normal.iter())
+                .all(|value| value.is_finite())
+        }));
     }
 
     #[test]

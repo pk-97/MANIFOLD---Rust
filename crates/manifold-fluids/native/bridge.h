@@ -33,6 +33,9 @@ int manifold_fluids_world_set_surface_options(void *world, double marker_particl
                                                double smoothing, uint32_t smoothing_iterations);
 int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
                                               double surface_tension);
+int manifold_fluids_world_set_time_step_options(void *world, uint32_t min_substeps,
+                                                uint32_t max_substeps, uint32_t cfl,
+                                                int adaptive_obstacles);
 int manifold_fluids_world_set_whitewater_options(void *world, int enabled,
                                                  uint32_t max_particles, double wavecrest_rate,
                                                  double turbulence_rate, double min_energy,

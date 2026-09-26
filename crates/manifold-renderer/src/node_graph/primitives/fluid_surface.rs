@@ -158,6 +158,7 @@ impl Primitive for FluidSurface {
                 viscosity: f64::from(ctx.scalar_or_param("viscosity", 0.0)),
                 surface_tension: f64::from(ctx.scalar_or_param("surface_tension", 0.0)),
             },
+            time_steps: Default::default(),
             surface: SurfaceOptions {
                 particle_scale: f64::from(ctx.scalar_or_param("surface_particle_scale", 3.0)),
                 smoothing: f64::from(ctx.scalar_or_param("surface_smoothing", 0.5)),
