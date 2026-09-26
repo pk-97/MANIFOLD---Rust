@@ -43,6 +43,10 @@ pub struct Slot(pub u32);
 pub struct NodeInputs<'a> {
     bindings: &'a [(&'static str, Slot)],
     backend: &'a dyn Backend,
+    /// A transient camera supplied by a render-only consumer. The override
+    /// is intentionally scoped to one named port; all other input ports keep
+    /// resolving through the graph backend.
+    camera_override: Option<(&'static str, Camera)>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
     /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
     /// (see `Executor::slot_generations`). Threaded through so
@@ -83,6 +87,7 @@ impl<'a> NodeInputs<'a> {
         Self {
             bindings,
             backend,
+            camera_override: None,
             generations,
             pending: &[],
             mesh_revisions: &[],
@@ -116,6 +121,17 @@ impl<'a> NodeInputs<'a> {
         content_versions: &'a [Option<ContentVersion>],
     ) -> Self {
         self.content_versions = content_versions;
+        self
+    }
+
+    /// View the same bindings with one camera port replaced for a render-only
+    /// pass. No backend value or slot binding is changed.
+    pub(crate) fn with_camera_override(
+        mut self,
+        port: &'static str,
+        camera: Camera,
+    ) -> Self {
+        self.camera_override = Some((port, camera));
         self
     }
 
@@ -210,6 +226,11 @@ impl<'a> NodeInputs<'a> {
     /// by the executor into the backend's per-slot map before the
     /// consumer runs.
     pub fn camera(&self, port: &str) -> Option<Camera> {
+        if let Some((override_port, camera)) = self.camera_override
+            && override_port == port
+        {
+            return Some(camera);
+        }
         self.backend.camera(self.slot(port)?)
     }
 
@@ -692,5 +713,50 @@ mod array_accessor_tests {
 
         let got = outputs.array("particles_out").expect("should resolve");
         assert_eq!(got.size, expected_size);
+    }
+}
+
+#[cfg(test)]
+mod camera_override_tests {
+    use super::*;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::ports::PortType;
+
+    #[test]
+    fn camera_override_is_scoped_to_the_named_port() {
+        let mut backend = crate::node_graph::MockBackend::new();
+        let camera_slot = backend.acquire(
+            ResourceId(0),
+            PortType::Camera,
+            None,
+            (0, 0),
+        );
+        let other_slot = backend.acquire(
+            ResourceId(1),
+            PortType::Camera,
+            None,
+            (0, 0),
+        );
+        let underlying = Camera::default_perspective();
+        let override_camera = Camera::from_pos_euler(
+            [1.0, 2.0, -4.0],
+            0.2,
+            -0.1,
+            0.0,
+            0.8,
+            0.05,
+            200.0,
+        );
+        Backend::set_camera(&mut backend, camera_slot, underlying);
+        Backend::set_camera(&mut backend, other_slot, underlying);
+        let bindings = [("camera", camera_slot), ("other", other_slot)];
+        let inputs = NodeInputs::new(&bindings, &backend, &[])
+            .with_camera_override("camera", override_camera);
+
+        assert_eq!(inputs.camera("camera"), Some(override_camera));
+        assert_eq!(inputs.camera("other"), Some(underlying));
+        assert_eq!(backend.camera(camera_slot), Some(underlying));
+        assert_eq!(inputs.scalar("camera"), None);
     }
 }

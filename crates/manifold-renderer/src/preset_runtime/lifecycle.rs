@@ -10,6 +10,7 @@ impl PresetRuntime {
     /// there (e.g. `temporal::Feedback`'s prev-frame buffer) reset
     /// alongside instance-local state.
     pub fn clear_state(&mut self) {
+        self.executor.reset_scene_viewport_state();
         for view in &mut self.math_views {
             view.events.clear();
             for variant in &mut view.variants {

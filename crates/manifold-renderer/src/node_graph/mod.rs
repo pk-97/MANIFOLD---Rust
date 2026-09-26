@@ -25,6 +25,7 @@ pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
+pub mod scene_viewport;
 mod binding_migration;
 pub mod content_revision;
 mod boundary_nodes;

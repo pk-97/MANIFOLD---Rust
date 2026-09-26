@@ -145,6 +145,14 @@ pub struct Executor {
     /// release) so the graph editor can sample it. `None` disables capture —
     /// zero cost on the live path. Set per frame via [`set_preview_target`].
     preview_target: Option<NodeInstanceId>,
+    /// A second render of the selected scene's resolved inputs. Owns only
+    /// render state; it never executes another graph or advances physics.
+    scene_viewport: Option<(
+        NodeInstanceId,
+        super::scene_viewport::SceneViewportConfig,
+        super::scene_viewport::SceneViewportPass,
+    )>,
+    scene_viewport_captured: bool,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
     /// the active quality column (realtime vs export). Default = live constants
     /// so tests and non-RT graphs run unchanged. Set per frame via
@@ -491,6 +499,8 @@ impl Executor {
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
             preview_target: None,
+            scene_viewport: None,
+            scene_viewport_captured: false,
             rt_quality: crate::node_graph::RtQuality::default(),
             preview_resource: None,
             preview_scalar_inputs: Vec::new(),
@@ -694,6 +704,52 @@ impl Executor {
     /// can hand it to the integration layer for downscaling.
     pub fn set_preview_target(&mut self, node: Option<NodeInstanceId>) {
         self.preview_target = node;
+    }
+
+    pub(crate) fn set_scene_viewport(
+        &mut self,
+        node: NodeInstanceId,
+        config: super::scene_viewport::SceneViewportConfig,
+    ) {
+        if let Some((target, current, _)) = self.scene_viewport.as_mut()
+            && *target == node
+        {
+            *current = config;
+        } else {
+            self.scene_viewport = Some((node, config, super::scene_viewport::SceneViewportPass::new()));
+        }
+        self.scene_viewport_captured = false;
+    }
+
+    pub(crate) fn clear_scene_viewport(&mut self) {
+        self.scene_viewport = None;
+        self.scene_viewport_captured = false;
+    }
+
+    pub(crate) fn reset_scene_viewport_state(&mut self) {
+        if let Some((_, _, pass)) = self.scene_viewport.as_mut() {
+            pass.clear_state();
+        }
+        self.scene_viewport_captured = false;
+    }
+
+    pub(crate) fn scene_viewport_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.scene_viewport.as_ref()
+            .filter(|_| self.scene_viewport_captured)
+            .and_then(|(_, _, pass)| pass.texture())
+    }
+
+    pub(crate) fn scene_viewport_status(&self) -> Option<crate::frame_status::FrameRenderStatus> {
+        self.scene_viewport.as_ref().map(|(_, _, pass)| {
+            if self.scene_viewport_captured { pass.status() }
+            else { crate::frame_status::FrameRenderStatus::PendingGeometry }
+        })
+    }
+
+    pub(crate) fn scene_viewport_errors(&self) -> &[String] {
+        self.scene_viewport.as_ref()
+            .filter(|_| self.scene_viewport_captured)
+            .map(|(_, _, pass)| pass.errors()).unwrap_or(&[])
     }
 
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set the per-frame RT quality values
@@ -1352,6 +1408,9 @@ impl Executor {
         // Reset preview capture for this frame. Re-resolved below if the
         // target node is live and produces a texture.
         self.preview_resource = None;
+        if !partial_sample {
+            self.scene_viewport_captured = false;
+        }
         self.preview_scalar_inputs.clear();
         self.preview_scalar_outputs.clear();
         self.live_scalar_inputs.clear();
@@ -1938,6 +1997,17 @@ impl Executor {
                         .with_outputs_retained(outputs_retained);
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
+                        // Borrow the same resolved resources before their last
+                        // reader releases them. The pass owns its camera view,
+                        // render history, outputs and diagnostics; no upstream
+                        // node or main renderer is evaluated a second time.
+                        if !partial_sample
+                            && let Some((target, config, pass)) = self.scene_viewport.as_mut()
+                            && *target == step.node
+                        {
+                            pass.render(&mut ctx, *config);
+                            self.scene_viewport_captured = true;
+                        }
                         debug_assert!(
                             !has_gpu_binding
                                 || !ctx.outputs_unchanged
