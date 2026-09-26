@@ -121,6 +121,7 @@
     ]
   },
   "flows": {
+    "scene-fluid-authoring": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",
     "scene-imported-physics": "gltfscene",

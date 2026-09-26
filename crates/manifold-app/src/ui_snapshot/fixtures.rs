@@ -33,6 +33,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
         "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
+        "fluidauthoring" => Some(physics_scene("SceneStarter", "Fluid Authoring")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {

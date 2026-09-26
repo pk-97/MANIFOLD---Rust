@@ -30,6 +30,7 @@ const UNBOUNDED_ANGLE_EXPOSURE_RANGE: (f32, f32) =
 const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.rigid_body",
     "node.physics_world",
+    "node.fluid_surface",
     "node.transform_3d",
     "node.pbr_material",
     "node.phong_material",
@@ -91,6 +92,10 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         })
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
+        .filter(|pd| type_id != "node.fluid_surface" || matches!(pd.name.as_ref(),
+            "domain_size" | "fill_height" | "viscosity" | "surface_tension" | "gravity"
+                | "emission" | "inflow_speed" | "speed" | "reset" | "surface_subdivisions"
+                | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"))
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or({
                 if matches!(pd.ty, ParamType::Angle) {
@@ -370,6 +375,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         .unwrap_or("Scene");
     let category = match node.type_id.as_str() {
         "node.rigid_body" | "node.physics_world" => "Physics".to_string(),
+        "node.fluid_surface" => "Simulation".to_string(),
         "node.transform_3d" => "Transform".to_string(),
         "node.pbr_material" | "node.phong_material" | "node.unlit_material" | "node.cel_material" => {
             "Material".to_string()
@@ -641,6 +647,23 @@ mod tests {
     #[test]
     fn metadata_for_unknown_type_is_empty() {
         assert!(metadata_for_node_type("node.definitely_not_real").is_empty());
+    }
+
+    #[test]
+    fn scene_physics_fluid_metadata_exposes_creative_controls_and_trigger() {
+        let metadata = metadata_for_node_type("node.fluid_surface");
+        for name in ["domain_size", "fill_height", "viscosity", "surface_tension",
+            "gravity", "emission", "inflow_speed", "speed", "surface_subdivisions",
+            "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations"]
+        {
+            assert!(metadata.iter().any(|param| param.name == name), "missing {name}");
+        }
+        assert!(metadata.iter().find(|param| param.name == "reset").unwrap().is_trigger);
+        for name in ["resolution", "transfer", "max_capacity", "cache_mode", "cache_path",
+            "whitewater", "whitewater_capacity"]
+        {
+            assert!(!metadata.iter().any(|param| param.name == name), "internal control {name}");
+        }
     }
 
     #[test]

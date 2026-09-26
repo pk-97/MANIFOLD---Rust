@@ -547,6 +547,25 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+                let command = manifold_editing::commands::graph::AddSceneFluidCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id.clone()),
+                    *render_scene_node_id,
+                    metadata_for_node_type("node.fluid_surface"),
+                    metadata_for_node_type("node.transform_3d"),
+                    metadata_for_node_type("node.pbr_material"),
+                    metadata_for_node_type("node.scene_object"),
+                    default,
+                );
+                ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
+                    Box::new(command),
+                    crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
+                ));
+            }
+            DispatchResult::structural()
+        }
         // BUG-hlw8 "+ Plane" button: mirrors `SceneSetupAddObject` above but
         // dispatches `AddSceneLayerPlaneCommand`, which builds a grouped plane
         // mesh + unlit material + transform. Skin assignment adds the source
@@ -1752,6 +1771,59 @@ mod tests {
             objects_param(&project, &layer_id, render_scene_id),
             before + 1.0
         );
+    }
+
+    #[test]
+    fn scene_physics_add_fluid_is_content_owned_selectable_and_reloadable() {
+        use crate::content_command::ContentCommand;
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let original = effective_def(&project, &layer_id);
+        let before = objects_param(&project, &layer_id, render_scene_id);
+        let (_, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let result = dispatch_project(
+            &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        assert!(result.structural_change);
+        assert_eq!(effective_def(&project, &layer_id), original,
+            "UI dispatch must leave the project unchanged until content accepts the edit");
+        let ContentCommand::ExecuteSelecting(mut command, request) =
+            content_rx.try_recv().expect("queued fluid insertion")
+        else { panic!("fluid insertion must use content-owned editing and selection"); };
+        assert!(content_rx.is_empty());
+        let pending = request.capture(&project);
+        command.execute(&mut project);
+        assert!(matches!(pending.resolve(&project),
+            Some(crate::edit_selection::EditSelection::Object { .. })));
+        let added = effective_def(&project, &layer_id);
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+        let vm = SceneVm::from_def(&added).expect("scene with fluid");
+        let row = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => Some(row),
+            _ => None,
+        }).expect("fluid is a selectable scene object");
+        assert_eq!(row.fluid_node_ids.len(), 2, "surface and source controls");
+        let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&added), &row.fluid_node_ids,
+        );
+        assert!(sections.iter().any(|section| section.contains("Simulation")));
+        assert!(sections.iter().any(|section| section.contains("Source")));
+        assert!(row.transform.is_none(), "fluid has no disconnected render-only transform");
+
+        let saved = serde_json::to_string(&project).unwrap();
+        let reloaded: Project = serde_json::from_str(&saved).unwrap();
+        assert_eq!(effective_def(&reloaded, &layer_id), added);
+        let reloaded_vm = SceneVm::from_def(&effective_def(&reloaded, &layer_id)).unwrap();
+        assert_eq!(reloaded_vm.objects, vm.objects);
+        command.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), original);
+        command.execute(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), added, "redo keeps stable graph identities");
     }
 
     #[test]

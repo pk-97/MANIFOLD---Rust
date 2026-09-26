@@ -14,21 +14,17 @@ pub(crate) const KEY_ADD_OBJECT: u64 = 80_014;
 pub(crate) const KEY_ADD_LIGHT: u64 = 80_015;
 /// BUG-hlw8 "+ Plane" button — dispatches `AddSceneLayerPlaneCommand`.
 pub(crate) const KEY_ADD_PLANE: u64 = 80_020;
+pub(crate) const KEY_ADD_FLUID: u64 = 80_021;
 
-/// The button ids the row built, handed back for the panel's click-dispatch
-/// fields (`add_object_id`/`add_light_id`/`add_plane_id`).
+/// Button ids retained by the panel for click dispatch.
 pub(crate) struct AddRowIds {
     pub object: NodeId,
     pub light: NodeId,
     pub plane: NodeId,
+    pub fluid: NodeId,
 }
 
-/// D6/BUG-hlw8: compact action row — Object, Light, and Layer Plane (a
-/// skinned plane mesh) all share the same live `next_index` source
-/// (`vm.object_count`). The compact Import Model button that used to render
-/// here was unreachable: `import_model_id` is overwritten by the Objects
-/// section header's Import button, so it emitted no action. Returns the ids
-/// and the y below the row.
+/// Compact scene insertion row. Returns button ids and the y below the row.
 pub(crate) fn build_add_action_row(
     tree: &mut UITree,
     parent: Option<NodeId>,
@@ -36,7 +32,7 @@ pub(crate) fn build_add_action_row(
     inner_w: f32,
     cy: f32,
 ) -> (AddRowIds, f32) {
-    let action_w = (inner_w - 2.0 * ROW_GAP) / 3.0;
+    let action_w = (inner_w - 3.0 * ROW_GAP) / 4.0;
     let object = tree.add_button_keyed(
         parent,
         inner_x,
@@ -67,7 +63,18 @@ pub(crate) fn build_add_action_row(
         "+ Plane",
         KEY_ADD_PLANE,
     );
-    (AddRowIds { object, light, plane }, cy + ROW_H)
+    let fluid = tree.add_button_keyed(
+        parent,
+        inner_x + 3.0 * (action_w + ROW_GAP),
+        cy,
+        action_w,
+        ROW_H,
+        btn_style(),
+        "+ Fluid",
+        KEY_ADD_FLUID,
+    );
+    tree.set_name(fluid, "scene_setup.add_fluid");
+    (AddRowIds { object, light, plane, fluid }, cy + ROW_H)
 }
 
 /// Click dispatch for the add-action row: Object and Plane index off the
@@ -76,6 +83,7 @@ pub(crate) fn add_row_click(
     object: Option<NodeId>,
     light: Option<NodeId>,
     plane: Option<NodeId>,
+    fluid: Option<NodeId>,
     node_id: NodeId,
     vm: &SceneSetupVm,
 ) -> Option<PanelAction> {
@@ -96,6 +104,11 @@ pub(crate) fn add_row_click(
             vm.layer_id.clone(),
             vm.scene_root_node_id,
             vm.object_count as u32,
+        )))
+    } else if fluid == Some(node_id) {
+        Some(PanelAction::Project(ProjectAction::SceneSetupAddFluid(
+            vm.layer_id.clone(),
+            vm.scene_root_node_id,
         )))
     } else {
         None

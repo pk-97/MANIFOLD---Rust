@@ -135,6 +135,7 @@ impl FluidSettings {
 pub struct FluidControls {
     pub emitter: Transform,
     pub obstacle: Transform,
+    pub obstacle_enabled: bool,
     pub gravity: f32,
     pub emission: bool,
     pub inflow_speed: f32,
@@ -153,6 +154,7 @@ impl Default for FluidControls {
                 scale: [0.65, 0.8, 0.65],
                 ..Transform::default()
             },
+            obstacle_enabled: true,
             gravity: -9.81,
             emission: true,
             inflow_speed: 1.5,
@@ -422,9 +424,13 @@ impl Worker {
                         native.set_gravity([0.0, step.current.gravity, 0.0]).map_err(|e| e.to_string())?;
                         native.set_emitter(request.settings.bounds(step.current.emitter),
                             [0.0, -step.current.inflow_speed, 0.0], step.current.emission).map_err(|e| e.to_string())?;
-                        native.set_obstacle(request.settings.bounds(step.previous.obstacle),
-                            request.settings.bounds(step.current.obstacle), request.settings.bounds(step.next.obstacle))
-                            .map_err(|e| e.to_string())?;
+                        if step.current.obstacle_enabled {
+                            native.set_obstacle(request.settings.bounds(step.previous.obstacle),
+                                request.settings.bounds(step.current.obstacle), request.settings.bounds(step.next.obstacle))
+                                .map_err(|e| e.to_string())?;
+                        } else {
+                            native.clear_obstacle().map_err(|e| e.to_string())?;
+                        }
                         stats = native.step(Seconds(TICK)).map_err(|e| e.to_string())?;
                         completed_count += 1;
                         pose = step.next.obstacle;
@@ -678,6 +684,11 @@ impl FluidRuntime {
                 return FluidControls {
                     emitter: interpolate(previous.controls.emitter, next.controls.emitter),
                     obstacle: interpolate(previous.controls.obstacle, next.controls.obstacle),
+                    obstacle_enabled: if alpha >= 1.0 {
+                        next.controls.obstacle_enabled
+                    } else {
+                        previous.controls.obstacle_enabled
+                    },
                     gravity: previous.controls.gravity
                         + alpha * (next.controls.gravity - previous.controls.gravity),
                     inflow_speed: previous.controls.inflow_speed
@@ -1437,6 +1448,7 @@ mod tests {
             .unwrap();
         let mut second = first;
         second.obstacle.pos[0] += 1.0;
+        second.obstacle_enabled = false;
         second.emission = false;
         runtime
             .observe(settings, second, Seconds(1.0), 1.0, 0.0)
@@ -1444,7 +1456,9 @@ mod tests {
         let middle = FluidRuntime::controls_at(runtime.history.iter(), 0.5);
         assert!((middle.obstacle.pos[0] - first.obstacle.pos[0] - 0.5).abs() < 1e-6);
         assert!(middle.emission);
+        assert!(middle.obstacle_enabled);
         assert!(!FluidRuntime::controls_at(runtime.history.iter(), 1.0).emission);
+        assert!(!FluidRuntime::controls_at(runtime.history.iter(), 1.0).obstacle_enabled);
         second.obstacle.rot_euler[1] = 0.1;
         assert!(
             runtime

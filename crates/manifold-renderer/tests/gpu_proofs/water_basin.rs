@@ -186,3 +186,54 @@ fn water_invalid_configuration_marks_frame_failed_for_export() {
     }
     encoder.commit_and_wait_completed();
 }
+
+#[test]
+fn scene_physics_added_fluid_renders_after_project_reload() {
+    use manifold_core::{GraphTarget, PresetTypeId, layer::Layer, project::Project};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::AddSceneFluidCommand;
+    use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
+
+    let mut project = Project::default();
+    let preset = PresetTypeId::new("SceneStarter");
+    let baseline = bundled_preset_def(&preset).unwrap();
+    let render_id = baseline.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
+    let layer = Layer::new_generator("Fluid Authoring".into(), preset, 0);
+    let target_graph = GraphTarget::Generator(layer.layer_id.clone());
+    project.timeline.layers.push(layer);
+    let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
+        metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
+        metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
+        baseline.clone());
+    add.execute(&mut project);
+    assert!(add.was_applied(), "{:?}", add.rejection_reason());
+    let saved = serde_json::to_string(&project).unwrap();
+    let reloaded: Project = serde_json::from_str(&saved).unwrap();
+    let graph = reloaded.graph_for_target(&target_graph, None).unwrap();
+    let harness = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let build = |def| PresetRuntime::from_json_str_with_device(
+        &serde_json::to_string(def).unwrap(), &registry, Arc::clone(&harness.device),
+        WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
+    let mut base_runtime = build(baseline);
+    let mut fluid_runtime = build(graph);
+    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
+        GpuTextureFormat::Rgba16Float, "added-fluid-proof");
+    let _offline = PhysicsStepScope::for_render(true);
+    let base_pixels = render_frame(&mut base_runtime, &target, &harness.device, 0);
+    let mut fluid_pixels = Vec::new();
+    for frame in 0..=30 {
+        fluid_pixels = render_frame(&mut fluid_runtime, &target, &harness.device, frame);
+    }
+    assert_finite_and_nonempty(&fluid_pixels, 30);
+    let changed = base_pixels.chunks_exact(8).zip(fluid_pixels.chunks_exact(8))
+        .filter(|(a, b)| (0..3).any(|axis| {
+            let offset = axis * 2;
+            let a = f16::from_le_bytes([a[offset], a[offset + 1]]).to_f32();
+            let b = f16::from_le_bytes([b[offset], b[offset + 1]]).to_f32();
+            (a - b).abs() > 0.01
+        })).count();
+    assert!(changed > 200, "added fluid must visibly affect the existing scene: {changed} pixels");
+    std::fs::write("/tmp/manifold_added_fluid.png",
+        readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+}

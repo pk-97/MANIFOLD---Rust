@@ -235,6 +235,9 @@ pub struct SceneObjectKnownRow {
     /// object group for imported models and at root for hand-built objects.
     pub physics: Option<PhysicsVm>,
     pub physics_imported: bool,
+    /// Fluid domain and source nodes whose ordinary parameters belong to
+    /// this surface. Document IDs remain globally unique across groups.
+    pub fluid_node_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1125,6 +1128,7 @@ fn trace_scene_object(
     let mut cursor = current_level.producer(object_node_id, "vertices");
     let mut parseable = cursor.is_some();
     let mut source_vertex_count: Option<u32> = None;
+    let mut fluid_node_ids = Vec::new();
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
@@ -1156,6 +1160,18 @@ fn trace_scene_object(
             continue;
         }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
+            if n.type_id == "node.fluid_surface" {
+                fluid_node_ids.push(n.id);
+                for port in ["emitter", "initial_volume"] {
+                    if let Some((_, _, source, _)) =
+                        resolve_producer_through_group(&current_level, n.id, port)
+                        && source.type_id == "node.transform_3d"
+                        && !fluid_node_ids.contains(&source.id)
+                    {
+                        fluid_node_ids.push(source.id);
+                    }
+                }
+            }
             source_vertex_count = node_source_vertex_count(n);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
@@ -1183,6 +1199,7 @@ fn trace_scene_object(
         skin,
         physics,
         physics_imported,
+        fluid_node_ids,
     }));
     (row, source_vertex_count)
 }
@@ -1540,6 +1557,22 @@ mod tests {
     fn empty_def_yields_no_scene() {
         let d = def(vec![node(0, "system.final_output", None)], vec![]);
         assert!(SceneVm::from_def(&d).is_none());
+    }
+
+    #[test]
+    fn scene_physics_fluid_controls_follow_surface_and_shared_source() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, "node.scene_object", Some("Fluid")),
+            node(4, "node.fluid_surface", None), node(5, "node.transform_3d", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter"),
+                wire(5, "transform", 4, "initial_volume")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert_eq!(row.fluid_node_ids, vec![4, 5]);
+        assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
     }
 
     #[test]

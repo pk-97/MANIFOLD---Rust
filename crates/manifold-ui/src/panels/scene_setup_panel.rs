@@ -940,6 +940,7 @@ pub struct ScenePanel {
     add_light_id: Option<NodeId>,
     /// BUG-hlw8 "+ Plane" — dispatches `SceneSetupAddLayerPlane`.
     add_plane_id: Option<NodeId>,
+    add_fluid_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
@@ -1079,6 +1080,7 @@ impl Default for ScenePanel {
             add_object_id: None,
             add_light_id: None,
             add_plane_id: None,
+            add_fluid_id: None,
             import_model_id: None,
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
@@ -1361,6 +1363,7 @@ impl ScenePanel {
         self.add_object_id = None;
         self.add_light_id = None;
         self.add_plane_id = None;
+        self.add_fluid_id = None;
         self.import_model_id = None;
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
@@ -1746,6 +1749,7 @@ impl ScenePanel {
         self.add_object_id = Some(ids.object);
         self.add_light_id = Some(ids.light);
         self.add_plane_id = Some(ids.plane);
+        self.add_fluid_id = Some(ids.fluid);
         cy
     }
 
@@ -2660,6 +2664,7 @@ impl ScenePanel {
                         self.add_object_id,
                         self.add_light_id,
                         self.add_plane_id,
+                        self.add_fluid_id,
                         *node_id,
                         vm,
                     ) {
@@ -3586,6 +3591,24 @@ mod tests {
             &actions[0],
             PanelAction::Project(ProjectAction::SceneSetupAddLight(l, 99, 1)) if *l == LayerId::new("layer-1")
         ));
+    }
+
+    #[test]
+    fn scene_physics_add_fluid_button_targets_the_bound_scene() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: panel.add_fluid_id.expect("add fluid button"),
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(actions.as_slice(),
+            [PanelAction::Project(ProjectAction::SceneSetupAddFluid(layer, 99))]
+                if *layer == LayerId::new("layer-1")));
     }
 
     /// BUG-hlw8: the "+ Plane" button emits `SceneSetupAddLayerPlane` carrying

@@ -251,6 +251,8 @@ pub enum ProjectAction {
     /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
     /// (SCENE_BUILD P5) — no new mutation path.
     SceneSetupAddObject(LayerId, u32, u32),
+    /// Add a liquid domain to the existing scene, with a source and material.
+    SceneSetupAddFluid(LayerId, u32),
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),

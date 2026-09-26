@@ -65,7 +65,7 @@ crate::primitive! {
     composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
     examples: ["WaterBasin", "WaterDamBreak", "HoneyDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
-    summary: "Simulate liquid, a pouring source and a moving box, and generate a surface for scene rendering.",
+    summary: "Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion.",
     category: Geometry3D, role: Source,
     aliases: ["water", "liquid", "fluid", "FLIP", "APIC"],
     boundary_reason: IoBridge,
@@ -208,14 +208,14 @@ impl Primitive for FluidSurface {
             return;
         }
         let defaults = FluidControls::default();
+        let emitter = ctx.inputs.transform("emitter");
+        let obstacle = ctx.inputs.transform("obstacle");
         let controls = FluidControls {
-            emitter: ctx.inputs.transform("emitter").unwrap_or(defaults.emitter),
-            obstacle: ctx
-                .inputs
-                .transform("obstacle")
-                .unwrap_or(defaults.obstacle),
+            emitter: emitter.unwrap_or(defaults.emitter),
+            obstacle: obstacle.unwrap_or(defaults.obstacle),
+            obstacle_enabled: obstacle.is_some(),
             gravity: ctx.scalar_or_param("gravity", -9.81),
-            emission: ctx.scalar_or_param("emission", 1.0) > 0.5,
+            emission: emitter.is_some() && ctx.scalar_or_param("emission", 1.0) > 0.5,
             inflow_speed: ctx.scalar_or_param("inflow_speed", 1.5),
         };
         if let Err(error) = self.runtime.observe(
@@ -306,5 +306,53 @@ impl Primitive for FluidSurface {
         }
         self.last_version = self.runtime.version;
         self.last_lag = lag.to_bits();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
+    use crate::node_graph::effect_node::FrameTime;
+    use crate::node_graph::physics::PhysicsStepScope;
+    use crate::node_graph::MockBackend;
+    use manifold_core::{Beats, Seconds};
+
+    #[test]
+    fn scene_physics_unconnected_fluid_source_does_not_emit_demo_liquid() {
+        let backend = MockBackend::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("resolution"), ParamValue::Float(8.0));
+        params.insert(Cow::Borrowed("fill_height"), ParamValue::Float(0.0));
+        let mut scalar = Vec::new();
+        let mut camera = Vec::new();
+        let mut light = Vec::new();
+        let mut material = Vec::new();
+        let mut transform = Vec::new();
+        let mut atmosphere = Vec::new();
+        let mut render_mode = Vec::new();
+        let mut object = Vec::new();
+        let mut errors = Vec::new();
+        let mut fluid = FluidSurface::new();
+        let _offline = PhysicsStepScope::for_render(true);
+        for frame in 0..=3 {
+            let inputs = NodeInputs::new(&[], &backend, &[]);
+            let outputs = NodeOutputs::new(&[], &backend, &mut scalar, &mut camera,
+                &mut light, &mut material, &mut transform, &mut atmosphere,
+                &mut render_mode, &mut object);
+            let time = FrameTime {
+                beats: Beats(f64::from(frame) / 60.0),
+                seconds: Seconds(f64::from(frame) / 60.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: frame.into(),
+            };
+            let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None)
+                .with_errors(&mut errors);
+            Primitive::run(&mut fluid, &mut ctx);
+        }
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(fluid.runtime.stats.particles, 0);
+        assert!(fluid.runtime.vertices.is_empty());
+        assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
     }
 }

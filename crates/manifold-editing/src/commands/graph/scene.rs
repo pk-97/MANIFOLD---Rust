@@ -21,6 +21,9 @@ use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposur
 use crate::command::Command;
 
 mod clone_sections;
+mod fluid;
+
+pub use fluid::*;
 
 use super::{
     InstanceLayerSnapshot, collect_node_ids, dedup_handle, descend_level, prune_instance_params,

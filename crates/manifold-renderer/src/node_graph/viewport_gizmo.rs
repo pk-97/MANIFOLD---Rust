@@ -490,6 +490,7 @@ mod tests {
             skin: None,
             physics: None,
             physics_imported: false,
+            fluid_node_ids: Vec::new(),
         }))
     }
 
@@ -595,6 +596,7 @@ mod tests {
             skin: None,
             physics: None,
             physics_imported: false,
+            fluid_node_ids: Vec::new(),
         }));
         let scene = scene_with(vec![row]);
         let target = gizmo_target_for(&scene, 5).unwrap();

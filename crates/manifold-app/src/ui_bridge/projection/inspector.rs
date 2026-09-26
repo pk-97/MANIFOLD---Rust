@@ -589,6 +589,7 @@ pub fn sync_inspector_data(
                                         // different strings for the same
                                         // node kind).
                                         let mut object_doc_ids = vec![*object_node_id];
+                                        object_doc_ids.extend_from_slice(&known.fluid_node_ids);
                                         if let Some(physics) = physics {
                                             if physics.enabled { object_doc_ids.push(physics.body_node_id); }
                                         } else if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
