@@ -125,9 +125,15 @@ dated E1–E6 record above describes the original implementation.
   `COLOR_0`. Missing colours are white. Interpolation and deformation preserve
   colour; base colour and cutout alpha multiply it. Mesh decode caches use a new
   format/key version while HDRI caches retain their existing version.
+  New imports explicitly enable `vertex_colors` on their geometry sources.
+  The load-time upgrade enables varying colours on older imports. Constant
+  colours already baked into saved material factors keep a white vertex stream,
+  preserving the equivalent factor product without tinting twice.
 - Legacy specular/glossiness import preserves diffuse and RGB specular factors
   and maps. Glossiness conversion computes `1 - factor * texture.a`. Previously
-  imported graphs which discarded specular RGB need reimporting to recover it.
+  imported graphs recover omitted settings and maps from their source model at
+  load, including RGB specular data. Generated legacy defaults are repaired;
+  edited values, custom wiring, transforms and animation remain authored.
 - Imported punctual lights retain raw intensity, inverse-square falloff, optional
   finite range and spot cones. Existing authored lights keep legacy attenuation
   by default; their falloff control can select the physical mode.
@@ -135,6 +141,15 @@ dated E1–E6 record above describes the original implementation.
   subsurface scattering, with shared colour/radius/phase/weight controls. See
   [SUBSURFACE_MATERIAL_DESIGN.md](SUBSURFACE_MATERIAL_DESIGN.md) for the boundary
   model, cost, geometry requirements and evidence.
+
+Project loading upgrades embedded imports and graph overrides in memory, with
+the changes persisted on the next normal save. Missing source assets and
+ambiguous custom topology produce notices and remain retryable after repair.
+Shader corrections apply to existing materials independently of this source-data
+upgrade. SSS stays disabled until selected deliberately; its diffusion/random-walk
+mode, weight, radius, colour, phase and sample controls share a dedicated
+Subsurface inspector section. New texture controls use the existing Advanced
+parameter surface.
 
 Focused enforcement lives in `render_scene_pbr_fidelity`, `render_scene_glass`,
 `render_legacy_parity`, the alpha-depth unit proofs, and the RT transmission

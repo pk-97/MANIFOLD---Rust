@@ -37,6 +37,7 @@ mod render_scene_pbr_fidelity;
 mod render_scene_subsurface;
 mod render_scene_punctual_fidelity;
 mod render_scene_uv1_preservation;
+mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_ibl;
 mod render_scene_instances;

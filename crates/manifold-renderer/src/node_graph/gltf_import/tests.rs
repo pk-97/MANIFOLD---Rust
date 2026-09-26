@@ -365,6 +365,11 @@ fn default_material_primitive_imports_as_one_object() {
         "the synthetic object's mesh source must select via the D4 sentinel, not a real \
          material index or the -1 'unset' value"
     );
+    assert_eq!(
+        mesh_node.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new imports must explicitly enable authored vertex colors"
+    );
 
     // Structural gate: compiles through the real registry.
     let registry = PrimitiveRegistry::with_builtin();
@@ -762,6 +767,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         emissive_strength: 1.0,
         ior: 1.5,
         specular_factor: 1.0,
+        legacy_specular_factor: None,
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
@@ -1197,6 +1203,7 @@ pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> supe
         emissive_strength: 2.5,
         ior: 1.5,
         specular_factor: 1.0,
+        legacy_specular_factor: None,
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
@@ -1300,6 +1307,11 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
     // object 1.
     let mut seen_counts: Vec<i32> = Vec::new();
     for mesh in &mesh_sources {
+        assert_eq!(
+            mesh.params.get("vertex_colors"),
+            Some(&bool_val(true)),
+            "every new static mesh source must explicitly enable authored vertex colors"
+        );
         let vcount = match mesh.params.get("source_vertex_count") {
             Some(SerializedParamValue::Int { value }) => *value,
             other => panic!("expected an Int source_vertex_count, got {other:?}"),
@@ -3178,6 +3190,16 @@ fn skinned_import_gets_no_rigid_animation_source() {
         flat.nodes.iter().any(|n| n.type_id == "node.gltf_skeleton_pose"),
         "rigged import must drive its mesh through node.gltf_skeleton_pose"
     );
+    let skinned_source = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.gltf_skinned_mesh_source")
+        .expect("rigged import must contain a skinned mesh source");
+    assert_eq!(
+        skinned_source.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new skinned imports must explicitly enable authored vertex colors"
+    );
     assert!(
         !flat.nodes.iter().any(|n| n.type_id == "node.gltf_animation_source"),
         "a skinned object's positioning comes entirely from its joint palette — \
@@ -3209,9 +3231,15 @@ fn skin_and_morph_combination_composes_instead_of_dropping() {
     );
 
     let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
-    assert!(
-        flat.nodes.iter().any(|n| n.type_id == "node.gltf_skinned_mesh_source"),
-        "skin+morph object must still be driven by node.gltf_skinned_mesh_source"
+    let skinned_source = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.gltf_skinned_mesh_source")
+        .expect("skin+morph object must still be driven by node.gltf_skinned_mesh_source");
+    assert_eq!(
+        skinned_source.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new skin+morph imports must explicitly enable authored vertex colors"
     );
     let blend = flat
         .nodes
@@ -3710,6 +3738,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         emissive_strength: 1.0,
         ior: 1.5,
         specular_factor: 1.0,
+        legacy_specular_factor: None,
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
@@ -4865,6 +4894,17 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
          palette — if this fails, the fixture no longer exercises the case this test gates \
          (report: {:?})",
         report.report_lines
+    );
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+    let rigid_source = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.gltf_skinned_mesh_source")
+        .expect("rigid multi-node import must contain a skinned mesh source");
+    assert_eq!(
+        rigid_source.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new rigid multi-node imports must explicitly enable authored vertex colors"
     );
     let duration_s = skeleton_pose_duration_s_or_static(&def);
     assert!(duration_s > 0.0, "node-slot object must resolve a positive clip duration");

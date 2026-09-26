@@ -947,7 +947,34 @@ impl Application {
     /// Apply a ProjectIOAction returned by ProjectIOService.
     /// Handles all side-effects that require Application-owned state:
     /// engine init, GPU resize, audio loading, selection reset, etc.
-    pub(crate) fn apply_project_io_action(&mut self, action: ProjectIOAction) {
+    pub(crate) fn apply_project_io_action(&mut self, mut action: ProjectIOAction) {
+        // Snapshot restore/copy actions bypass ProjectIOService's file-open
+        // migration hook. Upgrade those projects at the common apply seam;
+        // ordinary opens mark the action as already upgraded so their source
+        // assets are parsed only once and notices are not duplicated.
+        if !action.material_upgrade_applied {
+            if let Some(project) = action.apply_project.as_mut() {
+                let material_report = manifold_renderer::node_graph::gltf_import::upgrade_project_materials(project);
+                if material_report.changed_graphs > 0 {
+                    crate::project_io::install_project_preset_overlay(project);
+                    project.load_report.unresolved_preset_templates =
+                        project.reconcile_param_manifests();
+                }
+                if !material_report.notices.is_empty() {
+                    let material_notice = material_report.notices.join("\n");
+                    action.notice = Some(
+                        action
+                            .notice
+                            .take()
+                            .map_or(material_notice.clone(), |existing| {
+                                format!("{existing}\n{material_notice}")
+                            }),
+                    );
+                }
+            }
+            action.material_upgrade_applied = true;
+        }
+
         // Apply loaded project (replaces host.PrepareForProjectSwitch + ApplyProject + OnProjectOpened)
         if let Some(project) = action.apply_project {
             self.autosave.project_changed();

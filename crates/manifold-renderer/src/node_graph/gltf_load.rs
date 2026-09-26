@@ -1362,6 +1362,10 @@ pub(crate) struct GltfMaterialInfo {
     pub ior: f32,
     /// `KHR_materials_specular`'s `specularFactor` (default 1.0).
     pub specular_factor: f32,
+    /// Old specular/glossiness imports reduced RGB to this scalar mean.
+    /// Load-time upgrades use it to recognize generated defaults without
+    /// replacing the performer's authored specular edits. Not serialized.
+    pub legacy_specular_factor: Option<f32>,
     /// `KHR_materials_specular`'s `specularColorFactor` (default
     /// `[1,1,1]`), or the dielectric F0 tint recovered from a
     /// `KHR_materials_pbrSpecularGlossiness` RGB factor.
@@ -3562,12 +3566,15 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // this spec-gloss override write the SAME variable — one slot,
             // two possible sources, never both.
             let mut specular_factor_override: Option<f32> = None;
+            let mut legacy_specular_factor = None;
             let mut specular_color_factor_override: Option<[f32; 3]> = None;
             let mut spec_gloss_color_texture: Option<u32> = None;
             let mut spec_gloss_color_map: Option<MaterialMapInfo> = None;
             let mut spec_gloss_present = false;
             if let Some(sg) = m.pbr_specular_glossiness() {
                 spec_gloss_present = true;
+                let rgb = sg.specular_factor();
+                legacy_specular_factor = Some(((rgb[0] + rgb[1] + rgb[2]) / 3.0).clamp(0.0, 1.0));
                 let conv = convert_spec_gloss(sg.glossiness_factor(), sg.specular_factor());
                 base_color_factor = sg.diffuse_factor();
                 base_color_info = sg.diffuse_texture();
@@ -4048,6 +4055,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 emissive_strength,
                 ior,
                 specular_factor,
+                legacy_specular_factor,
                 specular_color_factor,
                 specular_texture,
                 specular_color_texture,
@@ -4214,6 +4222,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             unlit: false,
             ior: 1.5,
             specular_factor: 1.0,
+            legacy_specular_factor: None,
             specular_color_factor: [1.0, 1.0, 1.0],
             specular_texture: None,
             specular_color_texture: None,

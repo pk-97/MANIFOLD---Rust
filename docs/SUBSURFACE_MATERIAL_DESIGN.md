@@ -71,6 +71,10 @@ Diffusion, 8 samples. The PBR node has scalar ports for continuous values and
 enum/integer parameters for mode/samples. Samples clamp to 1–64, phase to
 −0.95–0.95, radius to 0.00001–10, weight/colour to 0–1. Nonfinite inputs use
 defaults. No experimental glTF extension is claimed as a ratified SSS format.
+The existing material inspector presents these controls in a dedicated
+Subsurface section, including a colour swatch. Existing projects gain the
+controls through the load-time exposure migration; weight remains zero until
+the performer enables scattering.
 
 GPU data in `manifold-gpu/src/metal/raytrace/params.rs`:
 

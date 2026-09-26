@@ -111,6 +111,18 @@ fn apply_translate(verts: Vec<MeshVertex>, offset: [f32; 3]) -> Vec<MeshVertex> 
         .collect()
 }
 
+/// Preserve the pre-COLOR_0 importer contract for saved graphs that do not
+/// carry the opt-in `vertex_colors` parameter. New imports set the parameter
+/// explicitly and retain authored vertex colours.
+fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) -> Vec<MeshVertex> {
+    if !vertex_colors {
+        for vertex in &mut verts {
+            vertex.color = [1.0; 4];
+        }
+    }
+    verts
+}
+
 crate::primitive! {
     name: GltfMeshSource,
     type_id: "node.gltf_mesh_source",
@@ -182,6 +194,14 @@ crate::primitive! {
             range: None,
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("vertex_colors"),
+            label: "Vertex Colors",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
         // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
         // provenance, never read by `evaluate()`/`run()` — stamped by
         // `gltf_import.rs` at import/merge time and read back by
@@ -245,7 +265,7 @@ crate::primitive! {
     boundary_reason: IoBridge,
     extra_fields: {
         // (path, mesh_index, primitive_index, material_index, fit, recenter,
-        // translate_x, translate_y, translate_z) last parsed (or in
+        // vertex_colors, translate_x, translate_y, translate_z) last parsed (or in
         // flight). Any change re-triggers a background parse — including
         // fit/recenter/translate_*, which apply to the freshly parsed
         // geometry ON that same background thread (D7), never per-frame.
@@ -253,8 +273,8 @@ crate::primitive! {
         // port-shadowed performance scalars, so a full re-parse on change
         // is the simple, correct choice over a second CPU-side cache tier.
         // BUG-221: translate_x/y/z joined the tuple the same way.
-        last_key: (String, i32, i32, i32, u32, bool, f32, f32, f32) =
-            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, 0.0, 0.0, 0.0),
+        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32) =
+            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0),
         // Last successfully parsed geometry (CPU-side), retained only until
         // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -328,6 +348,7 @@ impl Primitive for GltfMeshSource {
             _ => 0,
         };
         let recenter = matches!(ctx.params.get("recenter"), Some(ParamValue::Bool(true)));
+        let vertex_colors = matches!(ctx.params.get("vertex_colors"), Some(ParamValue::Bool(true)));
         let fit_unit_box = fit_idx == 1;
         let translate_x = ctx.param_f32("translate_x", 0.0);
 
@@ -347,6 +368,7 @@ impl Primitive for GltfMeshSource {
             material_index,
             fit_idx,
             recenter,
+            vertex_colors,
             translate_x,
             translate_y,
             translate_z,
@@ -398,6 +420,7 @@ impl Primitive for GltfMeshSource {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let result = cached_load_gltf_mesh(&path_buf, selector)
+                        .map(|verts| apply_vertex_color_compat(verts, vertex_colors))
                         .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
                         .map(|verts| apply_translate(verts, translate));
                     let _ = tx.send(result);
@@ -614,6 +637,7 @@ mod tests {
                 "max_capacity",
                 "fit",
                 "recenter",
+                "vertex_colors",
                 "translate_x",
                 "translate_y",
                 "translate_z",
@@ -635,6 +659,21 @@ mod tests {
         let recenter = GltfMeshSource::PARAMS.iter().find(|p| p.name == "recenter").unwrap();
         assert_eq!(recenter.ty, ParamType::Bool);
         assert_eq!(recenter.default, ParamValue::Bool(true));
+    }
+
+    #[test]
+    fn vertex_colors_compatibility_whitens_legacy_and_preserves_opt_in() {
+        let mut authored = off_scale_off_center_verts();
+        authored[0].color = [0.15, 0.3, 0.6, 0.85];
+        authored[1].color = [0.9, 0.2, 0.1, 0.7];
+
+        let legacy = apply_vertex_color_compat(authored.clone(), false);
+        assert!(legacy.iter().all(|vertex| vertex.color == [1.0; 4]));
+        let preserved = apply_vertex_color_compat(authored.clone(), true);
+        for (actual, expected) in preserved.iter().zip(authored.iter()) {
+            assert_eq!(actual.position, expected.position);
+            assert_eq!(actual.color, expected.color);
+        }
     }
 
     #[test]
@@ -758,6 +797,7 @@ mod gpu_tests {
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::effect_node::ParamValues;
+    use crate::node_graph::gltf_load::load_gltf_mesh;
     use crate::node_graph::{FrameTime, MetalBackend};
     use crate::TestDevice;
     use manifold_core::{Beats, Seconds};
@@ -834,6 +874,14 @@ mod gpu_tests {
         let buf = backend.array_buffer(slot).expect("array buffer retained");
         let ptr = buf.mapped_ptr().expect("shared buffer");
         unsafe { std::slice::from_raw_parts(ptr, buf.size() as usize) }.to_vec()
+    }
+
+    fn readback_vertices(backend: &MetalBackend, slot: Slot, count: usize) -> Vec<MeshVertex> {
+        let bytes = readback(backend, slot);
+        let byte_count = count * std::mem::size_of::<MeshVertex>();
+        assert!(bytes.len() >= byte_count, "vertex readback is smaller than the loaded mesh");
+        bytes[..byte_count].chunks_exact(std::mem::size_of::<MeshVertex>())
+            .map(bytemuck::pod_read_unaligned::<MeshVertex>).collect()
     }
 
     fn settle(
@@ -959,5 +1007,82 @@ mod gpu_tests {
             a_output, b_output,
             "fit param change on a live gated executor must match a fresh executor built with that param"
         );
+    }
+
+    /// Saved graphs omit `vertex_colors` and therefore retain the legacy white
+    /// vertex stream. New imports set it explicitly, preserving authored
+    /// COLOR_0 data. Toggling the flag must reparse, publish, and advance the
+    /// source content version rather than reusing the old staging buffer.
+    #[test]
+    fn vertex_colors_toggle_republishes_static_colored_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/BoxVertexColors.glb");
+        assert!(path.exists(), "required colored fixture missing: {}", path.display());
+        let authored = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load BoxVertexColors.glb");
+        assert!(!authored.is_empty());
+        assert!(
+            authored.iter().any(|vertex| vertex.color != [1.0; 4]),
+            "fixture must contain authored nonwhite COLOR_0 values"
+        );
+        assert!(
+            authored.iter().any(|vertex| vertex.color != authored[0].color),
+            "fixture must contain varying COLOR_0 values"
+        );
+
+        let count = authored.len();
+        let device = crate::test_device();
+        let (backend, _r_out, slot) = make_buffer_backend(&device);
+        let scratch: Vec<(&'static str, Slot)> = vec![("vertices", slot)];
+        let params_legacy = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
+        let mut prim = GltfMeshSource::new();
+
+        // An absent parameter is the saved-graph path and must publish white.
+        settle(&mut prim, &backend, &device, &scratch, &params_legacy);
+        let legacy_version = prim.content_version;
+        let legacy = readback_vertices(&backend, slot, count);
+        assert!(legacy.iter().all(|vertex| vertex.color == [1.0; 4]));
+        let legacy_colors: Vec<[f32; 4]> = legacy.iter().map(|vertex| vertex.color).collect();
+        assert!(run_once(&mut prim, &backend, &device, &scratch, &params_legacy, frame_time()));
+        assert_eq!(prim.content_version, legacy_version, "unchanged legacy frame must not reload");
+        let next_colors: Vec<[f32; 4]> = readback_vertices(&backend, slot, count)
+            .iter()
+            .map(|vertex| vertex.color)
+            .collect();
+        assert_eq!(legacy_colors, next_colors);
+
+        // Explicit opt-in preserves authored colors and advances publication.
+        let mut params_opt_in = params_legacy.clone();
+        params_opt_in.insert(Cow::Borrowed("vertex_colors"), ParamValue::Bool(true));
+        for _ in 0..200 {
+            run_once(&mut prim, &backend, &device, &scratch, &params_opt_in, frame_time());
+            if prim.content_version > legacy_version && prim.uploaded && prim.staging.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(prim.content_version > legacy_version, "enabling vertex colors must reload content");
+        let opt_in_version = prim.content_version;
+        run_once(&mut prim, &backend, &device, &scratch, &params_opt_in, frame_time());
+        let opt_in = readback_vertices(&backend, slot, count);
+        for (actual, expected) in opt_in.iter().zip(authored.iter()) {
+            assert_eq!(actual.color, expected.color, "opt-in output must retain authored COLOR_0");
+        }
+
+        // Explicit false is another compatibility reload, not a stale reuse
+        // of the opt-in staging buffer.
+        let mut params_false = params_legacy;
+        params_false.insert(Cow::Borrowed("vertex_colors"), ParamValue::Bool(false));
+        for _ in 0..200 {
+            run_once(&mut prim, &backend, &device, &scratch, &params_false, frame_time());
+            if prim.content_version > opt_in_version && prim.uploaded && prim.staging.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(prim.content_version > opt_in_version, "disabling vertex colors must reload content");
+        run_once(&mut prim, &backend, &device, &scratch, &params_false, frame_time());
+        let explicit_false = readback_vertices(&backend, slot, count);
+        assert!(explicit_false.iter().all(|vertex| vertex.color == [1.0; 4]));
     }
 }

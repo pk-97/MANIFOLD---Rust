@@ -214,6 +214,7 @@ pub(super) fn build_object_group(
                     .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
                 n.params
                     .insert("source_bbox_radius".to_string(), float(bbox_radius));
+                n.params.insert("vertex_colors".to_string(), bool_val(true));
                 n
             };
             group_nodes.push(skinned_src);
@@ -302,6 +303,7 @@ pub(super) fn build_object_group(
                     .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
                 n.params
                     .insert("source_bbox_radius".to_string(), float(bbox_radius));
+                n.params.insert("vertex_colors".to_string(), bool_val(true));
                 n
             };
             group_nodes.push(rigid_src);
@@ -381,6 +383,7 @@ pub(super) fn build_object_group(
             mesh_node
                 .params
                 .insert("source_bbox_radius".to_string(), float(bbox_radius));
+            mesh_node.params.insert("vertex_colors".to_string(), bool_val(true));
             // BUG-221: shift this object's OWN mesh so local (0,0,0)
             // lands on ITS OWN bbox center (m.own_center), not the
             // shared whole-scene center below — see build_object_group's
