@@ -130,6 +130,19 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
             }
         }
     }
+    if let Some((_, layer)) = ui.scene_setup_panel.live_layer_id()
+        .and_then(|id| project.timeline.find_layer_by_id(id))
+        && let Some(host) = layer.gen_params()
+        && let Some(def) = host.graph.as_ref()
+    {
+        for card in ui.scene_setup_panel.force_cards_mut() {
+            if let Some(instance) = card.modifier_info().and_then(|info|
+                def.scene_modifiers.iter().find(|instance| instance.id == info.instance_id))
+            {
+                card.sync_enabled(tree, modifier_enabled_value(host, def, instance));
+            }
+        }
+    }
 }
 
 /// Stamp the card-level available-send list (labels + ids) onto every card
@@ -703,12 +716,30 @@ pub(crate) fn modifier_picker_entries(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
+    scene_recipe_picker_entries(def, vm, false)
+}
+
+pub(crate) fn force_picker_entries(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
+    scene_recipe_picker_entries(def, vm, true)
+}
+
+fn scene_recipe_picker_entries(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    forces: bool,
+) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
     use manifold_renderer::preset_loader::SCENE_MODIFIER_CATALOG;
     use manifold_ui::param_surface::ModifierPickerEntry;
     let catalog = SCENE_MODIFIER_CATALOG.load();
     let mut entries: Vec<_> = catalog.entries().filter_map(|(id, json)| {
         if !catalog.is_browser_visible(&id) { return None; }
         let recipe: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&json).ok()?;
+        if manifold_core::scene_modifier_preset::is_force_recipe(&recipe) != forces {
+            return None;
+        }
         let metadata = recipe.preset_metadata.as_ref()?;
         if !metadata.available { return None; }
         let attachment = metadata.scene_modifier.as_ref()?;
@@ -745,6 +776,16 @@ pub(crate) fn modifier_picker_entries(
 
 /// A card owns rows through stable host-to-instance bindings. Titles and
 /// sections are presentation only; modulation still addresses the generator.
+pub(crate) fn is_force_surface(
+    surface: &ParamSurface,
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+) -> bool {
+    surface.modifier.as_ref().is_some_and(|info| {
+        def.scene_modifiers.iter().any(|instance| instance.id == info.instance_id
+            && manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph))
+    })
+}
+
 pub(crate) fn modifier_surfaces(
     gp: &manifold_core::effects::PresetInstance,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
@@ -776,12 +817,21 @@ pub(crate) fn modifier_surfaces(
         let enabled_row_in_body = enabled_row.is_some_and(|row| row.spec.name != "Enabled");
         let enabled = modifier_enabled_value_for_binding(gp, bindings, instance, &recipe.enabled_param);
         let legacy_scope = manifold_core::scene_modifier_math_view::has_legacy_scope_control(&instance.graph);
+        let force = manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph);
+        let force_objects = if force {
+            Some(manifold_renderer::node_graph::scene_modifier_expand::force_objects_for_authoring(def, &instance.scene)
+                .unwrap_or_else(|error| {
+                    log::error!("force {} targets unavailable: {error}", instance.id);
+                    Vec::new()
+                }))
+        } else { None };
         let object_targeting = recipe.stages.iter().any(|stage| {
             stage.outputs.iter().any(|output| matches!(
                 output.endpoint,
                 manifold_core::scene_modifier_preset::SceneEndpoint::Transform
                     | manifold_core::scene_modifier_preset::SceneEndpoint::Instances
                     | manifold_core::scene_modifier_preset::SceneEndpoint::Vertices
+                    | manifold_core::scene_modifier_preset::SceneEndpoint::Acceleration
             ))
         });
         let mut rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
@@ -832,7 +882,9 @@ pub(crate) fn modifier_surfaces(
                             SceneTargetSelection::Explicit { objects } => objects.contains(&object),
                         };
                         ModifierObjectOption {
-                            label: modifier_object_label(def, &object),
+                            label: if force_objects.as_ref().is_some_and(|eligible| !eligible.contains(&object)) {
+                                format!("{} (no physics)", modifier_object_label(def, &object))
+                            } else { modifier_object_label(def, &object) },
                             object: ModifierObjectRef { scope: object.scope, node: object.node },
                             selected,
                         }
@@ -1132,6 +1184,52 @@ mod audio_send_projection_tests {
 
 #[cfg(test)]
 mod modifier_audio_projection_tests {
+    #[test]
+    fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
+        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+        ))).unwrap();
+        let recipe = manifold_renderer::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
+            SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
+        graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
+        let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        host.graph = Some(graph.clone());
+        host.refresh_manifest_from_graph();
+        let strength = graph.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding| matches!(
+            &binding.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } if param_id == "strength"
+        )).unwrap().id.clone();
+        host.audio_mods = Some(vec![ParameterAudioMod::new(strength.clone().into(), "drums".into(),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full))]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        let surface = &surfaces[0];
+        assert!(is_force_surface(surface, &graph));
+        assert!(!surface.rows.is_empty());
+        for row in &surface.rows {
+            assert!(host.params.get(row.id.as_ref()).is_some());
+            assert!(row.scene_addr.is_none());
+            assert_eq!(row.audio.active, row.id.as_ref() == strength);
+        }
+        let info = surface.modifier.as_ref().unwrap();
+        assert!(info.targets_all);
+        assert!(!info.objects.is_empty());
+        assert!(info.objects.iter().all(|object| object.label.ends_with("(no physics)")));
+        assert!(force_picker_entries(&graph, &vm).iter().any(|entry| entry.preset_id == "RadialForce" && entry.disabled.is_none()));
+        assert!(modifier_picker_entries(&graph, &vm).iter().all(|entry| entry.preset_id != "RadialForce"));
+        let mut project = manifold_core::project::Project::default();
+        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), host.generator_type().clone(), 0);
+        *layer.gen_params_mut().unwrap() = host;
+        project.timeline.layers.push(layer);
+        let saved = serde_json::to_vec(&project).unwrap();
+        let mut loaded: manifold_core::project::Project = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(loaded.reconcile_param_manifests(), 0);
+        let host = loaded.timeline.layers[0].gen_params().unwrap();
+        let reloaded = modifier_surfaces(host, host.graph.as_ref().unwrap(), &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        assert!(reloaded[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap().audio.active);
+    }
+
     use super::*;
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
     use manifold_core::effect_graph_def::EffectGraphDef;

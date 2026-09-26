@@ -7,6 +7,9 @@ use manifold_ui::panels::actions::CardEditAction;
 impl AppInputHost<'_> {
     pub(super) fn edit_object_cards(&mut self, action: CardEditAction) -> bool {
         if !self.ui_root.object_cards_have_focus { return false; }
+        if let Some((layer, id)) = self.ui_root.scene_setup_panel.selected_force() {
+            return self.edit_force_card(action, layer, id);
+        }
         let selected = self.ui_root.scene_setup_panel.selected_object_modifier();
         if matches!(action, CardEditAction::Copy | CardEditAction::Cut) {
             let Some(address) = selected.as_ref() else { return true; };
@@ -62,6 +65,46 @@ impl AppInputHost<'_> {
                 ));
             }
         }
+        *self.needs_structural_sync = true;
+        *self.needs_rebuild = true;
+        true
+    }
+
+    fn edit_force_card(
+        &mut self,
+        action: CardEditAction,
+        layer: LayerId,
+        id: manifold_core::NodeId,
+    ) -> bool {
+        use crate::scene_modifier_edit::SceneModifierAction;
+        if matches!(action, CardEditAction::Copy | CardEditAction::Cut) {
+            match crate::scene_modifier_transfer::ModifierClipboard::capture(
+                self.project,
+                &layer,
+                std::slice::from_ref(&id),
+            ) {
+                Ok(clipboard) => self.ui_root.set_scene_modifier_clipboard(Some(clipboard)),
+                Err(reason) => {
+                    ContentCommand::send(
+                        self.content_tx,
+                        ContentCommand::GraphEditRejected(reason),
+                    );
+                    return true;
+                }
+            }
+        }
+        let edit = match action {
+            CardEditAction::Copy | CardEditAction::Group | CardEditAction::Ungroup => return true,
+            CardEditAction::Cut | CardEditAction::Delete => SceneModifierAction::Remove(layer, id),
+            CardEditAction::Duplicate => SceneModifierAction::Duplicate(layer, vec![id]),
+            CardEditAction::Paste => {
+                let Some(clipboard) = self.ui_root.scene_modifier_clipboard.clone() else {
+                    return true;
+                };
+                SceneModifierAction::Paste(layer, clipboard)
+            }
+        };
+        ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(edit));
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true

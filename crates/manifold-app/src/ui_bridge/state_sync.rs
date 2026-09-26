@@ -140,6 +140,13 @@ pub fn push_state(
 
         if let Some(update) = &content_state.modifier_selection_update {
             if ui.last_modifier_selection_sequence != Some(update.sequence) {
+                if let Some(id) = update.ids.iter().rev().find(|id| {
+                    ui.scene_setup_panel.force_card_info(id)
+                        .is_some_and(|info| info.layer_id == update.layer_id)
+                }) {
+                    ui.scene_setup_panel.set_selection(update.layer_id.clone(),
+                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
+                }
                 ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
                 ui.inspector.apply_selection_visuals(tree);
                 ui.inspector.reveal_pending_selection(tree);

@@ -202,8 +202,8 @@ impl ScenePanel {
     fn resolve_selection_readonly(&self, vm: &SceneSetupVm) -> SceneSelection {
         self.selection
             .get(&vm.layer_id)
-            .copied()
-            .filter(|selection| Self::selection_exists(vm, *selection))
+            .cloned()
+            .filter(|selection| Self::selection_exists(vm, selection.clone()))
             .unwrap_or_else(|| Self::default_selection(vm))
     }
 
@@ -453,7 +453,9 @@ impl ScenePanel {
     }
 
     pub fn cancel_object_modifier_drag(&mut self, tree: &mut UITree) -> bool {
-        let active = self.object_modifier_drag.is_some() || self.object_modifier_pressed_card.is_some();
+        let active = self.object_modifier_drag.is_some()
+            || self.object_modifier_pressed_card.is_some()
+            || self.force_pressed_card.is_some();
         if let Some(drag) = self.object_modifier_drag.take()
             && let Some(source) = self.card_index_for_address(&drag.identity)
         {
@@ -468,6 +470,9 @@ impl ScenePanel {
         {
             let _ = card.handle_drag_end(tree);
         }
+        if self.force_pressed_card.is_some() {
+            let _ = self.end_force_card_gesture(tree);
+        }
         active
     }
 
@@ -476,6 +481,11 @@ impl ScenePanel {
         if !self.open { self.object_cards_animating = false; return; }
         let mut any = false;
         for card in &mut self.object_modifier_cards {
+            if card.node_count() == 0 { continue; }
+            any |= card.tick_drawers(dt_ms);
+            card.tick_value_flash(tree, dt_ms);
+        }
+        for card in &mut self.force_cards {
             if card.node_count() == 0 { continue; }
             any |= card.tick_drawers(dt_ms);
             card.tick_value_flash(tree, dt_ms);
@@ -505,6 +515,9 @@ impl ScenePanel {
         for card in &self.object_modifier_cards {
             if card.node_count() > 0 { card.update_fire_meters(tree, fire_level, dt); }
         }
+        for card in &self.force_cards {
+            if card.node_count() > 0 { card.update_fire_meters(tree, fire_level, dt); }
+        }
     }
 
     fn card_index_for_address(&self, address: &ObjectModifierCardInfo) -> Option<usize> {
@@ -514,7 +527,7 @@ impl ScenePanel {
     }
 
     pub fn contains_object_modifier_node(&self, node_id: NodeId) -> bool {
-        self.card_index_for_node(node_id).is_some()
+        self.card_index_for_node(node_id).is_some() || self.force_card_index_for_node(node_id).is_some()
     }
 
     pub fn audio_drawer_intent(
@@ -524,8 +537,12 @@ impl ScenePanel {
         param_id: &manifold_foundation::ParamId,
         click: AudioDrawerClick,
     ) -> Vec<PanelAction> {
-        let Some(index) = self.card_index_for_node(node_id) else { return Vec::new() };
-        self.object_modifier_cards[index].audio_drawer_intent(target, param_id, click)
+        if let Some(index) = self.card_index_for_node(node_id) {
+            return self.object_modifier_cards[index].audio_drawer_intent(target, param_id, click);
+        }
+        self.force_card_index_for_node(node_id)
+            .map(|index| self.force_cards[index].audio_drawer_intent(target, param_id, click))
+            .unwrap_or_default()
     }
 
     pub fn refresh_driver_period_intent(
@@ -540,8 +557,13 @@ impl ScenePanel {
         ) {
             return action;
         }
-        self.card_index_for_node(node_id)
-            .and_then(|index| self.object_modifier_cards[index].driver_period_typein(node_id, tree))
+        if let Some(index) = self.card_index_for_node(node_id) {
+            return self.object_modifier_cards[index]
+                .driver_period_typein(node_id, tree)
+                .unwrap_or(action);
+        }
+        self.force_card_index_for_node(node_id)
+            .and_then(|index| self.force_cards[index].driver_period_typein(node_id, tree))
             .unwrap_or(action)
     }
 

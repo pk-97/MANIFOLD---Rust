@@ -185,6 +185,14 @@ fn modifier_object_menu_items(
     layer_id: &manifold_core::LayerId,
     info: &manifold_ui::param_surface::ModifierCardInfo,
 ) -> Vec<DropdownItem> {
+    scene_target_menu_items(layer_id, info, false)
+}
+
+fn scene_target_menu_items(
+    layer_id: &manifold_core::LayerId,
+    info: &manifold_ui::param_surface::ModifierCardInfo,
+    force: bool,
+) -> Vec<DropdownItem> {
     use manifold_ui::param_surface::ModifierObjectRef;
 
     let selected_count = info.objects.iter().filter(|object| object.selected).count();
@@ -194,15 +202,22 @@ fn modifier_object_menu_items(
         info.instance_id.clone(),
         None,
     ));
-    items.push(DropdownItem::new("Apply to all objects")
+    items.push(DropdownItem::new(if force { "All physics objects" } else { "Apply to all objects" })
         .with_check(info.targets_all)
         .with_action(all_action));
+    if force {
+        items.push(DropdownItem::new("No targets")
+            .with_check(!info.targets_all && selected_count == 0)
+            .with_action(PanelAction::Project(ProjectAction::SceneModifierSetTargets(
+                layer_id.clone(), info.instance_id.clone(), Some(Vec::new()),
+            ))));
+    }
 
     for (index, option) in info.objects.iter().enumerate() {
         let action = if info.targets_all {
             Some(vec![option.object.clone()])
         } else if option.selected {
-            if selected_count <= 1 {
+            if selected_count <= 1 && !force {
                 None
             } else {
                 let targets: Vec<ModifierObjectRef> = info
@@ -245,7 +260,7 @@ fn modifier_object_menu_items(
         // empty object snapshot.
         items[0] = items[0].clone().with_separator();
     }
-    for option in info.objects.iter().filter(|object| object.selected) {
+    for option in info.objects.iter().filter(|object| object.selected && !force) {
         items.push(DropdownItem::new(&format!("Preview {}", option.label)).with_action(
             PanelAction::Root(RootAction::PreviewSceneModifierObject(
                 layer_id.clone(),
@@ -264,6 +279,19 @@ mod tests {
     use manifold_core::{LayerId, NodeId};
     use manifold_ui::panels::{PanelAction, ProjectAction, RootAction};
     use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption, ModifierObjectRef};
+
+    #[test]
+    fn scene_force_menu_can_clear_last_target_without_losing_stable_address() {
+        let items = super::scene_target_menu_items(&LayerId::new("layer"),
+            &info(false, vec![object("body", true)]), true);
+        assert_eq!(items[0].label, "All physics objects");
+        assert!(items.iter().any(|item| item.label == "No targets" && matches!(&item.action,
+            Some(PanelAction::Project(ProjectAction::SceneModifierSetTargets(layer, id, Some(targets))))
+                if layer.as_str() == "layer" && id.as_str() == "modifier" && targets.is_empty())));
+        assert!(items.iter().any(|item| item.label == "Duplicate" && matches!(&item.action,
+            Some(PanelAction::Project(ProjectAction::SceneModifierSetTargets(_, _, Some(targets)))) if targets.is_empty())));
+        assert!(!items.iter().any(|item| item.label.starts_with("Preview")));
+    }
 
     #[test]
     fn automation_numeric_menu_captures_the_clicked_point_value() {
@@ -826,10 +854,32 @@ impl UIRoot {
                 // Resolve against the exact card instance that emitted the
                 // click. The card snapshot owns stable object addresses; this
                 // menu never reconstructs them from labels or positions.
-                let Some(info) = self.inspector.modifier_card_info(instance_id).cloned() else {
+                let force_info = self.scene_setup_panel.force_card_info(instance_id)
+                    .filter(|info| &info.layer_id == layer_id).cloned();
+                let force = force_info.is_some();
+                let Some(info) = force_info.or_else(|| self.inspector.modifier_card_info(instance_id)
+                    .filter(|info| &info.layer_id == layer_id).cloned()) else {
                     return true;
                 };
-                let items = modifier_object_menu_items(layer_id, &info);
+                let items = if force { scene_target_menu_items(layer_id, &info, true) }
+                    else { modifier_object_menu_items(layer_id, &info) };
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
+            PanelAction::Root(RootAction::SceneSetupAddForceClicked(layer_id)) => {
+                if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
+                    return true;
+                }
+                let items = self.scene_setup_panel.force_picker().iter().map(|entry| {
+                    match &entry.disabled {
+                        Some(reason) => DropdownItem::disabled(&format!("{} — {}", entry.label, reason)),
+                        None => DropdownItem::new(&entry.label).with_action(
+                            PanelAction::Project(ProjectAction::SceneModifierApply(
+                                layer_id.clone(), entry.preset_id.clone(),
+                            )),
+                        ),
+                    }
+                }).collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
@@ -1538,15 +1588,27 @@ impl UIRoot {
                 true
             }
             PanelAction::Root(RootAction::SceneModifierCardRightClicked(layer, id)) => {
-                self.object_cards_have_focus = false;
-                self.inspector.select_modifier_for_context_menu(layer, id);
-                self.inspector.apply_selection_visuals(&mut self.tree);
+                let force = self.scene_setup_panel.force_card_info(id)
+                    .is_some_and(|info| &info.layer_id == layer);
+                self.object_cards_have_focus = force;
+                if force {
+                    self.scene_setup_panel.set_selection(layer.clone(),
+                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
+                } else {
+                    self.inspector.select_modifier_for_context_menu(layer, id);
+                    self.inspector.apply_selection_visuals(&mut self.tree);
+                }
                 let target = manifold_ui::view::UiGraphTarget::SceneModifier {
                     owner: Box::new(manifold_ui::view::UiGraphTarget::Generator(layer.clone())),
                     modifier_id: id.clone(),
                 };
                 let mut items = card_edit_menu_items(self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0), false, false);
-                items.extend(preset_menu_items(self.inspector.modifier_has_graph_mod(layer, id),
+                let modified = if force {
+                    self.scene_setup_panel.force_cards_mut().iter()
+                        .find(|card| card.modifier_info().is_some_and(|info| &info.instance_id == id))
+                        .is_some_and(|card| card.has_graph_mod())
+                } else { self.inspector.modifier_has_graph_mod(layer, id) };
+                items.extend(preset_menu_items(modified,
                     |kind| ParamsAction::PresetAction(target.clone(), kind)));
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true

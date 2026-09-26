@@ -30,6 +30,8 @@ mod row_gesture_tests;
 mod material_inspector;
 #[path = "scene_setup_panel/object_modifiers.rs"]
 mod object_modifiers;
+#[path = "scene_setup_panel/forces.rs"]
+mod forces;
 #[path = "scene_setup_panel/fluid_roles.rs"]
 mod fluid_roles;
 
@@ -40,7 +42,7 @@ use crate::input::UIEvent;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
-use manifold_foundation::{AudioSendId, LayerId};
+use manifold_foundation::{AudioSendId, LayerId, NodeId as FoundationNodeId};
 
 use super::{GraphParamTarget, PanelAction, ParamsAction};
 use super::actions::{MaterialEditKind, MaterialParamWrite};
@@ -55,7 +57,8 @@ use super::param_slider_shared::{
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec,
+    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RgbChannel, RowMapping,
+    RowRole, RowSpec,
 };
 use crate::slider::GAP;
 
@@ -74,6 +77,7 @@ const KEY_IMPORT_MODEL: u64 = 80_016;
 const KEY_OUTLINER_SCENE: u64 = 80_017;
 const KEY_OUTLINER_LIGHTS: u64 = 80_018;
 const KEY_OUTLINER_OBJECTS: u64 = 80_019;
+const KEY_OUTLINER_FORCES: u64 = 80_023;
 /// Frame button offset: use offset 33 to avoid collision with Remove (20), Duplicate (21), and mod buttons (22..32)
 const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
@@ -615,6 +619,12 @@ pub struct FluidRoleRow {
 /// depend on `manifold-renderer`/`manifold-core`, so the translation is the
 /// UI-facing DTO boundary, same convention as `AudioSendRow`).
 #[derive(Clone, Debug, PartialEq)]
+pub struct SceneForceRowVm {
+    pub instance_id: FoundationNodeId,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct SceneSetupVm {
     pub layer_id: LayerId,
     pub scene_name: String,
@@ -653,17 +663,22 @@ pub struct SceneSetupVm {
     /// used to compute scene-relative slider ranges (center ± 2×extent per axis).
     /// Fallback to descriptor defaults when None.
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
+    /// Scene force rows projected with stable instance identities.
+    pub forces: Vec<SceneForceRowVm>,
+    /// Typed force recipe picker for the selected scene layer.
+    pub force_picker: Vec<ModifierPickerEntry>,
 }
 
 /// P5's outliner selection (D7): the one scene item whose controls the
 /// properties region shows. UI-local workspace state — like fold state,
 /// NEVER serialized (`rg -n "SceneSelection" crates/manifold-io
-/// crates/manifold-core` must stay 0 hits). `u32` payloads are node doc
-/// ids — removal-stable, unlike indices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// crates/manifold-core` must stay 0 hits). Object/light `u32` payloads and
+/// force `NodeId` payloads are stable graph identities, unlike indices.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneSelection {
     Object(u32),
     Light(u32),
+    Force(FoundationNodeId),
     Camera,
     World,
     /// scene-panel-ux lane: outliner group fold toggle (Scene/Lights/Objects)
@@ -969,6 +984,9 @@ pub struct ScenePanel {
     object_modifier_drag_indicator: Option<NodeId>,
     selected_object_modifier: Option<ObjectModifierCardInfo>,
     object_modifier_pressed_card: Option<usize>,
+    /// Shared parameter cards for force recipes in the selected scene.
+    force_cards: Vec<ParamCardPanel>,
+    force_pressed_card: Option<(LayerId, FoundationNodeId)>,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
     /// `ParamSurface` (every exposed param, every section) — built by
     /// `state_sync` the SAME way the main inspector's generator card is
@@ -983,6 +1001,7 @@ pub struct ScenePanel {
     /// BUG-hlw8 "+ Plane" — dispatches `SceneSetupAddLayerPlane`.
     add_plane_id: Option<NodeId>,
     add_fluid_id: Option<NodeId>,
+    add_force_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
@@ -1120,12 +1139,15 @@ impl Default for ScenePanel {
             object_modifier_drag_indicator: None,
             selected_object_modifier: None,
             object_modifier_pressed_card: None,
+            force_cards: Vec::new(),
+            force_pressed_card: None,
             full_params: None,
             full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
             add_light_id: None,
             add_plane_id: None,
             add_fluid_id: None,
+            add_force_id: None,
             import_model_id: None,
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
@@ -1189,6 +1211,9 @@ impl ScenePanel {
         for card in &self.object_modifier_cards {
             card.register_intents(intents);
         }
+        for card in &self.force_cards {
+            card.register_intents(intents);
+        }
     }
 
     pub fn open(&mut self) {
@@ -1209,6 +1234,7 @@ impl ScenePanel {
     /// staleness").
     pub fn configure(&mut self, state: SceneSetupState) {
         self.state = state;
+        if !matches!(self.state, SceneSetupState::Live(_)) { self.clear_force_cards(); }
         self.rebuild_object_modifier_cards_from_projection();
     }
 
@@ -1331,6 +1357,22 @@ impl ScenePanel {
                 });
                 card.sync_values(tree, &mut modifier_slots);
             }
+            for card in &mut self.force_cards {
+                if card.node_count() == 0 { continue; }
+                let mut force_slots = surface.rows.iter().map(|row| {
+                    (
+                        row.id.as_ref(),
+                        crate::view::UiParamSlot {
+                            value: row.value.effective,
+                            base: row.value.base,
+                            exposed: row.value.exposed,
+                            min: row.spec.min,
+                            max: row.spec.max,
+                        },
+                    )
+                });
+                card.sync_values(tree, &mut force_slots);
+            }
         }
         for &(node, slot) in &self.material_mode_ids {
             let label = match card.current_values[slot].round() as i32 { 1 => "Off", 2 => "On", _ => "Auto" };
@@ -1412,6 +1454,7 @@ impl ScenePanel {
         self.add_light_id = None;
         self.add_plane_id = None;
         self.add_fluid_id = None;
+        self.add_force_id = None;
         self.import_model_id = None;
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
@@ -1441,6 +1484,9 @@ impl ScenePanel {
         // cards hidden by a non-object selection cannot claim a fresh row's
         // node range during event routing.
         for card in &mut self.object_modifier_cards {
+            card.clear_nodes();
+        }
+        for card in &mut self.force_cards {
             card.clear_nodes();
         }
         self.active_material_info = None;
@@ -1570,7 +1616,7 @@ impl ScenePanel {
 
         // ── Outliner ──
         let selected = self.resolve_selection(vm);
-        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, selected);
+        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, &selected);
         cy += ROW_GAP * 2.0;
 
         // ── Properties ──
@@ -1599,7 +1645,7 @@ impl ScenePanel {
         };
         if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
         let SceneSetupState::Live(vm) = &self.state else { return false; };
-        self.selection.insert(vm.layer_id.clone(), *selection);
+        self.selection.insert(vm.layer_id.clone(), selection.clone());
         true
     }
 
@@ -1609,12 +1655,12 @@ impl ScenePanel {
     /// into `self.selection` so a later `object_name_rect`/click lookup
     /// this same frame sees the same answer `build_outliner` used.
     fn resolve_selection(&mut self, vm: &SceneSetupVm) -> SceneSelection {
-        let current = self.selection.get(&vm.layer_id).copied();
+        let current = self.selection.get(&vm.layer_id).cloned();
         let resolved = match current {
-            Some(sel) if Self::selection_exists(vm, sel) => sel,
+            Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
         };
-        self.selection.insert(vm.layer_id.clone(), resolved);
+        self.selection.insert(vm.layer_id.clone(), resolved.clone());
         resolved
     }
 
@@ -1628,6 +1674,7 @@ impl ScenePanel {
             SceneSelection::Light(id) => {
                 vm.lights.iter().any(|l| matches!(l, LightRowVm::Known(r) if r.node_doc_id == id))
             }
+            SceneSelection::Force(id) => vm.forces.iter().any(|row| row.instance_id == id),
         }
     }
 
@@ -1657,7 +1704,7 @@ impl ScenePanel {
         inner_w: f32,
         mut cy: f32,
         vm: &SceneSetupVm,
-        selected: SceneSelection,
+        selected: &SceneSelection,
     ) -> f32 {
         // Scene group header
         let scene_folded = self.outliner_folded.get("Scene").copied().unwrap_or(false);
@@ -1708,9 +1755,40 @@ impl ScenePanel {
             }
         }
 
+        // Forces are scene modifier cards with stable instance identities. The
+        // header owns the typed recipe picker affordance; rows only select.
+        let forces_folded = self.outliner_folded.get("Forces").copied().unwrap_or(false);
+        let (next_y, add_force) = self.build_outliner_fold_header_with_button(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            "Forces",
+            forces_folded,
+            KEY_OUTLINER_FORCES,
+            KEY_OUTLINER_FORCES + 1,
+            "+ Force",
+        );
+        cy = next_y;
+        self.add_force_id = Some(add_force);
+        if !forces_folded {
+            for force in &vm.forces {
+                cy = self.build_outliner_row(
+                    tree,
+                    inner_x,
+                    inner_w,
+                    cy,
+                    &format!("\u{26A1} {}", force.title),
+                    SceneSelection::Force(force.instance_id.clone()),
+                    selected,
+                    EyeSlot::Empty,
+                );
+            }
+        }
+
         // Objects group header with Import Model button
         let objects_folded = self.outliner_folded.get("Objects").copied().unwrap_or(false);
-        cy = self.build_outliner_fold_header_with_button(
+        let (next_y, import_model) = self.build_outliner_fold_header_with_button(
             tree,
             inner_x,
             inner_w,
@@ -1721,6 +1799,8 @@ impl ScenePanel {
             KEY_IMPORT_MODEL,
             "Import Model…",
         );
+        cy = next_y;
+        self.import_model_id = Some(import_model);
         if !objects_folded {
             for obj in &vm.objects {
                 match obj {
@@ -1819,10 +1899,10 @@ impl ScenePanel {
         cy: f32,
         label: &str,
         sel: SceneSelection,
-        selected: SceneSelection,
+        selected: &SceneSelection,
         eye: EyeSlot,
     ) -> f32 {
-        let is_selected = sel == selected;
+        let is_selected = &sel == selected;
         let row_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
@@ -1831,9 +1911,9 @@ impl ScenePanel {
             ROW_H,
             outliner_row_style(is_selected),
             label,
-            outliner_row_key(sel),
+            outliner_row_key(sel.clone()),
         );
-        self.outliner_row_ids.push((row_id, sel));
+        self.outliner_row_ids.push((row_id, sel.clone()));
         match eye {
             EyeSlot::Live(row) => {
                 let on = row.value > 0.5;
@@ -1871,7 +1951,7 @@ impl ScenePanel {
         cy: f32,
         label: &str,
         group_id: u32,
-        selected: SceneSelection,
+        selected: &SceneSelection,
         expanded: bool,
         eye: EyeSlot,
     ) -> f32 {
@@ -1893,7 +1973,7 @@ impl ScenePanel {
             cy,
             inner_w - STEP_W * 2.0,
             ROW_H,
-            outliner_row_style(SceneSelection::Object(group_id) == selected),
+            outliner_row_style(&SceneSelection::Object(group_id) == selected),
             label,
             outliner_row_key(SceneSelection::Object(group_id)),
         );
@@ -1926,7 +2006,7 @@ impl ScenePanel {
         cy: f32,
         label: &str,
         sel: SceneSelection,
-        selected: SceneSelection,
+        selected: &SceneSelection,
         eye: EyeSlot,
     ) -> f32 {
         let indent = STEP_W;
@@ -1936,11 +2016,11 @@ impl ScenePanel {
             cy,
             inner_w - STEP_W - indent,
             ROW_H,
-            outliner_row_style(sel == selected),
+            outliner_row_style(&sel == selected),
             label,
-            outliner_row_key(sel),
+            outliner_row_key(sel.clone()),
         );
-        self.outliner_row_ids.push((row_id, sel));
+        self.outliner_row_ids.push((row_id, sel.clone()));
         if let EyeSlot::Live(row) = eye {
             let object_node_id = match sel {
                 SceneSelection::Object(id) => id,
@@ -2056,7 +2136,7 @@ impl ScenePanel {
     }
 
     /// Build a foldable outliner group header with a right-aligned button
-    /// (Objects group with "Import Model…"). Returns the updated cy position.
+    /// Returns the updated cy position and the button's live node id.
     fn build_outliner_fold_header_with_button(
         &mut self,
         tree: &mut UITree,
@@ -2068,7 +2148,7 @@ impl ScenePanel {
         header_key: u64,
         button_key: u64,
         button_label: &str,
-    ) -> f32 {
+    ) -> (f32, NodeId) {
         let header_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
@@ -2113,8 +2193,7 @@ impl ScenePanel {
             name,
             section_label_style(),
         );
-        // Right-aligned Import Model button
-        self.import_model_id = Some(tree.add_button_keyed(
+        let button_id = tree.add_button_keyed(
             Some(header_id),
             inner_x + inner_w - button_w,
             cy,
@@ -2123,10 +2202,10 @@ impl ScenePanel {
             btn_style,
             button_label,
             button_key,
-        ));
+        );
         // Register outliner fold header for click routing
         self.outliner_row_ids.push((header_id, SceneSelection::OutlinerFold(name)));
-        cy + ROW_H
+        (cy + ROW_H, button_id)
     }
 
     /// The panel's ONE param-row renderer (P2 slice 2a). Filters
@@ -2607,6 +2686,9 @@ impl ScenePanel {
                 if let Some(actions) = self.object_modifier_card_click(*node_id, tree) {
                     return (true, actions);
                 }
+                if let Some(actions) = self.force_card_click(*node_id, tree) {
+                    return (true, actions);
+                }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
                 // exists. D1 of SCENE_PANEL_UX_DESIGN.md: also emit
@@ -2622,7 +2704,8 @@ impl ScenePanel {
                     }
                     // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
-                        self.selection.insert(vm.layer_id.clone(), *sel);
+
+                        self.selection.insert(vm.layer_id.clone(), sel.clone());
                         return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
                     }
                     return (true, Vec::new());
@@ -2765,6 +2848,10 @@ impl ScenePanel {
                         vm,
                     ) {
                         actions.push(act);
+                    } else if self.add_force_id == Some(*node_id) {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupAddForceClicked(
+                            vm.layer_id.clone(),
+                        )));
                     } else if self.import_model_id == Some(*node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(
                             vm.layer_id.clone(),
@@ -2884,6 +2971,9 @@ impl ScenePanel {
                 if let Some(action) = self.object_modifier_card_double_click(*node_id, tree) {
                     return (true, vec![action]);
                 }
+                if let Some(action) = self.force_card_double_click(*node_id, tree) {
+                    return (true, vec![action]);
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let card = &self.properties_card;
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -2901,6 +2991,9 @@ impl ScenePanel {
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(actions) = self.object_modifier_card_pointer_down(*node_id, *pos, tree) {
+                    return (true, actions);
+                }
+                if let Some(actions) = self.force_card_pointer_down(*node_id, *pos, tree) {
                     return (true, actions);
                 }
                 if let SceneSetupState::Live(vm) = &self.state {
@@ -2926,12 +3019,20 @@ impl ScenePanel {
                 if self.begin_object_modifier_drag(*node_id, tree) {
                     return (true, Vec::new());
                 }
+                if node_id.is_some_and(|node| self.force_card_index_for_node(node).is_some())
+                    && self.force_pressed_card.is_some()
+                {
+                    return (true, Vec::new());
+                }
                 (self.properties_card.row_host.is_dragging(), Vec::new())
             }
             UIEvent::Drag { pos, modifiers, .. } => {
                 if self.object_modifier_drag.is_some() || self.object_modifier_pressed_card.is_some() {
                     self.update_object_modifier_drag(*pos, tree, self.object_modifier_bounds);
                     return (true, self.object_modifier_card_drag(*pos, tree, modifiers.shift));
+                }
+                if self.force_pressed_card.is_some() {
+                    return (true, self.force_card_drag(*pos, tree, modifiers.shift));
                 }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -2955,6 +3056,9 @@ impl ScenePanel {
                 }
                 if self.object_modifier_pressed_card.is_some() {
                     return (true, self.end_object_modifier_card_gesture(tree));
+                }
+                if self.force_pressed_card.is_some() {
+                    return (true, self.end_force_card_gesture(tree));
                 }
                 let was_dragging = self.properties_card.row_host.is_dragging();
                 let actions = self.properties_card.row_host.handle_drag_end();
@@ -3018,11 +3122,13 @@ fn outliner_row_key(sel: SceneSelection) -> u64 {
         SceneSelection::OutlinerFold(name) => match name {
             "Scene" => KEY_OUTLINER_SCENE,
             "Lights" => KEY_OUTLINER_LIGHTS,
+            "Forces" => KEY_OUTLINER_FORCES,
             "Objects" => KEY_OUTLINER_OBJECTS,
             _ => OUTLINER_KEY_BASE + 100, // fallback
         },
         SceneSelection::Light(id) => OUTLINER_KEY_BASE + 2 + (id as u64) * 2,
         SceneSelection::Object(id) => OUTLINER_KEY_BASE + 3 + (id as u64) * 2,
+        SceneSelection::Force(id) => crate::param_surface::stable_key(&format!("scene.force.{id}")),
     }
 }
 
@@ -3209,6 +3315,8 @@ mod tests {
             objects: Vec::new(),
             fluid_domains: Vec::new(),
             lights: Vec::new(),
+            forces: Vec::new(),
+            force_picker: Vec::new(),
             camera: CameraRowVm::None,
             camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
@@ -3304,6 +3412,8 @@ mod tests {
                 })),
                 LightRowVm::Custom { index: 1 },
             ],
+            forces: Vec::new(),
+            force_picker: Vec::new(),
             camera: CameraRowVm::Orbit(Box::new(OrbitCameraRowVm {
                 orbit: mrow(RowValue { addr: RowAddr::root(70, "orbit"), value: 0.7, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
                 tilt: mrow(RowValue { addr: RowAddr::root(70, "tilt"), value: 0.3, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
@@ -3332,7 +3442,7 @@ mod tests {
         // selectable (`outliner_row_ids`); the Custom object/light are
         // listed too but as plain labels (D3: never hidden, but no
         // addressable node id to select by, D12).
-        assert_eq!(panel.outliner_row_ids.len(), 7, "Scene/Camera/World fold rows + Lights fold + 1 known light + Objects fold + 1 known object");
+        assert_eq!(panel.outliner_row_ids.len(), 8, "Scene/Camera/World fold rows + Lights fold + Forces fold + Objects fold + 1 known light + 1 known object");
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
@@ -3409,7 +3519,7 @@ mod tests {
         let child_row = panel
             .outliner_row_ids
             .iter()
-            .find(|(_, sel)| *sel == SceneSelection::Object(43))
+            .find(|(_, sel)| sel == &SceneSelection::Object(43))
             .map(|(id, _)| *id)
             .expect("expanded child is selectable");
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
@@ -4040,7 +4150,7 @@ mod tests {
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let (node, _) = panel.outliner_row_ids.iter()
-            .find(|(_, selection)| *selection == SceneSelection::Object(200)).unwrap();
+            .find(|(_, selection)| selection == &SceneSelection::Object(200)).unwrap();
         assert!(panel.select_outliner_node(*node));
         assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), 201)));
         assert!(panel.selected_object_modifier().is_none());
@@ -4063,10 +4173,11 @@ mod tests {
         // so neither button builds).
         assert!(panel.add_environment_id.is_none(), "World isn't selected — no Environment row built yet");
 
-        let (world_row_id, _) = *panel
+        let world_row_id = panel
             .outliner_row_ids
             .iter()
-            .find(|(_, sel)| *sel == SceneSelection::World)
+            .find(|(_, sel)| sel == &SceneSelection::World)
+            .map(|(id, _)| *id)
             .expect("World is always a selectable outliner row");
 
         let (consumed, _) = panel.handle_event(&UIEvent::Click {
@@ -4216,10 +4327,11 @@ mod tests {
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-        let (world_row_id, _) = *panel
+        let world_row_id = panel
             .outliner_row_ids
             .iter()
-            .find(|(_, sel)| *sel == SceneSelection::World)
+            .find(|(_, sel)| sel == &SceneSelection::World)
+            .map(|(id, _)| *id)
             .expect("World is always a selectable outliner row");
         let (consumed, _) = panel.handle_event(
             &UIEvent::Click {

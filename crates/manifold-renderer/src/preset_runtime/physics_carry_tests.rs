@@ -6,6 +6,7 @@ use std::{borrow::Cow, cell::Cell};
 thread_local! {
     static POSE: Cell<Option<Transform>> = const { Cell::new(None) };
     static PEER_POSE: Cell<Option<Transform>> = const { Cell::new(None) };
+    static POSE_READY: Cell<bool> = const { Cell::new(false) };
 }
 
 struct PoseObserver(EffectNodeType);
@@ -43,6 +44,7 @@ impl EffectNode for PoseObserver {
         &[]
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        POSE_READY.set(ctx.inputs.slot("pose").is_some_and(|slot| ctx.inputs.slot_content_ready(slot)));
         POSE.set(ctx.inputs.transform("pose"));
         PEER_POSE.set(ctx.inputs.transform("peer_pose"));
     }
@@ -241,7 +243,7 @@ fn physics_targeted_field_graph_preserves_recipients_across_rebuild_and_frame_ra
 #[test]
 fn physics_targeted_field_graph_without_recipient_stays_pending() {
     let mut runtime = runtime_with_field_port(5.0, false, Some("body_acceleration_9"));
-    POSE.set(None);
+    POSE_READY.set(true);
     runtime.execute_frame(FrameTime {
         seconds: Seconds::ZERO,
         beats: Beats::ZERO,
@@ -249,8 +251,8 @@ fn physics_targeted_field_graph_without_recipient_stays_pending() {
         frame_count: 0,
     });
     assert!(
-        POSE.get().is_none(),
-        "a missing recipient must not silently advance the world"
+        !POSE_READY.get(),
+        "a missing recipient must leave the output pending, even if the slot retains an old/default pose"
     );
 }
 

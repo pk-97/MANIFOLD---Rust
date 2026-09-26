@@ -148,7 +148,9 @@ pub(super) fn expand_bindings_with_sources(
             let generated = copies
                 .get(target.as_str())
                 .ok_or_else(|| missing_target(target, "local binding leaf is not generated"))?;
-            if generated.is_empty() {
+            if generated.is_empty()
+                && !manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph)
+            {
                 return Err(missing_target(
                     target,
                     "local binding has no generated copies",
@@ -226,7 +228,9 @@ pub(super) fn expand_bindings_with_sources(
             let generated = copies.get(target.as_str()).ok_or_else(|| {
                 missing_target(target, "local string binding leaf is not generated")
             })?;
-            if generated.is_empty() {
+            if generated.is_empty()
+                && !manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph)
+            {
                 return Err(missing_target(
                     target,
                     "local string binding has no generated copies",

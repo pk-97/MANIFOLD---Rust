@@ -8,7 +8,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::scene_modifier_preset::{
     SceneContextValue, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef, SceneStageScope,
-    SceneStageSource, validate_scene_modifier_schema,
+    SceneStageSource, is_force_recipe, validate_scene_modifier_schema,
 };
 use sha2::{Digest, Sha256};
 
@@ -29,6 +29,9 @@ type CloneKey = (u32, Option<SceneNodeRef>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
 pub(crate) mod math_events;
 pub(crate) mod shatter;
+
+#[cfg(test)]
+mod acceleration_tests;
 
 #[cfg(test)]
 mod conformance;
@@ -55,6 +58,7 @@ fn endpoint_port(endpoint: SceneEndpoint) -> &'static str {
         SceneEndpoint::Transform => "transform",
         SceneEndpoint::Instances => "instances",
         SceneEndpoint::Vertices => "vertices",
+        SceneEndpoint::Acceleration => "acceleration",
     }
 }
 
@@ -307,7 +311,43 @@ fn prepare_scene_modifiers_impl(
         // migration legitimately produces several Math View instances per
         // scene — one per authored legacy carrier.
         frames::validate_saved_frames(owner, &index, instance)?;
-        let targets = frames::selected_objects(&index, instance)?;
+        let targets = if is_force_recipe(&instance.graph) {
+            let selected = super::acceleration::selected(
+                &index, &instance.targets, &instance.scene, registry,
+            )?;
+            let mut seen = BTreeSet::new();
+            let mut deduplicated = Vec::new();
+            for target in selected {
+                if let Some(key) =
+                    super::acceleration::recipient_key(&index, &target, registry)?
+                    && seen.insert(key)
+                {
+                    deduplicated.push(target);
+                }
+            }
+            deduplicated
+        } else {
+            let has_acceleration = instance
+                .graph
+                .preset_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.scene_modifier.as_ref())
+                .is_some_and(|recipe| {
+                    recipe.stages.iter().any(|stage| {
+                        stage.outputs.iter().any(|output| {
+                            output.endpoint == SceneEndpoint::Acceleration
+                        })
+                    })
+                });
+            if has_acceleration {
+                return Err(SceneModifierExpandError::UnsupportedEndpoint {
+                    path: instance.id.to_string(),
+                    detail: "acceleration stages cannot be mixed with other endpoint outputs"
+                        .into(),
+                });
+            }
+            frames::selected_objects(&index, instance)?
+        };
         if let Some(request) = builder.math_view {
             // Seed once, at the head of the view's scene chain: the sampled
             // reference faces then flow through every preceding modifier, so
@@ -1224,6 +1264,12 @@ impl Builder<'_> {
                 );
                 self.constant_node(identity_key, "node.arrange_copies", params, "instances")?
             }
+            SceneEndpoint::Acceleration => {
+                for component in ["x", "y", "z"] {
+                    params.insert(component.into(), SerializedParamValue::Float { value: 0.0 });
+                }
+                self.constant_node(identity_key, "node.uniform_vector_field", params, "out")?
+            }
             _ => {
                 return Err(SceneModifierExpandError::MissingInput {
                     path: format!("{:?}.{}", key.0, key.1),
@@ -1470,6 +1516,12 @@ impl Builder<'_> {
                 self.camera_anchors.insert(reference.clone(), key.clone());
                 key
             }
+        } else if endpoint == SceneEndpoint::Acceleration {
+            super::acceleration::recipient_key(self.index, reference, self.registry)?
+                .ok_or_else(|| SceneModifierExpandError::UnsupportedEndpoint {
+                    path: format!("{reference:?}"),
+                    detail: "selected object has no physical acceleration recipient".into(),
+                })?
         } else {
             (reference.clone(), endpoint_port(endpoint).into())
         };
@@ -1599,7 +1651,10 @@ impl Builder<'_> {
                     "group appears in multiple stages",
                 ));
             }
-            if stage.scope == SceneStageScope::EachObject && targets.is_empty() {
+            if stage.scope == SceneStageScope::EachObject
+                && targets.is_empty()
+                && !is_force_recipe(&instance.graph)
+            {
                 return Err(SceneModifierExpandError::MissingTarget {
                     path: instance.id.to_string(),
                     detail: "EachObject stage needs at least one selected object".into(),
@@ -1652,6 +1707,20 @@ impl Builder<'_> {
             let each = stages
                 .get(&node.id)
                 .is_some_and(|(_, stage)| stage.scope == SceneStageScope::EachObject);
+            if each && targets.is_empty() {
+                // A force with no recipients retains authored controls but has
+                // no per-object runtime leaves. Record that explicitly so
+                // routing can distinguish inactivity from a missing clone.
+                let mut pending = vec![node];
+                while let Some(local) = pending.pop() {
+                    if !local.node_id.is_empty() {
+                        leaves.entry(local.node_id.to_string()).or_default();
+                    }
+                    if let Some(group) = local.group.as_ref() {
+                        pending.extend(&group.nodes);
+                    }
+                }
+            }
             let selected: Vec<Option<&SceneNodeRef>> = if each {
                 targets.iter().map(Some).collect()
             } else {
@@ -1827,6 +1896,7 @@ impl Builder<'_> {
                         && matches!(
                             output.endpoint,
                             SceneEndpoint::Instances
+                                | SceneEndpoint::Acceleration
                                 | SceneEndpoint::Atmosphere
                                 | SceneEndpoint::RenderMode
                         )

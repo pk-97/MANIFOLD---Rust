@@ -609,6 +609,11 @@ mod tests {
         ]);
 
         let prepared = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
+        let prepared_id = |stable: &NodeId| prepared.def.nodes.iter()
+            .find(|node| &node.node_id == stable).unwrap().id;
+        let world = prepared_id(&owner.nodes.iter().find(|node| node.id == 40).unwrap().node_id);
+        let field = prepared_id(&NodeId::new("shatter-field"));
+        let reserved = prepared_id(&NodeId::new("reserved-pose-target"));
         let fragment_ids: BTreeSet<_> = prepared
             .def
             .nodes
@@ -624,7 +629,7 @@ mod tests {
             .iter()
             .filter(|wire| {
                 fragment_ids.contains(&wire.from_node)
-                    && wire.to_node == 40
+                    && wire.to_node == world
                     && wire.to_port.starts_with("body_")
             })
             .collect();
@@ -644,9 +649,9 @@ mod tests {
         for body_wire in fragment_body_wires {
             let slot = body_wire.to_port.strip_prefix("body_").unwrap();
             assert!(prepared.def.wires.iter().any(|wire| {
-                wire.from_node == 900
+                wire.from_node == field
                     && wire.from_port == "out"
-                    && wire.to_node == 40
+                    && wire.to_node == world
                     && wire.to_port == format!("body_acceleration_{slot}")
             }));
         }
@@ -654,7 +659,7 @@ mod tests {
             .def
             .wires
             .iter()
-            .filter(|wire| wire.from_node == 900 && wire.from_port == "out" && wire.to_node == 40)
+            .filter(|wire| wire.from_node == field && wire.from_port == "out" && wire.to_node == world)
             .collect();
         assert_eq!(
             field_wires.len(),
@@ -670,9 +675,9 @@ mod tests {
             "the parent route remains a single authored connection"
         );
         assert!(prepared.def.wires.iter().any(|wire| {
-            wire.from_node == 40
+            wire.from_node == world
                 && wire.from_port == "pose_7"
-                && wire.to_node == 901
+                && wire.to_node == reserved
                 && wire.to_port == "transform"
         }));
         assert!(
@@ -680,7 +685,7 @@ mod tests {
                 .def
                 .wires
                 .iter()
-                .any(|wire| wire.from_node == 900 && wire.to_port == "acceleration_field")
+                .any(|wire| wire.from_node == field && wire.to_port == "acceleration_field")
         );
     }
 

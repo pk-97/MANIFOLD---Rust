@@ -940,6 +940,10 @@ pub enum RootAction {
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
     SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
+    /// Scene Setup's dedicated force picker affordance. The app resolves the
+    /// selected recipe from the panel's `force_picker` snapshot and applies
+    /// the existing scene modifier command.
+    SceneSetupAddForceClicked(LayerId),
     SceneSetupFluidRoleClicked {
         layer_id: LayerId,
         render_scene_node_id: u32,

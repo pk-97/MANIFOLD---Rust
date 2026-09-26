@@ -1,0 +1,327 @@
+{
+  "version": 3,
+  "name": "Uniform Force",
+  "presetMetadata": {
+    "id": "UniformForce",
+    "displayName": "Uniform Force",
+    "category": "Forces",
+    "oscPrefix": "uniform_force",
+    "available": true,
+    "params": [
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "direction_x",
+        "name": "Vector X",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "direction_y",
+        "name": "Vector Y",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "direction_z",
+        "name": "Vector Z",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "strength",
+        "name": "Strength (m/s\u00b2)",
+        "min": -20.0,
+        "max": 20.0,
+        "defaultValue": 1.0
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "direction_x",
+        "label": "Vector X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_field",
+          "param": "x"
+        }
+      },
+      {
+        "id": "direction_y",
+        "label": "Vector Y",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_field",
+          "param": "y"
+        }
+      },
+      {
+        "id": "direction_z",
+        "label": "Vector Z",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_field",
+          "param": "z"
+        }
+      },
+      {
+        "id": "strength",
+        "label": "Strength (m/s\u00b2)",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_strength",
+          "param": "strength"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "force_source_stage",
+          "scope": "scene",
+          "inputs": [],
+          "outputs": []
+        },
+        {
+          "group": "force_apply_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "previous",
+              "source": {
+                "previous": {
+                  "endpoint": "acceleration"
+                }
+              }
+            },
+            {
+              "port": "field",
+              "source": {
+                "stageOutput": {
+                  "stage": "force_source_stage",
+                  "port": "field"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "acceleration",
+              "endpoint": "acceleration"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "force_source_stage",
+      "typeId": "group",
+      "handle": "ForceSourceStage",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "field",
+              "portType": "VectorField"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "force_field",
+            "typeId": "node.uniform_vector_field",
+            "handle": "force_field",
+            "params": {
+              "x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "y": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 2,
+            "nodeId": "force_strength",
+            "typeId": "node.scale_vector_field",
+            "handle": "force_strength",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "force_enabled",
+            "typeId": "node.value",
+            "handle": "force_enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "force_gate",
+            "typeId": "node.scale_vector_field",
+            "handle": "force_gate",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 5,
+            "nodeId": "force_source_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "strength"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "field"
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "force_apply_stage",
+      "typeId": "group",
+      "handle": "ForceApplyStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "previous",
+              "portType": "VectorField"
+            },
+            {
+              "name": "field",
+              "portType": "VectorField"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "acceleration",
+              "portType": "VectorField"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_previous",
+            "typeId": "system.group_input",
+            "handle": "previous"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_field",
+            "typeId": "system.group_input",
+            "handle": "field"
+          },
+          {
+            "id": 3,
+            "nodeId": "force_add",
+            "typeId": "node.add_vector_fields",
+            "handle": "force_add"
+          },
+          {
+            "id": 4,
+            "nodeId": "force_apply_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "previous",
+            "toNode": 3,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "field",
+            "toNode": 3,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "acceleration"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

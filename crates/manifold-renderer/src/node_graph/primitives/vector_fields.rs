@@ -457,7 +457,10 @@ mod tests {
         let (_, pending, errors) = run_node(
             &mut add,
             ParamValues::default(),
-            &[("a", FieldValue::uniform([1.0; 3]).unwrap())],
+            &[
+                ("a", FieldValue::uniform([1.0; 3]).unwrap()),
+                ("b", FieldValue::uniform([2.0; 3]).unwrap()),
+            ],
             &[],
             &["a"],
         );

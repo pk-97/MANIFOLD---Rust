@@ -1130,9 +1130,13 @@ mod tests {
 
     #[test]
     fn fluid_shared_field_worker_matches_gravity_without_restarting() {
+        const TICKS: u64 = 8;
         fn run(gravity: f32, field: Option<FieldValue>) -> [f32; 3] {
             let settings = FluidSettings {
-                resolution: 8,
+                // At 8³ this seed's reconstructed surface reaches every native
+                // domain wall. Leave air around it so surface motion measures
+                // acceleration instead of a boundary-clipped mesh.
+                resolution: 12,
                 fill_height: 0.0,
                 initial_volume: Some(Transform {
                     pos: [0.0, 2.0, 0.0],
@@ -1168,14 +1172,14 @@ mod tests {
                     controls,
                     &[],
                     field,
-                    Seconds(8.0 * TICK),
+                    Seconds(TICKS as f64 * TICK),
                     1.0,
                     0.0,
                 )
                 .unwrap();
             runtime.advance(true).unwrap();
             assert_eq!(runtime.epoch, epoch);
-            assert_eq!(runtime.completed_tick, 8);
+            assert_eq!(runtime.completed_tick, TICKS);
             assert!(!runtime.vertices.is_empty());
             std::array::from_fn(|axis| {
                 runtime
@@ -1191,7 +1195,7 @@ mod tests {
         let field = run(0.0, Some(FieldValue::uniform([0.0, -6.0, 0.0]).unwrap()));
         assert!(
             resting[1] - field[1] > 0.01,
-            "field must move the native fluid"
+            "field must move the native fluid: resting={resting:?}, gravity={gravity:?}, field={field:?}"
         );
         for axis in 0..3 {
             assert!(

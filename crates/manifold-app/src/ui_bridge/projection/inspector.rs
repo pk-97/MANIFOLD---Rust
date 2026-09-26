@@ -267,6 +267,7 @@ pub fn sync_inspector_data(
         // `ParamSurface`, filled in below only in the `Live` arm — see
         // `ScenePanel::configure_params`'s doc comment.
         let mut full_params: Option<ParamSurface> = None;
+        let mut force_surfaces = Vec::new();
         let state = match layer {
             None => SceneSetupState::NoSelection("Select a layer to set up its scene.".to_string()),
             Some(l) if l.layer_type != LayerType::Generator => SceneSetupState::NoSelection(
@@ -387,6 +388,22 @@ pub fn sync_inspector_data(
                             // sites further down are unchanged.
                             use manifold_ui::panels::scene_setup_panel::ModulatedRow;
                             let gen_inst = l.gen_params();
+                            let (forces, force_picker) = if let (Some(gp), Some(def)) = (gen_inst, def.as_ref()) {
+                                let mut surfaces = modifier_surfaces(gp, def, &vm, layer_id.as_str(), automation_latched, driver_timing);
+                                surfaces.retain(|surface| super::cards::is_force_surface(surface, def));
+                                attach_audio_sends(&mut surfaces, &project.audio_setup);
+                                if let Some((target, param_id)) = selected_automation(&layer_id) {
+                                    for surface in &mut surfaces {
+                                        mark_selected_automation_row(surface, &layer_id, target, param_id);
+                                    }
+                                }
+                                let rows = surfaces.iter().filter_map(|surface| surface.modifier.as_ref().map(|info|
+                                    manifold_ui::panels::scene_setup_panel::SceneForceRowVm {
+                                        instance_id: info.instance_id.clone(), title: surface.title.clone(),
+                                    })).collect();
+                                force_surfaces = surfaces;
+                                (rows, super::cards::force_picker_entries(def, &vm))
+                            } else { (Vec::new(), Vec::new()) };
                             // BUG-249: modulation facts resolve through the
                             // REAL exposed-param binding id, not the row's
                             // synthesized scene id (which the runtime never
@@ -1123,6 +1140,8 @@ pub fn sync_inspector_data(
                                 atmosphere,
                                 objects,
                                 fluid_domains,
+                                forces,
+                                force_picker,
                                 lights,
                                 camera,
                                 camera_sections,
@@ -1140,6 +1159,7 @@ pub fn sync_inspector_data(
         };
         ui.scene_setup_panel.configure(state);
         ui.scene_setup_panel.configure_params(full_params);
+        ui.scene_setup_panel.configure_force_cards(&force_surfaces);
     }
 
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──
@@ -1343,6 +1363,7 @@ pub fn sync_inspector_data(
                     // SAME def + VM (the UI never reads the graph).
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
                     let mut surfaces = modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing);
+                    surfaces.retain(|surface| !super::cards::is_force_surface(surface, &def));
                     attach_audio_sends(&mut surfaces, &project.audio_setup);
                     if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                         for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }

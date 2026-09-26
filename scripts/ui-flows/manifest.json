@@ -25,7 +25,8 @@
       "material-inspector",
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle"
+      "scene-fluid-object-lifecycle",
+      "scene-forces-controls"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
@@ -35,7 +36,8 @@
       "material-inspector",
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle"
+      "scene-fluid-object-lifecycle",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
@@ -52,7 +54,8 @@
       "inspector",
       "set-param",
       "envelope-modulation",
-      "calibrated-param"
+      "calibrated-param",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
       "frame-align-lfo",
@@ -63,14 +66,16 @@
       "scene-skin",
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle"
+      "scene-fluid-object-lifecycle",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
       "inspector",
-      "set-param"
+      "set-param",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_translate.rs": [
       "scene-setup",
@@ -214,7 +219,8 @@
     "scene-setup-fog-density-card-row": "gltfscene",
     "scene-setup-fog-undo-removes-fog": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
-    "scene-fluid-object-lifecycle": "fluidauthoring"
+    "scene-fluid-object-lifecycle": "fluidauthoring",
+    "scene-forces-controls": "physicsscene"
   },
   "expected_fail": {},
   "unresolved": {}

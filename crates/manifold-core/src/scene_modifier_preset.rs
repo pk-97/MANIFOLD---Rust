@@ -218,6 +218,27 @@ pub enum SceneEndpoint {
     Transform,
     Instances,
     Vertices,
+    Acceleration,
+}
+
+/// True when a recipe writes only physical acceleration endpoints.
+pub fn is_force_recipe(graph: &EffectGraphDef) -> bool {
+    let Some(recipe) = graph
+        .preset_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.scene_modifier.as_ref())
+    else {
+        return false;
+    };
+    let mut has_acceleration = false;
+    for output in recipe.stages.iter().flat_map(|stage| &stage.outputs) {
+        if output.endpoint == SceneEndpoint::Acceleration {
+            has_acceleration = true;
+        } else {
+            return false;
+        }
+    }
+    has_acceleration
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

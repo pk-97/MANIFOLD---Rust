@@ -935,6 +935,7 @@ impl ScenePanel {
             }
             SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
+            SceneSelection::Force(id) => self.build_force_card(tree, inner_x, inner_w, cy, &id),
             SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
         }
     }

@@ -12,6 +12,9 @@ use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission, with_admission_snapshot};
 
+#[path = "force_tests.rs"]
+mod forces;
+
 const MUSHROOM_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/gltf/cc0___mushroom.glb"
