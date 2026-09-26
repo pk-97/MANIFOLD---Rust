@@ -2344,6 +2344,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-fluids"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "manifold-foundation",
+]
+
+[[package]]
 name = "manifold-foundation"
 version = "0.1.0"
 dependencies = [
@@ -2491,6 +2499,7 @@ dependencies = [
  "log",
  "manifold-core",
  "manifold-editing",
+ "manifold-fluids",
  "manifold-foundation",
  "manifold-gpu",
  "manifold-io",

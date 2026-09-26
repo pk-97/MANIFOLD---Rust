@@ -16,6 +16,11 @@ pub(crate) fn authored_sample_only() -> bool {
     SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
 }
 
+/// Fluid workers use the same preview/offline scope as rigid bodies.
+pub(crate) fn offline_simulation() -> bool {
+    PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
+}
+
 /// Record a historical graph pose without advancing the native solver. The
 /// generator host uses this while evaluating only the physics input ancestry
 /// at fixed times between delivered render frames.

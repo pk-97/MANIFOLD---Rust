@@ -7,6 +7,7 @@
 //! not a structural divide.
 
 mod abs_texture;
+pub(crate) mod fluid_surface;
 mod glyph_atlas;
 mod render_glyph_grid;
 pub(crate) mod terminal_analysis;

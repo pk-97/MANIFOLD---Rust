@@ -42,6 +42,8 @@ mod effect_node;
 pub(crate) mod execution;
 mod execution_plan;
 pub mod freeze;
+pub mod fluid;
+pub(crate) mod fluid_mesh_upload;
 mod graph;
 mod graph_loader;
 pub mod resource_allocation;

@@ -2,7 +2,7 @@
 
 <!-- index: Bounded implementation assignments and proof checkpoints for the MLS-MPM pool-and-cube prototype; Sol owns integration, Luna owns specified mechanical scopes. -->
 
-**Status:** PROPOSED execution plan · 2026-09-09 · Astra. S1–S8 not implemented.
+**Status:** SUPERSEDED execution plan · 2026-09-26. Current work integrates the upstream CPU FLIP engine; see the current implementation contract in [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md). S1–S8 below describe the earlier custom GPU approach and are not the active assignments.
 **Implementation epic:** `BUG-vglg`; update this work item as proof checkpoints land.
 **Prerequisites:** [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md), authoritative for the decisions below.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Current AGENTS.md execution limits override older broad-sweep instructions.

@@ -1,0 +1,15 @@
+[package]
+name = "manifold-fluids"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
+
+[build-dependencies]
+cc = "1"
+
+[lints]
+workspace = true

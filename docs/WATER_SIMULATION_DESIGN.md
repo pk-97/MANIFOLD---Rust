@@ -2,7 +2,19 @@
 
 <!-- index: Dedicated MLS-MPM water: bounded graph substeps, persistent layer state, moving colliders, scene depth/refraction, and the pool-and-cube prototype. -->
 
-**Status:** PROPOSED implementation specification · 2026-09-09 · Astra. Peter approved the direction and MVP; the numerical defaults below are hypotheses to prove, not measured capability. No water implementation is claimed. Execution review 2026-09-09 (Astra, via Peter): the k3 lead seat owns S2/S7 and all landing; Q=2^20 is the sole momentum encoding, conditional on S1 proof; c0=10 stays baseline, with softness classified as expected only after the half-timestep stability gate (sections 5 and 8).
+**Status:** SUPERSEDED solver direction · 2026-09-26. The sections below preserve the earlier custom GPU proposal. Current development uses the upstream FLIP Fluids CPU engine; no GPU solver or real-time performance is claimed.
+
+## Current implementation contract — CPU FLIP reference
+
+`manifold-fluids` vendors the MIT engine at revision `70a0e954018fe39e1f9c3631264989569752bb7a`; its native provenance file identifies the upstream source. Numerical engine files remain unchanged. A narrow C++ bridge owns each world; native calls serialize access to upstream global state. `node.fluid_surface` runs simulation and the upstream mesher on a worker, then publishes immutable meshes through `manifold-gpu` to ordinary scene/material nodes. The bundled entry is **Water Basin (CPU)**.
+
+Preview and export use the same fixed 60 Hz solver and physical controls. Preview polls completed frames and retains time debt; export waits for all due ticks. The existing 240 Hz CPU ancestry sampler supplies animated box controls. The visible obstacle consumes the accepted simulation pose. Changing resolution/detail restarts the simulation and may change the resulting trajectory. Reset and backward transport start a fresh world; the first stepped frame creates the initial pool surface. This is a development reference, not cached timeline playback.
+
+The initial domain is a closed cube with a pouring box and one translating axis-aligned obstacle. Mesh overflow and native failures invalidate the frame. Rotating/arbitrary colliders, persistent disk caches, clip-transition guarantees, whitewater, two-way rigid-body coupling and an accelerated solver remain open. Existing PBR transmission is a rendering baseline, not final liquid optics. Any future GPU implementation must target the `manifold-gpu` abstraction and support both Metal and Vulkan; the CPU reference remains the comparison engine.
+
+Focused checks are the native crate tests, renderer `fluid_` / `water_` tests and `gpu_proofs_gate.py --filter fluid_ --filter water_`. The Water Basin proof renders ticks 0–90 at 640×360 and writes `/tmp/manifold_water_{1,30,90}.png` for observation. These checks do not establish app frame rate or production export/lifecycle acceptance.
+
+## Earlier GPU proposal (historical)
 **Prerequisites:** existing scene renderer, material system and native Metal backend. No cloth, ropes, baked-cache import or generic physics engine prerequisite.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; executable assignments are in [WATER_IMPLEMENTATION_PLAN.md](WATER_IMPLEMENTATION_PLAN.md).
 

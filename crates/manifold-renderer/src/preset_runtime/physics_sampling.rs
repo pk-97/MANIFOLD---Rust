@@ -1,4 +1,4 @@
-//! CPU ancestry sampling for Physics World inputs.
+//! CPU ancestry sampling for native rigid-body and fluid simulation inputs.
 
 use super::*;
 
@@ -13,7 +13,12 @@ pub(super) fn physics_sample_steps(
 
     let mut pending: Vec<_> = graph
         .nodes()
-        .filter(|node| node.node.type_id().as_str() == "node.physics_world")
+        .filter(|node| {
+            matches!(
+                node.node.type_id().as_str(),
+                "node.physics_world" | "node.fluid_surface"
+            )
+        })
         .map(|node| node.id)
         .collect();
     if pending.is_empty() {
@@ -33,6 +38,7 @@ pub(super) fn physics_sample_steps(
         let stateless_cpu = matches!(
             type_id,
             "node.physics_world"
+                | "node.fluid_surface"
                 | "node.rigid_body"
                 | "node.transform_3d"
                 | "node.lfo"
@@ -45,7 +51,7 @@ pub(super) fn physics_sample_steps(
         let requires = node.node.requires();
         if !stateless_cpu || requires.gpu_encoder || requires.state_store {
             return Err(format!(
-                "Physics World cannot sample historical Animated motion through `{type_id}`; use stateless CPU controls before the rigid body"
+                "Physics cannot sample historical motion through `{type_id}`; use stateless CPU controls before the simulation"
             ));
         }
     }
@@ -117,6 +123,40 @@ impl PresetRuntime {
 mod tests {
     use super::*;
     use crate::node_graph::PrimitiveRegistry;
+
+    #[test]
+    fn water_history_samples_fluid_controls_without_rendering() {
+        let runtime = PresetRuntime::from_json_str(
+            include_str!("../../assets/generator-presets/WaterBasin.json"),
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("WaterBasin loads");
+        let mask = runtime
+            .physics_sample_steps
+            .as_ref()
+            .expect("fluid ancestry");
+        let sampled: Vec<_> = runtime
+            .plan
+            .steps()
+            .iter()
+            .zip(mask)
+            .filter(|(_, enabled)| **enabled)
+            .map(|(step, _)| {
+                runtime
+                    .graph
+                    .get_node(step.node)
+                    .unwrap()
+                    .node
+                    .type_id()
+                    .as_str()
+                    .to_owned()
+            })
+            .collect();
+        assert!(sampled.iter().any(|kind| kind == "node.fluid_surface"));
+        assert!(sampled.iter().any(|kind| kind == "node.lfo"));
+        assert!(!sampled.iter().any(|kind| kind == "node.scene_object"));
+        assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
+    }
 
     #[test]
     fn physics_history_mask_includes_nonlinear_lfo_and_excludes_rendering() {
