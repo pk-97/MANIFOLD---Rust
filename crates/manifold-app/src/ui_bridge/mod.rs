@@ -302,7 +302,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             // chain, which no handler claimed, so they returned `unhandled()`;
             // preserve that exactly.
             RootAction::AudioSetupDeviceClicked
-            | RootAction::OpenAbletonPickerForParam(..) => DispatchResult::unhandled(),
+            | RootAction::OpenAbletonPickerForParam(..)
+            | RootAction::ObjectModifierCardRightClicked(_) => DispatchResult::unhandled(),
         },
 
         // ── Scrub: the unified value-scrub gesture (P-I / D4). One handler for

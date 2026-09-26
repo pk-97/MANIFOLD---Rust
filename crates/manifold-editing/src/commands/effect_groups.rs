@@ -3,6 +3,23 @@ use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::project::Project;
 use manifold_core::{EffectGroupId, EffectId};
+use std::collections::HashSet;
+
+fn group_members_contiguous(effects: &[PresetInstance], group_id: &EffectGroupId) -> bool {
+    let mut seen_member = false;
+    let mut ended = false;
+    for effect in effects {
+        if effect.group_id.as_ref() == Some(group_id) {
+            if ended {
+                return false;
+            }
+            seen_member = true;
+        } else if seen_member {
+            ended = true;
+        }
+    }
+    true
+}
 
 /// Group effects into a rack group.
 /// Matches Unity GroupEffectsCommand: makes effects contiguous in the list
@@ -121,10 +138,8 @@ impl Command for GroupEffectsCommand {
                 }
             }
 
-            let mut grouped: Vec<PresetInstance> = indices
-                .iter()
-                .map(|&idx| effects[idx].clone())
-                .collect();
+            let mut grouped: Vec<PresetInstance> =
+                indices.iter().map(|&idx| effects[idx].clone()).collect();
             if let Some(mask_id) = selected_mask
                 && let Some(mask_pos) = grouped.iter().position(|effect| effect.id == mask_id)
             {
@@ -303,7 +318,9 @@ impl Command for AddGroupMaskCommand {
                     self.rejection = Some("modifier group no longer exists");
                     return;
                 }
-                indices = effects.iter().enumerate()
+                indices = effects
+                    .iter()
+                    .enumerate()
                     .filter(|(_, effect)| effect.group_id.as_ref() == Some(group_id))
                     .map(|(index, _)| index)
                     .collect();
@@ -325,13 +342,10 @@ impl Command for AddGroupMaskCommand {
             }
             let requested_group_id = self.group_id.as_ref();
             if groups.iter().any(|group| {
-                group
-                    .mask_effect_id
-                    .as_ref()
-                    .is_some_and(|mask_id| {
-                        sorted.iter().any(|&idx| effects[idx].id == *mask_id)
-                            && requested_group_id != Some(&group.id)
-                    })
+                group.mask_effect_id.as_ref().is_some_and(|mask_id| {
+                    sorted.iter().any(|&idx| effects[idx].id == *mask_id)
+                        && requested_group_id != Some(&group.id)
+                })
             }) {
                 self.rejection = Some("selected effects already have a mask");
                 return;
@@ -595,6 +609,83 @@ impl Command for ToggleGroupCommand {
     }
 }
 
+/// Set a group's collapsed state, with exact undo/redo behavior.
+#[derive(Debug)]
+pub struct SetGroupCollapsedCommand {
+    target: EffectTarget,
+    group_id: EffectGroupId,
+    collapsed: bool,
+    old_collapsed: Option<bool>,
+    applied: bool,
+    rejection: Option<&'static str>,
+}
+
+impl SetGroupCollapsedCommand {
+    pub fn new(target: EffectTarget, group_id: EffectGroupId, collapsed: bool) -> Self {
+        Self {
+            target,
+            group_id,
+            collapsed,
+            old_collapsed: None,
+            applied: false,
+            rejection: None,
+        }
+    }
+}
+
+impl Command for SetGroupCollapsedCommand {
+    fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
+        self.old_collapsed = None;
+        let group_id = self.group_id.clone();
+        let collapsed = self.collapsed;
+        let target_exists = with_effects_mut(project, &self.target, |_effects, groups| {
+            let Some(group) = groups.iter_mut().find(|group| group.id == group_id) else {
+                self.rejection = Some("modifier group no longer exists");
+                return;
+            };
+            if group.collapsed == collapsed {
+                return;
+            }
+            self.old_collapsed = Some(group.collapsed);
+            group.collapsed = collapsed;
+            self.applied = true;
+        });
+        if target_exists.is_none() {
+            self.rejection = Some("effect target no longer exists");
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
+        let group_id = self.group_id.clone();
+        let Some(collapsed) = self.old_collapsed else {
+            return;
+        };
+        with_effects_mut(project, &self.target, |_effects, groups| {
+            if let Some(group) = groups.iter_mut().find(|group| group.id == group_id) {
+                group.collapsed = collapsed;
+            }
+        });
+        self.applied = false;
+    }
+
+    fn description(&self) -> &str {
+        "Set Group Collapsed"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
+    }
+}
+
 /// Rename a group.
 #[derive(Debug)]
 pub struct RenameGroupCommand {
@@ -798,13 +889,412 @@ impl Command for ReorderRackCommand {
     }
 }
 
+/// Move effects by stable ID, optionally changing their group membership.
+/// `preserve_groups` is used for whole-group moves and keeps every selected
+/// effect's existing membership intact.
+#[derive(Debug)]
+pub struct MoveEffectsToGroupCommand {
+    target: EffectTarget,
+    ids: Vec<EffectId>,
+    before: Option<EffectId>,
+    destination_group: Option<EffectGroupId>,
+    preserve_groups: bool,
+    old_effects: Option<Vec<PresetInstance>>,
+    old_groups: Option<Vec<EffectGroup>>,
+    applied: bool,
+    rejection: Option<&'static str>,
+}
+
+impl MoveEffectsToGroupCommand {
+    pub fn new(
+        target: EffectTarget,
+        ids: Vec<EffectId>,
+        before: Option<EffectId>,
+        destination_group: Option<EffectGroupId>,
+        preserve_groups: bool,
+    ) -> Self {
+        Self {
+            target,
+            ids,
+            before,
+            destination_group,
+            preserve_groups,
+            old_effects: None,
+            old_groups: None,
+            applied: false,
+            rejection: None,
+        }
+    }
+}
+
+impl Command for MoveEffectsToGroupCommand {
+    fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
+        let ids = self.ids.clone();
+        let before = self.before.clone();
+        let destination_group = self.destination_group.clone();
+        let preserve_groups = self.preserve_groups;
+
+        let target_exists = with_effects_mut(project, &self.target, |effects, groups| {
+            if ids.is_empty() {
+                self.rejection = Some("at least one effect must be selected");
+                return;
+            }
+            let selected_ids: HashSet<EffectId> = ids.iter().cloned().collect();
+            if selected_ids.len() != ids.len() {
+                self.rejection = Some("effect selection contains duplicate IDs");
+                return;
+            }
+            if selected_ids
+                .iter()
+                .any(|id| !effects.iter().any(|effect| &effect.id == id))
+            {
+                self.rejection = Some("effect selection contains a stale ID");
+                return;
+            }
+            if let Some(before) = &before
+                && !effects.iter().any(|effect| &effect.id == before)
+            {
+                self.rejection = Some("move destination is stale");
+                return;
+            }
+            if let Some(group_id) = &destination_group
+                && !groups.iter().any(|group| &group.id == group_id)
+            {
+                self.rejection = Some("destination group no longer exists");
+                return;
+            }
+
+            let selected_positions: Vec<usize> = effects
+                .iter()
+                .enumerate()
+                .filter_map(|(index, effect)| selected_ids.contains(&effect.id).then_some(index))
+                .collect();
+            let selected_group_ids: HashSet<EffectGroupId> = selected_positions
+                .iter()
+                .filter_map(|&index| effects[index].group_id.clone())
+                .collect();
+
+            for group_id in &selected_group_ids {
+                let members: Vec<usize> = effects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, effect)| {
+                        (effect.group_id.as_ref() == Some(group_id)).then_some(index)
+                    })
+                    .collect();
+                let selected_members = members
+                    .iter()
+                    .filter(|index| selected_ids.contains(&effects[**index].id))
+                    .count();
+                let group = groups.iter().find(|group| &group.id == group_id);
+                if !group_members_contiguous(effects, group_id) {
+                    self.rejection = Some("group members are noncontiguous");
+                    return;
+                }
+                if group.is_some_and(|group| group.mask_effect_id.is_some())
+                    && selected_members != members.len()
+                    && destination_group.as_ref() != Some(group_id)
+                {
+                    self.rejection = Some("masked groups must move as a whole");
+                    return;
+                }
+                if preserve_groups && selected_members != members.len() {
+                    self.rejection = Some("whole-group moves require complete groups");
+                    return;
+                }
+            }
+
+            if preserve_groups {
+                if destination_group.is_some() {
+                    self.rejection = Some("whole groups cannot be moved into another group");
+                    return;
+                }
+            } else if selected_group_ids.iter().any(|group_id| {
+                groups
+                    .iter()
+                    .find(|group| &group.id == group_id)
+                    .is_some_and(|group| group.mask_effect_id.is_some())
+                    && destination_group.as_ref() != Some(group_id)
+            }) {
+                self.rejection = Some("masked groups require a whole-group move");
+                return;
+            }
+
+            if let Some(before) = &before
+                && selected_ids.contains(before)
+            {
+                return;
+            }
+
+            let mut candidate: Vec<PresetInstance> = effects
+                .iter()
+                .filter(|effect| !selected_ids.contains(&effect.id))
+                .cloned()
+                .collect();
+            let mut moved: Vec<PresetInstance> = effects
+                .iter()
+                .filter(|effect| selected_ids.contains(&effect.id))
+                .cloned()
+                .collect();
+            if !preserve_groups {
+                for effect in &mut moved {
+                    effect.group_id = destination_group.clone();
+                }
+            }
+            let insert_at = before
+                .as_ref()
+                .and_then(|before| candidate.iter().position(|effect| &effect.id == before))
+                .unwrap_or(candidate.len());
+            candidate.splice(insert_at..insert_at, moved);
+
+            if !groups
+                .iter()
+                .all(|group| group_members_contiguous(&candidate, &group.id))
+            {
+                self.rejection = Some("move would split a group");
+                return;
+            }
+            if candidate.len() == effects.len()
+                && candidate
+                    .iter()
+                    .zip(effects.iter())
+                    .all(|(candidate, current)| {
+                        candidate.id == current.id && candidate.group_id == current.group_id
+                    })
+            {
+                return;
+            }
+
+            self.old_effects = Some(effects.clone());
+            self.old_groups = Some(groups.clone());
+            *effects = candidate;
+            self.applied = true;
+        });
+        if target_exists.is_none() {
+            self.rejection = Some("effect target no longer exists");
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
+        let Some(old_effects) = self.old_effects.clone() else {
+            return;
+        };
+        let Some(old_groups) = self.old_groups.clone() else {
+            return;
+        };
+        with_effects_mut(project, &self.target, |effects, groups| {
+            *effects = old_effects;
+            *groups = old_groups;
+        });
+        self.applied = false;
+    }
+
+    fn description(&self) -> &str {
+        "Move Effects"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
+    }
+}
+
+/// Paste a prepared effect/group payload as one atomic, undoable edit.
+#[derive(Debug)]
+pub struct PasteEffectsCommand {
+    target: EffectTarget,
+    effects: Vec<PresetInstance>,
+    groups: Vec<EffectGroup>,
+    before: Option<EffectId>,
+    destination_group: Option<EffectGroupId>,
+    old_effects: Option<Vec<PresetInstance>>,
+    old_groups: Option<Vec<EffectGroup>>,
+    applied: bool,
+    rejection: Option<&'static str>,
+}
+
+impl PasteEffectsCommand {
+    pub fn new(
+        target: EffectTarget,
+        effects: Vec<PresetInstance>,
+        groups: Vec<EffectGroup>,
+        before: Option<EffectId>,
+        destination_group: Option<EffectGroupId>,
+    ) -> Self {
+        Self {
+            target,
+            effects,
+            groups,
+            before,
+            destination_group,
+            old_effects: None,
+            old_groups: None,
+            applied: false,
+            rejection: None,
+        }
+    }
+}
+
+impl Command for PasteEffectsCommand {
+    fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
+        let payload_effects = self.effects.clone();
+        let payload_groups = self.groups.clone();
+        let before = self.before.clone();
+        let destination_group = self.destination_group.clone();
+
+        let target_exists = with_effects_mut(project, &self.target, |effects, groups| {
+            if payload_effects.is_empty() {
+                self.rejection = Some("paste payload is empty");
+                return;
+            }
+            let effect_ids: HashSet<EffectId> = payload_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect();
+            let group_ids: HashSet<EffectGroupId> = payload_groups
+                .iter()
+                .map(|group| group.id.clone())
+                .collect();
+            if effect_ids.len() != payload_effects.len() || group_ids.len() != payload_groups.len()
+            {
+                self.rejection = Some("paste payload contains duplicate IDs");
+                return;
+            }
+            if effect_ids
+                .iter()
+                .any(|id| effects.iter().any(|effect| &effect.id == id))
+                || group_ids
+                    .iter()
+                    .any(|id| groups.iter().any(|group| &group.id == id))
+            {
+                self.rejection = Some("paste payload reuses an existing ID");
+                return;
+            }
+            if let Some(before) = &before
+                && !effects.iter().any(|effect| &effect.id == before)
+            {
+                self.rejection = Some("paste destination is stale");
+                return;
+            }
+            if let Some(group_id) = &destination_group
+                && !groups.iter().any(|group| &group.id == group_id)
+            {
+                self.rejection = Some("destination group no longer exists");
+                return;
+            }
+            if destination_group.is_some() && !payload_groups.is_empty() {
+                self.rejection = Some("complete groups cannot be pasted into another group");
+                return;
+            }
+
+            let mut pasted = payload_effects.clone();
+            for effect in &mut pasted {
+                if let Some(group_id) = &effect.group_id {
+                    if !group_ids.contains(group_id) {
+                        self.rejection = Some("paste payload has a dangling group ID");
+                        return;
+                    }
+                } else if destination_group.is_some() {
+                    effect.group_id = destination_group.clone();
+                }
+            }
+            for group in &payload_groups {
+                if let Some(parent) = &group.parent_group_id
+                    && !group_ids.contains(parent)
+                {
+                    self.rejection = Some("paste payload has a dangling parent group ID");
+                    return;
+                }
+                let members: Vec<&PresetInstance> = pasted
+                    .iter()
+                    .filter(|effect| effect.group_id.as_ref() == Some(&group.id))
+                    .collect();
+                if members.is_empty() {
+                    self.rejection = Some("paste payload contains an empty group");
+                    return;
+                }
+                if let Some(mask_id) = &group.mask_effect_id
+                    && !members.iter().any(|effect| &effect.id == mask_id)
+                {
+                    self.rejection = Some("paste payload has a dangling mask ID");
+                    return;
+                }
+            }
+
+            let mut candidate = effects.clone();
+            let insert_at = before
+                .as_ref()
+                .and_then(|id| candidate.iter().position(|effect| &effect.id == id))
+                .unwrap_or(candidate.len());
+            candidate.splice(insert_at..insert_at, pasted);
+            if !groups
+                .iter()
+                .all(|group| group_members_contiguous(&candidate, &group.id))
+                || !payload_groups
+                    .iter()
+                    .all(|group| group_members_contiguous(&candidate, &group.id))
+            {
+                self.rejection = Some("paste would split a group");
+                return;
+            }
+
+            self.old_effects = Some(effects.clone());
+            self.old_groups = Some(groups.clone());
+            *effects = candidate;
+            groups.extend(payload_groups.clone());
+            self.applied = true;
+        });
+        if target_exists.is_none() {
+            self.rejection = Some("effect target no longer exists");
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
+        let Some(old_effects) = self.old_effects.clone() else {
+            return;
+        };
+        let Some(old_groups) = self.old_groups.clone() else {
+            return;
+        };
+        with_effects_mut(project, &self.target, |effects, groups| {
+            *effects = old_effects;
+            *groups = old_groups;
+        });
+        self.applied = false;
+    }
+
+    fn description(&self) -> &str {
+        "Paste Effects"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::command::Command;
     use crate::commands::effects::{
-        AddEffectCommand, RemoveEffectCommand, ReorderEffectCommand,
-        ReorderEffectGroupCommand,
+        AddEffectCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
     };
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
@@ -849,31 +1339,33 @@ mod tests {
         project.settings.master_effects.push(effect("Colour"));
 
         let mut mask = effect("MaskBlob");
-        mask.params = ParamManifest::from_params([
-            ("threshold", "Threshold", 0.0, 1.0, 0.5),
-            ("min_area", "Min Area", 0.0, 0.25, 0.001),
-            ("max_blobs", "Max Blobs", 1.0, 32.0, 8.0),
-            ("selection", "Selection", 0.0, 1.0, 0.0),
-            ("amount", "Amount", 0.0, 1.0, 1.0),
-        ]
-        .into_iter()
-        .map(|(id, name, min, max, default_value)| {
-            Param::bundled(ParamSpecDef {
-                id: id.to_string(),
-                name: name.to_string(),
-                min,
-                max,
-                default_value,
-                whole_numbers: id == "max_blobs" || id == "selection",
-                value_labels: if id == "selection" {
-                    vec!["All".to_string(), "Largest".to_string()]
-                } else {
-                    Vec::new()
-                },
-                ..ParamSpecDef::default()
+        mask.params = ParamManifest::from_params(
+            [
+                ("threshold", "Threshold", 0.0, 1.0, 0.5),
+                ("min_area", "Min Area", 0.0, 0.25, 0.001),
+                ("max_blobs", "Max Blobs", 1.0, 32.0, 8.0),
+                ("selection", "Selection", 0.0, 1.0, 0.0),
+                ("amount", "Amount", 0.0, 1.0, 1.0),
+            ]
+            .into_iter()
+            .map(|(id, name, min, max, default_value)| {
+                Param::bundled(ParamSpecDef {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    min,
+                    max,
+                    default_value,
+                    whole_numbers: id == "max_blobs" || id == "selection",
+                    value_labels: if id == "selection" {
+                        vec!["All".to_string(), "Largest".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    ..ParamSpecDef::default()
+                })
             })
-        })
-        .collect());
+            .collect(),
+        );
         mask.base_tracked = true;
         assert!(mask.set_base_param("threshold", 0.63));
         assert!(mask.set_base_param("min_area", 0.012));
@@ -901,7 +1393,14 @@ mod tests {
 
         command.undo(&mut project);
         assert_eq!(project.settings.master_effects.len(), 1);
-        assert!(project.settings.master_effect_groups.as_ref().unwrap().is_empty());
+        assert!(
+            project
+                .settings
+                .master_effect_groups
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
 
         command.execute(&mut project);
         let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
@@ -916,12 +1415,7 @@ mod tests {
             .find(|effect| effect["effectType"] == "MaskBlob")
             .unwrap();
         assert!(
-            (saved_mask["params"]["threshold"]["value"]
-                .as_f64()
-                .unwrap()
-                - 0.63)
-                .abs()
-                < 1.0e-6
+            (saved_mask["params"]["threshold"]["value"].as_f64().unwrap() - 0.63).abs() < 1.0e-6
         );
         assert_eq!(saved_mask["params"]["max_blobs"]["value"], 12.0);
         assert_eq!(saved_mask["params"]["selection"]["value"], 1.0);
@@ -953,7 +1447,14 @@ mod tests {
         let group_id = group.id.clone();
 
         command.undo(&mut project);
-        assert!(project.settings.master_effect_groups.as_ref().unwrap().is_empty());
+        assert!(
+            project
+                .settings
+                .master_effect_groups
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
         command.execute(&mut project);
         let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
         assert_eq!(redo_group.id, group_id);
@@ -963,25 +1464,49 @@ mod tests {
     #[test]
     fn group_mask_by_id_follows_reordered_members_and_undo_redo() {
         let mut project = Project::default();
-        project.settings.master_effects = vec![effect("First"), effect("Second"), effect("Outside")];
-        let mut group = GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
+        project.settings.master_effects =
+            vec![effect("First"), effect("Second"), effect("Outside")];
+        let mut group =
+            GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
         group.execute(&mut project);
-        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0]
+            .id
+            .clone();
         let mask = effect("Mask");
         let mask_id = mask.id.clone();
         let mut command = AddGroupMaskCommand::for_group(master_target(), group_id.clone(), mask);
         // A queued menu command must resolve the group, not its old indices.
         project.settings.master_effects.rotate_right(1);
-        let before = project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>();
+        let before = project
+            .settings
+            .master_effects
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect::<Vec<_>>();
         command.execute(&mut project);
         assert!(command.was_applied());
         assert_eq!(project.settings.master_effects[0].id, before[0]);
         assert_eq!(project.settings.master_effects[1].id, mask_id);
-        assert!(project.settings.master_effects[1..].iter().all(|effect| effect.group_id.as_ref() == Some(&group_id)));
+        assert!(
+            project.settings.master_effects[1..]
+                .iter()
+                .all(|effect| effect.group_id.as_ref() == Some(&group_id))
+        );
         command.undo(&mut project);
-        assert_eq!(project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>(), before);
+        assert_eq!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
+            before
+        );
         command.execute(&mut project);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(mask_id));
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(mask_id)
+        );
     }
 
     #[test]
@@ -990,14 +1515,23 @@ mod tests {
         project.settings.master_effects = vec![effect("First")];
         let mut group = GroupEffectsCommand::new(master_target(), vec![0], "Modifier Group".into());
         group.execute(&mut project);
-        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0]
+            .id
+            .clone();
         let mut command = AddGroupMaskCommand::for_group(master_target(), group_id, effect("Mask"));
         group.undo(&mut project);
         command.execute(&mut project);
         assert!(!command.was_applied());
         assert_eq!(project.settings.master_effects.len(), 1);
         assert!(project.settings.master_effects[0].group_id.is_none());
-        assert!(project.settings.master_effect_groups.as_ref().unwrap().is_empty());
+        assert!(
+            project
+                .settings
+                .master_effect_groups
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1032,15 +1566,26 @@ mod tests {
             .collect();
         assert_eq!(members, vec![0, 1, 2]);
         assert_eq!(effects[0].id, mask_id);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(mask_id.clone()));
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(mask_id.clone())
+        );
 
         command.undo(&mut project);
         assert_eq!(
-            project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>(),
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
             original_ids
         );
         assert_eq!(project.settings.master_effects[0].group_id, Some(gid));
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, None);
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            None
+        );
     }
 
     #[test]
@@ -1051,27 +1596,49 @@ mod tests {
         let mask_id = mask.id.clone();
         let mut add = AddGroupMaskCommand::new(master_target(), vec![0], mask);
         add.execute(&mut project);
-        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
-        let mask_index = project.settings.master_effects.iter().position(|effect| effect.id == mask_id).unwrap();
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0]
+            .id
+            .clone();
+        let mask_index = project
+            .settings
+            .master_effects
+            .iter()
+            .position(|effect| effect.id == mask_id)
+            .unwrap();
         let removed = project.settings.master_effects[mask_index].clone();
         let mut remove = RemoveEffectCommand::new(master_target(), removed, mask_index);
 
         remove.execute(&mut project);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, None);
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            None
+        );
         remove.undo(&mut project);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(mask_id.clone()));
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].id, group_id);
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(mask_id.clone())
+        );
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].id,
+            group_id
+        );
         remove.execute(&mut project);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, None);
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            None
+        );
     }
 
     #[test]
     fn group_mask_replace_preserves_group_members_and_restores_exact_mask() {
         let mut project = Project::default();
         project.settings.master_effects = vec![effect("Colour"), effect("Wet")];
-        let mut group = GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
+        let mut group =
+            GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
         group.execute(&mut project);
-        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0]
+            .id
+            .clone();
 
         let first_mask = mask_with_state("MaskCircle", 0.25);
         let first_mask_id = first_mask.id.clone();
@@ -1082,32 +1649,60 @@ mod tests {
 
         let replacement = mask_with_state("MaskGradient", 0.75);
         let replacement_id = replacement.id.clone();
-        let mut replace = AddGroupMaskCommand::for_group(master_target(), group_id.clone(), replacement);
+        let mut replace =
+            AddGroupMaskCommand::for_group(master_target(), group_id.clone(), replacement);
         replace.execute(&mut project);
         assert!(replace.was_applied());
-        assert!(!project.settings.master_effects.iter().any(|effect| effect.id == first_mask_id));
-        assert!(project.settings.master_effects.iter().any(|effect| effect.id == replacement_id));
+        assert!(
+            !project
+                .settings
+                .master_effects
+                .iter()
+                .any(|effect| effect.id == first_mask_id)
+        );
+        assert!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .any(|effect| effect.id == replacement_id)
+        );
         assert_eq!(project.settings.master_effects.len(), before_replace.len());
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].id, group_id);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(replacement_id.clone()));
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].id,
+            group_id
+        );
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(replacement_id.clone())
+        );
 
         replace.undo(&mut project);
         assert_eq!(
             serde_json::to_value(&project.settings.master_effects).unwrap(),
             serde_json::to_value(&before_replace).unwrap()
         );
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(first_mask_id));
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(first_mask_id)
+        );
         replace.execute(&mut project);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(replacement_id));
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(replacement_id)
+        );
     }
 
     #[test]
     fn group_mask_remove_preserves_group_and_undoes_exact_mask() {
         let mut project = Project::default();
         project.settings.master_effects = vec![effect("Colour"), effect("Wet")];
-        let mut group = GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
+        let mut group =
+            GroupEffectsCommand::new(master_target(), vec![0, 1], "Modifier Group".into());
         group.execute(&mut project);
-        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let group_id = project.settings.master_effect_groups.as_ref().unwrap()[0]
+            .id
+            .clone();
         let mask = mask_with_state("MaskBlob", 0.63);
         let mask_id = mask.id.clone();
         let mut add = AddGroupMaskCommand::for_group(master_target(), group_id.clone(), mask);
@@ -1117,19 +1712,40 @@ mod tests {
         let mut remove = RemoveGroupMaskCommand::new(master_target(), group_id.clone());
         remove.execute(&mut project);
         assert!(remove.was_applied());
-        assert_eq!(project.settings.master_effects.len(), before_remove.len() - 1);
-        assert!(!project.settings.master_effects.iter().any(|effect| effect.id == mask_id));
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].id, group_id);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, None);
+        assert_eq!(
+            project.settings.master_effects.len(),
+            before_remove.len() - 1
+        );
+        assert!(
+            !project
+                .settings
+                .master_effects
+                .iter()
+                .any(|effect| effect.id == mask_id)
+        );
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].id,
+            group_id
+        );
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            None
+        );
 
         remove.undo(&mut project);
         assert_eq!(
             serde_json::to_value(&project.settings.master_effects).unwrap(),
             serde_json::to_value(&before_remove).unwrap()
         );
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(mask_id.clone()));
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(mask_id.clone())
+        );
         remove.execute(&mut project);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, None);
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            None
+        );
     }
 
     #[test]
@@ -1150,8 +1766,14 @@ mod tests {
         let mut remove = RemoveGroupMaskCommand::new(master_target(), target_group_id.clone());
         remove.execute(&mut project);
         assert!(!remove.was_applied());
-        assert_eq!(remove.rejection_reason(), Some("group mask effect belongs to another group"));
-        assert_eq!(serde_json::to_value(&project.settings.master_effects).unwrap(), before);
+        assert_eq!(
+            remove.rejection_reason(),
+            Some("group mask effect belongs to another group")
+        );
+        assert_eq!(
+            serde_json::to_value(&project.settings.master_effects).unwrap(),
+            before
+        );
         assert_eq!(
             project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
             Some(mask_id)
@@ -1168,18 +1790,56 @@ mod tests {
         add.execute(&mut project);
         let group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
         let gid = group.id.clone();
-        let original_ids: Vec<EffectId> = project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect();
+        let original_ids: Vec<EffectId> = project
+            .settings
+            .master_effects
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect();
         let mut ungroup = UngroupEffectsCommand::new(master_target(), gid.clone());
 
         ungroup.execute(&mut project);
-        assert!(project.settings.master_effects.iter().all(|effect| effect.id != mask_id));
-        assert!(project.settings.master_effect_groups.as_ref().unwrap().is_empty());
+        assert!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .all(|effect| effect.id != mask_id)
+        );
+        assert!(
+            project
+                .settings
+                .master_effect_groups
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
         ungroup.undo(&mut project);
-        assert_eq!(project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>(), original_ids);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].id, gid);
-        assert_eq!(project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id, Some(mask_id.clone()));
+        assert_eq!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
+            original_ids
+        );
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].id,
+            gid
+        );
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            Some(mask_id.clone())
+        );
         ungroup.execute(&mut project);
-        assert!(project.settings.master_effects.iter().all(|effect| effect.id != mask_id));
+        assert!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .all(|effect| effect.id != mask_id)
+        );
     }
 
     #[test]
@@ -1189,7 +1849,9 @@ mod tests {
         let mask = effect("Mask");
         let mut add = AddGroupMaskCommand::new(master_target(), vec![0], mask);
         add.execute(&mut project);
-        let gid = project.settings.master_effect_groups.as_ref().unwrap()[0].id.clone();
+        let gid = project.settings.master_effect_groups.as_ref().unwrap()[0]
+            .id
+            .clone();
 
         let mut insert = AddEffectCommand::new(master_target(), effect("Inserted"), 1);
         insert.execute(&mut project);
@@ -1199,7 +1861,13 @@ mod tests {
         let mut move_into = ReorderEffectCommand::new(master_target(), 2, 1);
         move_into.execute(&mut project);
         assert!(move_into.rejection_reason().is_some());
-        assert!(project.settings.master_effects.iter().any(|effect| effect.group_id.as_ref() == Some(&gid)));
+        assert!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .any(|effect| effect.group_id.as_ref() == Some(&gid))
+        );
 
         let old_effects = project.settings.master_effects.clone();
         let mut broken = old_effects.clone();
@@ -1208,5 +1876,156 @@ mod tests {
         let mut snapshot = ReorderEffectGroupCommand::new(master_target(), old_effects, broken);
         snapshot.execute(&mut project);
         assert!(snapshot.rejection_reason().is_some());
+    }
+
+    #[test]
+    fn set_group_collapsed_roundtrips_exactly() {
+        let mut project = Project::default();
+        project.settings.master_effects.push(effect("Colour"));
+        let mut group = EffectGroup::new("Collapsed".into());
+        group.collapsed = false;
+        let group_id = group.id.clone();
+        project.settings.master_effects[0].group_id = Some(group_id.clone());
+        project.settings.master_effect_groups = Some(vec![group]);
+
+        let mut command = SetGroupCollapsedCommand::new(master_target(), group_id, true);
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        assert!(project.settings.master_effect_groups.as_ref().unwrap()[0].collapsed);
+        command.undo(&mut project);
+        assert!(!project.settings.master_effect_groups.as_ref().unwrap()[0].collapsed);
+        command.execute(&mut project);
+        assert!(project.settings.master_effect_groups.as_ref().unwrap()[0].collapsed);
+
+        let mut no_op = SetGroupCollapsedCommand::new(
+            master_target(),
+            project.settings.master_effect_groups.as_ref().unwrap()[0]
+                .id
+                .clone(),
+            true,
+        );
+        no_op.execute(&mut project);
+        assert!(!no_op.was_applied());
+        assert_eq!(no_op.rejection_reason(), None);
+    }
+
+    #[test]
+    fn masked_card_reorder_stays_in_group_but_partial_move_out_rejects() {
+        let mut project = Project::default();
+        let mut mask = effect("Mask");
+        let mut first = effect("First");
+        let mut second = effect("Second");
+        let outside = effect("Outside");
+        let mut group = EffectGroup::new("Masked".into());
+        let group_id = group.id.clone();
+        group.mask_effect_id = Some(mask.id.clone());
+        mask.group_id = Some(group_id.clone());
+        first.group_id = Some(group_id.clone());
+        second.group_id = Some(group_id.clone());
+        let second_id = second.id.clone();
+        let first_id = first.id.clone();
+        project.settings.master_effects = vec![mask, first, second, outside];
+        project.settings.master_effect_groups = Some(vec![group]);
+        let original_ids: Vec<EffectId> = project
+            .settings
+            .master_effects
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect();
+
+        let mut reorder = MoveEffectsToGroupCommand::new(
+            master_target(),
+            vec![second_id.clone()],
+            Some(first_id.clone()),
+            Some(group_id.clone()),
+            false,
+        );
+        reorder.execute(&mut project);
+        assert!(reorder.was_applied());
+        assert_eq!(project.settings.master_effects[1].id, second_id);
+        assert_eq!(
+            project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
+            project.settings.master_effects.first().map(|effect| effect.id.clone())
+        );
+        reorder.undo(&mut project);
+        assert_eq!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
+            original_ids
+        );
+
+        let mut move_out = MoveEffectsToGroupCommand::new(
+            master_target(),
+            vec![first_id],
+            Some(project.settings.master_effects[3].id.clone()),
+            None,
+            false,
+        );
+        move_out.execute(&mut project);
+        assert!(!move_out.was_applied());
+        assert_eq!(
+            move_out.rejection_reason(),
+            Some("masked groups must move as a whole")
+        );
+    }
+
+    #[test]
+    fn separated_complete_groups_move_together_and_undo_exactly() {
+        let mut project = Project::default();
+        let mut a1 = effect("A1");
+        let mut a2 = effect("A2");
+        let middle = effect("Middle");
+        let mut b1 = effect("B1");
+        let mut b2 = effect("B2");
+        let tail = effect("Tail");
+        let group_a = EffectGroup::new("A".into());
+        let group_b = EffectGroup::new("B".into());
+        let group_a_id = group_a.id.clone();
+        let group_b_id = group_b.id.clone();
+        a1.group_id = Some(group_a_id.clone());
+        a2.group_id = Some(group_a_id.clone());
+        b1.group_id = Some(group_b_id.clone());
+        b2.group_id = Some(group_b_id.clone());
+        let tail_id = tail.id.clone();
+        project.settings.master_effects = vec![a1, a2, middle, b1, b2, tail];
+        project.settings.master_effect_groups = Some(vec![group_a, group_b]);
+        let original_ids: Vec<EffectId> = project
+            .settings
+            .master_effects
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect();
+
+        let selected = project.settings.master_effects[..2]
+            .iter()
+            .chain(project.settings.master_effects[3..5].iter())
+            .map(|effect| effect.id.clone())
+            .collect();
+        let mut move_groups = MoveEffectsToGroupCommand::new(
+            master_target(),
+            selected,
+            Some(tail_id),
+            None,
+            true,
+        );
+        move_groups.execute(&mut project);
+        assert!(move_groups.was_applied());
+        assert_eq!(project.settings.master_effects[0].effect_type(), &PresetTypeId::new("Middle"));
+        assert_eq!(project.settings.master_effects[1].group_id, Some(group_a_id));
+        assert_eq!(project.settings.master_effects[3].group_id, Some(group_b_id));
+        move_groups.undo(&mut project);
+        assert_eq!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
+            original_ids
+        );
     }
 }

@@ -383,6 +383,15 @@ impl UIRoot {
     /// — the perf HUD (modeless, never-consuming) does not, so Escape falls
     /// through to selection clearing when only the HUD is up.
     pub fn escape_overlays(&mut self) -> bool {
+        if self.scene_setup_panel.cancel_object_modifier_drag(&mut self.tree) {
+            self.drag_owner = None;
+            return true;
+        }
+        if self.inspector.is_card_drag_active() {
+            self.inspector.cancel_card_drag(&mut self.tree);
+            self.drag_owner = None;
+            return true;
+        }
         let event = UIEvent::KeyDown {
             node_id: NodeId::PLACEHOLDER,
             key: Key::Escape,

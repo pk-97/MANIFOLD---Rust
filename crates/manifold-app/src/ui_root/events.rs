@@ -36,10 +36,18 @@ impl UIRoot {
         let action = self.intents.resolve(&self.tree, node_id, gesture)?;
         Some(match action {
             PanelAction::Root(RootAction::AudioDrawerClick(target, param_id, click)) =>
-                node_id.map(|node| self.inspector.audio_drawer_intent(node, target, &param_id, click)).unwrap_or_default(),
+                node_id.map(|node| {
+                    if self.scene_setup_panel.contains_object_modifier_node(node) {
+                        self.scene_setup_panel.audio_drawer_intent(node, target, &param_id, click)
+                    } else {
+                        self.inspector.audio_drawer_intent(node, target, &param_id, click)
+                    }
+                }).unwrap_or_default(),
             PanelAction::Root(RootAction::ClipTriggerDrawerClick(layer, row, click)) =>
                 self.inspector.clip_trigger_drawer_intent(&layer, row, &click),
             action => vec![match node_id {
+                Some(node) if self.scene_setup_panel.contains_object_modifier_node(node) =>
+                    self.scene_setup_panel.refresh_driver_period_intent(node, &self.tree, action),
                 Some(node) => self.inspector.refresh_driver_period_intent(node, &self.tree, action),
                 None => action,
             }],
@@ -170,6 +178,17 @@ impl UIRoot {
 
             // Scene Setup dock — mirror of the Audio Setup routing above.
             if self.scene_setup_panel.is_open() {
+                let node = match event {
+                    UIEvent::Click { node_id, .. } | UIEvent::DoubleClick { node_id, .. } => Some(*node_id),
+                    UIEvent::RightClick { node_id, .. } => *node_id,
+                    _ => None,
+                };
+                if node.is_some_and(|node| self.scene_setup_panel.contains_object_modifier_node(node))
+                    && let Some(resolved) = self.resolve_intent(event)
+                {
+                    actions.extend(resolved);
+                    continue;
+                }
                 let (consumed, mut acts) = self.scene_setup_panel.handle_event(event, &mut self.tree);
                 actions.append(&mut acts);
                 if consumed {
@@ -265,8 +284,9 @@ impl UIRoot {
                         }
                     }
                 }
-                UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+                UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. } => {
                     if self.inspector.is_card_drag_active() {
+                        self.inspector.update_card_drag(*pos, &mut self.tree);
                         let mut reorder_actions = self.inspector.end_card_drag(&mut self.tree);
                         actions.append(&mut reorder_actions);
                     } else if self.inspector.has_pressed_target() {

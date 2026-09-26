@@ -28,6 +28,8 @@ mod host_parity_tests;
 mod row_gesture_tests;
 #[path = "scene_setup_panel/material_inspector.rs"]
 mod material_inspector;
+#[path = "scene_setup_panel/object_modifiers.rs"]
+mod object_modifiers;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -43,15 +45,15 @@ use super::actions::{MaterialEditKind, MaterialParamWrite};
 #[cfg(test)]
 use super::{ScrubPhase, ScrubValue, ValueRef};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
-use super::param_card::{RowGeometry, RowMod};
+use super::param_card::{ParamCardPanel, RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
     ROW_ROLE_SECTION_HEADER, ROW_ROLE_TOGGLE, param_row_key_base,
     build_toggle_trigger_row, toggle_btn_style, ToggleParamIds,
 };
 use crate::param_surface::{
-    MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ModifierObjectRef,
-    ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec,
+    MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
+    ModifierObjectRef, ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec,
 };
 use crate::slider::GAP;
 
@@ -148,18 +150,10 @@ pub const MESH_MODIFIER_CHOICES: &[(&str, &str)] = &[
 /// the stack grows.
 const MODIFIER_KEY_BASE: u64 = 88_000;
 const MODIFIER_OBJ_STRIDE: u64 = 480;
-const MODIFIER_ROW_STRIDE: u64 = 20;
-const MODIFIER_OFF_UP: u64 = 0;
-const MODIFIER_OFF_DOWN: u64 = 1;
-const MODIFIER_OFF_REMOVE: u64 = 2;
 /// Reserved sub-range within the per-object budget for the "+ Add Modifier"
 /// button (UX-P2 D6: one control now, was 7 chips) — well clear of any real
 /// modifier stack (never more than a handful of rows).
 const MODIFIER_ADD_BUTTON_OFFSET: u64 = 400;
-
-const fn modifier_row_key(object_index: usize, modifier_index: usize, offset: u64) -> u64 {
-    MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + modifier_index as u64 * MODIFIER_ROW_STRIDE + offset
-}
 
 const fn modifier_add_button_key(object_index: usize) -> u64 {
     MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_BUTTON_OFFSET
@@ -375,6 +369,10 @@ pub struct ModifierKnownRow {
     pub index: usize,
     pub node_doc_id: u32,
     pub display_name: String,
+    /// Exact exposed parameter ids owned by this modifier. These ids come
+    /// from projection metadata and may be custom/non-numeric; UI must never
+    /// infer ownership from a numeric document-id prefix.
+    pub parameter_ids: Vec<String>,
 }
 
 // P4b: the Skin row's payload types live in `scene_setup_skin.rs` (this file
@@ -910,6 +908,14 @@ pub struct ScenePanel {
     /// fields this replaced — they had stopped rendering rows in 2a and were
     /// kept declared only to back a synthesized-id lookup that always missed).
     properties_card: SceneCardState,
+    /// Shared parameter cards for the selected object's modifier chain. The
+    /// cards are retained by stable object/modifier address across snapshots;
+    /// only the selected object's live nodes are built this frame.
+    object_modifier_cards: Vec<ParamCardPanel>,
+    object_modifier_drag: Option<object_modifiers::ObjectModifierDrag>,
+    object_modifier_drag_indicator: Option<NodeId>,
+    selected_object_modifier: Option<ObjectModifierCardInfo>,
+    object_modifier_pressed_card: Option<usize>,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
     /// `ParamSurface` (every exposed param, every section) — built by
     /// `state_sync` the SAME way the main inspector's generator card is
@@ -972,15 +978,6 @@ pub struct ScenePanel {
     /// scene-panel-ux lane: fold state for outliner groups (Scene/Lights/Objects).
     /// UI-local, never serialized. Missing entry = expanded.
     outliner_folded: ahash::AHashMap<&'static str, bool>,
-    /// P5: `(node_id, group_node_id, modifier_node_id)` for every modifier
-    /// row's remove button built this frame.
-    modifier_remove_ids: Vec<(NodeId, u32, u32)>,
-    /// P5: `(node_id, group_node_id, modifier_node_id, new_position)` for
-    /// every up/down reorder button built this frame — only pushed for
-    /// buttons that aren't at a stack boundary (up at index 0 / down at the
-    /// last index are rendered but inert, per
-    /// `feedback_no_conditionally_visible_ui`).
-    modifier_move_ids: Vec<(NodeId, u32, u32, u32)>,
     /// UX-P2 (D6): `(button_node_id, group_node_id)` for the single "+ Add
     /// Modifier" button built this frame, when the selected object's chain
     /// is addable (was `modifier_add_ids: Vec<(NodeId, u32, String)>`, one
@@ -1027,6 +1024,11 @@ pub struct ScenePanel {
     )>,
     active_material_info: Option<MaterialInspectorInfo>,
     panel_rect: Rect,
+    /// Scrollable properties viewport used to validate object-card gestures.
+    /// The title bar and neighbouring surfaces are outside this region.
+    object_modifier_bounds: Rect,
+    object_cards_animating: bool,
+    object_cards_were_animating: bool,
 }
 
 impl Default for ScenePanel {
@@ -1045,6 +1047,11 @@ impl Default for ScenePanel {
             new_scene_id: None,
             open_graph_editor_id: None,
             properties_card: SceneCardState::new(),
+            object_modifier_cards: Vec::new(),
+            object_modifier_drag: None,
+            object_modifier_drag_indicator: None,
+            selected_object_modifier: None,
+            object_modifier_pressed_card: None,
             full_params: None,
             full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
@@ -1060,8 +1067,6 @@ impl Default for ScenePanel {
             object_frame_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
-            modifier_remove_ids: Vec::new(),
-            modifier_move_ids: Vec::new(),
             add_modifier_button_id: None,
             skin_source_ids: Vec::new(),
             skin_target_ids: Vec::new(),
@@ -1077,6 +1082,9 @@ impl Default for ScenePanel {
             material_feature_ids: Vec::new(),
             active_material_info: None,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+            object_modifier_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
+            object_cards_animating: false,
+            object_cards_were_animating: false,
         }
     }
 }
@@ -1100,6 +1108,9 @@ impl ScenePanel {
             return;
         }
         self.properties_card.row_host.register_intents(intents);
+        for card in &self.object_modifier_cards {
+            card.register_intents(intents);
+        }
     }
 
     pub fn open(&mut self) {
@@ -1120,6 +1131,7 @@ impl ScenePanel {
     /// staleness").
     pub fn configure(&mut self, state: SceneSetupState) {
         self.state = state;
+        self.rebuild_object_modifier_cards_from_projection();
     }
 
     /// P2 slice 2a: hand the panel the layer's FULL generator
@@ -1139,6 +1151,7 @@ impl ScenePanel {
             }
         }
         self.full_params = config;
+        self.rebuild_object_modifier_cards_from_projection();
     }
 
     /// Build the panel as a docked column into `rect`
@@ -1218,6 +1231,27 @@ impl ScenePanel {
             }
             if let Some(c) = card.row_value_synced.get_mut(i) {
                 *c = true;
+            }
+        }
+        // Object modifier cards share the same layer manifest channel. Their
+        // retained rows join by the unchanged ParamId; rebuilding a second
+        // value store here would let object-card order drift from the graph.
+        if let Some(surface) = full_params.as_ref() {
+            for card in &mut self.object_modifier_cards {
+                if card.node_count() == 0 { continue; }
+                let mut modifier_slots = surface.rows.iter().map(|row| {
+                    (
+                        row.id.as_ref(),
+                        crate::view::UiParamSlot {
+                            value: row.value.effective,
+                            base: row.value.base,
+                            exposed: row.value.exposed,
+                            min: row.spec.min,
+                            max: row.spec.max,
+                        },
+                    )
+                });
+                card.sync_values(tree, &mut modifier_slots);
             }
         }
         for &(node, slot) in &self.material_mode_ids {
@@ -1305,8 +1339,6 @@ impl ScenePanel {
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
-        self.modifier_remove_ids.clear();
-        self.modifier_move_ids.clear();
         self.add_modifier_button_id = None;
         self.skin_source_ids.clear();
         self.skin_target_ids.clear();
@@ -1317,11 +1349,19 @@ impl ScenePanel {
         self.material_look_ids.clear();
         self.material_feature_ids.clear();
         self.material_remove_ids.clear();
+        // Object modifier cards are retained for collapse/gesture state, but
+        // their widget ids are frame-local. Clear them before rebuilding so
+        // cards hidden by a non-object selection cannot claim a fresh row's
+        // node range during event routing.
+        for card in &mut self.object_modifier_cards {
+            card.clear_nodes();
+        }
         self.active_material_info = None;
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
         let content_top = y + PAD + TITLE_H;
         let body_viewport = Rect::new(x, content_top, self.panel_w, (y + panel_h - PAD - content_top).max(0.0));
+        self.object_modifier_bounds = body_viewport;
         let clip_id = self.scroll.begin(tree, body_viewport);
         self.content_parent = clip_id;
         let content_start = tree.count();
@@ -1345,6 +1385,7 @@ impl ScenePanel {
         }
         let sb_x = x + self.panel_w - SCROLLBAR_W - 2.0;
         self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
+        self.rebuild_object_modifier_drag_overlay(tree);
     }
 
     fn build_sentence(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, cy: f32, sentence: &str) -> f32 {
@@ -1453,6 +1494,18 @@ impl ScenePanel {
     /// push through, unlike `handle_event`'s click arm).
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
         self.selection.insert(layer_id, sel);
+    }
+
+    /// Capture the destination before a keyboard shortcut can overtake the
+    /// queued click. Folding remains a click action, not a selection change.
+    pub fn select_outliner_node(&mut self, node_id: NodeId) -> bool {
+        let Some((_, selection)) = self.outliner_row_ids.iter().find(|(id, _)| *id == node_id) else {
+            return false;
+        };
+        if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
+        let SceneSetupState::Live(vm) = &self.state else { return false; };
+        self.selection.insert(vm.layer_id.clone(), *selection);
+        true
     }
 
     /// The current selection for `vm.layer_id`, resolving the D7 fallback
@@ -1871,8 +1924,19 @@ impl ScenePanel {
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
+        cy: f32,
+        owner: (&[String], Option<&[u32]>),
+    ) -> f32 {
+        self.build_filtered_properties_excluding(tree, inner_x, inner_w, cy, (owner.0, owner.1, &[]))
+    }
+
+    fn build_filtered_properties_excluding(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
         mut cy: f32,
-        (sections, owner_ids): (&[String], Option<&[u32]>),
+        (sections, owner_ids, excluded_ids): (&[String], Option<&[u32]>, &[String]),
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
@@ -1904,8 +1968,11 @@ impl ScenePanel {
                         .and_then(|s| s.parse::<u32>().ok())
                         .is_some_and(|id| ids.contains(&id))
                 });
+                let excluded = !selected_material_id
+                    && excluded_ids.iter().any(|id| id == p.id.as_ref());
                 if p.spec.section.as_deref() == Some(section.as_str())
                     && owned
+                    && !excluded
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
                     && self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
@@ -2184,71 +2251,6 @@ impl ScenePanel {
         cy
     }
 
-    /// P2 slice 2a: STRUCTURAL chrome only — display name + up/down/remove.
-    /// This modifier's own PARAM rows no longer build here: they're part of
-    /// `row.sections` (each modifier's own P1 section, e.g. "Teapot — Bend")
-    /// and render through the unified `build_filtered_properties` pass in
-    /// `build_object_properties_body`, ABOVE this stack list — the stack
-    /// itself stays a structural verb (add/remove/reorder), unchanged.
-    /// `mod_count` is the CURRENT stack length — up/down are always
-    /// rendered (never conditionally hidden,
-    /// `feedback_no_conditionally_visible_ui`) but only recorded as live
-    /// targets when they wouldn't push past a stack boundary; clicking an
-    /// inert one at the boundary is simply a no-op.
-    fn build_modifier_stack_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        object_index: usize,
-        group_node_id: u32,
-        m: &ModifierKnownRow,
-        mod_count: usize,
-    ) -> f32 {
-        let name_w = inner_w - STEP_W * 3.0;
-        tree.add_label(Some(self.content_parent), inner_x, cy, name_w, ROW_H, &m.display_name, label_style());
-        let btn_x = inner_x + name_w;
-        let up_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            btn_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2191}",
-            modifier_row_key(object_index, m.index, MODIFIER_OFF_UP),
-        );
-        let down_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            btn_x + STEP_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2193}",
-            modifier_row_key(object_index, m.index, MODIFIER_OFF_DOWN),
-        );
-        let remove_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            btn_x + STEP_W * 2.0,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{00D7}",
-            modifier_row_key(object_index, m.index, MODIFIER_OFF_REMOVE),
-        );
-        self.modifier_remove_ids.push((remove_id, group_node_id, m.node_doc_id));
-        if m.index > 0 {
-            self.modifier_move_ids.push((up_id, group_node_id, m.node_doc_id, (m.index - 1) as u32));
-        }
-        if m.index + 1 < mod_count {
-            self.modifier_move_ids.push((down_id, group_node_id, m.node_doc_id, (m.index + 1) as u32));
-        }
-        cy + ROW_H
-    }
-
     /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
     /// button, replacing the old 7-chip grid (`build_add_modifier_row`).
     /// The click opens the shared `panels::dropdown` overlay, listing the
@@ -2321,6 +2323,9 @@ impl ScenePanel {
                     // the single owning path (width + open + rebuild +
                     // header sync all in lockstep).
                     return (true, vec![PanelAction::Root(RootAction::OpenSceneSetup)]);
+                }
+                if let Some(actions) = self.object_modifier_card_click(*node_id, tree) {
+                    return (true, actions);
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
@@ -2495,23 +2500,6 @@ impl ScenePanel {
                             current_target_map: skin.target_map,
                             button_node_id: *node_id,
                         }));
-                    } else if let Some((_, group_node_id, modifier_node_id)) =
-                        self.modifier_remove_ids.iter().find(|(id, _, _)| *id == *node_id)
-                    {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveModifier(
-                            vm.layer_id.clone(),
-                            *group_node_id,
-                            *modifier_node_id,
-                        )));
-                    } else if let Some((_, group_node_id, modifier_node_id, new_position)) =
-                        self.modifier_move_ids.iter().find(|(id, _, _, _)| *id == *node_id)
-                    {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupMoveModifier(
-                            vm.layer_id.clone(),
-                            *group_node_id,
-                            *modifier_node_id,
-                            *new_position,
-                        )));
                     } else if let Some((_, index)) =
                         self.object_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
@@ -2571,6 +2559,9 @@ impl ScenePanel {
             // action, so the app's `InspectorParam` commit drives the same
             // `ValueRef::Param(GeneratorOf, ..)` scrub wire the drag uses.
             UIEvent::DoubleClick { node_id, .. } => {
+                if let Some(action) = self.object_modifier_card_double_click(*node_id, tree) {
+                    return (true, vec![action]);
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let card = &self.properties_card;
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -2587,6 +2578,9 @@ impl ScenePanel {
                 (false, Vec::new())
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
+                if let Some(actions) = self.object_modifier_card_pointer_down(*node_id, *pos, tree) {
+                    return (true, actions);
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                     let was_dragging = self.properties_card.row_host.is_dragging();
@@ -2606,8 +2600,17 @@ impl ScenePanel {
                 }
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
-            UIEvent::DragBegin { .. } => (self.properties_card.row_host.is_dragging(), Vec::new()),
+            UIEvent::DragBegin { node_id, .. } => {
+                if self.begin_object_modifier_drag(*node_id, tree) {
+                    return (true, Vec::new());
+                }
+                (self.properties_card.row_host.is_dragging(), Vec::new())
+            }
             UIEvent::Drag { pos, modifiers, .. } => {
+                if self.object_modifier_drag.is_some() || self.object_modifier_pressed_card.is_some() {
+                    self.update_object_modifier_drag(*pos, tree, self.object_modifier_bounds);
+                    return (true, self.object_modifier_card_drag(*pos, tree, modifiers.shift));
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                     let was_dragging = self.properties_card.row_host.is_dragging();
@@ -2624,7 +2627,13 @@ impl ScenePanel {
                 }
                 (false, Vec::new())
             }
-            UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+            UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. } => {
+                if self.object_modifier_drag.is_some() {
+                    return (true, self.finish_object_modifier_drag(*pos, tree, self.object_modifier_bounds));
+                }
+                if self.object_modifier_pressed_card.is_some() {
+                    return (true, self.end_object_modifier_card_gesture(tree));
+                }
                 let was_dragging = self.properties_card.row_host.is_dragging();
                 let actions = self.properties_card.row_host.handle_drag_end();
                 let actions = self.rewrite_material_rgb_actions(actions);
@@ -2925,6 +2934,7 @@ mod tests {
                         index: 0,
                         node_doc_id: 70,
                         display_name: "Bend".to_string(),
+                        parameter_ids: vec!["70_amount".to_string()],
                     }],
                     modifiers_addable: true,
                     sections: Vec::new(),
@@ -3069,11 +3079,13 @@ mod tests {
                 index: 0,
                 node_doc_id: 70,
                 display_name: "Bend".to_string(),
+                parameter_ids: vec!["70_amount".to_string()],
             },
             ModifierKnownRow {
                 index: 1,
                 node_doc_id: 71,
                 display_name: "Twist".to_string(),
+                parameter_ids: vec!["71_amount".to_string()],
             },
         ];
         row.modifiers_addable = modifiers_addable;
@@ -3149,92 +3161,49 @@ mod tests {
     }
 
     #[test]
-    fn modifier_remove_click_emits_remove_modifier_action() {
+    fn copied_modifier_ids_from_other_objects_do_not_leak_into_properties() {
+        let (mut vm, mut surface) = world_transform_vm();
+        let shared_section = "Cube — Bend_mesh".to_string();
+        let ObjectRowVm::Known(first) = &mut vm.objects[0] else { unreachable!() };
+        first.sections = vec![shared_section.clone()];
+        first.modifiers[0].parameter_ids = vec!["70_amount".to_string()];
+        surface.rows[0].id = "70_amount".into();
+        surface.rows[0].spec.section = Some(shared_section.clone());
+        let mut copied = first.as_ref().clone();
+        copied.index = 1;
+        copied.object_node_id = 41;
+        copied.group_node_id = Some(43);
+        copied.name = "Object 2".to_string();
+        copied.modifiers[0].node_doc_id = 71;
+        copied.modifiers[0].parameter_ids = vec!["71_amount".to_string()];
+        vm.objects.push(ObjectRowVm::Known(Box::new(copied)));
+        surface.rows.push({
+            let mut row = surface.rows[0].clone();
+            row.id = "71_amount".into();
+            row
+        });
+
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure_params(Some(surface));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.modifier_remove_ids.len(), 1);
-        let (remove_id, group_node_id, modifier_node_id) = panel.modifier_remove_ids[0];
-        assert_eq!(group_node_id, 42);
-        assert_eq!(modifier_node_id, 70);
 
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: remove_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupRemoveModifier(l, 42, 70)) if *l == LayerId::new("layer-1")
-        ));
+        assert!(panel.properties_card.rows.is_empty());
+        assert_eq!(panel.object_modifier_cards.len(), 2);
+        assert_eq!(panel.object_modifier_cards[0].rows[0].id.as_ref(), "70_amount");
+        assert_eq!(panel.object_modifier_cards[1].rows[0].id.as_ref(), "71_amount");
     }
 
     #[test]
-    fn modifier_up_down_respect_stack_boundaries() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(true))));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // First modifier (index 0): no "up" target (already first), but a
-        // "down" target to position 1.
-        // Second modifier (index 1): an "up" target to position 0, no
-        // "down" target (already last).
-        assert_eq!(panel.modifier_move_ids.len(), 2, "one live reorder target per modifier, boundary buttons excluded");
-        assert!(
-            panel
-                .modifier_move_ids
-                .iter()
-                .any(|(_, gid, mid, pos)| *gid == 42 && *mid == 70 && *pos == 1),
-            "modifier 0's down button targets position 1"
-        );
-        assert!(
-            panel
-                .modifier_move_ids
-                .iter()
-                .any(|(_, gid, mid, pos)| *gid == 42 && *mid == 71 && *pos == 0),
-            "modifier 1's up button targets position 0"
-        );
-    }
-
-    #[test]
-    fn modifier_move_click_emits_move_modifier_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(true))));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (move_id, _, _, _) = panel
-            .modifier_move_ids
-            .iter()
-            .find(|(_, gid, mid, _)| *gid == 42 && *mid == 71)
-            .copied()
-            .unwrap();
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: move_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupMoveModifier(l, 42, 71, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    #[test]
-    fn unparseable_modifier_chain_shows_custom_label_and_disables_add() {
+    fn unparseable_modifier_chain_disables_add() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(false))));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.add_modifier_button_id.is_none(), "Add modifier is disabled for an unparseable chain");
-        assert!(panel.modifier_remove_ids.is_empty(), "no remove buttons for an unparseable chain either");
     }
 
     #[test]
@@ -3510,6 +3479,25 @@ mod tests {
             PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 42, n))
                 if *l == LayerId::new("layer-1") && n == "Azalea"
         ));
+    }
+
+    #[test]
+    fn object_paste_destination_changes_before_the_queued_click_is_drained() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(mut second) = vm.objects[0].clone() else { panic!("known fixture"); };
+        second.object_node_id = 200;
+        second.group_node_id = Some(201);
+        vm.objects.push(ObjectRowVm::Known(second));
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (node, _) = panel.outliner_row_ids.iter()
+            .find(|(_, selection)| *selection == SceneSelection::Object(200)).unwrap();
+        assert!(panel.select_outliner_node(*node));
+        assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), 201)));
+        assert!(panel.selected_object_modifier().is_none());
     }
 
     /// D7: clicking an outliner row changes the UI-local selection, and the

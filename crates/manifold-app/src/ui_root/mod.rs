@@ -195,6 +195,8 @@ pub struct UIRoot {
     /// bump `data_version`, so this guard keys directly on the content event's
     /// sequence and remains stable across repeated snapshots.
     pub last_graph_edit_diagnostic_sequence: Option<u64>,
+    pub last_modifier_selection_sequence: Option<u64>,
+    pub last_object_modifier_selection_sequence: Option<u64>,
 
     /// Load-time warmup progress shown as a centered overlay during project
     /// open. `None` when no warmup is active.
@@ -279,6 +281,8 @@ pub struct UIRoot {
     /// Written only through `set_scene_modifier_clipboard` so the latest
     /// copy wins across both clipboards.
     pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
+    pub object_modifier_clipboard: Option<crate::object_modifier_transfer::ObjectModifierClipboard>,
+    pub object_cards_have_focus: bool,
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
@@ -454,6 +458,8 @@ impl UIRoot {
             last_export_toast_key: None,
             last_undo_redo_toast_key: None,
             last_graph_edit_diagnostic_sequence: None,
+            last_modifier_selection_sequence: None,
+            last_object_modifier_selection_sequence: None,
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
             built: false,
@@ -484,6 +490,8 @@ impl UIRoot {
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             scene_modifier_clipboard: None,
+            object_modifier_clipboard: None,
+            object_cards_have_focus: false,
             cursor_hover_actions: Vec::new(),
             pending_keyboard_actions: Vec::new(),
             viewport_events: Vec::new(),
@@ -520,6 +528,7 @@ impl UIRoot {
     ) {
         if clipboard.is_some() {
             self.effect_clipboard.clear();
+            self.object_modifier_clipboard = None;
         }
         self.scene_modifier_clipboard = clipboard;
     }
@@ -890,6 +899,7 @@ impl UIRoot {
             self.tree.end_region(region, start);
         }
 
+        self.inspector.rebuild_card_drag_overlay(&mut self.tree);
         self.built = true;
     }
 
@@ -905,6 +915,7 @@ impl UIRoot {
         let start = self.tree.count();
         self.inspector.build_in_rect(&mut self.tree, rect);
         self.tree.end_region(region, start);
+        self.inspector.rebuild_card_drag_overlay(&mut self.tree);
     }
 
     /// Route pre-drained events through the inspector subset of the main
@@ -972,8 +983,9 @@ impl UIRoot {
                         actions.append(&mut drag_actions);
                     }
                 }
-                UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+                UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. } => {
                     if self.inspector.is_card_drag_active() {
+                        self.inspector.update_card_drag(*pos, &mut self.tree);
                         let mut reorder = self.inspector.end_card_drag(&mut self.tree);
                         actions.append(&mut reorder);
                     } else if self.inspector.has_pressed_target() {
@@ -1519,6 +1531,7 @@ impl UIRoot {
         self.footer.update(&mut self.tree);
         self.layer_headers.update(&mut self.tree);
         self.tick_inspector();
+        self.scene_setup_panel.tick_object_cards(&mut self.tree, split_dt_ms);
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
         // D11 toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2): repaints its own alpha
@@ -1560,6 +1573,7 @@ impl UIRoot {
         dt: f32,
     ) {
         self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
+        self.scene_setup_panel.update_object_card_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
