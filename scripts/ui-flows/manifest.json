@@ -125,6 +125,8 @@
     "scene-physics-controls": "physicsscene",
     "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",
+    "automation-time-selection": "automation",
+    "automation-lane-management": "automation",
     "automation-show-parameter": "inspector",
     "automation-clear-parameter": "inspector",
     "automation-coincident-points": "automation",

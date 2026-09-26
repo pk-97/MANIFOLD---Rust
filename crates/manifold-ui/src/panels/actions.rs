@@ -17,7 +17,7 @@ use crate::types::{
     AbletonMacroAddress, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
     PresetTypeId, TonemapCurve,
 };
-use crate::view::UiGraphTarget;
+use crate::view::{UiGraphTarget, UiSegmentShape};
 use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, NodeId, ParamId};
 
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +111,11 @@ pub enum EditingAction {
     /// Right-click anywhere on an automation lane strip/segment/dot
     /// (BUG-184) — opens the lane's context menu.
     AutomationLaneRightClicked(UiGraphTarget, ParamId),
+    /// Session-only lane view actions. These never touch envelope data.
+    AutomationLaneHide(UiGraphTarget, ParamId),
+    AutomationLanePinToggle(UiGraphTarget, ParamId),
+    AutomationLaneMove(UiGraphTarget, ParamId, i32),
+    ShowAllAutomationLanes,
     ContextAutomationCut(UiGraphTarget, ParamId, Beats),
     ContextAutomationCopy(UiGraphTarget, ParamId, Beats),
     ContextAutomationPaste(UiGraphTarget, ParamId, Beats),
@@ -124,6 +129,9 @@ pub enum EditingAction {
         Beats,
         AutomationShape,
     ),
+    /// Change the shape leaving the captured point. The app dispatches this
+    /// through `MoveAutomationPointCommand`, so one menu choice is one undo.
+    ContextAutomationSetShape(UiGraphTarget, ParamId, Beats, f32, UiSegmentShape),
     /// Opens the existing point value editor for the addressed point.
     AutomationPointEditValue(UiGraphTarget, ParamId, Beats, f32),
     /// Opens the existing point time editor for the addressed point.
@@ -614,6 +622,12 @@ pub enum ParamsAction {
     ParamLabelRightClick(GraphParamTarget, ParamId),
     /// Reveal this parameter's arrangement lane without touching its value.
     ShowAutomation(GraphParamTarget, ParamId),
+    /// Reveal a lane using its stable UI graph target. Used by chooser entries
+    /// whose layer must survive a later active-inspector change.
+    ShowAutomationAddress(crate::view::UiGraphTarget, ParamId),
+    /// Open the searchable automation parameter chooser. `None` means the
+    /// current inspector layer; `Some` is a layer-context invocation.
+    OpenAutomationChooser(Option<LayerId>),
     /// Remove all arrangement automation for this parameter, with undo.
     ClearAutomation(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu

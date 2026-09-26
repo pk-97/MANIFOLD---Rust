@@ -207,8 +207,9 @@ impl Application {
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
-                let drag_active =
-                    self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
+                let drag_active = self.overlay.drag_mode()
+                    != manifold_ui::interaction_overlay::DragMode::None
+                    || self.overlay.has_pending_automation_press();
                 // Suppress snapshots until content thread catches up after a local project load.
                 // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
                 const MAX_SUPPRESS_FRAMES: u64 = 120;
@@ -432,6 +433,9 @@ impl Application {
                 &self.local_project,
                 self.selection.automation_mode_visible,
                 &self.selection.chosen_automation_params,
+                &self.selection.automation_lane_order,
+                &self.selection.hidden_automation_lanes,
+                &self.selection.pinned_automation_lanes,
             );
         }
 
@@ -930,6 +934,9 @@ impl Application {
                 .map(|p| (p.target.clone(), p.param_id.clone()));
             let viewport_events = self.ws.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
+                if viewport_events.iter().any(|event| matches!(event, manifold_ui::input::UIEvent::PointerDown { .. })) {
+                    crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
+                }
                 // Sync modifier state to overlay (Unity reads Keyboard.current inline)
                 self.overlay.set_modifiers(self.modifiers);
                 let content_tx = self.content_tx.as_ref().unwrap();
@@ -947,7 +954,24 @@ impl Application {
                 );
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
+                    if let UIEvent::PointerDown { modifiers, .. }
+                        | UIEvent::Click { modifiers, .. }
+                        | UIEvent::DoubleClick { modifiers, .. }
+                        | UIEvent::RightClick { modifiers, .. }
+                        | UIEvent::DragBegin { modifiers, .. }
+                        | UIEvent::Drag { modifiers, .. } = event
+                    {
+                        self.overlay.set_modifiers(*modifiers);
+                    }
                     match event {
+                        UIEvent::PointerDown { pos, .. } => {
+                            self.overlay.on_pointer_down(
+                                *pos, &mut host, &mut self.selection, &self.ws.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::PointerUp { .. } => {
+                            self.overlay.on_pointer_up(&mut host);
+                        }
                         UIEvent::Click { pos, modifiers, .. } => {
                             self.overlay.on_pointer_click(
                                 *pos,
@@ -984,13 +1008,18 @@ impl Application {
                                 &self.ws.ui_root.viewport,
                             );
                         }
-                        UIEvent::DragBegin { origin, .. } => {
+                        UIEvent::DragBegin { origin, pos, .. } => {
                             self.overlay.on_begin_drag(
                                 *origin,
                                 &mut host,
                                 &mut self.selection,
                                 &self.ws.ui_root.viewport,
                             );
+                            if self.overlay.is_automation_drag() {
+                                self.overlay.on_drag(
+                                    *pos, &mut host, &mut self.selection, &mut self.ws.ui_root.viewport,
+                                );
+                            }
                         }
                         UIEvent::Drag { pos, .. } => {
                             self.overlay.on_drag(
@@ -1000,7 +1029,12 @@ impl Application {
                                 &mut self.ws.ui_root.viewport,
                             );
                         }
-                        UIEvent::DragEnd { .. } => {
+                        UIEvent::DragEnd { pos, .. } => {
+                            if self.overlay.is_automation_drag() {
+                                self.overlay.on_drag(
+                                    *pos, &mut host, &mut self.selection, &mut self.ws.ui_root.viewport,
+                                );
+                            }
                             self.overlay.on_end_drag(&mut host);
                         }
                         _ => {}
@@ -2974,6 +3008,7 @@ impl Application {
                 .active_layer_id
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
             crate::ui_bridge::sync_project_data(
                 &mut self.ws.ui_root,
                 &self.local_project,
@@ -2993,6 +3028,7 @@ impl Application {
                 .active_layer_id
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
             crate::ui_bridge::sync_project_data(
                 &mut self.ws.ui_root,
                 &self.local_project,
@@ -3179,6 +3215,9 @@ impl Application {
                 &self.local_project,
                 self.selection.automation_mode_visible,
                 &self.selection.chosen_automation_params,
+                &self.selection.automation_lane_order,
+                &self.selection.hidden_automation_lanes,
+                &self.selection.pinned_automation_lanes,
             );
         }
 

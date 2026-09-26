@@ -121,6 +121,9 @@ pub enum AutomationTarget {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Gesture {
     Click { modifiers: Modifiers },
+    /// Split a click across frames to observe press-time feedback.
+    Press { modifiers: Modifiers },
+    Release,
     DoubleClick,
     /// The other house intrinsic-reset gesture (BUG-070/BUG-105's "every
     /// card/panel slider in the app" convention) — a right-click at the
