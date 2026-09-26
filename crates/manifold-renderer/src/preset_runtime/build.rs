@@ -629,6 +629,7 @@ impl PresetRuntime {
             physics_sample_steps,
             physics_input_snapshot,
             last_physics_frame_time: None,
+            impulse_identity: std::sync::Arc::new(()),
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),

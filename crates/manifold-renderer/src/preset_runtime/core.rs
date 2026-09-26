@@ -74,6 +74,8 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
+    /// Captured event routes belong to this installed graph, never a rebuild.
+    pub(super) impulse_identity: std::sync::Arc<()>,
     /// Plan-aligned physics input ancestry, built once with the graph.
     pub(super) physics_sample_steps: Option<Vec<bool>>,
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
@@ -1315,6 +1317,7 @@ impl PresetRuntime {
             physics_sample_steps,
             physics_input_snapshot,
             last_physics_frame_time: None,
+            impulse_identity: std::sync::Arc::new(()),
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -2140,6 +2143,7 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
+        self.impulse_identity = std::sync::Arc::new(());
         self.last_physics_frame_time = None;
         for view in &mut self.math_views {
             view.events.clear();

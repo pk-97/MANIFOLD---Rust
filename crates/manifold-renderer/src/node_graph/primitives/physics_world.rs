@@ -2,7 +2,12 @@ use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics::{BODY_PORTS, MAX_COPIES, POSE_PORTS, RigidSimulation};
+use crate::node_graph::physics::{
+    BODY_PORTS, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidSimulation,
+};
+use crate::node_graph::physics_events::{
+    map_rigid_receipt, ImpulseTarget, ResolvedNodeImpulse,
+};
 use crate::node_graph::primitive::Primitive;
 use manifold_physics::FieldValue;
 use std::borrow::Cow;
@@ -385,6 +390,35 @@ impl Primitive for PhysicsWorldNode {
         self.simulation = RigidSimulation::default();
         self.targeted_acceleration_fields.fill(None);
     }
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        self.simulation.impulse_epoch()
+    }
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        let ImpulseTarget::Rigid(targets) = impulse.target else {
+            return Err("Physics World cannot accept a fluid impulse".into());
+        };
+        self.simulation.enqueue_impulse(
+            stamp,
+            ResolvedRigidImpulse {
+                field: impulse.field,
+                targets,
+            },
+        )
+    }
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
+        ),
+    ) {
+        for event in self.simulation.drain_applied_impulses() {
+            map_rigid_receipt(event, consume);
+        }
+    }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let mut bodies = std::array::from_fn(|_| None);
         let mut body_inputs_pending = false;
@@ -524,8 +558,12 @@ impl Primitive for PhysicsWorldNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::physics::{RigidBody, RigidImpulseTargets};
+    use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
     use crate::node_graph::ports::PortType;
     use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_core::Seconds;
+    use manifold_physics::input::EventStamp;
 
     #[test]
     fn targeted_acceleration_ports_pair_with_all_body_slots_and_copies() {
@@ -556,6 +594,72 @@ mod tests {
                 .iter()
                 .all(Option::is_none)
         );
+    }
+
+    #[test]
+    fn physics_world_effect_node_impulse_dispatch_preserves_receipt_and_retry_sequence() {
+        use crate::node_graph::effect_node::EffectNode;
+        let mut node = PhysicsWorldNode::new();
+        let mut bodies: [Option<RigidBody>; crate::node_graph::physics::MAX_BODIES] =
+            std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody::default());
+        node.simulation
+            .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+            .expect("native rigid world initialization");
+        let epoch = EffectNode::physics_impulse_epoch(&node).expect("native impulse epoch");
+        let stamp = EventStamp {
+            epoch,
+            time: Seconds::ZERO,
+            sequence: 17,
+        };
+        let field = FieldValue::uniform([1.25, -2.5, 3.75]).expect("finite impulse field");
+        let wrong = ResolvedNodeImpulse {
+            field: field.clone(),
+            target: ImpulseTarget::Fluid,
+        };
+        let valid = ResolvedNodeImpulse {
+            field: field.clone(),
+            target: ImpulseTarget::Rigid(RigidImpulseTargets {
+                bodies: 1,
+                copies: false,
+            }),
+        };
+
+        {
+            let graph_node: &mut dyn EffectNode = &mut node;
+            assert!(graph_node
+                .enqueue_physics_impulse(stamp, wrong)
+                .expect_err("wrong target must be rejected before queue admission")
+                .contains("fluid"));
+            assert_eq!(
+                graph_node
+                    .enqueue_physics_impulse(stamp, valid)
+                    .expect("same producer sequence must remain valid"),
+                manifold_physics::TickStamp { epoch, tick: 0 }
+            );
+        }
+
+        node.simulation
+            .advance(bodies, [0.0; 3], Seconds(1.0 / 60.0), 1.0, 0.0)
+            .expect("native rigid tick");
+
+        let mut receipts = Vec::new();
+        let graph_node: &mut dyn EffectNode = &mut node;
+        graph_node.drain_physics_impulses(&mut |event| receipts.push(event));
+        assert_eq!(receipts.len(), 1);
+        let receipt = receipts.pop().expect("one rigid receipt");
+        assert_eq!(receipt.source, stamp);
+        assert_eq!(receipt.applied, manifold_physics::TickStamp { epoch, tick: 0 });
+        assert_eq!(receipt.lateness, Seconds::ZERO);
+        assert_eq!(receipt.value.field, field);
+        assert_eq!(
+            receipt.value.target,
+            ImpulseTarget::Rigid(RigidImpulseTargets {
+                bodies: 1,
+                copies: false,
+            })
+        );
+        graph_node.drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
     }
 }
 

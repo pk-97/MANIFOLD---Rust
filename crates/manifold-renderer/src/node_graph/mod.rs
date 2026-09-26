@@ -166,6 +166,7 @@ pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
 pub use preview_encoding::{LiveNodeParams, PreviewEncoding, PreviewScalarIo};
 pub use param_doc::{ParamDoc, tooltip_for};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
+pub use physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 pub use snapshot::{
     ArrayMatchMode, ChannelSnapshot, GraphSnapshot, GroupSnapshot, NodeSnapshot, OuterParamRouting,
     OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
@@ -186,4 +187,5 @@ pub use validation::{
 pub mod mesh_partition;
 pub mod physics_mesh;
 pub mod physics;
+pub mod physics_events;
 pub mod physics_metrics;

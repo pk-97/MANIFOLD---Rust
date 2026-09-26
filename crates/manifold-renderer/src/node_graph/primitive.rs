@@ -391,6 +391,31 @@ pub trait Primitive: PrimitiveSpec {
         None
     }
 
+    /// Mirror of the native impulse admission hooks on [`EffectNode`].
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        None
+    }
+
+    /// Queue one resolved impulse for a native fixed-tick simulation.
+    fn enqueue_physics_impulse(
+        &mut self,
+        _stamp: manifold_physics::input::EventStamp,
+        _impulse: crate::node_graph::physics_events::ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        Err("node does not accept physics impulses".into())
+    }
+
+    /// Drain native tick-start impulse receipts into the graph-owned sink.
+    fn drain_physics_impulses(
+        &mut self,
+        _consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<
+                crate::node_graph::physics_events::ResolvedNodeImpulse,
+            >,
+        ),
+    ) {
+    }
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -733,6 +758,26 @@ impl<P: Primitive + 'static> EffectNode for P {
         &self,
     ) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
         Primitive::fluid_domain_snapshot(self)
+    }
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        Primitive::physics_impulse_epoch(self)
+    }
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: crate::node_graph::physics_events::ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        Primitive::enqueue_physics_impulse(self, stamp, impulse)
+    }
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<
+                crate::node_graph::physics_events::ResolvedNodeImpulse,
+            >,
+        ),
+    ) {
+        Primitive::drain_physics_impulses(self, consume)
     }
     fn fused_gather_sampler_mode(
         &self,

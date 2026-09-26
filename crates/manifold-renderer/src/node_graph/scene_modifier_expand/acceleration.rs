@@ -224,3 +224,60 @@ pub(super) fn recipient_key(
 ) -> Result<Option<(SceneNodeRef, String)>, SceneModifierExpandError> {
     Ok(resolve(index, object, registry)?.map(|recipient| (recipient.node, recipient.port)))
 }
+
+/// Prepare the same physical selection for discrete hits. Several visible
+/// material parts may share one body; several bodies may share one world.
+/// Merge both cases before delivery so one hit reaches each body only once.
+pub(crate) fn impulse_recipients(
+    owner: &EffectGraphDef,
+    scene: &SceneNodeRef,
+    selection: &SceneTargetSelection,
+    registry: &PrimitiveRegistry,
+) -> Result<
+    Vec<(
+        manifold_core::NodeId,
+        crate::node_graph::physics_events::ImpulseTarget,
+    )>,
+    SceneModifierExpandError,
+> {
+    use crate::node_graph::physics::RigidImpulseTargets;
+    use crate::node_graph::physics_events::ImpulseTarget;
+    let index = FlatSceneIndex::build(owner)?;
+    let mut worlds = std::collections::BTreeMap::new();
+    for object in selected(&index, selection, scene, registry)? {
+        let Some(recipient) = resolve(&index, &object, registry)? else {
+            continue;
+        };
+        let node = index.node(&recipient.node)?;
+        let target = if node.type_id == "node.fluid_surface" {
+            ImpulseTarget::Fluid
+        } else {
+            let mut targets = RigidImpulseTargets::default();
+            if recipient.port == "copies_acceleration" {
+                targets.copies = true;
+            } else {
+                let slot = recipient
+                    .port
+                    .strip_prefix("body_acceleration_")
+                    .and_then(|slot| slot.parse::<usize>().ok())
+                    .filter(|&slot| slot < 64)
+                    .ok_or_else(|| {
+                        unsupported(&recipient.port, "invalid rigid impulse recipient")
+                    })?;
+                targets.bodies = 1u64 << slot;
+            }
+            ImpulseTarget::Rigid(targets)
+        };
+        let previous = worlds
+            .entry(node.node_id.as_str().to_owned())
+            .or_insert(target);
+        if let (ImpulseTarget::Rigid(previous), ImpulseTarget::Rigid(target)) = (previous, target) {
+            previous.bodies |= target.bodies;
+            previous.copies |= target.copies;
+        }
+    }
+    Ok(worlds
+        .into_iter()
+        .map(|(id, target)| (manifold_core::NodeId::new(id), target))
+        .collect())
+}

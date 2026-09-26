@@ -1129,6 +1129,31 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Epoch of native impulse inputs accepted by this node, if any.
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        None
+    }
+
+    /// Queue one resolved impulse for a native fixed-tick simulation.
+    fn enqueue_physics_impulse(
+        &mut self,
+        _stamp: manifold_physics::input::EventStamp,
+        _impulse: crate::node_graph::physics_events::ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        Err("node does not accept physics impulses".into())
+    }
+
+    /// Drain native tick-start impulse receipts into the graph-owned sink.
+    fn drain_physics_impulses(
+        &mut self,
+        _consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<
+                crate::node_graph::physics_events::ResolvedNodeImpulse,
+            >,
+        ),
+    ) {
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
         None

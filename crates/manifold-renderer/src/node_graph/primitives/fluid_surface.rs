@@ -13,6 +13,9 @@ use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::physics_events::{
+    map_fluid_receipt, ImpulseTarget, ResolvedNodeImpulse,
+};
 use crate::node_graph::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 
@@ -187,6 +190,29 @@ impl Primitive for FluidSurface {
         self.runtime.clear();
         self.role_pending = false;
         self.domain_failure = false;
+    }
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        self.runtime.impulse_epoch()
+    }
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        if !matches!(impulse.target, ImpulseTarget::Fluid) {
+            return Err("Liquid Surface cannot accept a rigid impulse".into());
+        }
+        self.runtime.enqueue_impulse(stamp, impulse.field)
+    }
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
+        ),
+    ) {
+        for event in self.runtime.drain_applied_impulses() {
+            map_fluid_receipt(event, consume);
+        }
     }
     fn fluid_domain_snapshot(&self) -> Option<FluidDomainSnapshot> {
         let mut snapshot = self.runtime.domain_snapshot();
@@ -497,7 +523,10 @@ mod tests {
     use crate::node_graph::MockBackend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
     use crate::node_graph::effect_node::FrameTime;
+    use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
     use crate::node_graph::physics::PhysicsStepScope;
+    use manifold_physics::FieldValue;
+    use manifold_physics::input::EventStamp;
     use manifold_core::{Beats, Seconds};
 
     #[test]
@@ -545,6 +574,73 @@ mod tests {
         assert_eq!(fluid.runtime.stats.particles, 0);
         assert!(fluid.runtime.vertices.is_empty());
         assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn fluid_surface_effect_node_impulse_dispatch_preserves_receipt_and_retry_sequence() {
+        use crate::node_graph::effect_node::EffectNode;
+        let mut node = FluidSurface::new();
+        let settings = FluidSettings {
+            resolution: 8,
+            fill_height: 0.0,
+            ..FluidSettings::default()
+        };
+        let controls = FluidControls {
+            gravity: 0.0,
+            emission: false,
+            obstacle_enabled: false,
+            ..FluidControls::default()
+        };
+        node.runtime
+            .observe(settings, controls, Seconds::ZERO, 1.0, 0.0)
+            .expect("native fluid initialization");
+        let epoch = EffectNode::physics_impulse_epoch(&node).expect("native impulse epoch");
+        let stamp = EventStamp {
+            epoch,
+            time: Seconds::ZERO,
+            sequence: 23,
+        };
+        let field = FieldValue::uniform([-1.0, 2.0, 0.5]).expect("finite impulse field");
+        let wrong = ResolvedNodeImpulse {
+            field: field.clone(),
+            target: ImpulseTarget::Rigid(Default::default()),
+        };
+        let valid = ResolvedNodeImpulse {
+            field: field.clone(),
+            target: ImpulseTarget::Fluid,
+        };
+
+        {
+            let graph_node: &mut dyn EffectNode = &mut node;
+            assert!(graph_node
+                .enqueue_physics_impulse(stamp, wrong)
+                .expect_err("wrong target must be rejected before queue admission")
+                .contains("rigid"));
+            assert_eq!(
+                graph_node
+                    .enqueue_physics_impulse(stamp, valid)
+                    .expect("same producer sequence must remain valid")
+                    .tick,
+                0
+            );
+        }
+
+        node.runtime
+            .observe(settings, controls, Seconds(crate::node_graph::fluid::TICK), 1.0, 0.0)
+            .expect("native fluid observation");
+        node.runtime.advance(true).expect("native fluid tick");
+
+        let mut receipts = Vec::new();
+        let graph_node: &mut dyn EffectNode = &mut node;
+        graph_node.drain_physics_impulses(&mut |event| receipts.push(event));
+        assert_eq!(receipts.len(), 1);
+        let receipt = receipts.pop().expect("one fluid receipt");
+        assert_eq!(receipt.source, stamp);
+        assert_eq!(receipt.applied, manifold_physics::TickStamp { epoch, tick: 0 });
+        assert_eq!(receipt.lateness, Seconds::ZERO);
+        assert_eq!(receipt.value.field, field);
+        assert_eq!(receipt.value.target, ImpulseTarget::Fluid);
+        graph_node.drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
     }
 
     #[test]

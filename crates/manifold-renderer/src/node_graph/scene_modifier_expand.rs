@@ -4,6 +4,7 @@
 //! ordinary graph bindings; no per-frame attachment work belongs here.
 
 mod acceleration;
+pub(crate) use acceleration::impulse_recipients;
 mod bindings;
 mod buffer_budget;
 mod event_state;
