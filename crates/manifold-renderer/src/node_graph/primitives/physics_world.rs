@@ -393,6 +393,13 @@ impl Primitive for PhysicsWorldNode {
     fn physics_impulse_epoch(&self) -> Option<u64> {
         self.simulation.impulse_epoch()
     }
+    fn physics_impulse_stamp(
+        &self,
+        transport: manifold_core::Seconds,
+        sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        self.simulation.impulse_stamp(transport, sequence)
+    }
     fn enqueue_physics_impulse(
         &mut self,
         stamp: manifold_physics::input::EventStamp,

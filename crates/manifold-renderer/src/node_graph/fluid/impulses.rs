@@ -23,6 +23,35 @@ impl FluidRuntime {
         self.settings.map(|_| self.epoch)
     }
 
+    /// Capture an impulse timestamp from the observation that was accepted for
+    /// this exact transport value. Playback and cache recording have no live
+    /// impulse clock, and observations never extrapolate native time.
+    pub fn impulse_stamp(&self, transport: Seconds, sequence: u64) -> Result<EventStamp, String> {
+        if !transport.0.is_finite() {
+            return Err("Water: impulse transport must be finite".into());
+        }
+        if self.cache_mode != super::CacheMode::Live {
+            return Err("Water: impulses require Live mode until input takes are recorded".into());
+        }
+        if self.settings.is_none() {
+            return Err("Water: no initialized impulse epoch".into());
+        }
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        let Some((accepted_transport, native_time)) = self.accepted_observation else {
+            return Err("Water: no successfully accepted observation at this transport".into());
+        };
+        if accepted_transport != transport.0 {
+            return Err("Water: impulse transport does not match the accepted observation".into());
+        }
+        Ok(EventStamp {
+            epoch: self.epoch,
+            time: Seconds(native_time),
+            sequence,
+        })
+    }
+
     /// Capture a scene-space delta-velocity field, in metres per second.
     /// The returned tick is a scheduling decision, not native completion.
     /// An in-flight request owns all its tick inputs, so arrivals during that

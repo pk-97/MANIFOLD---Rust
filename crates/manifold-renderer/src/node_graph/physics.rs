@@ -372,6 +372,7 @@ pub struct RigidSimulation {
     impulse_epoch: Option<u64>,
     impulse_failure: Option<String>,
     impulse_overflow_latched: bool,
+    accepted_observation: Option<(f64, f64)>,
 }
 
 impl Default for RigidSimulation {
@@ -414,6 +415,7 @@ impl Default for RigidSimulation {
             impulse_epoch: None,
             impulse_failure: None,
             impulse_overflow_latched: false,
+            accepted_observation: None,
         }
     }
 }
@@ -423,6 +425,7 @@ impl RigidSimulation {
     /// prepared. The next ready frame starts from its current authored time
     /// instead of replaying time that elapsed with incomplete geometry.
     pub fn hold_pending(&mut self, now: Seconds) {
+        self.accepted_observation = None;
         if now.0.is_finite() {
             self.last_time = Some(now);
         }
@@ -567,6 +570,7 @@ impl RigidSimulation {
         acceleration_field: Option<FieldValue>,
         targeted_fields_input: &[Option<FieldValue>],
     ) -> Result<(), String> {
+        self.accepted_observation = None;
         if !targeted_fields_input.is_empty() && targeted_fields_input.len() != TARGET_SLOTS {
             return Err(format!(
                 "Physics: targeted fields require exactly {TARGET_SLOTS} entries"
@@ -688,6 +692,7 @@ impl RigidSimulation {
                 self.authored_time = authored_time;
                 self.accumulator += elapsed_simulation;
                 self.last_time = Some(now);
+                self.accepted_observation = Some((now.0, self.authored_time));
                 return Ok(());
             }
         }
@@ -1162,6 +1167,7 @@ impl RigidSimulation {
         }
         self.copy_description = prototype.clone();
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
+        self.accepted_observation = Some((now.0, self.authored_time));
         Ok(())
     }
 

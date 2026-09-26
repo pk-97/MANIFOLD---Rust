@@ -1134,6 +1134,16 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Timestamp an impulse against the exact native observation accepted at
+    /// the supplied transport value, if this node owns such a clock.
+    fn physics_impulse_stamp(
+        &self,
+        _transport: manifold_core::Seconds,
+        _sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        Err("node does not expose a native impulse clock".into())
+    }
+
     /// Queue one resolved impulse for a native fixed-tick simulation.
     fn enqueue_physics_impulse(
         &mut self,

@@ -24,6 +24,7 @@ struct Recipient {
 /// ancestry is admitted; capture never runs a solver, trigger latch or GPU node.
 pub struct PreparedSceneImpulse {
     identity: Arc<()>,
+    plan_epoch: u64,
     recipients: Arc<[Recipient]>,
     field: ResourceId,
     steps: Vec<bool>,
@@ -83,6 +84,56 @@ impl CapturedSceneImpulse {
 }
 
 impl PresetRuntime {
+    /// Capture a live source observation using each recipient's accepted
+    /// simulation clock. Apply the source's resolved controls before calling.
+    /// Scene setup and GPU-derived geometry must already have been evaluated
+    /// by a full frame; this entry point samples live CPU controls only.
+    /// Historical observations must be supplied in order; later render inputs
+    /// cannot reconstruct an earlier audio event.
+    pub fn capture_scene_impulse_at_source(
+        &mut self,
+        binding: &mut PreparedSceneImpulse,
+        captured: &mut CapturedSceneImpulse,
+        source: FrameTime,
+        sequence: u64,
+    ) -> Result<(), String> {
+        self.validate_impulse_capture(binding, captured)?;
+        self.observe_physics_at_source(source)?;
+        self.capture_scene_impulse_with_stamp(
+            binding,
+            captured,
+            source,
+            sequence,
+            |_, node, transport, sequence| node.physics_impulse_stamp(transport, sequence),
+        )
+    }
+
+    fn validate_impulse_capture(
+        &self,
+        binding: &PreparedSceneImpulse,
+        captured: &CapturedSceneImpulse,
+    ) -> Result<(), String> {
+        if !Arc::ptr_eq(&binding.identity, &self.impulse_identity)
+            || !Arc::ptr_eq(&binding.recipients, &captured.recipients)
+        {
+            return Err(
+                "Impulse: capture binding belongs to a different graph or selection".into(),
+            );
+        }
+        if captured.field.is_some() {
+            return Err(
+                "Impulse: acknowledge the previous capture before reusing its storage".into(),
+            );
+        }
+        if self.forced_outputs_stale
+            || binding.plan_epoch != self.last_forced_outputs_epoch
+            || binding.plan_epoch != self.graph.forced_outputs_epoch()
+        {
+            return Err("Impulse: execution outputs changed; rebuild and prepare the binding again".into());
+        }
+        Ok(())
+    }
+
     /// `owner` is the canonical graph used to install this runtime. Scoped
     /// scene refs are validated there; physical leaves retain globally unique
     /// document IDs through flattening. The field source is a compiled leaf
@@ -95,6 +146,11 @@ impl PresetRuntime {
         field_node: &NodeId,
         field_port: &str,
     ) -> Result<PreparedSceneImpulse, String> {
+        if self.forced_outputs_stale
+            || self.graph.forced_outputs_epoch() != self.last_forced_outputs_epoch
+        {
+            return Err("Impulse: rebuild the changed graph before preparing a binding".into());
+        }
         let targets = crate::node_graph::scene_modifier_expand::impulse_recipients(
             owner,
             scene,
@@ -188,6 +244,7 @@ impl PresetRuntime {
             .collect();
         Ok(PreparedSceneImpulse {
             identity: self.impulse_identity.clone(),
+            plan_epoch: self.last_forced_outputs_epoch,
             recipients: recipients.into(),
             field,
             steps,
@@ -208,39 +265,40 @@ impl PresetRuntime {
         sequence: u64,
         mut map_time: impl FnMut(&NodeId, Seconds) -> Result<Seconds, String>,
     ) -> Result<(), String> {
-        if !Arc::ptr_eq(&binding.identity, &self.impulse_identity)
-            || !Arc::ptr_eq(&binding.recipients, &captured.recipients)
-        {
-            return Err(
-                "Impulse: capture binding belongs to a different graph or selection".into(),
-            );
-        }
-        if captured.field.is_some() {
-            return Err(
-                "Impulse: acknowledge the previous capture before reusing its storage".into(),
-            );
-        }
+        self.capture_scene_impulse_with_stamp(
+            binding, captured, source, sequence,
+            |id, node, transport, sequence| {
+                let epoch = node.physics_impulse_epoch()
+                    .ok_or_else(|| format!("Impulse: `{id}` is not initialized"))?;
+                Ok(EventStamp { epoch, time: map_time(id, transport)?, sequence })
+            },
+        )
+    }
+
+    fn capture_scene_impulse_with_stamp(
+        &mut self,
+        binding: &mut PreparedSceneImpulse,
+        captured: &mut CapturedSceneImpulse,
+        source: FrameTime,
+        sequence: u64,
+        mut stamp: impl FnMut(&NodeId, &dyn crate::node_graph::EffectNode, Seconds, u64)
+            -> Result<EventStamp, String>,
+    ) -> Result<(), String> {
+        self.validate_impulse_capture(binding, captured)?;
         if !source.seconds.0.is_finite() || !source.beats.0.is_finite() {
             return Err("Impulse: source clock must be finite".into());
         }
         captured.stamps.clear();
         for recipient in binding.recipients.iter() {
-            let epoch = self
-                .graph
-                .get_node(recipient.instance)
-                .and_then(|node| node.node.physics_impulse_epoch())
-                .ok_or_else(|| format!("Impulse: `{}` is not initialized", recipient.id))?;
-            let time = map_time(&recipient.id, source.seconds)?;
-            if !time.0.is_finite() || time.0 < 0.0 {
+            let node = self.graph.get_node(recipient.instance)
+                .expect("prepared recipient belongs to this graph");
+            let stamp = stamp(&recipient.id, node.node.as_ref(), source.seconds, sequence)?;
+            if !stamp.time.0.is_finite() || stamp.time.0 < 0.0 {
                 return Err(
                     "Impulse: mapped simulation time must be finite and nonnegative".into(),
                 );
             }
-            captured.stamps.push(EventStamp {
-                epoch,
-                time,
-                sequence,
-            });
+            captured.stamps.push(stamp);
         }
         // Prepared key/storage shapes are retained. Only values are copied.
         for (step, params) in self.plan.steps().iter().zip(&mut binding.params) {

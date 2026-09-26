@@ -194,6 +194,19 @@ impl Primitive for FluidSurface {
     fn physics_impulse_epoch(&self) -> Option<u64> {
         self.runtime.impulse_epoch()
     }
+    fn physics_impulse_stamp(
+        &self,
+        transport: manifold_core::Seconds,
+        sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        if self.role_pending {
+            return Err("Liquid Surface: cannot capture an impulse while inputs are pending".into());
+        }
+        if self.domain_failure {
+            return Err("Liquid Surface: cannot capture an impulse after a domain failure".into());
+        }
+        self.runtime.impulse_stamp(transport, sequence)
+    }
     fn enqueue_physics_impulse(
         &mut self,
         stamp: manifold_physics::input::EventStamp,

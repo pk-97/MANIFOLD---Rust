@@ -2,7 +2,8 @@ use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
 use crate::node_graph::physics::{
-    MAX_BODIES, ResolvedRigidImpulse, RigidBody, RigidImpulseTargets, RigidSimulation,
+    MAX_BODIES, PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidImpulseTargets,
+    RigidSimulation,
 };
 use crate::node_graph::transform::Transform;
 
@@ -49,6 +50,78 @@ fn receipts(
     simulation: &mut RigidSimulation,
 ) -> Vec<manifold_physics::input::AppliedEvent<ResolvedRigidImpulse>> {
     simulation.drain_applied_impulses().collect()
+}
+
+#[test]
+fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
+    let bodies = one_body([0.0, 4.0, 0.0]);
+    let mut simulation = RigidSimulation::default();
+    assert!(
+        simulation
+            .impulse_stamp(Seconds::ZERO, 0)
+            .expect_err("stamp before initialization")
+            .contains("epoch")
+    );
+
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(5.0), 1.0, 0.0)
+        .unwrap();
+    let epoch = simulation.impulse_epoch().unwrap();
+    assert_eq!(
+        simulation.impulse_stamp(Seconds(5.0), 1).unwrap(),
+        EventStamp {
+            epoch,
+            time: Seconds::ZERO,
+            sequence: 1,
+        }
+    );
+
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(6.0), 2.0, 0.0)
+        .unwrap();
+    assert_eq!(
+        simulation.impulse_stamp(Seconds(6.0), 2).unwrap().time,
+        Seconds(2.0)
+    );
+    simulation
+        .advance(bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
+        .unwrap();
+    assert_eq!(
+        simulation.impulse_stamp(Seconds(6.0), 3).unwrap().time,
+        Seconds(2.0)
+    );
+    assert!(simulation
+        .impulse_stamp(Seconds(6.0 + 1e-9), 4)
+        .is_err());
+}
+
+#[test]
+fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
+    let mut bodies = one_body([0.0, 4.0, 0.0]);
+    let mut simulation = RigidSimulation::default();
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .unwrap();
+    assert!(simulation.impulse_stamp(Seconds::ZERO, 0).is_ok());
+
+    simulation.hold_pending(Seconds(1.0));
+    assert!(simulation.impulse_stamp(Seconds(1.0), 1).is_err());
+
+    let body = bodies[0].as_mut().unwrap();
+    body.shape = (body.shape + 1) % 5;
+    {
+        let _scope = PhysicsAuthoredSampleScope::new();
+        simulation
+            .advance(bodies.clone(), [0.0; 3], Seconds(2.0), 1.0, 0.0)
+            .unwrap();
+    }
+    assert!(simulation.impulse_stamp(Seconds(2.0), 2).is_err());
+
+    simulation
+        .advance(bodies, [0.0; 3], Seconds(2.0), 1.0, 0.0)
+        .unwrap();
+    let stamp = simulation.impulse_stamp(Seconds(2.0), 3).unwrap();
+    assert_eq!(stamp.time, Seconds::ZERO);
 }
 
 #[test]

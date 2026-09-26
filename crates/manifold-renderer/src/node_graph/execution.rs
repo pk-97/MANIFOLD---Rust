@@ -1048,9 +1048,7 @@ impl Executor {
         // per-frame wires or gets pruned.
         let mut worklist: Vec<usize> = Vec::new();
         for (idx, step) in steps.iter().enumerate() {
-            if let Some(inst) = graph.get_node(step.node)
-                && inst.node.is_liveness_root()
-            {
+            if graph.is_liveness_root(step.node) {
                 self.live_steps[idx] = true;
                 worklist.push(idx);
             }
@@ -2602,6 +2600,76 @@ mod tests {
             kind: PortKind::Output,
             required: false,
         }
+    }
+
+    struct ExternalFieldNode {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl ExternalFieldNode {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.external_field"),
+                outputs: vec![output("field", PortType::VectorField)],
+            }
+        }
+    }
+
+    impl EffectNode for ExternalFieldNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            ctx.outputs.set_vector_field(
+                "field",
+                manifold_physics::FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field"),
+            );
+        }
+    }
+
+    #[test]
+    fn external_field_output_survives_cpu_execute_frame() {
+        use manifold_physics::VectorField;
+        let mut graph = Graph::new();
+        let image = graph.add_node(Box::new(crate::node_graph::Source::new()));
+        let out = graph.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        graph.connect((image, "out"), (out, "in")).unwrap();
+        let source = graph.add_node(Box::new(ExternalFieldNode::new()));
+        assert!(compile(&graph).unwrap().steps().iter().all(|step| step.node != source));
+        graph.add_external_output(source, "field").unwrap();
+        let plan = compile(&graph).unwrap();
+        let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, frame_time());
+
+        let slot = executor
+            .backend()
+            .slot_for(resource)
+            .expect("external output slot remains bound after frame");
+        let field = executor
+            .backend()
+            .vector_field(slot)
+            .expect("external field was published by execute_frame");
+        assert_eq!(field.sample([0.0, 0.0, 0.0]), [1.0, -2.0, 3.0]);
     }
 
     /// Misbehaving test node: declares `aliased_array_io` claiming

@@ -159,6 +159,44 @@ pub(super) fn physics_sample_steps(
 }
 
 impl PresetRuntime {
+    /// Observe controls at an event producer boundary without running native
+    /// ticks or rendering. Close the held-input interval first, then record
+    /// the current inputs at the same timestamp. Moving the observation anchor
+    /// prevents the next rendered frame from replaying the interval twice.
+    pub(super) fn observe_physics_at_source(&mut self, source: FrameTime) -> Result<(), String> {
+        if !source.seconds.0.is_finite() || !source.beats.0.is_finite() {
+            return Err("Impulse: source clock must be finite".into());
+        }
+        let previous = self.last_physics_frame_time.ok_or(
+            "Impulse: render the scene before capturing an event",
+        )?;
+        if source.seconds.0 < previous.seconds.0 {
+            return Err("Impulse: source precedes the latest physics observation".into());
+        }
+        if self.graph.prepared_param_violation().is_some() {
+            return Err("Impulse: graph preparation is pending".into());
+        }
+        // A producer callback must never inherit offline history draining.
+        let _scope = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        self.sample_physics_history(source);
+        let (Some(inputs), Some(steps)) = (
+            self.physics_input_snapshot.as_mut(),
+            self.physics_sample_steps.as_ref(),
+        ) else {
+            return Err("Impulse: graph has no prepared physics ancestry".into());
+        };
+        inputs.set_sample_time(source);
+        self.executor.execute_physics_sample_frame(
+            &mut self.graph,
+            &self.plan,
+            source,
+            steps,
+            &inputs.values,
+        );
+        self.last_physics_frame_time = Some(source);
+        Ok(())
+    }
+
     /// Sample stateless authored motion on the existing 240 Hz grid, holding
     /// external parameters at their last observed values. Today's parameters
     /// must not be substituted into an earlier tick. The final left-limit

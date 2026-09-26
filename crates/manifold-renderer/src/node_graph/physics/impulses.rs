@@ -90,6 +90,39 @@ impl RigidSimulation {
         self.impulse_epoch
     }
 
+    /// Capture an impulse timestamp from the observation that was accepted for
+    /// this exact transport value. Native time is authored time, so paused
+    /// observations retain their current clock without extrapolation.
+    pub fn impulse_stamp(&self, transport: Seconds, sequence: u64) -> Result<EventStamp, String> {
+        if !transport.0.is_finite() {
+            return Err("Physics: impulse transport must be finite".into());
+        }
+        let Some(epoch) = self.impulse_epoch else {
+            return Err("Physics: no initialized impulse epoch".into());
+        };
+        if let Some(error) = &self.impulse_failure {
+            return Err(error.clone());
+        }
+        if self.impulse_overflow_latched {
+            return Err(
+                "Physics: impulse history is full; restart the simulation or bake the scene".into(),
+            );
+        }
+        let Some((accepted_transport, native_time)) = self.accepted_observation else {
+            return Err("Physics: no successfully accepted observation at this transport".into());
+        };
+        if accepted_transport != transport.0 {
+            return Err(
+                "Physics: impulse transport does not match the accepted observation".into(),
+            );
+        }
+        Ok(EventStamp {
+            epoch,
+            time: Seconds(native_time),
+            sequence,
+        })
+    }
+
     /// Queue a scene-space delta velocity for one fixed tick. Validation is
     /// complete before EventQueue sees the stamp, so rejected inputs do not
     /// consume the producer sequence.

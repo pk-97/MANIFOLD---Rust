@@ -108,6 +108,8 @@ pub struct Graph {
     /// before the next frame executes (BUG-317: the stale plan had no
     /// `velocity` target, and the first temporal-upscale frame panicked).
     forced_outputs_epoch: u64,
+    /// Runtime-only outputs consumed by the host, outside graph wires.
+    external_outputs: AHashMap<NodeInstanceId, AHashSet<std::borrow::Cow<'static, str>>>,
     /// Derived admission metadata follows this graph through every allocator.
     modifier_buffer_budget: Option<super::scene_modifier_expand::PreparedModifierBufferBudget>,
     prepared_params: AHashMap<NodeInstanceId, Vec<PreparedParam>>,
@@ -122,6 +124,7 @@ impl Graph {
             next_id: 0,
             handles: AHashMap::default(),
             forced_outputs_epoch: 0,
+            external_outputs: AHashMap::default(),
             modifier_buffer_budget: None,
             prepared_params: AHashMap::default(),
             prepared_param_rejections: 0,
@@ -222,6 +225,39 @@ impl Graph {
         id
     }
 
+    /// Register an output port whose value is consumed outside the graph.
+    /// External outputs are runtime-only liveness roots and are not serialized.
+    pub fn add_external_output(&mut self, node: NodeInstanceId, port: &str) -> Result<(), GraphError> {
+        let inst = self.nodes.get(&node).ok_or(GraphError::NodeNotFound(node))?;
+        let canonical = inst
+            .node
+            .outputs()
+            .iter()
+            .find(|output| output.name == port)
+            .map(|output| output.name.clone())
+            .ok_or_else(|| GraphError::PortNotFound {
+                node,
+                port: port.to_string(),
+            })?;
+        if self.external_outputs.entry(node).or_default().insert(canonical) {
+            self.forced_outputs_epoch += 1;
+        }
+        Ok(())
+    }
+
+    /// Iterate runtime-only externally consumed output ports.
+    pub fn external_outputs(&self) -> impl Iterator<Item = (NodeInstanceId, &str)> + '_ {
+        self.external_outputs
+            .iter()
+            .flat_map(|(&node, ports)| ports.iter().map(move |port| (node, port.as_ref())))
+    }
+
+    /// Whether a node must be retained as an execution root.
+    pub fn is_liveness_root(&self, node: NodeInstanceId) -> bool {
+        self.nodes.get(&node).is_some_and(|inst| inst.node.is_liveness_root())
+            || self.external_outputs.contains_key(&node)
+    }
+
     /// Look up a node id by its stable handle. Returns `None` if no
     /// node was added with that handle (or if the handle has been
     /// retired — handles are not removed when their node is, since
@@ -280,6 +316,7 @@ impl Graph {
     /// [`NodeInstance`], or `None` if the id wasn't in the graph.
     pub fn remove_node(&mut self, id: NodeInstanceId) -> Option<NodeInstance> {
         let removed = self.nodes.remove(&id)?;
+        self.external_outputs.remove(&id);
         if let Some(guards) = self.prepared_params.remove(&id) {
             self.prepared_param_rejections -= guards.iter().filter(|guard| guard.rejected).count();
         }
@@ -727,6 +764,42 @@ mod tests {
             kind: PortKind::Output,
             required: false,
         }
+    }
+
+    #[test]
+    fn external_output_registration_validates_and_clears_with_node() {
+        let mut g = Graph::new();
+        let node = g.add_node(Box::new(TestNode::new(
+            "source",
+            vec![],
+            vec![output("field", PortType::VectorField)],
+        )));
+
+        assert!(matches!(
+            g.add_external_output(NodeInstanceId(99), "field"),
+            Err(GraphError::NodeNotFound(NodeInstanceId(99)))
+        ));
+        assert!(matches!(
+            g.add_external_output(node, "missing"),
+            Err(GraphError::PortNotFound { .. })
+        ));
+        let epoch = g.forced_outputs_epoch();
+        g.add_external_output(node, "field").unwrap();
+        assert_eq!(g.forced_outputs_epoch(), epoch + 1);
+        g.add_external_output(node, "field").unwrap();
+        assert_eq!(g.forced_outputs_epoch(), epoch + 1);
+        assert!(g.is_liveness_root(node));
+        assert_eq!(g.external_outputs().collect::<Vec<_>>(), vec![(node, "field")]);
+
+        // Reconfigured nodes must still satisfy every external reader.
+        g.get_node_mut(node).unwrap().node = Box::new(TestNode::new("source", vec![], vec![]));
+        assert!(matches!(super::super::validation::validate(&g),
+            Err(GraphError::PortNotFound { node: invalid, port })
+                if invalid == node && port == "field"));
+        assert!(g.is_liveness_root(node), "a vanished port must not silently remove its reader");
+        g.remove_node(node);
+        assert!(!g.is_liveness_root(node));
+        assert!(g.external_outputs().next().is_none());
     }
 
     #[test]

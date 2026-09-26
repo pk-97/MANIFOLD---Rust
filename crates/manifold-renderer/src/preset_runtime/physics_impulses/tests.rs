@@ -5,6 +5,9 @@ use manifold_core::Beats;
 use manifold_physics::VectorField;
 use std::{borrow::Cow, cell::Cell};
 
+#[path = "source_tests.rs"]
+mod source_tests;
+
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }
 struct ObservePositions(EffectNodeType);

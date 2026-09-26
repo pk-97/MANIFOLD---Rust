@@ -3,6 +3,7 @@ use crate::node_graph::fluid::{
     CacheMode, FluidControls, FluidSettings, FrameStats, Reply, Request, Transform, Worker,
     cancelled_reply,
 };
+use crate::node_graph::physics::PhysicsAuthoredSampleScope;
 use std::sync::{Arc, mpsc};
 
 fn empty_settings() -> FluidSettings {
@@ -39,6 +40,70 @@ fn enqueue(runtime: &mut FluidRuntime, sequence: u64, time: f64, x: f32) -> Tick
             FieldValue::uniform([x, 0.0, 0.0]).unwrap(),
         )
         .unwrap()
+}
+
+#[test]
+fn fluid_impulse_stamp_tracks_target_time_from_exact_transport() {
+    let mut runtime = FluidRuntime::default();
+    assert!(
+        runtime
+            .impulse_stamp(Seconds::ZERO, 0)
+            .expect_err("stamp before observation")
+            .contains("epoch")
+    );
+    observe(&mut runtime, 5.0, 0.0);
+    let epoch = runtime.impulse_epoch().unwrap();
+    assert_eq!(
+        runtime.impulse_stamp(Seconds(5.0), 1).unwrap(),
+        EventStamp {
+            epoch,
+            time: Seconds::ZERO,
+            sequence: 1,
+        }
+    );
+    runtime
+        .observe(empty_settings(), controls(), Seconds(6.0), 2.0, 0.0)
+        .unwrap();
+    assert_eq!(
+        runtime.impulse_stamp(Seconds(6.0), 2).unwrap().time,
+        Seconds(2.0)
+    );
+    runtime
+        .observe(empty_settings(), controls(), Seconds(6.0), 2.0, 0.0)
+        .unwrap();
+    assert_eq!(
+        runtime.impulse_stamp(Seconds(6.0), 3).unwrap().time,
+        Seconds(2.0)
+    );
+    assert!(runtime
+        .impulse_stamp(Seconds(6.0 + 1e-9), 4)
+        .is_err());
+}
+
+#[test]
+fn fluid_impulse_stamp_rejects_withheld_authored_settings_and_recovers_in_live_setup() {
+    let mut runtime = FluidRuntime::default();
+    observe(&mut runtime, 0.0, 0.0);
+    let changed = FluidSettings {
+        resolution: 10,
+        ..empty_settings()
+    };
+    {
+        let _scope = PhysicsAuthoredSampleScope::new();
+        runtime
+            .observe_scene(changed, controls(), &[], Seconds(TICK), 1.0, 0.0)
+            .unwrap();
+    }
+    assert!(runtime.impulse_stamp(Seconds(TICK), 1).is_err());
+
+    runtime
+        .observe_scene(changed, controls(), &[], Seconds(TICK), 1.0, 0.0)
+        .unwrap();
+    let stamp = runtime.impulse_stamp(Seconds(TICK), 2).unwrap();
+    assert_eq!(stamp.time, Seconds::ZERO);
+
+    runtime.hold_pending(Seconds(2.0 * TICK));
+    assert!(runtime.impulse_stamp(Seconds(2.0 * TICK), 3).is_err());
 }
 
 #[test]

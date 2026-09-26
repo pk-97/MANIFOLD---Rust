@@ -674,7 +674,16 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     // plus any caller that builds a graph for its side effects rather
     // than to render) fall back to validating every node — there's no
     // "what does the executor run?" to compute.
-    let has_root = graph.nodes().any(|inst| inst.node.is_liveness_root());
+    for (node, port) in graph.external_outputs() {
+        let inst = graph.get_node(node).ok_or(GraphError::NodeNotFound(node))?;
+        if !inst.node.outputs().iter().any(|output| output.name == port) {
+            return Err(GraphError::PortNotFound {
+                node,
+                port: port.to_string(),
+            });
+        }
+    }
+    let has_root = graph.nodes().any(|inst| graph.is_liveness_root(inst.id));
     for inst in graph.nodes() {
         // Nodes the executor won't run don't have to satisfy required-
         // input rules — skipping them here makes editing-time graphs
@@ -803,7 +812,7 @@ pub(crate) fn reachable_from_liveness_roots(graph: &Graph) -> AHashSet<NodeInsta
     let mut live: AHashSet<NodeInstanceId> = AHashSet::default();
     let mut frontier: Vec<NodeInstanceId> = graph
         .nodes()
-        .filter(|inst| inst.node.is_liveness_root())
+        .filter(|inst| graph.is_liveness_root(inst.id))
         .map(|inst| inst.id)
         .collect();
     while let Some(id) = frontier.pop() {
@@ -1081,6 +1090,26 @@ mod tests {
         ) -> Option<&'static [manifold_gpu::GpuTextureFormat]> {
             self.accepted_inputs.get(port).copied()
         }
+    }
+
+    #[test]
+    fn externally_rooted_node_with_required_input_must_be_wired() {
+        let mut g = Graph::new();
+        let image = g.add_node(Box::new(crate::node_graph::Source::new()));
+        let out = g.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        g.connect((image, "out"), (out, "in")).unwrap();
+        let orphan = g.add_node(Box::new(TestNode::new(
+            "field_source",
+            vec![input("source", PortType::Texture2D, true)],
+            vec![output("field", PortType::VectorField)],
+        )));
+        assert!(validate(&g).is_ok(), "an unconsumed orphan remains inactive");
+        g.add_external_output(orphan, "field").unwrap();
+        assert!(matches!(
+            validate(&g),
+            Err(GraphError::RequiredInputUnwired { node, port })
+                if node == orphan && port == "source"
+        ));
     }
 
     #[test]

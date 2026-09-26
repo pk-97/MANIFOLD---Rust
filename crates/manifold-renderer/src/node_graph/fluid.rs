@@ -564,6 +564,7 @@ pub struct FluidRuntime {
     spare_history: Option<Vec<Sample>>,
     spare_role_history: Option<Vec<roles::Controls>>,
     failure: Option<String>,
+    accepted_observation: Option<(f64, f64)>,
     pub vertices: Vec<MeshVertex>,
     pub whitewater: WhitewaterFrame,
     pub version: u64,
@@ -599,6 +600,7 @@ impl Default for FluidRuntime {
             spare_history: Some(Vec::with_capacity(HISTORY_CAPACITY)),
             spare_role_history: Some(Vec::new()),
             failure: None,
+            accepted_observation: None,
             vertices: Vec::new(),
             whitewater: WhitewaterFrame::default(),
             version: 0,
@@ -638,6 +640,7 @@ impl FluidRuntime {
 
     pub fn clear(&mut self) {
         self.settings = None;
+        self.accepted_observation = None;
         self.last_transport = None;
         self.history.clear();
         self.role_history.clear();
@@ -743,6 +746,10 @@ impl FluidRuntime {
         speed: f32,
         reset: f32,
     ) -> Result<(), String> {
+        self.accepted_observation = None;
+        let authored_only_settings_withheld = super::physics::authored_sample_only()
+            && self.settings.is_some()
+            && self.settings != Some(settings);
         // Setup edits take effect at the current render evaluation. Replaying
         // live controls between frames must not move/rebuild the domain at
         // historical timestamps using newly authored setup values.
@@ -820,6 +827,9 @@ impl FluidRuntime {
             // even when history is full and the worker is still catching up.
             self.target_time = target_time;
             self.last_transport = Some(transport.0);
+            if !authored_only_settings_withheld {
+                self.accepted_observation = Some((transport.0, self.target_time));
+            }
             return Ok(());
         }
         let write = match self.history.record(
@@ -844,10 +854,14 @@ impl FluidRuntime {
             scene_roles,
             matches!(write, HistoryWrite::Replaced),
         );
+        if !authored_only_settings_withheld {
+            self.accepted_observation = Some((transport.0, self.target_time));
+        }
         Ok(())
     }
 
     pub fn hold_pending(&mut self, transport: Seconds) {
+        self.accepted_observation = None;
         self.last_transport = Some(transport.0);
     }
 
