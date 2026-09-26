@@ -544,34 +544,34 @@ fn assert_continuous_after_morph(
 const MASK_STOCKS: &[(&str, &str)] = &[
     (
         "OrderedRecon",
-        include_str!("../../../assets/scene-modifier-presets/OrderedRecon.json"),
+        include_str!("../../assets/scene-modifier-presets/OrderedRecon.json"),
     ),
     (
         "MaskedPeel",
-        include_str!("../../../assets/scene-modifier-presets/MaskedPeel.json"),
+        include_str!("../../assets/scene-modifier-presets/MaskedPeel.json"),
     ),
     (
         "SurfacePeel",
-        include_str!("../../../assets/scene-modifier-presets/SurfacePeel.json"),
+        include_str!("../../assets/scene-modifier-presets/SurfacePeel.json"),
     ),
     (
         "OrderedReconHit",
-        include_str!("../../../assets/scene-modifier-presets/OrderedReconHit.json"),
+        include_str!("../../assets/scene-modifier-presets/OrderedReconHit.json"),
     ),
     (
         "VortexFragments",
-        include_str!("../../../assets/scene-modifier-presets/VortexFragments.json"),
+        include_str!("../../assets/scene-modifier-presets/VortexFragments.json"),
     ),
 ];
 
 const RECON_STOCKS: &[(&str, &str)] = &[
     (
         "OrderedRecon",
-        include_str!("../../../assets/scene-modifier-presets/OrderedRecon.json"),
+        include_str!("../../assets/scene-modifier-presets/OrderedRecon.json"),
     ),
     (
         "OrderedReconHit",
-        include_str!("../../../assets/scene-modifier-presets/OrderedReconHit.json"),
+        include_str!("../../assets/scene-modifier-presets/OrderedReconHit.json"),
     ),
 ];
 
