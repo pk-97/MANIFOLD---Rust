@@ -1713,10 +1713,10 @@ impl InteractionOverlay {
                 self.begin_automation_segment_drag(lane_index, left_dot_index, press_pos, &lanes, host);
                 true
             }
-            AutomationHit::Strip { .. } => {
+            AutomationHit::Strip { lane_index } => {
                 ui_state.clear_automation_selection();
-                ui_state.automation_time_selection = None;
-                ui_state.automation_insert_beat = None;
+                let lane = &lanes[lane_index];
+                ui_state.automation_paste_context = Some((lane.target.clone(), lane.param_id.clone()));
                 self.drag.start(TimelineDrag::AutomationMarquee, press_pos);
                 self.update_automation_time_selection(press_pos, press_pos, ui_state, viewport);
                 host.mark_dirty();

@@ -347,6 +347,8 @@ pub struct UIRoot {
     /// drag-active latch + `is_event_in_tracks_area`'s positional gate for
     /// Drag/DragEnd.
     drag_owner: Option<DragOwner>,
+    /// A press forwarded to the tracks needs its release even before a drag starts.
+    tracks_press_active: bool,
 
     /// Cached Ableton session for the picker popup.
     pub ableton_session: Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
@@ -511,6 +513,7 @@ impl UIRoot {
             scene_setup_handle_id: None,
             layout_tick_last: std::time::Instant::now(),
             drag_owner: None,
+            tracks_press_active: false,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
             ableton_picker_context: None,

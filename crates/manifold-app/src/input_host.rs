@@ -2340,7 +2340,7 @@ mod automation_clipboard_host_tests {
         h.selection.automation_time_selection = Some(AutomationTimeSelection {
             start: Beats(3.0),
             end: Beats(5.0),
-            lanes: vec![(target, "amount".into())],
+            lanes: vec![(target.clone(), "amount".into())],
         });
         { let mut host = h.host(); host.copy_selected_automation(); }
         let clipboard = h.selection.automation_clipboard.as_ref().unwrap();
@@ -2352,6 +2352,17 @@ mod automation_clipboard_host_tests {
             clipboard.points[0].shape,
             UiSegmentShape::CurvedRange { bend: 0.6, start: 0.25, end: 0.75 }
         );
+        let copied_values = (clipboard.points[0].value, clipboard.points[1].value);
+        h.selection.clear_automation_selection();
+        h.selection.automation_time_selection = Some(AutomationTimeSelection {
+            start: Beats(12.0), end: Beats(14.0), lanes: vec![(target, "amount".into())],
+        });
+        { let mut host = h.host(); host.paste_automation(100.0); }
+        let lane = &h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0];
+        assert_eq!(lane.value_at(Beats(12.0)), copied_values.0);
+        assert_eq!(lane.value_at(Beats(14.0)), copied_values.1);
+        assert!(lane.points.iter().all(|point| point.beat < Beats(100.0)),
+            "an empty selected range supplies both the lane and insertion beat");
     }
 
     #[test]
@@ -2445,7 +2456,8 @@ mod automation_clipboard_host_tests {
             assert!(host.has_automation_paste_target());
             host.paste_automation(12.0);
         }
-        assert!(points(&h.project, "amount").contains(&(12.0, 0.2)));
+        assert_eq!(points(&h.project, "amount"), vec![(6.0, 0.6), (10.0, 0.8), (12.0, 0.2)],
+            "a single-point paste creates a breakpoint, without zero-duration punch guards");
         let mut authoritative = before;
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);

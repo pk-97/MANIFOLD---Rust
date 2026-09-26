@@ -118,6 +118,7 @@ impl UIRoot {
     pub(crate) fn broadcast_gesture_end(&mut self) {
         self.fire_gesture_end_hooks();
         self.drag_owner = None;
+        self.tracks_press_active = false;
     }
 
     /// D6/section 3.4 (`docs/DRAG_CAPTURE_DESIGN.md`) — after a `PointerDown` is
@@ -153,10 +154,9 @@ impl UIRoot {
     pub(crate) fn should_stash_for_tracks(&self, event: &manifold_ui::input::UIEvent) -> bool {
         use manifold_ui::input::UIEvent;
         match event {
-            // A provisional automation point owns its press until release,
-            // including a release outside the tracks. The overlay ignores
-            // releases when it has no provisional edit to finish/cancel.
-            UIEvent::PointerUp { .. } => true,
+            // A forwarded press owns its release, including outside tracks.
+            // A popup-owned press must never enter the timeline event stream.
+            UIEvent::PointerUp { .. } => self.tracks_press_active,
             UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. } => {
                 self.drag_owner == Some(DragOwner::TimelineTracks)
             }
@@ -273,11 +273,15 @@ mod drag_capture_tests {
     /// this exact case (BUG-058's leak-adjacent failure mode).
     #[test]
     fn pointer_release_reaches_provisional_automation_outside_tracks() {
-        let ui = new_root();
-        assert!(ui.should_stash_for_tracks(&UIEvent::PointerUp {
-            node_id: None,
-            pos: Vec2::new(-100.0, -100.0),
-        }));
+        let mut ui = new_root();
+        let press = center(ui.viewport.tracks_rect());
+        ui.pointer_event(press, PointerAction::Down, 0.0);
+        let _ = ui.process_events();
+        let _ = ui.drain_viewport_events();
+        ui.pointer_event(Vec2::new(-100.0, -100.0), PointerAction::Up, 0.05);
+        let _ = ui.process_events();
+        assert!(ui.drain_viewport_events().iter().any(|event| matches!(event, UIEvent::PointerUp { .. })));
+        assert!(!ui.tracks_press_active);
     }
 
     #[test]

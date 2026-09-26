@@ -241,7 +241,8 @@ the lane menu also offers Straighten, Hold, Ease In, and Ease Out.
 Phrase selection contract (2026-09-26): dragging empty plot space selects a beat
 interval across the intersected lanes, independent of the points' vertical values.
 The selection stays visible after release and can contain no interior points.
-Copy includes sampled boundary values and clipped segment shapes. Paste replaces
+Copy includes sampled boundary values and clipped segment shapes. Pasting a single
+point edits a breakpoint and its adjoining segments. Pasting a phrase replaces
 the destination interval, retaining the exact curve outside it; a single-lane
 phrase can map into another parameter's range. Cut and Delete hold the entry value
 through the selected interval. Duplicate places the phrase at the selection's end

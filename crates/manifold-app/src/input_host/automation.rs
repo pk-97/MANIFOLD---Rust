@@ -116,6 +116,12 @@ pub(crate) fn select_all_in_lane(
 }
 
 fn destination(selection: &UIState) -> Option<(UiGraphTarget, manifold_core::effects::ParamId)> {
+    if let Some(range) = &selection.automation_time_selection {
+        return selection.automation_paste_context.as_ref()
+            .filter(|context| range.lanes.contains(context))
+            .or_else(|| range.lanes.first())
+            .cloned();
+    }
     if let Some(point) = &selection.selected_automation_point {
         return Some((point.target.clone(), point.param_id.clone()));
     }
@@ -602,10 +608,22 @@ pub(crate) fn paste(
             .and_then(|instance| instance.automation_lanes.as_ref())
             .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == param_id))
             .map(|lane| lane.points.clone());
-        let new_points = manifold_playback::automation::punch_recorded_points(
-            old_points.as_deref().unwrap_or_default(),
-            &phrase,
-        );
+        let new_points = if phrase.first().unwrap().beat == phrase.last().unwrap().beat {
+            // A point paste edits the breakpoint and its adjoining segments.
+            // Punch guards around a zero-duration phrase would create an
+            // inaudible spike instead of a useful new breakpoint.
+            let beat = phrase[0].beat;
+            let mut points = old_points.clone().unwrap_or_default();
+            points.retain(|point| point.beat != beat);
+            points.extend_from_slice(&phrase);
+            points.sort_by(|left, right| left.beat.0.total_cmp(&right.beat.0));
+            points
+        } else {
+            manifold_playback::automation::punch_recorded_points(
+                old_points.as_deref().unwrap_or_default(),
+                &phrase,
+            )
+        };
         let mut command = CommitRecordedGestureCommand::new(
             target,
             param_id.as_ref(),
