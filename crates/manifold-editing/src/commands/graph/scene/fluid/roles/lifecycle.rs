@@ -24,7 +24,8 @@ use super::super::super::super::{
 };
 use super::super::super::{prune_scene_object_metadata, prune_scene_target_params, restore_scene_owner_graph};
 use super::{
-    FLUID_TYPE_ID, ROLE_SOURCE_TYPE_ID, first_free_role_port, graph_level as level_ref,
+    FLUID_TYPE_ID, ROLE_SOURCE_TYPE_ID, collision_free_export_port, first_free_role_port,
+    graph_level as level_ref,
     resolve_domain_ref, route_role_to_domain,
 };
 
@@ -457,53 +458,6 @@ fn retarget_role(
     Ok(Vec::new())
 }
 
-fn collision_free_export_port(
-    def: &EffectGraphDef,
-    scope: &[u32],
-    source_group_id: u32,
-    role_id: u32,
-    current: &str,
-) -> Result<String, String> {
-    if !route_port_conflict(def, scope, current)? {
-        return Ok(current.to_string());
-    }
-    let mut suffix = 0u32;
-    loop {
-        let candidate = format!("fluid_role_source_{role_id}_{suffix}");
-        let source_used = def
-            .nodes
-            .iter()
-            .find(|node| node.id == source_group_id)
-            .and_then(|node| node.group.as_deref())
-            .is_some_and(|group| {
-                group
-                    .interface
-                    .outputs
-                    .iter()
-                    .any(|port| port.name == candidate)
-            });
-        let source_wired = def
-            .nodes
-            .iter()
-            .find(|node| node.id == source_group_id)
-            .and_then(|node| node.group.as_ref())
-            .is_some_and(|group| {
-                group.wires.iter().any(|wire| {
-                    wire.to_port == candidate
-                        && group.nodes.iter().any(|node| {
-                            node.id == wire.to_node && node.type_id == GROUP_OUTPUT_TYPE_ID
-                        })
-                })
-            });
-        if !source_used && !source_wired && !route_port_conflict(def, scope, &candidate)? {
-            return Ok(candidate);
-        }
-        suffix = suffix
-            .checked_add(1)
-            .ok_or_else(|| "Fluid role export port space is exhausted".to_string())?;
-    }
-}
-
 fn create_export_port(
     def: &mut EffectGraphDef,
     source_group_id: u32,
@@ -515,12 +469,19 @@ fn create_export_port(
         .find(|node| node.id == source_group_id && node.type_id == GROUP_TYPE_ID)
         .and_then(|node| node.group.as_deref_mut())
         .ok_or_else(|| "Fluid role source group is unavailable".to_string())?;
-    let output_id = group
+    let outputs: Vec<_> = group
         .nodes
         .iter()
-        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
-        .map(|node| node.id)
-        .ok_or_else(|| "Fluid role source group has no output boundary".to_string())?;
+        .filter(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .collect();
+    let [output] = outputs.as_slice() else {
+        return Err(if outputs.is_empty() {
+            "Fluid role source group has no output boundary".into()
+        } else {
+            "Fluid role source group requires one output boundary".into()
+        });
+    };
+    let output_id = output.id;
     let mut suffix = 0u32;
     loop {
         let port = format!("fluid_role_source_{role_id}_retarget_{suffix}");
@@ -576,47 +537,6 @@ fn collapse_export_ports(
             && wire.to_port != keep)
     });
     Ok(())
-}
-
-fn route_port_conflict(def: &EffectGraphDef, scope: &[u32], port: &str) -> Result<bool, String> {
-    if scope.is_empty() {
-        return Ok(false);
-    }
-    for depth in 1..=scope.len() {
-        let boundary_scope = &scope[..depth];
-        let group_id = *boundary_scope.last().unwrap();
-        let parent_scope = &boundary_scope[..boundary_scope.len() - 1];
-        if level_ref(def, parent_scope).is_some_and(|(_, wires)| {
-            wires
-                .iter()
-                .any(|wire| wire.to_node == group_id && wire.to_port == port)
-        }) {
-            return Ok(true);
-        }
-        let (parent_nodes, _) = level_ref(def, parent_scope)
-            .ok_or_else(|| "Fluid role target boundary scope is unavailable".to_string())?;
-        let group = parent_nodes
-            .iter()
-            .find(|node| node.id == group_id && node.type_id == GROUP_TYPE_ID)
-            .ok_or_else(|| "Fluid role target boundary group is unavailable".to_string())?;
-        let body = group
-            .group
-            .as_deref()
-            .ok_or_else(|| "Fluid role target boundary group is malformed".to_string())?;
-        if body.interface.inputs.iter().any(|input| input.name == port) {
-            return Ok(true);
-        }
-        if body.wires.iter().any(|wire| {
-            wire.from_port == port
-                && body
-                    .nodes
-                    .iter()
-                    .any(|node| node.id == wire.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
-        }) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn rename_export_port(

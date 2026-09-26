@@ -244,7 +244,13 @@ fn build_assignment(
     };
     let role_id =
         fresh_id().ok_or_else(|| "Assign Fluid Role document id space is exhausted".to_string())?;
-    let source_port = format!("fluid_role_source_{role_id}");
+    let source_port = collision_free_export_port(
+        def,
+        &domain_scope,
+        object.group_id,
+        role_id,
+        &format!("fluid_role_source_{role_id}"),
+    )?;
     let mut node_ids = Vec::new();
     super::super::collect_node_ids(&def.nodes, &mut node_ids);
     let mut stable_ids: HashSet<NodeId> = node_ids.into_iter().collect();
@@ -280,12 +286,19 @@ fn build_assignment(
         .find(|node| node.id == object.group_id)
         .and_then(|node| node.group.as_deref_mut())
         .ok_or_else(|| "Assign Fluid Role selected object group is unavailable".to_string())?;
-    let output_id = group
+    let outputs: Vec<_> = group
         .nodes
         .iter()
-        .find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
-        .map(|node| node.id)
-        .ok_or_else(|| "Assign Fluid Role object group has no output boundary".to_string())?;
+        .filter(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .collect();
+    let [output] = outputs.as_slice() else {
+        return Err(if outputs.is_empty() {
+            "Assign Fluid Role object group has no output boundary".into()
+        } else {
+            "Assign Fluid Role object group requires one output boundary".into()
+        });
+    };
+    let output_id = output.id;
     let shared_transform = object.shared_transform_id;
     group.nodes.push(role_node);
     group.wires.push(scene_build_wire(
@@ -839,6 +852,131 @@ fn first_free_role_port(
         .ok_or_else(|| "Assign Fluid Role fluid domain has no free role ports".into())
 }
 
+pub(super) fn collision_free_export_port(
+    def: &EffectGraphDef,
+    scope: &[u32],
+    source_group_id: u32,
+    role_id: u32,
+    current: &str,
+) -> Result<String, String> {
+    if !source_port_conflict(def, source_group_id, role_id, current)?
+        && !route_port_conflict(def, scope, current)?
+    {
+        return Ok(current.to_string());
+    }
+    let mut suffix = 0u32;
+    loop {
+        let candidate = format!("fluid_role_source_{role_id}_{suffix}");
+        if !source_port_conflict(def, source_group_id, role_id, &candidate)?
+            && !route_port_conflict(def, scope, &candidate)?
+        {
+            return Ok(candidate);
+        }
+        suffix = suffix
+            .checked_add(1)
+            .ok_or_else(|| "Fluid role export port space is exhausted".to_string())?;
+    }
+}
+
+fn source_port_conflict(
+    def: &EffectGraphDef,
+    source_group_id: u32,
+    role_id: u32,
+    port: &str,
+) -> Result<bool, String> {
+    let group = def
+        .nodes
+        .iter()
+        .find(|node| node.id == source_group_id && node.type_id == GROUP_TYPE_ID)
+        .and_then(|node| node.group.as_deref())
+        .ok_or_else(|| "Fluid role source group is unavailable".to_string())?;
+    let output_ids: Vec<_> = group
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .map(|node| node.id)
+        .collect();
+    if output_ids.len() != 1 {
+        return Err(if output_ids.is_empty() {
+            "Fluid role source group has no output boundary".into()
+        } else {
+            "Fluid role source group requires one output boundary".into()
+        });
+    }
+    let interface_count = group
+        .interface
+        .outputs
+        .iter()
+        .filter(|output| output.name == port)
+        .count();
+    let output_wires: Vec<_> = group
+        .wires
+        .iter()
+        .filter(|wire| wire.to_node == output_ids[0] && wire.to_port == port)
+        .collect();
+    let role_wires: Vec<_> = output_wires
+        .iter()
+        .filter(|wire| wire.from_node == role_id && wire.from_port == "role")
+        .collect();
+    if interface_count > 1 || output_wires.len() > 1 {
+        return Ok(true);
+    }
+    if interface_count == 0 && output_wires.is_empty() {
+        return Ok(false);
+    }
+    if interface_count != 1 || output_wires.len() != 1 {
+        return Ok(true);
+    }
+    let output = group
+        .interface
+        .outputs
+        .iter()
+        .find(|output| output.name == port)
+        .expect("interface_count checked above");
+    Ok(output.port_type != "FluidRole" || role_wires.len() != 1)
+}
+
+fn route_port_conflict(def: &EffectGraphDef, scope: &[u32], port: &str) -> Result<bool, String> {
+    if scope.is_empty() {
+        return Ok(false);
+    }
+    for depth in 1..=scope.len() {
+        let boundary_scope = &scope[..depth];
+        let group_id = *boundary_scope.last().unwrap();
+        let parent_scope = &boundary_scope[..boundary_scope.len() - 1];
+        if graph_level(def, parent_scope).is_some_and(|(_, wires)| {
+            wires
+                .iter()
+                .any(|wire| wire.to_node == group_id && wire.to_port == port)
+        }) {
+            return Ok(true);
+        }
+        let (parent_nodes, _) = graph_level(def, parent_scope)
+            .ok_or_else(|| "Fluid role target boundary scope is unavailable".to_string())?;
+        let group = parent_nodes
+            .iter()
+            .find(|node| node.id == group_id && node.type_id == GROUP_TYPE_ID)
+            .ok_or_else(|| "Fluid role target boundary group is unavailable".to_string())?;
+        let body = group
+            .group
+            .as_deref()
+            .ok_or_else(|| "Fluid role target boundary group is malformed".to_string())?;
+        if body.interface.inputs.iter().any(|input| input.name == port) {
+            return Ok(true);
+        }
+        if body.wires.iter().any(|wire| {
+            wire.from_port == port
+                && body
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == wire.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn route_role_to_domain(
     nodes: &mut [EffectGraphNode],
     wires: &mut Vec<EffectGraphWire>,
@@ -867,11 +1005,16 @@ fn route_role_to_domain(
         .group
         .as_deref_mut()
         .ok_or_else(|| "Assign Fluid Role domain boundary group is malformed".to_string())?;
-    if let Some(port) = body
+    let matching_inputs: Vec<_> = body
         .interface
         .inputs
         .iter()
-        .find(|port| port.name == source_port)
+        .filter(|port| port.name == source_port)
+        .collect();
+    if matching_inputs.len() > 1 {
+        return Err("Assign Fluid Role domain boundary has duplicate role inputs".into());
+    }
+    if let Some(port) = matching_inputs.first()
     {
         if port.port_type != "FluidRole" {
             return Err("Assign Fluid Role domain boundary has a conflicting role input".into());
@@ -888,22 +1031,25 @@ fn route_role_to_domain(
         group_id,
         &source_port,
     ));
-    let input_id = if let Some(node) = body
+    let input_nodes: Vec<_> = body
         .nodes
         .iter()
-        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-    {
-        node.id
-    } else {
-        let id = fresh_id()
-            .ok_or_else(|| "Assign Fluid Role document id space is exhausted".to_string())?;
-        body.nodes.push(scene_build_node(
-            id,
-            GROUP_INPUT_TYPE_ID,
-            None,
-            BTreeMap::new(),
-        ));
-        id
+        .filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+        .collect();
+    let input_id = match input_nodes.as_slice() {
+        [] => {
+            let id = fresh_id()
+                .ok_or_else(|| "Assign Fluid Role document id space is exhausted".to_string())?;
+            body.nodes.push(scene_build_node(
+                id,
+                GROUP_INPUT_TYPE_ID,
+                None,
+                BTreeMap::new(),
+            ));
+            id
+        }
+        [node] => node.id,
+        _ => return Err("Assign Fluid Role domain requires one group input sentinel".into()),
     };
     if scope.len() == 1 {
         if !body

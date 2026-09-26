@@ -4,7 +4,8 @@ use super::*;
 use crate::commands::graph::test_support::{graph_of, project_with_graph};
 use manifold_core::effect_graph_def::{
     BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
-    GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, PresetMetadata,
+    GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    PresetMetadata,
     SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
@@ -554,6 +555,214 @@ fn scene_physics_assign_role_two_fluids_share_boundary_without_collisions() {
             .iter()
             .any(|wire| wire.to_node == 42 && wire.to_port == "role_0")
     );
+}
+
+#[test]
+fn scene_physics_assign_role_allocates_around_each_boundary_collision() {
+    for case in ["free", "source_reserved", "target_reserved", "existing_producer"] {
+        let mut graph = imported_compound_graph(true);
+        if case == "existing_producer" {
+            let body = graph
+                .nodes
+                .iter_mut()
+                .find(|node| node.id == 10)
+                .unwrap()
+                .group
+                .as_mut()
+                .unwrap();
+            body.nodes
+                .push(node(50, "existing_role", ROLE_SOURCE_TYPE_ID, Some("Existing")));
+        }
+        let reserved = format!(
+            "fluid_role_source_{}",
+            max_node_id_over(&graph.nodes) + 1
+        );
+        {
+            let source_body = graph
+                .nodes
+                .iter_mut()
+                .find(|node| node.id == 10)
+                .unwrap()
+                .group
+                .as_mut()
+                .unwrap();
+            if case == "source_reserved" || case == "existing_producer" {
+                source_body.interface.outputs.push(InterfacePortDef {
+                    name: reserved.clone(),
+                    port_type: "FluidRole".into(),
+                });
+                if case == "existing_producer" {
+                    source_body
+                        .wires
+                        .push(wire(50, "role", 15, &reserved));
+                }
+            }
+        }
+        if case == "target_reserved" {
+            graph
+                .nodes
+                .iter_mut()
+                .find(|node| node.id == 40)
+                .unwrap()
+                .group
+                .as_mut()
+                .unwrap()
+                .interface
+                .inputs
+                .push(InterfacePortDef {
+                    name: reserved.clone(),
+                    port_type: "FluidRole".into(),
+                });
+        }
+        let original_root_wires = graph.wires.clone();
+        let original_source_wires = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == 10)
+            .unwrap()
+            .group
+            .as_ref()
+            .unwrap()
+            .wires
+            .clone();
+        let original_target_wires = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == 40)
+            .unwrap()
+            .group
+            .as_ref()
+            .unwrap()
+            .wires
+            .clone();
+        let (mut project, effect) = project_with_graph(graph.clone());
+        let mut command = AssignSceneFluidRoleCommand::new(
+            GraphTarget::Effect(effect.clone()),
+            0,
+            0,
+            SceneNodeRef {
+                scope: vec![NodeId::new("domain_group")],
+                node: NodeId::new("fluid_b"),
+            },
+            1,
+            vec![],
+            graph,
+        );
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{case}: {:?}", command.rejection_reason());
+        let after = graph_of(&project, &effect);
+        assert!(original_root_wires
+            .iter()
+            .all(|wire| after.wires.contains(wire)));
+        let source_body = after
+            .nodes
+            .iter()
+            .find(|node| node.id == 10)
+            .unwrap()
+            .group
+            .as_ref()
+            .unwrap();
+        assert!(original_source_wires
+            .iter()
+            .all(|wire| source_body.wires.contains(wire)));
+        let target_body = after
+            .nodes
+            .iter()
+            .find(|node| node.id == 40)
+            .unwrap()
+            .group
+            .as_ref()
+            .unwrap();
+        assert!(original_target_wires
+            .iter()
+            .all(|wire| target_body.wires.contains(wire)));
+        let allocated = after
+            .wires
+            .iter()
+            .find(|wire| wire.from_node == 10 && wire.to_node == 40)
+            .unwrap()
+            .from_port
+            .clone();
+        assert_eq!(allocated == reserved, case == "free");
+        assert!(source_body
+            .interface
+            .outputs
+            .iter()
+            .any(|port| port.name == allocated && port.port_type == "FluidRole"));
+        assert!(manifold_core::flatten::flatten_groups(after).is_ok(), "{case}");
+    }
+}
+
+#[test]
+fn scene_physics_assign_role_rejects_duplicate_target_input_sentinels_atomically() {
+    let mut graph = imported_compound_graph(true);
+    graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 40)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .extend([
+            node(44, "first_input", GROUP_INPUT_TYPE_ID, None),
+            node(45, "second_input", GROUP_INPUT_TYPE_ID, None),
+        ]);
+    let (mut project, effect) = project_with_graph(graph.clone());
+    let before = serde_json::to_value(&project).unwrap();
+    let mut command = AssignSceneFluidRoleCommand::new(
+        GraphTarget::Effect(effect.clone()),
+        0,
+        0,
+        SceneNodeRef {
+            scope: vec![NodeId::new("domain_group")],
+            node: NodeId::new("fluid_b"),
+        },
+        1,
+        vec![],
+        graph,
+    );
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert!(command.rejection_reason().is_some());
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+}
+
+#[test]
+fn scene_physics_assign_role_rejects_duplicate_source_output_sentinels_atomically() {
+    let mut graph = imported_compound_graph(false);
+    graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .extend([
+            node(44, "first_output", GROUP_OUTPUT_TYPE_ID, None),
+            node(45, "second_output", GROUP_OUTPUT_TYPE_ID, None),
+        ]);
+    let (mut project, effect) = project_with_graph(graph.clone());
+    let before = serde_json::to_value(&project).unwrap();
+    let mut command = AssignSceneFluidRoleCommand::new(
+        GraphTarget::Effect(effect),
+        0,
+        0,
+        SceneNodeRef {
+            scope: vec![],
+            node: NodeId::new("fluid_a"),
+        },
+        1,
+        vec![],
+        graph,
+    );
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert!(command.rejection_reason().is_some());
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
 }
 
 #[test]

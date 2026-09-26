@@ -446,6 +446,34 @@ fn scene_physics_role_lifecycle_rejects_malformed_route_atomically() {
     assert_eq!(after, original);
 }
 
+#[test]
+fn scene_physics_role_lifecycle_rejects_duplicate_boundary_sentinels_atomically() {
+    let mut source_duplicate = role_graph(false, false);
+    source_duplicate
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .push(node(54, "second_output", GROUP_OUTPUT_TYPE_ID, None));
+    let original = source_duplicate.clone();
+    let (_project, _effect, _before, after, command) = execute_remove(source_duplicate);
+    assert!(!command.was_applied());
+    assert_eq!(after, original);
+
+    let mut target_duplicate = role_graph(true, true);
+    body_mut(&mut target_duplicate, 30)
+        .nodes
+        .push(node(61, "second_input", GROUP_INPUT_TYPE_ID, None));
+    let original = target_duplicate.clone();
+    let (_project, _effect, _before, after, command) = execute_remove(target_duplicate);
+    assert!(!command.was_applied());
+    assert_eq!(after, original);
+}
+
 pub(super) fn body_mut(graph: &mut EffectGraphDef, id: u32) -> &mut GroupDef {
     graph
         .nodes
