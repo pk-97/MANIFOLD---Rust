@@ -15,10 +15,10 @@ use manifold_core::scene_modifier_preset::SceneNodeRef;
 
 use crate::command::Command;
 
-use super::super::super::install_target_graph;
+use super::super::restore_scene_owner_graph;
 use super::super::{
     InstanceLayerSnapshot, collect_all_handles, dedup_handle, max_node_id_over,
-    refresh_target_manifest, resolve_target_instance, scene_build_node, scene_build_wire,
+    refresh_target_manifest, scene_build_node, scene_build_wire,
     with_target_graph_mut,
 };
 
@@ -108,7 +108,9 @@ impl Command for AssignSceneFluidRoleCommand {
         self.applied = false;
 
         if let (Some(before), Some(after)) = (self.prev.as_ref(), self.after.as_ref()) {
-            if self.current_snapshot(project).as_ref() != Some(before) {
+            if self.current_snapshot(project).as_ref() != Some(before)
+                || self.owner_graph(project).as_ref() != self.prev_graph.as_ref()
+            {
                 self.rejection =
                     Some("Assign Fluid Role redo rejected: graph changed since undo".into());
                 return;
@@ -120,7 +122,7 @@ impl Command for AssignSceneFluidRoleCommand {
             refresh_target_manifest(project, &self.target);
             if let (Some(snapshot), Some(instance)) = (
                 self.after_instance.clone(),
-                resolve_target_instance(&self.target, project),
+                project.graph_target_owner_mut(&self.target),
             ) {
                 snapshot.restore(instance);
             }
@@ -136,7 +138,7 @@ impl Command for AssignSceneFluidRoleCommand {
             self.rejection = Some("Assign Fluid Role target is unavailable".into());
             return;
         };
-        let Some(baseline_instance) = resolve_target_instance(&self.target, project)
+        let Some(baseline_instance) = project.graph_target_owner_mut(&self.target)
             .map(|instance| InstanceLayerSnapshot::capture(&*instance))
         else {
             self.rejection = Some("Assign Fluid Role target is unavailable".into());
@@ -165,7 +167,7 @@ impl Command for AssignSceneFluidRoleCommand {
         refresh_target_manifest(project, &self.target);
         self.prev_graph = Some(previous_graph);
         self.prev_instance = Some(baseline_instance);
-        self.after_instance = resolve_target_instance(&self.target, project)
+        self.after_instance = project.graph_target_owner_mut(&self.target)
             .map(|instance| InstanceLayerSnapshot::capture(&*instance));
         self.prev = Some(baseline);
         self.after = Some(candidate);
@@ -179,11 +181,11 @@ impl Command for AssignSceneFluidRoleCommand {
         let Some(previous_graph) = self.prev_graph.clone() else {
             return;
         };
-        install_target_graph(project, &self.target, previous_graph);
+        restore_scene_owner_graph(project, &self.target, previous_graph);
         refresh_target_manifest(project, &self.target);
         if let (Some(snapshot), Some(instance)) = (
             self.prev_instance.clone(),
-            resolve_target_instance(&self.target, project),
+            project.graph_target_owner_mut(&self.target),
         ) {
             snapshot.restore(instance);
         }
@@ -1021,6 +1023,9 @@ fn empty_scene_metadata() -> PresetMetadata {
 mod tests;
 
 mod lifecycle;
+pub(in crate::commands::graph::scene) use lifecycle::{
+    disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
+};
 pub use lifecycle::{
     RemoveSceneFluidRoleCommand, RetargetSceneFluidRoleCommand, SceneFluidRoleAssignment,
     scene_fluid_role_assignments,

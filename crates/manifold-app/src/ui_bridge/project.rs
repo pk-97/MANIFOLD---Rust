@@ -12,6 +12,16 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
+fn scene_object_source_identity(
+    project: &Project, target: &manifold_core::GraphTarget,
+    default: &manifold_core::effect_graph_def::EffectGraphDef, render: u32, index: u32,
+) -> Option<manifold_core::NodeId> {
+    let def = project.graph_for_target(target, Some(default))?;
+    let port = format!("object_{index}");
+    let wire = def.wires.iter().find(|wire| wire.to_node == render && wire.to_port == port)?;
+    def.nodes.iter().find(|node| node.id == wire.from_node).map(|node| node.node_id.clone())
+}
+
 pub(super) fn dispatch_project(
     action: &ProjectAction,
     project: &mut Project,
@@ -691,23 +701,16 @@ pub(super) fn dispatch_project(
         ProjectAction::SceneSetupRemoveObject(layer_id, render_scene_node_id, object_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let Some(source) = scene_object_source_identity(project, &target, &default, *render_scene_node_id, *object_index)
+                else { return DispatchResult::handled(); };
                 let cmd = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(
                     target,
                     Vec::new(),
                     *render_scene_node_id,
                     *object_index,
                     default,
-                );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                if boxed.was_applied() {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                } else if let Some(reason) = boxed.rejection_reason() {
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::GraphEditRejected(reason.to_owned()),
-                    );
-                }
+                ).with_expected_source(source);
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
@@ -812,27 +815,18 @@ pub(super) fn dispatch_project(
                 // duplicates have the same live controls as migrated scenes.
                 manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let Some(source) = scene_object_source_identity(project, &target, &default, *render_scene_node_id, *source_index)
+                else { return DispatchResult::handled(); };
                 let cmd = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
                     target,
                     Vec::new(),
                     *render_scene_node_id,
                     *source_index,
                     default,
-                );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                if boxed.was_applied() {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                } else if let Some(reason) = boxed.rejection_reason() {
-                    // The panel's local mirror runs the command before it is
-                    // handed to the content thread. Surface an ownership or
-                    // malformed-graph rejection immediately instead of
-                    // silently dropping the click.
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::GraphEditRejected(reason.to_owned()),
-                    );
-                }
+                ).with_expected_source(source);
+                ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
+                    Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
+                ));
             }
             DispatchResult::structural()
         }
@@ -1578,6 +1572,7 @@ mod tests {
     //! `SceneSetupAddLight` here, per `mod.rs`'s routing list), not just the
     //! command's own already-covered unit test in `manifold-editing`.
     use super::*;
+    use crate::content_command::ContentCommand;
     use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_core::types::LayerType;
 
@@ -1751,9 +1746,7 @@ mod tests {
             original.body_node_id, "friction", 0.73).unwrap();
         let before = effective_def(&project, &layer_id);
         let friction = |project: &Project| {
-            effective_def(project, &layer_id).nodes.into_iter()
-                .find(|node| node.id == original.body_node_id).unwrap()
-                .params.get("friction").cloned()
+            effective_scene_param_value(project, &layer_id, original.body_node_id, "friction")
         };
         for enabled in [false, true] {
             let action = if enabled {
@@ -1777,8 +1770,8 @@ mod tests {
             let saved = serde_json::to_string(&project).unwrap();
             let reloaded: Project = serde_json::from_str(&saved).unwrap();
             assert_eq!(body(&reloaded).enabled, enabled);
-            assert_eq!(friction(&project), Some(SerializedParamValue::Float { value: 0.73 }));
-            assert_eq!(friction(&reloaded), Some(SerializedParamValue::Float { value: 0.73 }));
+            assert_eq!(friction(&project), 0.73);
+            assert_eq!(friction(&reloaded), 0.73);
             let crate::content_command::ContentCommand::Execute(mut cmd) = rx.try_recv().unwrap() else {
                 panic!("toggle must send an undoable edit");
             };
@@ -2295,8 +2288,9 @@ mod tests {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let before = objects_param(&project, &layer_id, render_scene_id);
         assert!(before >= 1.0, "SceneStarter ships with at least one object");
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let action = ProjectAction::SceneSetupRemoveObject(
             layer_id.clone(),
@@ -2317,6 +2311,12 @@ mod tests {
             result.structural_change,
             "removing an object is a structural graph edit"
         );
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before,
+            "UI removal waits for content");
+        let ContentCommand::ExecuteOnContent(mut command) = content_rx.try_recv().unwrap()
+        else { panic!("content-owned removal"); };
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
         assert_eq!(
             objects_param(&project, &layer_id, render_scene_id),
             before - 1.0
@@ -2389,6 +2389,20 @@ mod tests {
         assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
 
         let source_index = before;
+        let source_def = effective_def(&project, &layer_id);
+        let source_vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&source_def).unwrap();
+        let source_transform = source_vm.objects.iter().find_map(|object| match object {
+            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                if row.index == source_index as usize => row.transform.as_ref(),
+            _ => None,
+        }).unwrap();
+        apply_scene_param_write(&mut project, &layer_id, source_transform.pos_addr.1.scope_path.clone(),
+            source_transform.node_doc_id, "pos_y", 2.25).unwrap();
+        apply_scene_param_write(&mut project, &layer_id, source_transform.pos_addr.0.scope_path.clone(),
+            source_transform.node_doc_id, "pos_x", 1.25).unwrap();
+        // Legacy manifests without saved base values must undo byte-for-byte.
+        project.graph_target_owner_mut(&manifold_core::GraphTarget::Generator(layer_id.clone())).unwrap().base_tracked = false;
+        let before_duplicate = serde_json::to_value(&project).unwrap();
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
             render_scene_id,
@@ -2404,6 +2418,15 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
+
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), (before + 1) as f32,
+            "UI duplication waits for content");
+        let ContentCommand::ExecuteSelecting(mut command, request) = content_rx.try_recv().unwrap()
+        else { panic!("content-owned duplicate"); };
+        let pending = request.capture(&project);
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
+        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
 
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
@@ -2422,6 +2445,23 @@ mod tests {
                 _ => None,
             })
             .expect("duplicated object has a transform row");
+
+        let binding_id = manifold_core::effects::binding_id_for_node_param_in(
+            &def, transform_id, "pos_x",
+        ).expect("duplicate has its own transform binding");
+        let section = def.preset_metadata.as_ref().unwrap().params.iter()
+            .find(|param| param.id == binding_id).unwrap().section.as_deref();
+        assert_eq!(section, Some(format!("Object {} 2 — Transform", before + 1).as_str()));
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_y"), 2.25,
+            "the duplicate keeps the source's authored control values");
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.75,
+            "the duplicate offset is applied to the authored position");
+        command.undo(&mut project);
+        assert_eq!(serde_json::to_value(&project).unwrap(), before_duplicate);
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(effective_scene_param_value(&reloaded, &layer_id, transform_id, "pos_y"), 2.25);
 
         let write = ProjectAction::SceneSetupParamChanged(
             layer_id.clone(),
@@ -2475,8 +2515,9 @@ mod tests {
         let (mut project, layer_id, render_scene_id) = physics_solids_layer_project();
         let source_index = 0;
         let duplicate_index = objects_param(&project, &layer_id, render_scene_id) as usize;
-        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
@@ -2493,6 +2534,13 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
+
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), duplicate_index as f32,
+            "UI duplication waits for content");
+        let ContentCommand::ExecuteSelecting(mut command, _) = content_rx.try_recv().unwrap()
+        else { panic!("content-owned duplicate"); };
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
 
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)

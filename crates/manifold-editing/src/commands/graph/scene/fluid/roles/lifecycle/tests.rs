@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::commands::graph::resolve_target_instance;
 use crate::command::Command;
 use crate::commands::graph::test_support::{graph_of, project_with_graph};
 use manifold_core::effect_graph_def::{
@@ -52,7 +53,7 @@ fn nested_domain_ref() -> SceneNodeRef {
     }
 }
 
-fn role_graph(with_nested: bool, fanout: bool) -> EffectGraphDef {
+pub(super) fn role_graph(with_nested: bool, fanout: bool) -> EffectGraphDef {
     let mut render = node(0, "render", "node.render_scene", Some("Render"));
     render
         .params
@@ -445,7 +446,7 @@ fn scene_physics_role_lifecycle_rejects_malformed_route_atomically() {
     assert_eq!(after, original);
 }
 
-fn body_mut(graph: &mut EffectGraphDef, id: u32) -> &mut GroupDef {
+pub(super) fn body_mut(graph: &mut EffectGraphDef, id: u32) -> &mut GroupDef {
     graph
         .nodes
         .iter_mut()

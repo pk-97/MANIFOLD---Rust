@@ -206,28 +206,7 @@ pub(crate) fn sections_for_doc_ids(
     // outer CARD's row builder (`cards::param_surface`).
     let mut sections: Vec<String> = Vec::new();
     for spec in &meta.params {
-        // A cloned scene binding retains its source numeric prefix and adds
-        // `_duplicate` (or `_duplicate_N`). Resolve only these IDs through
-        // their exact binding target; ordinary IDs stay prefix-based so the
-        // BUG-291 fan-out path cannot leak sections by target walking.
-        let owned = if spec.id.contains("_duplicate") {
-            meta.bindings
-                .iter()
-                .filter(|binding| binding.id == spec.id)
-                .any(|binding| match &binding.target {
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
-                        doc_id_for_node_id(&def.nodes, node_id)
-                            .is_some_and(|owner_doc_id| doc_ids.contains(&owner_doc_id))
-                    }
-                    _ => false,
-                })
-        } else {
-            spec.id
-                .split('_')
-                .next()
-                .and_then(|s| s.parse::<u32>().ok())
-                .is_some_and(|prefix_doc_id| doc_ids.contains(&prefix_doc_id))
-        };
+        let owned = parameter_owned_by_doc_ids(def, meta, &spec.id, doc_ids);
         if !owned {
             continue;
         }
@@ -239,6 +218,59 @@ pub(crate) fn sections_for_doc_ids(
         }
     }
     sections
+}
+
+/// Project the exact exposed parameter ids owned by the supplied scene nodes.
+/// Keep this predicate shared with [`sections_for_doc_ids`]: ordinary stamped
+/// ids are owned by their numeric prefix, while cloned `_duplicate` ids are
+/// resolved through their exact binding target. Fan-out bindings under an
+/// ordinary id do not acquire ownership from their target.
+pub(crate) fn parameter_ids_for_doc_ids(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    doc_ids: &[u32],
+) -> Vec<String> {
+    let Some(def) = def else { return Vec::new() };
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return Vec::new();
+    };
+    if doc_ids.is_empty() {
+        return Vec::new();
+    }
+    meta.params
+        .iter()
+        .filter(|spec| parameter_owned_by_doc_ids(def, meta, &spec.id, doc_ids))
+        .map(|spec| spec.id.clone())
+        .collect()
+}
+
+fn parameter_owned_by_doc_ids(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    meta: &manifold_core::effect_graph_def::PresetMetadata,
+    parameter_id: &str,
+    doc_ids: &[u32],
+) -> bool {
+    // A cloned scene binding retains its source numeric prefix and adds
+    // `_duplicate` (or `_duplicate_N`). Resolve only these IDs through their
+    // exact binding target; ordinary IDs stay prefix-based so the BUG-291
+    // fan-out path cannot leak sections by target walking.
+    if parameter_id.contains("_duplicate") {
+        return meta
+            .bindings
+            .iter()
+            .filter(|binding| binding.id == parameter_id)
+            .any(|binding| match &binding.target {
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
+                    doc_id_for_node_id(&def.nodes, node_id)
+                        .is_some_and(|owner_doc_id| doc_ids.contains(&owner_doc_id))
+                }
+                _ => false,
+            });
+    }
+    parameter_id
+        .split('_')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .is_some_and(|prefix_doc_id| doc_ids.contains(&prefix_doc_id))
 }
 
 fn doc_id_for_node_id(
@@ -382,6 +414,7 @@ mod sections_for_doc_ids_tests {
             vec!["Environment".to_string()],
             "World must not pick up \"Sun\" via the sun's fanned-out envmap.sun_x binding"
         );
+        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[1]), vec!["1_intensity"]);
     }
 
     #[test]
@@ -390,6 +423,7 @@ mod sections_for_doc_ids_tests {
         // Sun's doc-id set: just its own light node (doc id 7).
         let sections = sections_for_doc_ids(Some(&def), &[7]);
         assert_eq!(sections, vec!["Sun".to_string()]);
+        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[7]), vec!["7_pos_x"]);
     }
 
     #[test]
@@ -470,5 +504,11 @@ mod sections_for_doc_ids_tests {
 
         let sections = sections_for_doc_ids(Some(&def), &[107]);
         assert_eq!(sections, vec!["Ground 2 — Transform".to_string()]);
+        assert_eq!(
+            parameter_ids_for_doc_ids(Some(&def), &[107]),
+            vec!["7_pos_x_duplicate"]
+        );
+        assert!(parameter_ids_for_doc_ids(Some(&def), &[7]).contains(&"7_pos_x".to_string()));
+        assert!(!parameter_ids_for_doc_ids(Some(&def), &[7]).contains(&"7_pos_x_duplicate".to_string()));
     }
 }

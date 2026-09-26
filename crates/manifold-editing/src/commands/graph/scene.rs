@@ -21,14 +21,48 @@ use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposur
 use crate::command::Command;
 
 mod clone_sections;
+mod clone_values;
 mod fluid;
+
+#[cfg(test)]
+mod fluid_object_lifecycle_tests;
 
 pub use fluid::*;
 
+/// Scene commands snapshot the complete owner, including modifier-local edits.
+fn restore_scene_owner_graph(
+    project: &mut Project,
+    target: &GraphTarget,
+    graph: Option<EffectGraphDef>,
+) {
+    if let Some(owner) = target.host_target() {
+        install_target_graph(project, owner, graph);
+    }
+}
+
+fn scene_object_source_matches(
+    def: Option<&EffectGraphDef>, scope: &[u32], render: u32, index: u32, expected: Option<&NodeId>,
+) -> bool {
+    expected.is_none_or(|expected| def.and_then(|def| {
+        let (nodes, wires) = graph_level(def, scope)?;
+        let producer = object_producer_id(wires, render, index)?;
+        nodes.iter().find(|node| node.id == producer).map(|node| &node.node_id)
+    }) == Some(expected))
+}
+
+/// Modifier-local ids are mapped to owner ids by `refresh_target_manifest`.
+fn prune_scene_target_params(project: &mut Project, target: &GraphTarget, removed: &[String]) {
+    if !matches!(target, GraphTarget::SceneModifier { .. })
+        && let Some(instance) = project.graph_target_owner_mut(target)
+    {
+        prune_instance_params(instance, removed);
+    }
+}
+
 use super::{
-    InstanceLayerSnapshot, collect_node_ids, dedup_handle, descend_level, prune_instance_params,
-    refresh_target_manifest, resolve_target_instance, scene_build_node, scene_build_wire,
-    with_existing_target_graph_mut, with_target_graph_def_mut, with_target_graph_mut,
+    InstanceLayerSnapshot, collect_node_ids, dedup_handle, descend_level, install_target_graph,
+    prune_instance_params, refresh_target_manifest, resolve_target_instance, scene_build_node,
+    scene_build_wire, with_existing_target_graph_mut, with_target_graph_mut,
 };
 
 /// The add-object gesture (D7): one undoable composite edit that (1) bumps
@@ -1070,11 +1104,21 @@ pub struct RemoveSceneObjectCommand {
     scope_path: Vec<u32>,
     render_scene_node_id: u32,
     object_index: u32,
+    expected_source: Option<NodeId>,
     catalog_default: EffectGraphDef,
-    rejection: Option<&'static str>,
+    rejection: Option<String>,
     /// The level and metadata before this edit, plus the host instance state
     /// that is pruned when the removed object's exposures disappear.
-    prev: Option<RemovedObjectSnapshot>,
+    prev: Option<RemovedSceneObjectSnapshot>,
+    applied: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RemovedSceneObjectSnapshot {
+    graph: Option<EffectGraphDef>,
+    instance: InstanceLayerSnapshot,
+    after_graph: EffectGraphDef,
+    after_instance: InstanceLayerSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -1086,6 +1130,11 @@ struct RemovedObjectSnapshot {
 }
 
 impl RemoveSceneObjectCommand {
+    pub fn with_expected_source(mut self, source: NodeId) -> Self {
+        self.expected_source = Some(source);
+        self
+    }
+
     pub fn new(
         target: GraphTarget,
         scope_path: Vec<u32>,
@@ -1098,9 +1147,11 @@ impl RemoveSceneObjectCommand {
             scope_path,
             render_scene_node_id,
             object_index,
+            expected_source: None,
             catalog_default,
             rejection: None,
             prev: None,
+            applied: false,
         }
     }
 }
@@ -1111,23 +1162,58 @@ impl Command for RemoveSceneObjectCommand {
     }
 
     fn execute(&mut self, project: &mut Project) {
-        self.prev = None;
         self.rejection = None;
-        let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+        self.applied = false;
+        if let Some(snapshot) = &self.prev {
+            if project
+                .graph_target_owner(&self.target)
+                .map(|owner| &owner.graph)
+                != Some(&snapshot.graph)
+            {
+                self.rejection =
+                    Some("Remove Object redo rejected: graph changed since undo".into());
+                return;
+            }
+            if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                *def = snapshot.after_graph.clone();
+            })
+            .is_none()
+            {
+                self.rejection = Some("Remove Object redo target is unavailable".into());
+                return;
+            }
+            refresh_target_manifest(project, &self.target);
+            if let Some(instance) = project.graph_target_owner_mut(&self.target) {
+                snapshot.after_instance.clone().restore(instance);
+            }
+            self.applied = true;
+            return;
+        }
+        let Some(def) = project
+            .graph_for_target(&self.target, Some(&self.catalog_default))
+            .cloned()
+        else {
             return;
         };
+        if !scene_object_source_matches(Some(&def), &self.scope_path, self.render_scene_node_id,
+            self.object_index, self.expected_source.as_ref())
+        {
+            self.rejection = Some("Remove Object rejected: selected object changed".into());
+            return;
+        }
         if deletion_breaks_explicit_modifier_target(
-            def,
+            &def,
             &self.scope_path,
             self.render_scene_node_id,
             self.object_index,
         ) {
             self.rejection = Some(
-                "Object is explicitly targeted by a scene modifier; retarget or remove that modifier first",
+                "Object is explicitly targeted by a scene modifier; retarget or remove that modifier first".into(),
             );
             return;
         }
-        let Some(previous_instance) = resolve_target_instance(&self.target, project)
+        let Some(previous_instance) = project
+            .graph_target_owner_mut(&self.target)
             .map(|instance| InstanceLayerSnapshot::capture(instance))
         else {
             return;
@@ -1145,7 +1231,7 @@ impl Command for RemoveSceneObjectCommand {
                 ))
             });
         if let Some(PhysicsSceneObjectMatch::Malformed(reason)) = &physics_match {
-            self.rejection = Some(reason);
+            self.rejection = Some((*reason).into());
             return;
         }
         if matches!(
@@ -1153,120 +1239,150 @@ impl Command for RemoveSceneObjectCommand {
             Some(PhysicsSceneObjectMatch::Valid(_))
         ) && !scope.is_empty()
         {
-            self.rejection = Some("Remove Object physics ownership requires a root-level scene");
+            self.rejection =
+                Some("Remove Object physics ownership requires a root-level scene".into());
             return;
         }
-        let result =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                let prev_metadata = def.preset_metadata.clone();
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let prev = (nodes.clone(), wires.clone());
-
-                let object_port = format!("object_{k}");
-                let producer_id = wires
-                    .iter()
-                    .find(|w| w.to_node == render_id && w.to_port == object_port)
-                    .map(|w| w.from_node)?;
-
-                let current_objects = match nodes
-                    .iter()
-                    .find(|n| n.id == render_id)?
-                    .params
-                    .get("objects")
-                {
-                    Some(SerializedParamValue::Float { value }) => *value,
-                    Some(SerializedParamValue::Int { value }) => *value as f32,
-                    _ => return None,
-                };
-
-                let producer = nodes.iter().find(|node| node.id == producer_id)?;
-                let removed_indices = match physics_match.as_ref() {
-                    Some(PhysicsSceneObjectMatch::Valid(physics)) => physics.render_indices.clone(),
-                    _ if producer.type_id == GROUP_TYPE_ID => {
-                        group_render_indices(wires, render_id, producer_id)
-                    }
-                    _ => vec![k],
-                };
-                if removed_indices.is_empty() {
-                    return None;
-                }
-                let mut removed_ids = Vec::new();
-                if let Some(PhysicsSceneObjectMatch::Valid(physics)) = &physics_match {
-                    for id in &physics.owned_ids {
-                        if let Some(node) = nodes.iter().find(|node| node.id == *id) {
-                            collect_node_ids(std::slice::from_ref(node), &mut removed_ids);
-                        }
-                    }
-                    let owned = physics
-                        .owned_ids
-                        .iter()
-                        .copied()
-                        .collect::<std::collections::HashSet<_>>();
-                    nodes.retain(|node| !owned.contains(&node.id));
-                    wires.retain(|wire| {
-                        !owned.contains(&wire.from_node) && !owned.contains(&wire.to_node)
-                    });
-                } else {
-                    collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
-                    nodes.retain(|n| n.id != producer_id);
-                    wires.retain(|w| {
-                        w.from_node != producer_id
-                            && w.to_node != producer_id
-                            && !(w.to_node == render_id
-                                && removed_indices.iter().any(|index| {
-                                    w.to_port == format!("object_{index}")
-                                }))
-                    });
-                }
-
-                // Compact in reverse order so each removal is applied to the
-                // original slot numbering without shifting a later target
-                // before it is removed.
-                for index in removed_indices.iter().rev() {
-                    shift_indexed_ports_down(wires, render_id, "object", *index);
-                }
-
-                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                    "objects".to_string(),
-                    SerializedParamValue::Float {
-                        value: (current_objects - removed_indices.len() as f32).max(0.0),
-                    },
-                );
-
-                let removed_params = prune_scene_object_metadata(def, &removed_ids);
-                Some((prev, prev_metadata, removed_params))
-            });
-        let Some((prev, prev_metadata, removed_param_ids)) = result.flatten() else {
+        let Some(previous_graph) = project
+            .graph_target_owner(&self.target)
+            .map(|owner| owner.graph.clone())
+        else {
             return;
         };
-        if let Some(instance) = resolve_target_instance(&self.target, project) {
-            prune_instance_params(instance, &removed_param_ids);
-        }
-        self.prev = Some(RemovedObjectSnapshot {
-            nodes: prev.0,
-            wires: prev.1,
-            metadata: prev_metadata,
-            instance: previous_instance,
+        let mut candidate = def;
+        let producer_id = graph_level(&candidate, &scope)
+            .and_then(|(_, wires)| object_producer_id(wires, render_id, k));
+        let producer_is_group = producer_id.as_ref().is_some_and(|producer_id| {
+            graph_level(&candidate, &scope)
+                .and_then(|(nodes, _)| nodes.iter().find(|node| node.id == *producer_id))
+                .is_some_and(|node| node.type_id == GROUP_TYPE_ID)
         });
+        if scope.is_empty()
+            && producer_is_group
+            && let Err(reason) = fluid::disconnect_scene_object_fluid_roles(
+                &mut candidate,
+                producer_id.expect("producer id checked above"),
+            )
+        {
+            self.rejection = Some(reason);
+            return;
+        }
+        let result = (|| {
+            let def = &mut candidate;
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+
+            let object_port = format!("object_{k}");
+            let producer_id = wires
+                .iter()
+                .find(|w| w.to_node == render_id && w.to_port == object_port)
+                .map(|w| w.from_node)?;
+
+            let current_objects = match nodes
+                .iter()
+                .find(|n| n.id == render_id)?
+                .params
+                .get("objects")
+            {
+                Some(SerializedParamValue::Float { value }) => *value,
+                Some(SerializedParamValue::Int { value }) => *value as f32,
+                _ => return None,
+            };
+
+            let producer = nodes.iter().find(|node| node.id == producer_id)?;
+            let removed_indices = match physics_match.as_ref() {
+                Some(PhysicsSceneObjectMatch::Valid(physics)) => physics.render_indices.clone(),
+                _ if producer.type_id == GROUP_TYPE_ID => {
+                    group_render_indices(wires, render_id, producer_id)
+                }
+                _ => vec![k],
+            };
+            if removed_indices.is_empty() {
+                return None;
+            }
+            let mut removed_ids = Vec::new();
+            if let Some(PhysicsSceneObjectMatch::Valid(physics)) = &physics_match {
+                for id in &physics.owned_ids {
+                    if let Some(node) = nodes.iter().find(|node| node.id == *id) {
+                        collect_node_ids(std::slice::from_ref(node), &mut removed_ids);
+                    }
+                }
+                let owned = physics
+                    .owned_ids
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>();
+                nodes.retain(|node| !owned.contains(&node.id));
+                wires.retain(|wire| {
+                    !owned.contains(&wire.from_node) && !owned.contains(&wire.to_node)
+                });
+            } else {
+                collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
+                nodes.retain(|n| n.id != producer_id);
+                wires.retain(|w| {
+                    w.from_node != producer_id
+                        && w.to_node != producer_id
+                        && !(w.to_node == render_id
+                            && removed_indices
+                                .iter()
+                                .any(|index| w.to_port == format!("object_{index}")))
+                });
+            }
+
+            // Compact in reverse order so each removal is applied to the
+            // original slot numbering without shifting a later target
+            // before it is removed.
+            for index in removed_indices.iter().rev() {
+                shift_indexed_ports_down(wires, render_id, "object", *index);
+            }
+
+            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Float {
+                    value: (current_objects - removed_indices.len() as f32).max(0.0),
+                },
+            );
+
+            let removed_params = prune_scene_object_metadata(def, &removed_ids);
+            Some(removed_params)
+        })();
+        let Some(removed_param_ids) = result else {
+            return;
+        };
+        if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            *def = candidate.clone();
+        })
+        .is_none()
+        {
+            return;
+        }
+        prune_scene_target_params(project, &self.target, &removed_param_ids);
         refresh_target_manifest(project, &self.target);
+        self.prev = Some(RemovedSceneObjectSnapshot {
+            graph: previous_graph,
+            instance: previous_instance,
+            after_graph: candidate,
+            after_instance: InstanceLayerSnapshot::capture(
+                project
+                    .graph_target_owner_mut(&self.target)
+                    .expect("validated scene owner"),
+            ),
+        });
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some(snapshot) = self.prev.take() else {
+        if !self.applied {
+            return;
+        }
+        let Some(snapshot) = &self.prev else {
             return;
         };
-        let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            def.preset_metadata = snapshot.metadata;
-            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
-                *nodes = snapshot.nodes;
-                *wires = snapshot.wires;
-            }
-        });
-        if let Some(instance) = resolve_target_instance(&self.target, project) {
-            snapshot.instance.restore(instance);
-        }
+        restore_scene_owner_graph(project, &self.target, snapshot.graph.clone());
         refresh_target_manifest(project, &self.target);
+        if let Some(instance) = project.graph_target_owner_mut(&self.target) {
+            snapshot.instance.clone().restore(instance);
+        }
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
@@ -1274,11 +1390,11 @@ impl Command for RemoveSceneObjectCommand {
     }
 
     fn was_applied(&self) -> bool {
-        self.prev.is_some()
+        self.applied
     }
 
     fn rejection_reason(&self) -> Option<&str> {
-        self.rejection
+        self.rejection.as_deref()
     }
 }
 
@@ -4797,19 +4913,6 @@ fn graph_level<'a>(
     Some((nodes, wires))
 }
 
-fn target_string_bindings(
-    project: &Project,
-    target: &GraphTarget,
-    catalog_default: &EffectGraphDef,
-) -> Option<Option<Vec<StringBindingDef>>> {
-    let def = project.graph_for_target(target, Some(catalog_default))?;
-    Some(
-        def.preset_metadata
-            .as_ref()
-            .map(|meta| meta.string_bindings.clone()),
-    )
-}
-
 /// Remove exposure bindings whose stable target lives in a deleted object
 /// subtree. Shared binding ids are retained when another target still uses
 /// them (the importer deliberately fans out one outer control to many nodes).
@@ -4901,20 +5004,14 @@ pub struct DuplicateSceneObjectCommand {
     scope_path: Vec<u32>,
     render_scene_node_id: u32,
     source_index: u32,
+    expected_source: Option<NodeId>,
     catalog_default: EffectGraphDef,
-    /// The level's `(nodes, wires)` before this edit. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
-    /// BUG-212: the WHOLE `preset_metadata.string_bindings` vec before this
-    /// edit's append — whole-snapshot undo, same convention as `prev` above.
-    prev_string_bindings: Option<Option<Vec<StringBindingDef>>>,
-    /// Whole metadata snapshot, including numeric scene exposures cloned for
-    /// root-level physics objects.
-    prev_metadata: Option<Option<PresetMetadata>>,
-    /// Cached successful result. Redo restores these exact ids after checking
-    /// that the graph and string bindings still match the pre-edit baseline.
-    after: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
-    after_string_bindings: Option<Option<Vec<StringBindingDef>>>,
-    after_metadata: Option<Option<PresetMetadata>>,
+    /// The target owner's graph before this edit. `None` is meaningful: the
+    /// command must restore an unmaterialized catalog graph on undo.
+    prev_graph: Option<Option<EffectGraphDef>>,
+    /// Cached successful candidate for redo, preserving all cloned ids and
+    /// fluid route boundaries exactly.
+    after_graph: Option<EffectGraphDef>,
     /// Live manifest/modulation state before and after the duplicate. A
     /// structural refresh intentionally rebuilds the manifest, so retaining
     /// these snapshots keeps authored values stable across undo/redo too.
@@ -4925,6 +5022,11 @@ pub struct DuplicateSceneObjectCommand {
 }
 
 impl DuplicateSceneObjectCommand {
+    pub fn with_expected_source(mut self, source: NodeId) -> Self {
+        self.expected_source = Some(source);
+        self
+    }
+
     pub fn new(
         target: GraphTarget,
         scope_path: Vec<u32>,
@@ -4937,13 +5039,10 @@ impl DuplicateSceneObjectCommand {
             scope_path,
             render_scene_node_id,
             source_index,
+            expected_source: None,
             catalog_default,
-            prev: None,
-            prev_string_bindings: None,
-            prev_metadata: None,
-            after: None,
-            after_string_bindings: None,
-            after_metadata: None,
+            prev_graph: None,
+            after_graph: None,
             prev_instance: None,
             after_instance: None,
             rejection: None,
@@ -4964,55 +5063,29 @@ impl Command for DuplicateSceneObjectCommand {
         let render_id = self.render_scene_node_id;
         let src_k = self.source_index;
 
-        if let (Some(after), Some(_after_strings)) =
-            (self.after.as_ref(), self.after_string_bindings.as_ref())
+        if let (Some(previous_graph), Some(after_graph)) =
+            (self.prev_graph.as_ref(), self.after_graph.as_ref())
         {
-            let current_level = project
-                .graph_for_target(&self.target, Some(&self.catalog_default))
-                .and_then(|def| graph_level(def, &scope))
-                .map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec()));
-            let baseline_level = self
-                .prev
-                .as_ref()
-                .map(|(nodes, wires)| (nodes.clone(), wires.clone()));
-            let current_strings =
-                target_string_bindings(project, &self.target, &self.catalog_default);
-            let current_metadata = project
-                .graph_for_target(&self.target, Some(&self.catalog_default))
-                .map(|def| def.preset_metadata.clone());
-            if current_level != baseline_level
-                || current_strings != self.prev_string_bindings
-                || current_metadata != self.prev_metadata
-            {
-                self.rejection = Some(
-                    "Duplicate Object redo rejected: graph or source bindings changed since undo"
-                        .into(),
-                );
+            let current_graph = project
+                .graph_target_owner(&self.target)
+                .map(|owner| owner.graph.clone());
+            if current_graph.as_ref() != Some(previous_graph) {
+                self.rejection =
+                    Some("Duplicate Object redo rejected: graph changed since undo".into());
                 return;
             }
-            let restored =
-                with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                    *nodes = after.0.clone();
-                    *wires = after.1.clone();
-                    Some(())
-                })
-                .flatten()
-                .is_some();
-            if !restored {
+            if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                *def = after_graph.clone();
+            })
+            .is_none()
+            {
                 self.rejection = Some("Duplicate Object redo target is unavailable".into());
                 return;
             }
-            let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                def.preset_metadata = self.after_metadata.clone().flatten();
-            });
-            // Keep freshly cloned scene exposures visible to the live panel
-            // after redo; otherwise a save/load is required before the new
-            // binding slots can be edited.
             refresh_target_manifest(project, &self.target);
             if let (Some(snapshot), Some(instance)) = (
                 self.after_instance.clone(),
-                resolve_target_instance(&self.target, project),
+                project.graph_target_owner_mut(&self.target),
             ) {
                 snapshot.restore(instance);
             }
@@ -5020,6 +5093,13 @@ impl Command for DuplicateSceneObjectCommand {
             return;
         }
 
+        if !scene_object_source_matches(
+            project.graph_for_target(&self.target, Some(&self.catalog_default)),
+            &scope, render_id, src_k, self.expected_source.as_ref(),
+        ) {
+            self.rejection = Some("Duplicate Object rejected: selected object changed".into());
+            return;
+        }
         let physics_match = project
             .graph_for_target(&self.target, Some(&self.catalog_default))
             .and_then(|def| {
@@ -5056,138 +5136,171 @@ impl Command for DuplicateSceneObjectCommand {
             }
         }
 
-        let baseline_instance = resolve_target_instance(&self.target, project)
-            .map(|instance| InstanceLayerSnapshot::capture(&*instance));
-        let baseline_strings = target_string_bindings(project, &self.target, &self.catalog_default);
-        let baseline_metadata = project
+        let Some(baseline) = project
             .graph_for_target(&self.target, Some(&self.catalog_default))
-            .map(|def| def.preset_metadata.clone());
+            .cloned()
+        else {
+            self.rejection = Some("Duplicate Object requires an existing graph".into());
+            return;
+        };
+        let Some(previous_graph) = project
+            .graph_target_owner(&self.target)
+            .map(|owner| owner.graph.clone())
+        else {
+            self.rejection = Some("Duplicate Object target is unavailable".into());
+            return;
+        };
+        let baseline_instance = project
+            .graph_target_owner_mut(&self.target)
+            .map(|instance| InstanceLayerSnapshot::capture(&*instance));
+        let append_range = (|| {
+            let (nodes, wires) = graph_level(&baseline, &scope)
+                .ok_or("Duplicate Object scene scope is unavailable")?;
+            let next = scene_object_append_slot(nodes, wires, render_id)?;
+            let source = object_producer_id(wires, render_id, src_k)
+                .ok_or("Duplicate Object source object is unavailable")?;
+            let count = match physics_match.as_ref() {
+                Some(PhysicsSceneObjectMatch::Valid(physics)) => physics.render_indices.len(),
+                _ => group_render_indices(wires, render_id, source).len(),
+            };
+            let count =
+                u32::try_from(count).map_err(|_| "Duplicate Object object count is exhausted")?;
+            let end = next
+                .checked_add(count)
+                .filter(|end| *end as f32 as u32 == *end)
+                .ok_or("Duplicate Object object count is exhausted")?;
+            if count == 0
+                || (next..end).any(|index| {
+                    wires.iter().any(|wire| {
+                        wire.to_node == render_id && wire.to_port == format!("object_{index}")
+                    })
+                })
+            {
+                return Err("Duplicate Object destination slots are unavailable");
+            }
+            Ok((next, end))
+        })();
+        let (new_k, new_count) = match append_range {
+            Ok(range) => range,
+            Err(reason) => {
+                self.rejection = Some(reason.into());
+                return;
+            }
+        };
+        let mut candidate = baseline.clone();
         let mut node_id_map: Vec<(NodeId, NodeId)> = Vec::new();
-        let result =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                // Document ids and handles are global even when the edit is
-                // addressed through a nested scope. Seed both allocators
-                // from the full tree before borrowing the target level.
-                let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
-                let mut taken = std::collections::HashSet::new();
-                collect_all_handles(&def.nodes, &mut taken);
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let prev = (nodes.clone(), wires.clone());
+        let mut cloned_group_id = None;
+        let result = (|| {
+            let def = &mut candidate;
+            // Document ids and handles are global even when the edit is
+            // addressed through a nested scope. Seed both allocators
+            // from the full tree before borrowing the target level.
+            let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
+            let mut taken = std::collections::HashSet::new();
+            collect_all_handles(&def.nodes, &mut taken);
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
 
-                let current_objects = match nodes
+            if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref() {
+                let new_slot = first_free_physics_body_slot(wires, physics.world_id)?;
+                append_physics_duplicate(
+                    nodes,
+                    wires,
+                    physics,
+                    render_id,
+                    &physics.render_indices,
+                    new_k,
+                    new_slot,
+                    &mut node_id_map,
+                )?;
+                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Float {
+                        value: new_count as f32,
+                    },
+                );
+            } else {
+                let source_id = object_producer_id(wires, render_id, src_k)?;
+                let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
+                let mut source_outputs: Vec<(u32, String)> = wires
                     .iter()
-                    .find(|n| n.id == render_id)?
-                    .params
-                    .get("objects")
-                {
-                    Some(SerializedParamValue::Float { value }) => *value,
-                    Some(SerializedParamValue::Int { value }) => *value as f32,
-                    _ => 0.0,
-                };
-                let new_k = current_objects as u32;
-                if let Some(PhysicsSceneObjectMatch::Valid(physics)) = physics_match.as_ref() {
-                    let new_slot = first_free_physics_body_slot(wires, physics.world_id)?;
-                    append_physics_duplicate(
-                        nodes,
-                        wires,
-                        physics,
-                        render_id,
-                        &physics.render_indices,
-                        new_k,
-                        new_slot,
-                        &mut node_id_map,
-                    )?;
-                    let part_count = physics.render_indices.len() as f32;
-                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                        "objects".to_string(),
-                        SerializedParamValue::Float {
-                            value: current_objects + part_count,
-                        },
-                    );
-                } else {
-                    let source_id = object_producer_id(wires, render_id, src_k)?;
-                    let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
-                    let mut source_outputs: Vec<(u32, String)> = wires
-                        .iter()
-                        .filter_map(|wire| {
-                            if wire.from_node != source_id
-                                || wire.to_node != render_id
-                            {
-                                return None;
-                            }
-                            wire.to_port
-                                .strip_prefix("object_")
-                                .and_then(|value| value.parse::<u32>().ok())
-                                .map(|index| (index, wire.from_port.clone()))
-                        })
-                        .collect();
-                    source_outputs.sort_unstable();
-                    source_outputs.dedup_by_key(|(index, _)| *index);
-                    if source_outputs.is_empty() {
-                        return None;
-                    }
-
-                    let mut clone = deep_clone_with_fresh_ids(
-                        &source_node,
-                        &mut next_id,
-                        &mut taken,
-                        &mut node_id_map,
-                    );
-                    // D11's exact top-level convention (handle + " 2") overrides
-                    // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
-                    // assigned to the TOP node.
-                    let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
-                    clone.handle = cloned_handle.clone();
-                    clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
-
-                    // D6: keep a grouped scene_object's name in sync with its
-                    // enclosing group, as Add/importer and Rename do.
-                    if let Some(body) = clone.group.as_deref_mut() {
-                        if let Some(inner_object) = body
-                            .nodes
-                            .iter_mut()
-                            .find(|n| n.type_id == "node.scene_object")
-                        {
-                            inner_object.handle = cloned_handle;
+                    .filter_map(|wire| {
+                        if wire.from_node != source_id || wire.to_node != render_id {
+                            return None;
                         }
-                        if let Some(transform_node) = body
-                            .nodes
-                            .iter_mut()
-                            .find(|n| n.type_id == "node.transform_3d")
-                        {
-                            let cur = match transform_node.params.get("pos_x") {
-                                Some(SerializedParamValue::Float { value }) => *value,
-                                _ => 0.0,
-                            };
-                            transform_node.params.insert(
-                                "pos_x".to_string(),
-                                SerializedParamValue::Float { value: cur + 0.5 },
-                            );
-                        }
-                    }
-                    let clone_id = clone.id;
-                    nodes.push(clone);
-                    for (part, _) in source_outputs.iter().enumerate() {
-                        wires.push(scene_build_wire(
-                            clone_id,
-                            &source_outputs[part].1,
-                            render_id,
-                            &format!("object_{}", new_k + part as u32),
-                        ));
-                    }
-                    let part_count = source_outputs.len() as f32;
-                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
-                        "objects".to_string(),
-                        SerializedParamValue::Float {
-                            value: current_objects + part_count,
-                        },
-                    );
+                        wire.to_port
+                            .strip_prefix("object_")
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .map(|index| (index, wire.from_port.clone()))
+                    })
+                    .collect();
+                source_outputs.sort_unstable();
+                source_outputs.dedup_by_key(|(index, _)| *index);
+                if source_outputs.is_empty() {
+                    return None;
                 }
 
-                Some(prev)
-            });
-        self.prev = result.flatten();
-        if self.prev.is_none() {
+                let mut clone = deep_clone_with_fresh_ids(
+                    &source_node,
+                    &mut next_id,
+                    &mut taken,
+                    &mut node_id_map,
+                );
+                // D11's exact top-level convention (handle + " 2") overrides
+                // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
+                // assigned to the TOP node.
+                let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
+                clone.handle = cloned_handle.clone();
+                clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+
+                // D6: keep a grouped scene_object's name in sync with its
+                // enclosing group, as Add/importer and Rename do.
+                if let Some(body) = clone.group.as_deref_mut() {
+                    if let Some(inner_object) = body
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.type_id == "node.scene_object")
+                    {
+                        inner_object.handle = cloned_handle;
+                    }
+                    if let Some(transform_node) = body
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.type_id == "node.transform_3d")
+                    {
+                        let cur = match transform_node.params.get("pos_x") {
+                            Some(SerializedParamValue::Float { value }) => *value,
+                            _ => 0.0,
+                        };
+                        transform_node.params.insert(
+                            "pos_x".to_string(),
+                            SerializedParamValue::Float { value: cur + 0.5 },
+                        );
+                    }
+                }
+                let clone_id = clone.id;
+                if source_node.type_id == GROUP_TYPE_ID && scope.is_empty() {
+                    cloned_group_id = Some(clone_id);
+                }
+                nodes.push(clone);
+                for (part, _) in source_outputs.iter().enumerate() {
+                    wires.push(scene_build_wire(
+                        clone_id,
+                        &source_outputs[part].1,
+                        render_id,
+                        &format!("object_{}", new_k + part as u32),
+                    ));
+                }
+                nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Float {
+                        value: new_count as f32,
+                    },
+                );
+            }
+
+            Some(())
+        })();
+        if result.is_none() {
             // The clone itself was refused (unresolvable source/level) — no
             // subtree was cloned, so there's nothing to sweep bindings for.
             self.rejection = Some("Duplicate Object source object is unavailable".into());
@@ -5208,9 +5321,21 @@ impl Command for DuplicateSceneObjectCommand {
         // Reached at the same undo-unit boundary `RenameSceneObjectCommand`'s
         // D5 sweep uses (`resolve_target_instance`, outside
         // `with_target_graph_mut`'s narrower graph-only view).
+        if let (Some(original_group), Some(cloned_group)) = (
+            graph_level(&baseline, &scope)
+                .and_then(|(_, wires)| object_producer_id(wires, render_id, src_k)),
+            cloned_group_id,
+        ) && let Err(reason) = fluid::duplicate_scene_object_fluid_roles(
+            &mut candidate,
+            original_group,
+            cloned_group,
+            &node_id_map,
+        ) {
+            self.rejection = Some(reason);
+            return;
+        }
         if !node_id_map.is_empty() {
-            let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                let meta = def.preset_metadata.as_mut()?;
+            if let Some(meta) = candidate.preset_metadata.as_mut() {
                 let new_entries: Vec<StringBindingDef> = meta
                     .string_bindings
                     .iter()
@@ -5236,58 +5361,52 @@ impl Command for DuplicateSceneObjectCommand {
                     })
                     .collect();
                 meta.string_bindings.extend(new_entries);
-                Some(())
-            });
+            }
+            clone_sections::clone_scene_bindings(&mut candidate, &node_id_map);
         }
-        if !node_id_map.is_empty() {
-            let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                clone_sections::clone_scene_bindings(def, &node_id_map);
-            });
-        }
-        self.prev_string_bindings = baseline_strings;
-        self.prev_metadata = baseline_metadata;
-        self.after = with_target_graph_def_mut(project, &self.target, |def| {
-            graph_level(def, &scope).map(|(nodes, wires)| (nodes.to_vec(), wires.to_vec()))
+        let values = match project.graph_target_owner(&self.target)
+            .ok_or_else(|| "Duplicate Object parameter owner is unavailable".to_string())
+            .and_then(|owner| clone_values::prepare(owner, &self.catalog_default, &self.target, &candidate, &node_id_map))
+        {
+            Ok(values) => values,
+            Err(reason) => { self.rejection = Some(reason); return; }
+        };
+        let after_graph = candidate.clone();
+        if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            *def = after_graph.clone();
         })
-        .flatten();
-        self.after_string_bindings =
-            target_string_bindings(project, &self.target, &self.catalog_default);
-        self.after_metadata = project
-            .graph_for_target(&self.target, Some(&self.catalog_default))
-            .map(|def| def.preset_metadata.clone());
-        self.applied = self.after.is_some();
-        if self.applied {
-            // Physics duplicates clone their numeric exposure definitions.
-            // Rebuild the host manifest now so the new rows are immediately
-            // editable and survive execute/undo/redo without save/load.
-            refresh_target_manifest(project, &self.target);
-            self.prev_instance = baseline_instance;
-            self.after_instance = resolve_target_instance(&self.target, project)
-                .map(|instance| InstanceLayerSnapshot::capture(&*instance));
+        .is_none()
+        {
+            self.rejection = Some("Duplicate Object target is unavailable".into());
+            return;
         }
+        refresh_target_manifest(project, &self.target);
+        self.prev_graph = Some(previous_graph);
+        self.after_graph = Some(after_graph);
+        self.prev_instance = baseline_instance;
+        if let Some(instance) = project.graph_target_owner_mut(&self.target) {
+            for (id, value) in values {
+                instance.set_base_param_from_automation(&id, value);
+            }
+        }
+        self.after_instance = project
+            .graph_target_owner_mut(&self.target)
+            .map(|instance| InstanceLayerSnapshot::capture(&*instance));
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(prev_metadata) = self.prev_metadata.clone() {
-            let _ = with_target_graph_def_mut(project, &self.target, |def| {
-                def.preset_metadata = prev_metadata;
-            });
-        }
-
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some(previous_graph) = self.prev_graph.clone() else {
             return;
         };
-        let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
-                *nodes = pn;
-                *wires = pw;
-            }
-        });
+        if !self.applied {
+            return;
+        }
+        restore_scene_owner_graph(project, &self.target, previous_graph);
         refresh_target_manifest(project, &self.target);
         if let (Some(snapshot), Some(instance)) = (
             self.prev_instance.clone(),
-            resolve_target_instance(&self.target, project),
+            project.graph_target_owner_mut(&self.target),
         ) {
             snapshot.restore(instance);
         }

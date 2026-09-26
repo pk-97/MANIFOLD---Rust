@@ -59,25 +59,12 @@ pub(super) fn clone_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(Nod
             {
                 let mut param_spec = source_param.clone();
                 param_spec.id = candidate.clone();
-                if let Some(clone_node_id) = node_id_map
-                    .iter()
-                    .find(|(old, _)| old == node_id)
-                    .map(|(_, new)| new)
-                {
-                    let source_handle = node_handles
-                        .iter()
-                        .find(|(id, _)| id == node_id)
-                        .and_then(|(_, handle)| handle.as_deref());
-                    let clone_handle = node_handles
-                        .iter()
-                        .find(|(id, _)| id == clone_node_id)
-                        .and_then(|(_, handle)| handle.as_deref());
-                    param_spec.section = cloned_scene_section(
-                        param_spec.section.as_deref(),
-                        source_handle,
-                        clone_handle,
-                    );
-                }
+                param_spec.section = cloned_owned_section(
+                    param_spec.section.as_deref(),
+                    node_id,
+                    &node_handles,
+                    node_id_map,
+                );
                 if param_ids.insert(candidate.clone()) {
                     cloned_params.push(param_spec);
                 }
@@ -96,22 +83,61 @@ pub(super) fn clone_scene_bindings(def: &mut EffectGraphDef, node_id_map: &[(Nod
     meta.bindings.extend(cloned_bindings);
 }
 
-fn collect_node_handles(nodes: &[EffectGraphNode]) -> Vec<(NodeId, Option<String>)> {
+struct SectionOwner {
+    id: NodeId,
+    handle: Option<String>,
+    parent: Option<NodeId>,
+}
+
+fn collect_node_handles(nodes: &[EffectGraphNode]) -> Vec<SectionOwner> {
     let mut handles = Vec::new();
-    fn visit(nodes: &[EffectGraphNode], handles: &mut Vec<(NodeId, Option<String>)>) {
+    fn visit(nodes: &[EffectGraphNode], parent: Option<&NodeId>, handles: &mut Vec<SectionOwner>) {
         for node in nodes {
-            handles.push((node.node_id.clone(), node.handle.clone()));
+            handles.push(SectionOwner {
+                id: node.node_id.clone(),
+                handle: node.handle.clone(),
+                parent: parent.cloned(),
+            });
             if let Some(group) = node.group.as_deref() {
-                visit(&group.nodes, handles);
+                visit(&group.nodes, Some(&node.node_id), handles);
             }
         }
     }
-    visit(nodes, &mut handles);
+    visit(nodes, None, &mut handles);
     handles
 }
 
+fn cloned_owned_section(
+    section: Option<&str>,
+    source: &NodeId,
+    owners: &[SectionOwner],
+    node_id_map: &[(NodeId, NodeId)],
+) -> Option<String> {
+    let section = section?;
+    let mut current = Some(source);
+    while let Some(source) = current {
+        let Some(owner) = owners.iter().find(|owner| &owner.id == source) else {
+            break;
+        };
+        let clone = node_id_map
+            .iter()
+            .find(|(old, _)| old == source)
+            .and_then(|(_, new)| owners.iter().find(|owner| &owner.id == new));
+        let renamed = cloned_scene_section(
+            Some(section),
+            owner.handle.as_deref(),
+            clone.and_then(|owner| owner.handle.as_deref()),
+        );
+        if renamed.as_deref() != Some(section) {
+            return renamed;
+        }
+        current = owner.parent.as_ref();
+    }
+    Some(section.to_owned())
+}
+
 /// Replace the source owner handle while retaining generated suffixes such as
-/// ` — Transform`. Unknown/custom section strings stay unchanged.
+/// ` — Transform` or ` Fluid Role`. Sections outside that owner stay unchanged.
 fn cloned_scene_section(
     section: Option<&str>,
     source_handle: Option<&str>,
@@ -124,9 +150,9 @@ fn cloned_scene_section(
     if section == source_handle {
         return Some(clone_handle.to_string());
     }
-    let prefix = format!("{source_handle} — ");
     section
-        .strip_prefix(&prefix)
-        .map(|suffix| format!("{clone_handle} — {suffix}"))
+        .strip_prefix(source_handle)
+        .filter(|suffix| suffix.starts_with(' '))
+        .map(|suffix| format!("{clone_handle}{suffix}"))
         .or_else(|| Some(section.to_string()))
 }

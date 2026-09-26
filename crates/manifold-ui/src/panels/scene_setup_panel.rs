@@ -434,6 +434,10 @@ pub struct ObjectKnownRow {
     /// different strings for the same node kind). Filters the unified
     /// properties card down to exactly this object's rows.
     pub sections: Vec<String>,
+    /// Exact exposed parameter ids owned by this object and its scene-node
+    /// stack. This is the authoritative row filter when objects share a
+    /// section label; an empty list owns no rows.
+    pub parameter_ids: Vec<String>,
     /// P4b: the object's layer-skin row. `None` when no `node.layer_source`
     /// is wired into the object's material maps.
     pub skin: Option<SkinRowVm>,
@@ -442,6 +446,23 @@ pub struct ObjectKnownRow {
     pub physics_imported: bool,
     pub fluid_role_available: bool,
     pub fluid_roles: Result<Vec<FluidRoleRow>, String>,
+}
+
+enum PropertyOwners<'a> {
+    All,
+    Nodes(&'a [u32]),
+    Parameters(&'a [String]),
+}
+
+impl PropertyOwners<'_> {
+    fn contains(&self, id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Nodes(ids) => id.split('_').next().and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|id| ids.contains(&id)),
+            Self::Parameters(ids) => ids.iter().any(|owned| owned == id),
+        }
+    }
 }
 
 /// One Objects-section row (D3/D4).
@@ -2143,13 +2164,47 @@ impl ScenePanel {
         self.build_filtered_properties_excluding(tree, inner_x, inner_w, cy, (owner.0, owner.1, &[]))
     }
 
+    fn build_filtered_properties_parameter_ids(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        (sections, parameter_ids, excluded_ids): (&[String], &[String], &[String]),
+    ) -> f32 {
+        self.build_filtered_properties_with_ownership(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            (sections, PropertyOwners::Parameters(parameter_ids), excluded_ids),
+        )
+    }
+
     fn build_filtered_properties_excluding(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
-        mut cy: f32,
+        cy: f32,
         (sections, owner_ids, excluded_ids): (&[String], Option<&[u32]>, &[String]),
+    ) -> f32 {
+        self.build_filtered_properties_with_ownership(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            (sections, owner_ids.map_or(PropertyOwners::All, PropertyOwners::Nodes), excluded_ids),
+        )
+    }
+
+    fn build_filtered_properties_with_ownership(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        (sections, owners, excluded_ids): (&[String], PropertyOwners<'_>, &[String]),
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
@@ -2180,13 +2235,7 @@ impl ScenePanel {
                     && self.active_material_info.as_ref().is_some_and(|info| {
                         info.params.iter().any(|(_, id)| id == &p.id)
                     });
-                let owned = selected_material_id || owner_ids.is_none_or(|ids| {
-                    p.id.as_ref()
-                        .split('_')
-                        .next()
-                        .and_then(|s| s.parse::<u32>().ok())
-                        .is_some_and(|id| ids.contains(&id))
-                });
+                let owned = selected_material_id || owners.contains(p.id.as_ref());
                 let excluded = !selected_material_id
                     && excluded_ids.iter().any(|id| id == p.id.as_ref());
                 if p.spec.section.as_deref() == Some(section.as_str())
@@ -3218,6 +3267,7 @@ mod tests {
                     }],
                     modifiers_addable: true,
                     sections: Vec::new(),
+                    parameter_ids: Vec::new(),
                     skin: None,
                     physics_enabled: false,
                     physics_available: false,
@@ -3645,6 +3695,47 @@ mod tests {
     }
 
     #[test]
+    fn object_properties_use_exact_parameter_ids_when_sections_are_shared() {
+        let (mut vm, mut surface) = world_transform_vm();
+        let ObjectRowVm::Known(first) = &mut vm.objects[0] else { unreachable!() };
+        first.sections = vec!["Shared Object Controls".to_string()];
+        first.parameter_ids = vec!["40_velocity_y".to_string()];
+        first.modifiers.clear();
+        first.material = ObjectMaterialVm::None;
+
+        let mut second = first.as_ref().clone();
+        second.index = 1;
+        second.object_node_id = 41;
+        second.group_node_id = Some(43);
+        second.name = "Object 2".to_string();
+        second.parameter_ids = vec!["41_velocity_y".to_string()];
+        vm.objects = vec![
+            ObjectRowVm::Known(first.clone()),
+            ObjectRowVm::Known(Box::new(second)),
+        ];
+        vm.object_count = 2;
+
+        surface.rows[0].id = "40_velocity_y".into();
+        surface.rows[0].spec.name = "Velocity Y (Object 1)".into();
+        surface.rows[0].spec.section = Some("Shared Object Controls".to_string());
+        let mut second_row = surface.rows[0].clone();
+        second_row.id = "41_velocity_y".into();
+        second_row.spec.name = "Velocity Y (Object 2)".into();
+        surface.rows.push(second_row);
+
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure_params(Some(surface));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(40));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        assert_eq!(panel.properties_card.rows.len(), 1);
+        assert_eq!(panel.properties_card.rows[0].id.as_ref(), "40_velocity_y");
+    }
+
+    #[test]
     fn unparseable_modifier_chain_disables_add() {
         let mut panel = ScenePanel::new();
         panel.open();
@@ -3750,6 +3841,7 @@ mod tests {
         assert_eq!(panel.object_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
         let (remove_id, index) = panel.object_remove_ids[0];
         assert_eq!(index, 0);
+        assert_eq!(tree.name_of(remove_id), Some("scene_setup.properties.remove"));
 
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
             node_id: remove_id,

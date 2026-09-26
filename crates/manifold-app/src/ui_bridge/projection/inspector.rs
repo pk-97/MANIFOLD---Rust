@@ -612,6 +612,9 @@ pub fn sync_inspector_data(
                                         object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
                                         object_doc_ids.extend(transform_chain.iter().map(|m| m.node_doc_id));
                                         let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
+                                        let parameter_ids = super::scene::parameter_ids_for_doc_ids(
+                                            def.as_ref(), &object_doc_ids,
+                                        );
                                         // P4b: every Known object gets a Skin
                                         // row, even when no `node.layer_source`
                                         // exists yet — `source_node_id: None`
@@ -682,6 +685,7 @@ pub fn sync_inspector_data(
                                                     .collect(),
                                                 modifiers_addable: *modifier_chain_parseable,
                                                 sections,
+                                                parameter_ids,
                                                 skin,
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available: *physics_imported || physics.is_some(),

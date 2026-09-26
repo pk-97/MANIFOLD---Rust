@@ -1,5 +1,10 @@
 //! Discovery and lifecycle commands for authored fluid roles.
 
+mod object_routes;
+pub(in crate::commands::graph::scene) use object_routes::{
+    disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
+};
+
 use std::collections::HashSet;
 
 use manifold_core::GraphTarget;
@@ -14,10 +19,10 @@ use manifold_core::scene_modifier_preset::SceneNodeRef;
 use crate::command::Command;
 
 use super::super::super::super::{
-    InstanceLayerSnapshot, descend_level, install_target_graph, prune_instance_params,
-    refresh_target_manifest, resolve_target_instance, scene_build_wire, with_target_graph_mut,
+    InstanceLayerSnapshot, descend_level,
+    refresh_target_manifest, scene_build_wire, with_target_graph_mut,
 };
-use super::super::super::prune_scene_object_metadata;
+use super::super::super::{prune_scene_object_metadata, prune_scene_target_params, restore_scene_owner_graph};
 use super::{
     FLUID_TYPE_ID, ROLE_SOURCE_TYPE_ID, first_free_role_port, graph_level as level_ref,
     resolve_domain_ref, route_role_to_domain,
@@ -285,7 +290,9 @@ fn execute_lifecycle(
     *rejection = None;
     *applied = false;
     if let (Some(old), Some(new)) = (before.as_ref(), after.as_ref()) {
-        if project.graph_for_target(target, Some(catalog_default)) != Some(old) {
+        if project.graph_for_target(target, Some(catalog_default)) != Some(old)
+            || project.graph_target_owner(target).map(|owner| &owner.graph) != before_graph.as_ref()
+        {
             *rejection =
                 Some("Fluid role lifecycle redo rejected: graph changed since undo".into());
             return;
@@ -301,7 +308,7 @@ fn execute_lifecycle(
         refresh_target_manifest(project, target);
         if let (Some(snapshot), Some(instance)) = (
             after_instance.clone(),
-            resolve_target_instance(target, project),
+            project.graph_target_owner_mut(target),
         ) {
             snapshot.restore(instance);
         }
@@ -322,7 +329,7 @@ fn execute_lifecycle(
         *rejection = Some("Fluid role lifecycle target is unavailable".into());
         return;
     };
-    let Some(instance) = resolve_target_instance(target, project)
+    let Some(instance) = project.graph_target_owner_mut(target)
         .map(|instance| InstanceLayerSnapshot::capture(&*instance))
     else {
         *rejection = Some("Fluid role lifecycle target is unavailable".into());
@@ -345,14 +352,12 @@ fn execute_lifecycle(
         return;
     }
     refresh_target_manifest(project, target);
-    if let Some(instance) = resolve_target_instance(target, project) {
-        prune_instance_params(instance, &removed_params);
-    }
+    prune_scene_target_params(project, target, &removed_params);
     *before = Some(base);
     *after = Some(candidate);
     *before_graph = Some(previous_graph);
     *before_instance = Some(instance);
-    *after_instance = resolve_target_instance(target, project)
+    *after_instance = project.graph_target_owner_mut(target)
         .map(|instance| InstanceLayerSnapshot::capture(&*instance));
     *applied = true;
 }
@@ -370,9 +375,9 @@ fn undo_lifecycle(
     let Some(previous_graph) = previous_graph else {
         return;
     };
-    install_target_graph(project, target, previous_graph);
+    restore_scene_owner_graph(project, target, previous_graph);
     refresh_target_manifest(project, target);
-    if let (Some(snapshot), Some(instance)) = (instance, resolve_target_instance(target, project)) {
+    if let (Some(snapshot), Some(instance)) = (instance, project.graph_target_owner_mut(target)) {
         snapshot.restore(instance);
     }
     *applied = false;

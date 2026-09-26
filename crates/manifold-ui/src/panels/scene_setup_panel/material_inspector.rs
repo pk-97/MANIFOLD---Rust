@@ -1023,6 +1023,7 @@ impl ScenePanel {
             tree.set_name(remove_id, "scene_setup.properties.remove");
             self.submesh_remove_ids.push((remove_id, row.index));
         } else {
+            tree.set_name(remove_id, "scene_setup.properties.remove");
             self.object_remove_ids.push((remove_id, row.index));
         }
         let mut next_cy = cy + ROW_H + ROW_GAP;
@@ -1067,7 +1068,13 @@ impl ScenePanel {
     ) -> f32 {
         if row.is_group {
             self.active_material_info = None;
-            return self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            return self.build_filtered_properties_parameter_ids(
+                tree,
+                inner_x,
+                inner_w,
+                cy,
+                (&row.sections, &row.parameter_ids, &[]),
+            );
         }
         // Modifier rows are rendered only inside their retained shared cards;
         // keep transform/object/material rows in the ordinary properties
@@ -1111,21 +1118,33 @@ impl ScenePanel {
             }
             self.sync_material_feature_order();
             cy = self.build_material_header(tree, inner_x, inner_w, cy, &material);
-            cy = self.build_filtered_properties_excluding(
-                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            cy = self.build_filtered_properties_parameter_ids(
+                tree,
+                inner_x,
+                inner_w,
+                cy,
+                (&row.sections, &row.parameter_ids, &modifier_ids),
             );
             cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &material);
             cy = self.build_material_inspector(tree, inner_x, inner_w, cy, row, row.skin.as_ref());
         } else if let Some(skin) = &row.skin {
             // Non-PBR materials still expose their layer-skin control, but
             // there is no material drawer to host it.
-            cy = self.build_filtered_properties_excluding(
-                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            cy = self.build_filtered_properties_parameter_ids(
+                tree,
+                inner_x,
+                inner_w,
+                cy,
+                (&row.sections, &row.parameter_ids, &modifier_ids),
             );
             cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
         } else {
-            cy = self.build_filtered_properties_excluding(
-                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            cy = self.build_filtered_properties_parameter_ids(
+                tree,
+                inner_x,
+                inner_w,
+                cy,
+                (&row.sections, &row.parameter_ids, &modifier_ids),
             );
         }
         cy = self.build_object_modifier_cards(tree, inner_x, inner_w, cy, row.object_node_id);
