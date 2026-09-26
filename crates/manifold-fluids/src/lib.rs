@@ -20,6 +20,7 @@ pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
+    /// Rectangular uniform grid; each axis is 8..=512, total at most 128^3.
     pub cells: [u32; 3],
     pub cell_size: f64,
     pub surface_subdivisions: u32,
@@ -821,9 +822,9 @@ fn validate_config(config: Config) -> Result<(), FluidError> {
     if config
         .cells
         .iter()
-        .any(|&cells| !(8..=128).contains(&cells))
+        .any(|&cells| !(8..=512).contains(&cells))
     {
-        return Err(FluidError::input("each cell count must be in 8..=128"));
+        return Err(FluidError::input("each cell count must be in 8..=512"));
     }
     let total = u64::from(config.cells[0])
         .checked_mul(u64::from(config.cells[1]))
@@ -1429,6 +1430,48 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn scene_physics_rectangular_cell_limit_retains_total_budget() {
+        let config = Config {
+            cells: [320, 8, 320],
+            cell_size: 0.0625,
+            surface_subdivisions: 0,
+            apic: false,
+        };
+        super::validate_config(config).unwrap();
+        assert!(
+            super::validate_config(Config {
+                cells: [513, 8, 8],
+                ..config
+            })
+            .is_err()
+        );
+        assert!(
+            super::validate_config(Config {
+                cells: [256, 128, 128],
+                ..config
+            })
+            .is_err()
+        );
+        // Exercise an extended axis through the native constructor and solver,
+        // while keeping this compatibility probe small (8448 cells).
+        let mut world = super::FluidWorld::new(Config {
+            cells: [132, 8, 8],
+            ..config
+        })
+        .unwrap();
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.1, 0.1, 0.1],
+                    max: [0.3, 0.3, 0.3],
+                },
+                [0.0; 3],
+            )
+            .unwrap();
+        assert!(world.step(Seconds(1.0 / 60.0)).unwrap().particles > 0);
     }
 
     #[test]

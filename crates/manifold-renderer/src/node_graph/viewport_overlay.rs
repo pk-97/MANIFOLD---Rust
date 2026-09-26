@@ -20,6 +20,7 @@
 //! integer-stepped line draw.
 
 use crate::node_graph::camera::Camera;
+use crate::node_graph::fluid::FluidDomainLayout;
 
 /// One overlay line segment in world space, with its RGBA8 color.
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +67,34 @@ const GRID_AXIS_X_COLOR: [u8; 4] = [180, 70, 70, 255];
 const GRID_AXIS_Z_COLOR: [u8; 4] = [70, 90, 180, 255];
 const FRUSTUM_COLOR: [u8; 4] = [230, 200, 60, 255];
 const LIGHT_COLOR: [u8; 4] = [255, 225, 140, 255];
+
+/// Wireframe bounds for a selected fluid domain. The layout is already in
+/// scene world-space, so these are the exact translated rectangular bounds;
+/// no scene-object transform is applied.
+pub fn fluid_domain_lines(layout: FluidDomainLayout) -> [WorldLine; 12] {
+    let min = layout.min;
+    let max = [
+        min[0] + layout.size[0],
+        min[1] + layout.size[1],
+        min[2] + layout.size[2],
+    ];
+    let corners = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], max[2]],
+        [min[0], max[1], max[2]],
+    ];
+    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color: FRUSTUM_COLOR };
+    [
+        edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 0),
+        edge(4, 5), edge(5, 6), edge(6, 7), edge(7, 4),
+        edge(0, 4), edge(1, 5), edge(2, 6), edge(3, 7),
+    ]
+}
 
 /// A ground-plane (XZ, y=0) grid centred at the origin. The two lines through
 /// the origin are tinted to read as the X/Z axes (Blender/Maya convention),
@@ -261,6 +290,34 @@ mod tests {
     fn grid_lines_empty_for_nonpositive_params() {
         assert!(grid_lines(0.0, 1.0).is_empty());
         assert!(grid_lines(4.0, 0.0).is_empty());
+    }
+
+    #[test]
+    fn fluid_domain_lines_are_twelve_unique_edges_at_translated_bounds() {
+        let lines = fluid_domain_lines(FluidDomainLayout {
+            min: [2.0, -3.0, 4.0],
+            size: [5.0, 6.0, 7.0],
+            cells: [8, 8, 8],
+            cell_size: 1.0,
+        });
+        assert_eq!(lines.len(), 12);
+        let min = [2.0, -3.0, 4.0];
+        let max = [7.0, 3.0, 11.0];
+        for line in lines {
+            for point in [line.a, line.b] {
+                assert!(point.iter().enumerate().all(|(axis, value)| {
+                    (*value - min[axis]).abs() < f32::EPSILON
+                        || (*value - max[axis]).abs() < f32::EPSILON
+                }));
+            }
+        }
+        for (i, first) in lines.iter().enumerate() {
+            for second in lines.iter().skip(i + 1) {
+                let same = (first.a == second.a && first.b == second.b)
+                    || (first.a == second.b && first.b == second.a);
+                assert!(!same, "duplicate box edge: {first:?}");
+            }
+        }
     }
 
     #[test]

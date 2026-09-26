@@ -8,16 +8,18 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use manifold_core::Seconds;
 use manifold_fluids::{
-    Bounds, Config, FluidWorld, FrameStats, LiquidOptions, SurfaceOptions, SurfaceVertex,
-    TimeStepOptions, WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
+    Bounds, FluidWorld, FrameStats, LiquidOptions, SurfaceOptions, SurfaceVertex, TimeStepOptions,
+    WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
 };
 
 use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
+use super::fluid_role::FluidRole;
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
-use super::fluid_role::FluidRole;
 
+mod domain;
 mod roles;
+pub use domain::FluidDomainLayout;
 
 pub const TICK: f64 = 1.0 / 60.0;
 const HISTORY_CAPACITY: usize = 8192;
@@ -27,6 +29,11 @@ const BATCH: usize = 4;
 pub struct FluidSettings {
     pub resolution: u32,
     pub domain_size: f32,
+    /// Explicit axis-aligned scene-space domain. Scale is full XYZ size.
+    /// None preserves the legacy cube centred on X/Z with its floor at Y=0.
+    pub domain: Option<Transform>,
+    /// Closed faces in native order: -X, +X, -Y, +Y, -Z, +Z.
+    pub boundary_collisions: [bool; 6],
     pub fill_height: f32,
     pub initial_volume: Option<Transform>,
     pub surface_subdivisions: u32,
@@ -43,6 +50,8 @@ impl Default for FluidSettings {
         Self {
             resolution: 24,
             domain_size: 4.0,
+            domain: None,
+            boundary_collisions: [true; 6],
             fill_height: 0.4,
             initial_volume: None,
             surface_subdivisions: 0,
@@ -72,11 +81,9 @@ impl FluidSettings {
         if self.whitewater.max_particles > 250_000 {
             return Err("Water: whitewater capacity must not exceed 250000 particles".into());
         }
-        if !(8..=96).contains(&self.resolution)
-            || !self.domain_size.is_finite()
-            || !(0.5..=20.0).contains(&self.domain_size)
-            || !self.fill_height.is_finite()
-            || !(0.0..self.domain_size).contains(&self.fill_height)
+        let domain = self.domain_layout()?;
+        if !self.fill_height.is_finite()
+            || !(0.0..domain.size[1]).contains(&self.fill_height)
             || self.surface_subdivisions > 2
             || self.max_vertices < 3
             || self.max_vertices > 3_145_728
@@ -106,31 +113,18 @@ impl FluidSettings {
                         .into(),
                 );
             }
-            let bounds = self.bounds(volume);
+            let bounds = domain.bounds(volume);
             if bounds.min.iter().any(|v| *v < 0.0)
-                || bounds.max.iter().any(|v| *v > self.domain_size)
+                || bounds
+                    .max
+                    .iter()
+                    .zip(domain.size)
+                    .any(|(v, size)| *v > size)
             {
                 return Err("Water: initial volume must be fully contained in the domain".into());
             }
         }
         Ok(())
-    }
-
-    fn config(self) -> Config {
-        Config {
-            cells: [self.resolution; 3],
-            cell_size: self.domain_size as f64 / self.resolution as f64,
-            surface_subdivisions: self.surface_subdivisions,
-            apic: self.apic,
-        }
-    }
-
-    fn bounds(self, pose: Transform) -> Bounds {
-        let offset = [self.domain_size * 0.5, 0.0, self.domain_size * 0.5];
-        Bounds {
-            min: std::array::from_fn(|i| pose.pos[i] + offset[i] - 0.5 * pose.scale[i]),
-            max: std::array::from_fn(|i| pose.pos[i] + offset[i] + 0.5 * pose.scale[i]),
-        }
     }
 }
 
@@ -252,19 +246,15 @@ impl WhitewaterFrame {
         }
     }
 
-    fn fill(&mut self, particles: &[WhitewaterParticle], half_domain: f32) {
+    fn fill(&mut self, particles: &[WhitewaterParticle], domain: FluidDomainLayout) {
         self.clear();
         for particle in particles {
             // Native lifetime is remaining time. Shrink the last 0.2 seconds
             // instead of leaving a full-sized particle until its removal.
             let fade = (particle.lifetime / 0.2).clamp(0.0, 1.0);
+            let position = domain.to_scene(particle.position);
             let instance = InstanceTransform {
-                pos_scale: [
-                    particle.position[0] - half_domain,
-                    particle.position[1],
-                    particle.position[2] - half_domain,
-                    fade.sqrt(),
-                ],
+                pos_scale: [position[0], position[1], position[2], fade.sqrt()],
                 rot_pad: [0.0; 4],
             };
             match particle.kind {
@@ -398,25 +388,26 @@ impl Worker {
                         }
                         return Ok(());
                     }
+                    let domain = request.settings.domain_layout()?;
                     if world.as_ref().is_none_or(|(epoch, _)| *epoch != request.epoch) {
                         // Dropping/rebuilding an old world can take time too; keep
                         // it off the content thread along with all native work.
                         world = None;
-                        let mut new = FluidWorld::new(request.settings.config()).map_err(|e| e.to_string())?;
+                        let mut new = FluidWorld::new(domain.config(request.settings)).map_err(|e| e.to_string())?;
                         new.set_liquid_options(request.settings.liquid).map_err(|e| e.to_string())?;
                         new.set_time_step_options(request.settings.time_steps).map_err(|e| e.to_string())?;
                         new.set_surface_options(request.settings.surface).map_err(|e| e.to_string())?;
                         new.set_whitewater_options(request.settings.whitewater).map_err(|e| e.to_string())?;
-                        let size = request.settings.domain_size;
+                        new.set_boundary_collisions(request.settings.boundary_collisions).map_err(|e| e.to_string())?;
                         if request.settings.fill_height > 0.0 {
-                            new.add_fluid_box(Bounds { min: [0.0; 3], max: [size, request.settings.fill_height, size] }, [0.0; 3])
+                            new.add_fluid_box(Bounds { min: [0.0; 3], max: [domain.size[0], request.settings.fill_height, domain.size[2]] }, [0.0; 3])
                                 .map_err(|e| e.to_string())?;
                         }
                         if let Some(volume) = request.settings.initial_volume {
-                            new.add_fluid_box(request.settings.bounds(volume), [0.0; 3])
+                            new.add_fluid_box(domain.bounds(volume), [0.0; 3])
                                 .map_err(|e| e.to_string())?;
                         }
-                        native_roles = roles::NativeRoles::prepare(&mut new, &request.role_setup, size)?;
+                        native_roles = roles::NativeRoles::prepare(&mut new, &request.role_setup, domain)?;
                         world = Some((request.epoch, new));
                     }
                     request.recycle.clear();
@@ -431,17 +422,17 @@ impl Worker {
                         let tick = request.start_tick + index as u64;
                         let step = FluidRuntime::step_at(&request.history, tick);
                         native.set_gravity([0.0, step.current.gravity, 0.0]).map_err(|e| e.to_string())?;
-                        native.set_emitter(request.settings.bounds(step.current.emitter),
+                        native.set_emitter(domain.bounds(step.current.emitter),
                             [0.0, -step.current.inflow_speed, 0.0], step.current.emission).map_err(|e| e.to_string())?;
                         if step.current.obstacle_enabled {
-                            native.set_obstacle(request.settings.bounds(step.previous.obstacle),
-                                request.settings.bounds(step.current.obstacle), request.settings.bounds(step.next.obstacle))
+                            native.set_obstacle(domain.bounds(step.previous.obstacle),
+                                domain.bounds(step.current.obstacle), domain.bounds(step.next.obstacle))
                                 .map_err(|e| e.to_string())?;
                         } else {
                             native.clear_obstacle().map_err(|e| e.to_string())?;
                         }
                         native_roles.apply(native, &request.role_setup, &request.history,
-                            &request.role_history, tick, request.settings.domain_size)?;
+                            &request.role_history, tick, domain)?;
                         stats = native.step(Seconds(TICK)).map_err(|e| e.to_string())?;
                         completed_count += 1;
                         pose = step.next.obstacle;
@@ -451,11 +442,10 @@ impl Worker {
                             if surface.len() > request.settings.max_vertices {
                                 return Err(format!("Water surface needs {} vertices; capacity is {}. Lower resolution/detail or increase mesh capacity and reset.", surface.len(), request.settings.max_vertices));
                             }
-                            let half = request.settings.domain_size * 0.5;
                             request.recycle.extend(surface.iter().map(|v| MeshVertex {
-                                position: [v.position[0] - half, v.position[1], v.position[2] - half],
+                                position: domain.to_scene(v.position),
                                 _pad0: 0.0, normal: v.normal, _pad1: 0.0,
-                                uv: [v.position[0] / request.settings.domain_size, v.position[2] / request.settings.domain_size],
+                                uv: [v.position[0] / domain.size[0], v.position[2] / domain.size[2]],
                                 _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4],
                             }));
                             if request.settings.whitewater.enabled {
@@ -463,7 +453,7 @@ impl Worker {
                                 if whitewater.len() > request.settings.whitewater.max_particles as usize {
                                     return Err("Water whitewater snapshot exceeds its configured capacity".into());
                                 }
-                                request.recycle_whitewater.fill(&whitewater, half);
+                                request.recycle_whitewater.fill(&whitewater, domain);
                             }
                             if request.cache_mode == CacheMode::Record {
                                 writer.as_ref().expect("record writer initialized").append(
@@ -639,6 +629,14 @@ impl FluidRuntime {
         speed: f32,
         reset: f32,
     ) -> Result<(), String> {
+        // Setup edits take effect at the current render evaluation. Replaying
+        // live controls between frames must not move/rebuild the domain at
+        // historical timestamps using newly authored setup values.
+        let settings = if super::physics::authored_sample_only() {
+            self.settings.unwrap_or(settings)
+        } else {
+            settings
+        };
         settings.validate()?;
         roles::Setup::validate(scene_roles)?;
         if self.cache_mode != CacheMode::Live && scene_roles.iter().any(Option::is_some) {
@@ -656,7 +654,9 @@ impl FluidRuntime {
         }
         // Trigger buttons publish a counter, just like Physics World. Every
         // changed count (including undo) resets once; a held count is inert.
-        let reset_edge = self.previous_reset.is_some_and(|previous| previous != reset);
+        let reset_edge = self
+            .previous_reset
+            .is_some_and(|previous| previous != reset);
         self.previous_reset = Some(reset);
         let role_topology_changed = !self.role_setup.matches(scene_roles);
         if self.settings != Some(settings)
@@ -687,7 +687,8 @@ impl FluidRuntime {
             && (last.time - self.target_time).abs() < 1e-10
         {
             last.controls = controls;
-            self.role_history.observe(&self.role_setup, scene_roles, true);
+            self.role_history
+                .observe(&self.role_setup, scene_roles, true);
             return Ok(());
         }
         self.prune_history();
@@ -700,7 +701,8 @@ impl FluidRuntime {
             time: self.target_time,
             controls,
         });
-        self.role_history.observe(&self.role_setup, scene_roles, false);
+        self.role_history
+            .observe(&self.role_setup, scene_roles, false);
         Ok(())
     }
 
@@ -852,7 +854,9 @@ impl FluidRuntime {
                 .expect("one recycled history snapshot per request");
             history.clear();
             history.extend(self.history.iter().copied());
-            let mut role_history = self.spare_role_history.take()
+            let mut role_history = self
+                .spare_role_history
+                .take()
                 .expect("one recycled role history per request");
             self.role_history.snapshot(&mut role_history);
             let request = Request {
@@ -1065,7 +1069,7 @@ mod tests {
                     kind: WhitewaterKind::Spray,
                 },
             ],
-            2.0,
+            FluidSettings::default().domain_layout().unwrap(),
         );
         assert_eq!(whitewater.foam[0].pos_scale, [-1.0, 0.5, 1.0, 1.0]);
         assert_eq!(whitewater.bubbles[0].pos_scale, [0.0, 0.4, 0.0, 0.5]);
@@ -1239,7 +1243,10 @@ mod tests {
         runtime
             .observe(settings, controls, Seconds(10.7), 1.0, 2.0)
             .unwrap();
-        assert_ne!(runtime.epoch, first_reset_epoch, "a second button press resets");
+        assert_ne!(
+            runtime.epoch, first_reset_epoch,
+            "a second button press resets"
+        );
         assert_eq!(runtime.target_time, 0.0);
         let second_reset_epoch = runtime.epoch;
         runtime
@@ -1250,7 +1257,10 @@ mod tests {
         runtime
             .observe(settings, controls, Seconds(10.8), 1.0, 1.0)
             .unwrap();
-        assert_ne!(runtime.epoch, second_reset_epoch, "undo follows the same reset rule");
+        assert_ne!(
+            runtime.epoch, second_reset_epoch,
+            "undo follows the same reset rule"
+        );
         assert_eq!(runtime.target_time, 0.0);
         runtime
             .observe(settings, controls, Seconds(1.0), 1.0, 0.0)
@@ -1642,5 +1652,106 @@ mod tests {
                 .iter()
                 .all(|vertex| vertex.position[0] > 0.1)
         );
+    }
+    #[test]
+    fn scene_physics_domain_translation_keeps_native_surface_coherent() {
+        let delta = [8.0, -3.0, 5.0];
+        let initial = Transform {
+            pos: [-1.0, 1.0, 0.0],
+            scale: [0.8, 1.0, 0.8],
+            ..Transform::default()
+        };
+        let settings = FluidSettings {
+            resolution: 12,
+            domain: Some(Transform {
+                pos: [0.0, 1.5, 0.0],
+                scale: [4.0, 3.0, 2.0],
+                ..Transform::default()
+            }),
+            fill_height: 0.0,
+            initial_volume: Some(initial),
+            ..FluidSettings::default()
+        };
+        let shifted = FluidSettings {
+            domain: settings.domain.map(|mut pose| {
+                for (position, offset) in pose.pos.iter_mut().zip(delta) {
+                    *position += offset;
+                }
+                pose
+            }),
+            initial_volume: Some(Transform {
+                pos: std::array::from_fn(|i| initial.pos[i] + delta[i]),
+                ..initial
+            }),
+            ..settings
+        };
+        let mut base = FluidRuntime::default();
+        let mut moved = FluidRuntime::default();
+        for (runtime, setup) in [(&mut base, settings), (&mut moved, shifted)] {
+            let controls = FluidControls {
+                emission: false,
+                obstacle_enabled: false,
+                gravity: 0.0,
+                ..FluidControls::default()
+            };
+            runtime
+                .observe(setup, controls, Seconds(0.0), 1.0, 0.0)
+                .unwrap();
+            runtime.advance(true).unwrap();
+            runtime
+                .observe(setup, controls, Seconds(TICK), 1.0, 0.0)
+                .unwrap();
+            runtime.advance(true).unwrap();
+        }
+        assert!(!base.vertices.is_empty());
+        assert_eq!(base.stats.particles, moved.stats.particles);
+        assert_eq!(base.vertices.len(), moved.vertices.len());
+        for (a, b) in base.vertices.iter().zip(&moved.vertices) {
+            for (i, offset) in delta.iter().enumerate() {
+                assert!((b.position[i] - a.position[i] - offset).abs() < 2e-5);
+            }
+            assert_eq!(a.uv, b.uv);
+        }
+        let epoch = moved.epoch;
+        moved
+            .observe(settings, FluidControls::default(), Seconds(TICK), 1.0, 0.0)
+            .unwrap();
+        assert_ne!(moved.epoch, epoch, "domain edit starts a new world");
+        assert!(
+            moved.vertices.is_empty(),
+            "old domain surface must not survive the reset"
+        );
+    }
+
+    #[test]
+    fn scene_physics_domain_setup_does_not_rewrite_historical_inputs() {
+        let mut runtime = FluidRuntime::default();
+        let before = FluidSettings::default();
+        let after = FluidSettings {
+            domain: Some(Transform {
+                pos: [10.0, 2.0, 0.0],
+                scale: [4.0; 3],
+                ..Transform::default()
+            }),
+            ..before
+        };
+        let controls = FluidControls::default();
+        runtime
+            .observe(before, controls, Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        let epoch = runtime.epoch;
+        {
+            let _scope = super::super::physics::PhysicsAuthoredSampleScope::new();
+            runtime
+                .observe(after, controls, Seconds(TICK), 1.0, 0.0)
+                .unwrap();
+        }
+        assert_eq!(runtime.epoch, epoch);
+        assert_eq!(runtime.settings, Some(before));
+        runtime
+            .observe(after, controls, Seconds(2.0 * TICK), 1.0, 0.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, epoch);
+        assert_eq!(runtime.settings, Some(after));
     }
 }

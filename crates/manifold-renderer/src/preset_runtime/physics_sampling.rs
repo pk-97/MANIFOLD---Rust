@@ -35,11 +35,15 @@ pub(super) fn physics_sample_steps(
         let is_fluid_role = graph.get_node(node_id).is_some_and(|node| {
             node.node.type_id().as_str() == "node.fluid_role_source"
         });
+        let is_fluid = graph.get_node(node_id).is_some_and(|node| {
+            node.node.type_id().as_str() == "node.fluid_surface"
+        });
         // A mesh description is setup state: its prepared geometry stays
         // fixed during historical live-control sampling. Do not replay GPU
         // sources or local topology transforms at historical timestamps.
         pending.extend(graph.wires_into(node_id)
             .filter(|wire| !(is_body && wire.to.1 == "release_count"))
+            .filter(|wire| !(is_fluid && wire.to.1 == "domain"))
             .filter(|wire| !is_fluid_role || matches!(wire.to.1,
                 "transform" | "role" | "enabled" | "velocity_x" | "velocity_y"
                 | "velocity_z" | "inherit_motion" | "friction"))

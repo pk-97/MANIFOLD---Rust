@@ -151,12 +151,15 @@ impl GizmoTarget {
 }
 
 /// Find the selected object (`object_node_id`) in `scene` and resolve its
-/// gizmo target. `None` if the id isn't a `Known` object in this scene this
-/// frame (e.g. it was just deleted) — the caller drops the gizmo/selection
-/// rather than drawing stale geometry (no-silent-fallbacks).
+/// gizmo target. Fluid rows intentionally return `None`: their domain bounds
+/// are render-only editor geometry and domain controls remain in Scene
+/// properties for this stage. `None` also covers ids that are no longer a
+/// `Known` object this frame, so callers drop stale gizmo geometry.
 pub fn gizmo_target_for(scene: &SceneVm, object_node_id: u32) -> Option<GizmoTarget> {
     scene.objects.iter().find_map(|o| match o {
-        SceneObjectVm::Known(row) if row.object_node_id == object_node_id => {
+        SceneObjectVm::Known(row)
+            if row.object_node_id == object_node_id && row.fluid_node_ids.is_empty() =>
+        {
             let local = row.transform.as_ref().map(|t| [t.pos_value.0, t.pos_value.1, t.pos_value.2]).unwrap_or([0.0; 3]);
             let parent = row.parent_group_id.and_then(|id| scene.objects.iter().find_map(|o| match o {
                 SceneObjectVm::Known(parent) if parent.object_node_id == id => parent.transform.as_ref(),
@@ -176,7 +179,8 @@ pub fn gizmo_target_for(scene: &SceneVm, object_node_id: u32) -> Option<GizmoTar
 }
 
 /// Object-center pick (see module docs for why this isn't an ID-buffer
-/// pass): the nearest `Known` object whose origin projects within
+/// pass): the nearest `Known` object whose origin (or available fluid-domain
+/// center) projects within
 /// [`PICK_RADIUS_PX`] of `click`, or `None` if nothing in `scene` qualifies
 /// (empty scene, everything behind the camera, or nothing within range —
 /// the caller should clear selection, not leave it stale).
@@ -185,7 +189,13 @@ pub fn pick_object(scene: &SceneVm, cam: &Camera, width: u32, height: u32, click
     for obj in &scene.objects {
         let SceneObjectVm::Known(row) = obj else { continue };
         if !row.visible_value || row.parent_group_id.is_some() { continue; }
-        let origin = gizmo_target_for(scene, row.object_node_id)?.origin;
+        let origin = if row.fluid_node_ids.is_empty() {
+            let Some(target) = gizmo_target_for(scene, row.object_node_id) else { continue };
+            target.origin
+        } else {
+            let Some(domain) = row.fluid_domain else { continue };
+            domain.transform().pos
+        };
         let Some(proj) = cam.project_to_pixel(origin, width, height) else { continue };
         let d = dist2(click, (proj.px, proj.py));
         if d <= PICK_RADIUS_PX * PICK_RADIUS_PX && best.is_none_or(|(_, bd)| d < bd) {
@@ -491,7 +501,17 @@ mod tests {
             physics: None,
             physics_imported: false,
             fluid_node_ids: Vec::new(),
+            fluid_domain: None,
+            fluid_domain_transform: None,
         }))
+    }
+
+    fn known_fluid(id: u32, domain: Option<crate::node_graph::fluid::FluidDomainLayout>) -> SceneObjectVm {
+        let mut object = known_object(id, (0.0, 0.0, -5.0), (false, false, false));
+        let SceneObjectVm::Known(row) = &mut object else { unreachable!() };
+        row.fluid_node_ids.push(10);
+        row.fluid_domain = domain;
+        object
     }
 
     fn scene_with(objects: Vec<SceneObjectVm>) -> SceneVm {
@@ -523,6 +543,32 @@ mod tests {
         let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
         let picked = pick_object(&scene, &cam, 640, 480, (5.0, 5.0));
         assert_eq!(picked, None);
+    }
+
+    #[test]
+    fn fluid_domain_center_is_pickable_without_a_gizmo_target() {
+        let domain = crate::node_graph::fluid::FluidDomainLayout {
+            min: [1.0, -1.0, -8.0],
+            size: [4.0, 2.0, 4.0],
+            cells: [8, 8, 8],
+            cell_size: 0.25,
+        };
+        let scene = scene_with(vec![known_fluid(2, Some(domain))]);
+        let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
+        let proj = cam.project_to_pixel(domain.transform().pos, 640, 480).unwrap();
+        assert_eq!(pick_object(&scene, &cam, 640, 480, (proj.px, proj.py)), Some(2));
+        assert!(gizmo_target_for(&scene, 2).is_none());
+    }
+
+    #[test]
+    fn unavailable_fluid_domain_does_not_block_later_ordinary_pick() {
+        let scene = scene_with(vec![
+            known_fluid(2, None),
+            known_object(3, (0.0, 0.0, -5.0), (false, false, false)),
+        ]);
+        let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
+        let proj = cam.project_to_pixel([0.0, 0.0, -5.0], 640, 480).unwrap();
+        assert_eq!(pick_object(&scene, &cam, 640, 480, (proj.px, proj.py)), Some(3));
     }
 
     #[test]
@@ -597,6 +643,8 @@ mod tests {
             physics: None,
             physics_imported: false,
             fluid_node_ids: Vec::new(),
+            fluid_domain: None,
+            fluid_domain_transform: None,
         }));
         let scene = scene_with(vec![row]);
         let target = gizmo_target_for(&scene, 5).unwrap();

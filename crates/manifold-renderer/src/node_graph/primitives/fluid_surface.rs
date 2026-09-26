@@ -6,20 +6,29 @@ use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidControls, FluidRuntime, FluidSettings};
-use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::fluid_cache::CacheMode;
 use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 
-const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = ["role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8", "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17", "role_18", "role_19", "role_20", "role_21", "role_22", "role_23", "role_24", "role_25", "role_26", "role_27", "role_28", "role_29", "role_30", "role_31", "role_32", "role_33", "role_34", "role_35", "role_36", "role_37", "role_38", "role_39", "role_40", "role_41", "role_42", "role_43", "role_44", "role_45", "role_46", "role_47", "role_48", "role_49", "role_50", "role_51", "role_52", "role_53", "role_54", "role_55", "role_56", "role_57", "role_58", "role_59", "role_60", "role_61", "role_62", "role_63"];
+const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
+    "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
+    "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16",
+    "role_17", "role_18", "role_19", "role_20", "role_21", "role_22", "role_23", "role_24",
+    "role_25", "role_26", "role_27", "role_28", "role_29", "role_30", "role_31", "role_32",
+    "role_33", "role_34", "role_35", "role_36", "role_37", "role_38", "role_39", "role_40",
+    "role_41", "role_42", "role_43", "role_44", "role_45", "role_46", "role_47", "role_48",
+    "role_49", "role_50", "role_51", "role_52", "role_53", "role_54", "role_55", "role_56",
+    "role_57", "role_58", "role_59", "role_60", "role_61", "role_62", "role_63",
+];
 
 crate::primitive! {
     name: FluidSurface,
     type_id: "node.fluid_surface",
-    purpose: "Simulate a cubic liquid domain with the native FLIP Fluids CPU engine and output its reconstructed surface. Connect FluidRole inputs for mesh fills, inflows, drains and colliders, with retained live motion controls. Legacy box Transform inputs remain supported.",
+    purpose: "Simulate a rectangular liquid domain with the native FLIP Fluids CPU engine and output its reconstructed surface. Connect FluidRole inputs for mesh fills, inflows, drains and colliders, with retained live motion controls. Legacy box Transform inputs remain supported.",
     inputs: {
         role_0: FluidRole optional,
         role_1: FluidRole optional,
@@ -85,7 +94,7 @@ crate::primitive! {
         role_61: FluidRole optional,
         role_62: FluidRole optional,
         role_63: FluidRole optional,
-        emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
+        domain: Transform optional, emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
         resolution: ScalarF32 optional, domain_size: ScalarF32 optional, fill_height: ScalarF32 optional,
         viscosity: ScalarF32 optional, surface_tension: ScalarF32 optional,
         gravity: ScalarF32 optional, emission: ScalarF32 optional, inflow_speed: ScalarF32 optional,
@@ -105,6 +114,12 @@ crate::primitive! {
     params: [
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(24.0), range: Some((8.0, 96.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Closed −X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Closed +X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_y"), label: "Closed Bottom", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_y"), label: "Closed Top", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Closed −Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Closed +Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("viscosity"), label: "Viscosity", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("surface_tension"), label: "Surface Tension", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
@@ -129,7 +144,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. Mesh-role graphs currently require Live mode pending complete cache identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
+    composition_notes: "CPU reference engine, not a real-time guarantee. The optional domain Transform sets the axis-aligned container centre and full XYZ dimensions in metres. Bounds round outward around that centre to uniform cells. Domain rotation and billboarding are rejected. Without that input, Domain Size preserves the cube centred in X/Z with floor Y=0. Closed face toggles control all six boundaries; domain and boundary edits restart the simulation. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. Mesh-role graphs currently require Live mode pending complete cache identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
     examples: ["WaterBasin", "WaterDamBreak", "HoneyDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion.",
@@ -197,6 +212,10 @@ impl Primitive for FluidSurface {
                 self.role_pending |= !ctx.inputs.slot_content_ready(slot) || roles[index].is_none();
             }
         }
+        if let Some(slot) = ctx.inputs.slot("domain") {
+            self.role_pending |=
+                !ctx.inputs.slot_content_ready(slot) || ctx.inputs.transform("domain").is_none();
+        }
         if self.role_pending {
             self.runtime.hold_pending(ctx.time.seconds);
             ctx.mark_outputs_pending();
@@ -230,9 +249,18 @@ impl Primitive for FluidSurface {
             );
             return;
         }
+        let boundary_collisions = match boundary_collisions(ctx.params) {
+            Ok(faces) => faces,
+            Err(error) => {
+                Self::report_failure(ctx, error);
+                return;
+            }
+        };
         let settings = FluidSettings {
             resolution: ctx.scalar_or_param("resolution", 24.0).round() as u32,
             domain_size: ctx.scalar_or_param("domain_size", 4.0),
+            domain: ctx.inputs.transform("domain"),
+            boundary_collisions,
             fill_height: ctx.scalar_or_param("fill_height", 0.4),
             initial_volume: ctx.inputs.transform("initial_volume"),
             surface_subdivisions: ctx.scalar_or_param("surface_subdivisions", 0.0).round() as u32,
@@ -392,13 +420,38 @@ impl Primitive for FluidSurface {
     }
 }
 
+fn boundary_collisions(params: &ParamValues) -> Result<[bool; 6], String> {
+    let mut faces = [true; 6];
+    for (index, name) in [
+        "closed_neg_x",
+        "closed_pos_x",
+        "closed_neg_y",
+        "closed_pos_y",
+        "closed_neg_z",
+        "closed_pos_z",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        faces[index] = match params.get(name) {
+            None => true,
+            Some(ParamValue::Bool(value)) => *value,
+            Some(ParamValue::Float(value)) if value.is_finite() && (0.0..=1.0).contains(value) => {
+                *value > 0.5
+            }
+            _ => return Err(format!("Fluid: {name} must be a boolean")),
+        };
+    }
+    Ok(faces)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::MockBackend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
     use crate::node_graph::effect_node::FrameTime;
     use crate::node_graph::physics::PhysicsStepScope;
-    use crate::node_graph::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     #[test]
@@ -420,9 +473,18 @@ mod tests {
         let _offline = PhysicsStepScope::for_render(true);
         for frame in 0..=3 {
             let inputs = NodeInputs::new(&[], &backend, &[]);
-            let outputs = NodeOutputs::new(&[], &backend, &mut scalar, &mut camera,
-                &mut light, &mut material, &mut transform, &mut atmosphere,
-                &mut render_mode, &mut object);
+            let outputs = NodeOutputs::new(
+                &[],
+                &backend,
+                &mut scalar,
+                &mut camera,
+                &mut light,
+                &mut material,
+                &mut transform,
+                &mut atmosphere,
+                &mut render_mode,
+                &mut object,
+            );
             let time = FrameTime {
                 beats: Beats(f64::from(frame) / 60.0),
                 seconds: Seconds(f64::from(frame) / 60.0),

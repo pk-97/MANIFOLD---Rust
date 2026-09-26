@@ -1860,11 +1860,13 @@ mod tests {
             SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => Some(row),
             _ => None,
         }).expect("fluid is a selectable scene object");
-        assert_eq!(row.fluid_node_ids.len(), 3, "surface, role source, and source transform controls");
+        assert_eq!(row.fluid_node_ids.len(), 4, "surface, domain, role source, and source transform controls");
+        assert_eq!(row.fluid_domain.unwrap().size, [4.0; 3]);
         let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
             Some(&added), &row.fluid_node_ids,
         );
         assert!(sections.iter().any(|section| section.contains("Simulation")));
+        assert!(sections.iter().any(|section| section.contains("Domain")));
         assert!(sections.iter().any(|section| section.contains("Source")));
         assert!(row.transform.is_none(), "fluid has no disconnected render-only transform");
 

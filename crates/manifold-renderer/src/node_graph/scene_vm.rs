@@ -38,6 +38,8 @@ use manifold_core::effect_graph_def::{
 };
 
 use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
+use crate::node_graph::fluid::{FluidDomainLayout, FluidSettings};
+use crate::node_graph::transform::Transform;
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
@@ -238,6 +240,12 @@ pub struct SceneObjectKnownRow {
     /// Fluid domain and source nodes whose ordinary parameters belong to
     /// this surface. Document IDs remain globally unique across groups.
     pub fluid_node_ids: Vec<u32>,
+    /// Static domain bounds when the fluid domain is fully authored by
+    /// unwired scalar/transform parameters.
+    pub fluid_domain: Option<FluidDomainLayout>,
+    /// The domain transform's addresses and current values, independent of
+    /// the visible mesh object's ordinary transform.
+    pub fluid_domain_transform: Option<TransformVm>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1047,6 +1055,66 @@ pub fn physics_world_doc_ids(def: &EffectGraphDef) -> impl Iterator<Item=u32> + 
     def.nodes.iter().filter(|n| n.type_id == "node.physics_world").map(|n| n.id)
 }
 
+/// Resolve the editable domain transform and derive bounds only from a
+/// completely authored, non-driven domain. A graph-driven transform or
+/// scalar solver setting has no stable editor bounds to expose.
+fn trace_fluid_domain(
+    level: &Level<'_>,
+    scope_path: &[u32],
+    fluid: &EffectGraphNode,
+) -> (Option<FluidDomainLayout>, Option<TransformVm>) {
+    let domain_wire = level.producer(fluid.id, "domain").is_some();
+    let domain_size_driven = level.producer(fluid.id, "domain_size").is_some();
+    let resolution_driven = level.producer(fluid.id, "resolution").is_some();
+    let domain = resolve_producer_through_group(level, fluid.id, "domain")
+        .filter(|(_, _, node, _)| node.type_id == TRANSFORM_3D_TYPE_ID);
+
+    let Some((domain_level, crossed_group, domain_node, _)) = domain else {
+        if domain_wire || domain_size_driven || resolution_driven {
+            return (None, None);
+        }
+        let settings = FluidSettings {
+            resolution: param_f32(fluid, "resolution", 24.0).round() as u32,
+            domain_size: param_f32(fluid, "domain_size", 4.0),
+            ..FluidSettings::default()
+        };
+        return (settings.domain_layout().ok(), None);
+    };
+
+    let mut domain_scope = scope_path.to_vec();
+    if let Some(group_id) = crossed_group {
+        domain_scope.push(group_id);
+    }
+    let transform = trace_transform(&domain_level, domain_scope, domain_node.id);
+    let transform_driven = transform.pos_driven.0
+        || transform.pos_driven.1
+        || transform.pos_driven.2
+        || transform.rot_driven.0
+        || transform.rot_driven.1
+        || transform.rot_driven.2
+        || transform.scale_driven.0
+        || transform.scale_driven.1
+        || transform.scale_driven.2;
+    let billboard = param_bool(domain_node, "billboard", false);
+    let billboard_driven = domain_level.producer(domain_node.id, "billboard").is_some();
+    if resolution_driven || transform_driven || billboard || billboard_driven {
+        return (None, Some(transform));
+    }
+
+    let settings = FluidSettings {
+        resolution: param_f32(fluid, "resolution", 24.0).round() as u32,
+        domain_size: param_f32(fluid, "domain_size", 4.0),
+        domain: Some(Transform {
+            pos: [transform.pos_value.0, transform.pos_value.1, transform.pos_value.2],
+            rot_euler: [transform.rot_value.0, transform.rot_value.1, transform.rot_value.2],
+            scale: [transform.scale_value.0, transform.scale_value.1, transform.scale_value.2],
+            billboard: false,
+        }),
+        ..FluidSettings::default()
+    };
+    (settings.domain_layout().ok(), Some(transform))
+}
+
 /// Traces one `node.scene_object`'s full editable surface (D12): name,
 /// visible, transform, material, modifier chain, map-presence — everything
 /// addressed at `scope_path` (empty for a bare/ungrouped scene_object,
@@ -1126,9 +1194,12 @@ fn trace_scene_object(
     let mut chain = Vec::new();
     let mut current_level = Level { nodes: level.nodes, wires: level.wires };
     let mut cursor = current_level.producer(object_node_id, "vertices");
+    let mut mesh_scope_path = scope_path.clone();
     let mut parseable = cursor.is_some();
     let mut source_vertex_count: Option<u32> = None;
     let mut fluid_node_ids = Vec::new();
+    let mut fluid_domain = None;
+    let mut fluid_domain_transform = None;
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
@@ -1156,13 +1227,16 @@ fn trace_scene_object(
                 break;
             };
             current_level = inner;
+            mesh_scope_path.push(node_id);
             cursor = Some((inner_id, inner_port));
             continue;
         }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
             if n.type_id == "node.fluid_surface" {
+                (fluid_domain, fluid_domain_transform) =
+                    trace_fluid_domain(&current_level, &mesh_scope_path, n);
                 fluid_node_ids.push(n.id);
-                for port in ["emitter", "initial_volume"] {
+                for port in ["domain", "emitter", "initial_volume"] {
                     if let Some((_, _, source, _)) =
                         resolve_producer_through_group(&current_level, n.id, port)
                         && source.type_id == "node.transform_3d"
@@ -1223,6 +1297,8 @@ fn trace_scene_object(
         physics,
         physics_imported,
         fluid_node_ids,
+        fluid_domain,
+        fluid_domain_transform,
     }));
     (row, source_vertex_count)
 }
@@ -1586,15 +1662,26 @@ mod tests {
     fn scene_physics_fluid_controls_follow_surface_and_shared_source() {
         let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
             SerializedParamValue::Float { value: 1.0 });
+        let domain = with_param(
+            with_param(
+                with_param(node(6, "node.transform_3d", None), "pos_y",
+                    SerializedParamValue::Float { value: 2.0 }),
+                "scale_x", SerializedParamValue::Float { value: 4.0 }),
+            "scale_y", SerializedParamValue::Float { value: 4.0 });
         let graph = def(vec![scene, node(2, "system.final_output", None),
             node(3, "node.scene_object", Some("Fluid")),
-            node(4, "node.fluid_surface", None), node(5, "node.transform_3d", None)],
+            node(4, "node.fluid_surface", None), node(5, "node.transform_3d", None), domain],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(6, "transform", 4, "domain"),
                 wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter"),
                 wire(5, "transform", 4, "initial_volume")]);
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
-        assert_eq!(row.fluid_node_ids, vec![4, 5]);
+        assert_eq!(row.fluid_node_ids, vec![4, 6, 5]);
+        let domain_transform = row.fluid_domain_transform.as_ref().expect("domain transform");
+        assert_eq!(domain_transform.node_doc_id, 6);
+        assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
+        assert_eq!(row.fluid_domain.expect("static domain").size, [4.0, 4.0, 1.0]);
         assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
     }
 
@@ -1622,6 +1709,61 @@ mod tests {
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.fluid_node_ids, vec![4, 11, 12]);
         assert!(row.transform.is_none());
+    }
+
+    #[test]
+    fn scene_physics_fluid_domain_rejects_non_transform_producer() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
+            node(4, "node.fluid_surface", None), node(6, "node.value", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(6, "out", 4, "domain")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert!(row.fluid_domain.is_none());
+        assert!(row.fluid_domain_transform.is_none());
+    }
+
+    #[test]
+    fn scene_physics_fluid_domain_shadows_legacy_domain_size_driver() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let domain = with_param(
+            with_param(
+                with_param(node(6, TRANSFORM_3D_TYPE_ID, None), "pos_y",
+                    SerializedParamValue::Float { value: 2.0 }),
+            "scale_x", SerializedParamValue::Float { value: 4.0 }),
+            "scale_y", SerializedParamValue::Float { value: 4.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
+            node(4, "node.fluid_surface", None), domain,
+            node(7, "node.value", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(6, "transform", 4, "domain"),
+                wire(7, "out", 4, "domain_size")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert!(row.fluid_domain.is_some());
+        assert_eq!(row.fluid_domain_transform.as_ref().unwrap().node_doc_id, 6);
+    }
+
+    #[test]
+    fn scene_physics_fluid_domain_billboard_has_no_static_bounds() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let domain = with_param(node(6, TRANSFORM_3D_TYPE_ID, None), "billboard",
+            SerializedParamValue::Bool { value: true });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
+            node(4, "node.fluid_surface", None), domain],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(6, "transform", 4, "domain")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert!(row.fluid_domain.is_none());
+        assert!(row.fluid_domain_transform.is_some());
     }
 
     #[test]

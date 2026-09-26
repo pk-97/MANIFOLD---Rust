@@ -101,10 +101,40 @@ impl AddSceneFluidCommand {
             .collect()
     }
 
+    fn domain_metadata(&self) -> Vec<SceneParamMetadata> {
+        self.source_metadata
+            .iter()
+            .filter_map(|metadata| {
+                let label = match metadata.name.as_str() {
+                    "pos_x" | "pos_y" | "pos_z" => None,
+                    "scale_x" => Some("Width"),
+                    "scale_y" => Some("Height"),
+                    "scale_z" => Some("Depth"),
+                    _ => return None,
+                };
+                let mut metadata = metadata.clone();
+                if let Some(label) = label {
+                    metadata.label = label.to_string();
+                }
+                if metadata.name.starts_with("scale_") {
+                    metadata.min = 0.5;
+                    metadata.max = 20.0;
+                    metadata.is_angle = false;
+                }
+                Some(metadata)
+            })
+            .collect()
+    }
+
     fn fluid_metadata(&self) -> Vec<SceneParamMetadata> {
         self.fluid_metadata
             .iter()
-            .filter(|metadata| !matches!(metadata.name.as_str(), "emission" | "inflow_speed"))
+            .filter(|metadata| {
+                !matches!(
+                    metadata.name.as_str(),
+                    "domain_size" | "emission" | "inflow_speed"
+                )
+            })
             .cloned()
             .collect()
     }
@@ -187,6 +217,7 @@ impl Command for AddSceneFluidCommand {
         let render_id = self.render_scene_node_id;
         let fluid_metadata = self.fluid_metadata();
         let source_metadata = self.source_metadata();
+        let domain_metadata = self.domain_metadata();
         let mut candidate = baseline.clone();
         let result = (|def: &mut EffectGraphDef| {
             let Some(render) = def.nodes.iter().find(|node| node.id == render_id) else {
@@ -237,6 +268,9 @@ impl Command for AddSceneFluidCommand {
             let Some(role_id) = fresh_id() else {
                 return Err("Add Fluid document id space is exhausted");
             };
+            let Some(domain_id) = fresh_id() else {
+                return Err("Add Fluid document id space is exhausted");
+            };
 
             let mut existing_node_ids = Vec::new();
             collect_node_ids(&def.nodes, &mut existing_node_ids);
@@ -261,6 +295,7 @@ impl Command for AddSceneFluidCommand {
                 dedup_handle(&format!("{fluid_handle} Simulation"), &mut handles);
             let source_handle = dedup_handle(&format!("{fluid_handle} Source"), &mut handles);
             let role_handle = dedup_handle(&format!("{fluid_handle} Source Role"), &mut handles);
+            let domain_handle = dedup_handle(&format!("{fluid_handle} Domain"), &mut handles);
             let material_handle = dedup_handle(&format!("{fluid_handle} Material"), &mut handles);
             let object_handle = fluid_handle.clone();
 
@@ -285,6 +320,17 @@ impl Command for AddSceneFluidCommand {
             source_params.insert("scale_x".into(), float(0.7));
             source_params.insert("scale_y".into(), float(0.5));
             source_params.insert("scale_z".into(), float(0.7));
+
+            let mut domain_params = BTreeMap::new();
+            domain_params.insert("pos_x".into(), float(0.0));
+            domain_params.insert("pos_y".into(), float(2.0));
+            domain_params.insert("pos_z".into(), float(0.0));
+            domain_params.insert("rot_x".into(), float(0.0));
+            domain_params.insert("rot_y".into(), float(0.0));
+            domain_params.insert("rot_z".into(), float(0.0));
+            domain_params.insert("scale_x".into(), float(4.0));
+            domain_params.insert("scale_y".into(), float(4.0));
+            domain_params.insert("scale_z".into(), float(4.0));
 
             let mut material_params = BTreeMap::new();
             material_params.insert("color_r".into(), float(0.8));
@@ -342,6 +388,16 @@ impl Command for AddSceneFluidCommand {
             let role_node_id = role.node_id.clone();
             let role_params = role.params.clone();
 
+            let mut domain = scene_build_node(
+                domain_id,
+                TRANSFORM_TYPE_ID,
+                Some(domain_handle),
+                domain_params,
+            );
+            domain.node_id = stable_id("fluid_domain", domain_id);
+            let domain_node_id = domain.node_id.clone();
+            let domain_params = domain.params.clone();
+
             let mut material = scene_build_node(
                 material_id,
                 MATERIAL_TYPE_ID,
@@ -377,9 +433,10 @@ impl Command for AddSceneFluidCommand {
                     }],
                     params: Vec::new(),
                 },
-                nodes: vec![fluid, source, role, material, object, output],
+                nodes: vec![fluid, source, role, domain, material, object, output],
                 wires: vec![
                     scene_build_wire(source_id, "transform", role_id, "transform"),
+                    scene_build_wire(domain_id, "transform", fluid_id, "domain"),
                     scene_build_wire(role_id, "role", fluid_id, "role_0"),
                     scene_build_wire(fluid_id, "vertices", object_id, "vertices"),
                     scene_build_wire(material_id, "out", object_id, "material"),
@@ -412,6 +469,16 @@ impl Command for AddSceneFluidCommand {
                 &format!("{fluid_handle} - Simulation"),
                 &fluid_metadata,
                 &fluid_params,
+            );
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                domain_id,
+                &domain_node_id,
+                TRANSFORM_TYPE_ID,
+                &format!("{fluid_handle} - Domain"),
+                &domain_metadata,
+                &domain_params,
             );
             stamp_scene_node_exposures_into(
                 &mut meta.params,

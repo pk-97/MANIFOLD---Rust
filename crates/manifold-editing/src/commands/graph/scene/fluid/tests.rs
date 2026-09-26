@@ -92,8 +92,12 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
             scene_param_meta("inflow_speed", "Legacy Inflow Speed"),
         ],
         vec![
-            scene_param_meta("pos_y", "Y"),
+            scene_param_meta("pos_x", "Position X"),
+            scene_param_meta("pos_y", "Position Y"),
+            scene_param_meta("pos_z", "Position Z"),
             scene_param_meta("scale_x", "Scale X"),
+            scene_param_meta("scale_y", "Scale Y"),
+            scene_param_meta("scale_z", "Scale Z"),
             scene_param_meta("rot_x", "Rotation X"),
         ],
         vec![
@@ -142,7 +146,7 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
         .find(|node| node.handle.as_deref() == Some("Fluid 1 Graph"))
         .unwrap();
     let body = group.group.as_deref().unwrap();
-    assert_eq!(body.nodes.len(), 6);
+    assert_eq!(body.nodes.len(), 7);
     for type_id in [
         "node.fluid_surface",
         "node.transform_3d",
@@ -153,6 +157,13 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
     ] {
         assert!(body.nodes.iter().any(|node| node.type_id == type_id));
     }
+    assert_eq!(
+        body.nodes
+            .iter()
+            .filter(|node| node.type_id == "node.transform_3d")
+            .count(),
+        2
+    );
     assert!(result.wires.iter().any(|wire| {
         wire.from_node == group.id && wire.to_node == 10 && wire.to_port == "object_2"
     }));
@@ -177,6 +188,20 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
     }));
     let fluid = body.nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
     assert_eq!(fluid.params["emission"], SerializedParamValue::Float { value: 0.0 });
+    assert_eq!(fluid.params["domain_size"], SerializedParamValue::Float { value: 4.0 });
+    let domain = body
+        .nodes
+        .iter()
+        .find(|node| node.handle.as_deref() == Some("Fluid 1 Domain"))
+        .unwrap();
+    assert_eq!(domain.params["pos_y"], SerializedParamValue::Float { value: 2.0 });
+    assert_eq!(domain.params["scale_x"], SerializedParamValue::Float { value: 4.0 });
+    assert!(body.wires.iter().any(|wire| {
+        wire.from_node == domain.id
+            && wire.from_port == "transform"
+            && wire.to_node == fluid.id
+            && wire.to_port == "domain"
+    }));
     let role = body.nodes.iter().find(|node| node.type_id == "node.fluid_role_source").unwrap();
     assert_eq!(role.params["velocity_y"], SerializedParamValue::Float { value: -1.0 });
     assert!(body.wires.iter().any(|wire| wire.from_node == role.id && wire.from_port == "role" && wire.to_node == fluid.id && wire.to_port == "role_0"));
@@ -186,6 +211,28 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
         &binding.target,
         manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
             if node_id == fluid_node_id && matches!(param.as_str(), "emission" | "inflow_speed")
+    )));
+    let metadata = result.preset_metadata.as_ref().unwrap();
+    let domain_section = metadata
+        .params
+        .iter()
+        .filter(|param| param.section.as_deref() == Some("Fluid 1 - Domain"))
+        .collect::<Vec<_>>();
+    assert_eq!(domain_section.len(), 6);
+    assert!(domain_section.iter().all(|param| {
+        matches!(
+            param.name.as_str(),
+            "Position X" | "Position Y" | "Position Z" | "Width" | "Height" | "Depth"
+        )
+    }));
+    assert!(domain_section
+        .iter()
+        .filter(|param| matches!(param.name.as_str(), "Width" | "Height" | "Depth"))
+        .all(|param| param.min == 0.5 && param.max == 20.0));
+    assert!(!metadata.bindings.iter().any(|binding| matches!(
+        &binding.target,
+        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+            if node_id == fluid_node_id && param == "domain_size"
     )));
 }
 
@@ -295,9 +342,9 @@ fn scene_physics_invalid_root_and_occupied_slot_reject_atomically() {
 }
 
 #[test]
-fn scene_physics_add_fluid_seventh_id_exhaustion_is_atomic() {
+fn scene_physics_add_fluid_eighth_id_exhaustion_is_atomic() {
     let mut catalog = render_scene_graph(0, false);
-    catalog.nodes.push(node(u32::MAX - 6, "last_existing", "node.value"));
+    catalog.nodes.push(node(u32::MAX - 7, "last_existing", "node.value"));
     let (mut project, target) = fresh_project();
     let before = project.clone();
     let mut cmd = command(target, catalog);

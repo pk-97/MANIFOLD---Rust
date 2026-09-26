@@ -15,7 +15,8 @@ const MAGIC: &[u8; 8] = b"MFLUIDC1";
 const LEGACY_FORMAT_VERSION: u32 = 3;
 const LEGACY_LIQUID_FORMAT_VERSION: u32 = 4;
 const LEGACY_TIME_STEPS_FORMAT_VERSION: u32 = 5;
-const FORMAT_VERSION: u32 = 6;
+const MESH_VERTEX_FORMAT_VERSION: u32 = 6;
+const FORMAT_VERSION: u32 = 7;
 const LEGACY_MESH_VERTEX_SIZE: usize = 64;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
@@ -223,6 +224,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
         LEGACY_FORMAT_VERSION
             | LEGACY_LIQUID_FORMAT_VERSION
             | LEGACY_TIME_STEPS_FORMAT_VERSION
+            | MESH_VERTEX_FORMAT_VERSION
             | FORMAT_VERSION
     ) {
         return Err(io::Error::new(
@@ -248,6 +250,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
         reader,
         version >= LEGACY_LIQUID_FORMAT_VERSION,
         version >= LEGACY_TIME_STEPS_FORMAT_VERSION,
+        version >= FORMAT_VERSION,
     )? != settings
     {
         return Err(io::Error::new(
@@ -280,13 +283,19 @@ fn write_settings(writer: &mut impl Write, settings: FluidSettings) -> io::Resul
     write_u32(writer, settings.time_steps.min_substeps)?;
     write_u32(writer, settings.time_steps.max_substeps)?;
     write_u32(writer, settings.time_steps.cfl)?;
-    write_bool(writer, settings.time_steps.adaptive_obstacles)
+    write_bool(writer, settings.time_steps.adaptive_obstacles)?;
+    write_transform_opt(writer, settings.domain)?;
+    for face in settings.boundary_collisions {
+        write_bool(writer, face)?;
+    }
+    Ok(())
 }
 
 fn read_settings(
     reader: &mut impl Read,
     includes_liquid: bool,
     includes_time_steps: bool,
+    includes_domain: bool,
 ) -> io::Result<FluidSettings> {
     let settings = FluidSettings {
         resolution: read_u32(reader)?,
@@ -337,6 +346,23 @@ fn read_settings(
                 adaptive_obstacles: false,
             }
         },
+        domain: if includes_domain {
+            read_transform_opt(reader)?
+        } else {
+            None
+        },
+        boundary_collisions: if includes_domain {
+            [
+                read_bool(reader)?,
+                read_bool(reader)?,
+                read_bool(reader)?,
+                read_bool(reader)?,
+                read_bool(reader)?,
+                read_bool(reader)?,
+            ]
+        } else {
+            [true; 6]
+        },
     };
     Ok(settings)
 }
@@ -379,7 +405,7 @@ fn read_frame(
             "mesh vertex count is not triangular",
         ));
     }
-    if format_version < FORMAT_VERSION {
+    if format_version < MESH_VERTEX_FORMAT_VERSION {
         read_legacy_mesh_vertices(reader, vertices, vertex_count)?;
     } else {
         read_float_records(reader, vertices, vertex_count)?;
@@ -712,6 +738,12 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("manifold-fluid-cache-{}", std::process::id()));
         let settings = FluidSettings {
+            domain: Some(Transform {
+                pos: [0.25, 0.5, -0.25],
+                scale: [4.0, 3.0, 5.0],
+                ..Transform::default()
+            }),
+            boundary_collisions: [true, false, true, false, true, false],
             liquid: manifold_fluids::LiquidOptions {
                 viscosity: 0.25,
                 surface_tension: 0.1,
@@ -764,9 +796,11 @@ mod tests {
         );
         assert_eq!(decoded_obstacle, obstacle);
         assert_eq!(decoded_stats, stats);
-        assert!(reader
-            .read_into(3, &mut decoded_vertices, &mut decoded_whitewater)
-            .is_err());
+        assert!(
+            reader
+                .read_into(3, &mut decoded_vertices, &mut decoded_whitewater)
+                .is_err()
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -786,13 +820,19 @@ mod tests {
     }
 
     #[test]
-    fn cache_v6_rejects_each_liquid_and_time_step_mismatch() {
+    fn cache_v7_rejects_each_settings_mismatch() {
         let root = std::env::temp_dir().join(format!(
             "manifold-fluid-cache-liquid-mismatch-{}",
             std::process::id()
         ));
         let directory = Arc::new(root.join("frames"));
         let settings = FluidSettings {
+            domain: Some(Transform {
+                pos: [0.25, 0.5, -0.25],
+                scale: [4.0, 3.0, 5.0],
+                ..Transform::default()
+            }),
+            boundary_collisions: [true, false, true, false, true, false],
             liquid: manifold_fluids::LiquidOptions {
                 viscosity: 0.25,
                 surface_tension: 0.1,
@@ -830,7 +870,19 @@ mod tests {
 
         let mut changed_adaptive_obstacles = settings;
         changed_adaptive_obstacles.time_steps.adaptive_obstacles = false;
-        assert!(CacheReader::open(directory, changed_adaptive_obstacles).is_err());
+        assert!(CacheReader::open(directory.clone(), changed_adaptive_obstacles).is_err());
+
+        let mut changed_domain_translation = settings;
+        changed_domain_translation.domain.as_mut().unwrap().pos[0] += 0.1;
+        assert!(CacheReader::open(directory.clone(), changed_domain_translation).is_err());
+
+        let mut changed_domain_size = settings;
+        changed_domain_size.domain.as_mut().unwrap().scale[1] += 0.1;
+        assert!(CacheReader::open(directory.clone(), changed_domain_size).is_err());
+
+        let mut changed_boundary = settings;
+        changed_boundary.boundary_collisions[0] = false;
+        assert!(CacheReader::open(directory, changed_boundary).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -902,6 +954,15 @@ mod tests {
         fs::write(&path, &encoded).unwrap();
 
         let reader = CacheReader::open(Arc::new(directory.clone()), settings).unwrap();
+        let mut changed_domain = settings;
+        changed_domain.domain = Some(Transform {
+            scale: [4.0, 3.0, 5.0],
+            ..Transform::default()
+        });
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed_domain).is_err());
+        let mut changed_boundary = settings;
+        changed_boundary.boundary_collisions[0] = false;
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed_boundary).is_err());
         let mut vertices = Vec::new();
         let mut whitewater = WhitewaterFrame::default();
         reader
@@ -915,10 +976,72 @@ mod tests {
             assert_eq!(vertex.color, [1.0; 4]);
         }
         fs::write(&path, &encoded[..encoded.len() - 1]).unwrap();
-        assert!(reader
-            .read_into(11, &mut vertices, &mut whitewater)
-            .is_err());
+        assert!(
+            reader
+                .read_into(11, &mut vertices, &mut whitewater)
+                .is_err()
+        );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v6_decodes_colored_vertices_and_defaults_new_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v6-current-{}",
+            std::process::id()
+        ));
+        let directory = root.join("frames");
+        let settings = FluidSettings::default();
+        fs::create_dir_all(&directory).unwrap();
+
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(MAGIC);
+        write_u32(&mut manifest, MESH_VERTEX_FORMAT_VERSION).unwrap();
+        manifest.extend_from_slice(manifold_fluids::UPSTREAM_REVISION.as_bytes());
+        write_f64(&mut manifest, TICK).unwrap();
+        write_settings(&mut manifest, settings).unwrap();
+        // The v7 writer appends the optional domain and six boundary flags.
+        manifest.truncate(manifest.len() - 7);
+        fs::write(directory.join(MANIFEST), manifest).unwrap();
+
+        let (vertices, whitewater, obstacle, stats) = frame();
+        let mut payload = Vec::new();
+        write_u64(&mut payload, 13).unwrap();
+        write_len(&mut payload, vertices.len(), MAX_VERTICES).unwrap();
+        write_float_records(&mut payload, &vertices).unwrap();
+        write_instances(&mut payload, &whitewater.foam).unwrap();
+        write_instances(&mut payload, &whitewater.bubbles).unwrap();
+        write_instances(&mut payload, &whitewater.spray).unwrap();
+        write_transform(&mut payload, obstacle).unwrap();
+        write_u32(&mut payload, stats.particles).unwrap();
+        write_u32(&mut payload, stats.triangles).unwrap();
+        write_u32(&mut payload, stats.substeps).unwrap();
+        write_f64(&mut payload, stats.simulation_ms).unwrap();
+        write_f64(&mut payload, stats.meshing_ms).unwrap();
+        fs::write(
+            frame_path(&directory, 13),
+            zstd::stream::encode_all(payload.as_slice(), 1).unwrap(),
+        )
+        .unwrap();
+
+        let reader = CacheReader::open(Arc::new(directory.clone()), settings).unwrap();
+        let mut decoded_vertices = Vec::new();
+        let mut decoded_whitewater = WhitewaterFrame::default();
+        reader
+            .read_into(13, &mut decoded_vertices, &mut decoded_whitewater)
+            .unwrap();
+        assert_eq!(decoded_vertices[0].color, vertices[0].color);
+
+        let mut changed = settings;
+        changed.domain = Some(Transform {
+            scale: [4.0, 3.0, 5.0],
+            ..Transform::default()
+        });
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed).is_err());
+        changed = settings;
+        changed.boundary_collisions[0] = false;
+        assert!(CacheReader::open(Arc::new(directory), changed).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -932,6 +1055,16 @@ mod tests {
         let settings = FluidSettings::default();
         write_v3_manifest(&directory);
         assert!(CacheReader::open(Arc::new(directory.clone()), settings).is_ok());
+
+        let mut changed_domain = settings;
+        changed_domain.domain = Some(Transform {
+            scale: [4.0, 3.0, 5.0],
+            ..Transform::default()
+        });
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed_domain).is_err());
+        let mut changed_boundary = settings;
+        changed_boundary.boundary_collisions[0] = false;
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed_boundary).is_err());
 
         let mut changed = settings;
         changed.liquid.viscosity = 0.25;
@@ -963,6 +1096,16 @@ mod tests {
         };
         write_v4_liquid_manifest(&directory);
         assert!(CacheReader::open(Arc::new(directory.clone()), settings).is_ok());
+
+        let mut changed_domain = settings;
+        changed_domain.domain = Some(Transform {
+            scale: [4.0, 3.0, 5.0],
+            ..Transform::default()
+        });
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed_domain).is_err());
+        let mut changed_boundary = settings;
+        changed_boundary.boundary_collisions[0] = false;
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed_boundary).is_err());
 
         let mut changed = settings;
         changed.time_steps.min_substeps = 2;

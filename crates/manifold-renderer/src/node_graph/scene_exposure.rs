@@ -96,7 +96,9 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         .filter(|pd| type_id != "node.fluid_surface" || matches!(pd.name.as_ref(),
             "domain_size" | "fill_height" | "viscosity" | "surface_tension" | "gravity"
                 | "emission" | "inflow_speed" | "speed" | "reset" | "surface_subdivisions"
-                | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"))
+                | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"
+                | "closed_neg_x" | "closed_pos_x" | "closed_neg_y" | "closed_pos_y"
+                | "closed_neg_z" | "closed_pos_z"))
         .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
             "role" | "enabled" | "geometry" | "shape" | "radius"
                 | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
@@ -660,7 +662,8 @@ mod tests {
         let metadata = metadata_for_node_type("node.fluid_surface");
         for name in ["domain_size", "fill_height", "viscosity", "surface_tension",
             "gravity", "emission", "inflow_speed", "speed", "surface_subdivisions",
-            "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations"]
+            "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations",
+            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
         {
             assert!(metadata.iter().any(|param| param.name == name), "missing {name}");
         }

@@ -399,6 +399,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     for group in &mut def.nodes {
         let is_source = group.id == object_group_id;
         let Some(body) = &mut group.group else { continue; };
+        let domain_node = body.wires.iter().find(|wire| wire.to_port == "domain").map(|wire| wire.from_node);
         for node in &mut body.nodes {
             match node.type_id.as_str() {
                 "node.fluid_surface" => {
@@ -412,6 +413,12 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
                 "node.scene_object" if is_source => {
                     node.params.insert("visible".into(), SerializedParamValue::Float { value: 0.0 });
                 }
+                "node.transform_3d" if Some(node.id) == domain_node => {
+                    for (name, value) in [("pos_x", -0.3), ("pos_y", 1.5), ("pos_z", 0.2),
+                        ("scale_x", 5.0), ("scale_y", 3.0), ("scale_z", 2.5)] {
+                        node.params.insert(name.into(), SerializedParamValue::Float { value });
+                    }
+                }
                 "node.transform_3d" if is_source => {
                     node.params.insert("pos_y".into(), SerializedParamValue::Float { value: 1.3 });
                 }
@@ -419,6 +426,12 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
             }
         }
     }
+    let camera = manifold_renderer::node_graph::ViewportCamera {
+        target: [0.0, 1.0, 0.0], ..Default::default()
+    };
+    let render_node = def.nodes.iter().find(|node| node.id == render_id).unwrap().node_id.clone();
+    let def = manifold_renderer::node_graph::override_camera_def(&def, &render_node, &camera).unwrap();
+    let mut def = def;
     let saved = serde_json::to_string(&def).unwrap();
     let harness = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -465,6 +478,20 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
         })
     }).count();
     assert!(changed_size > 100, "visible mesh size edit must change assigned liquid geometry: {changed_size} pixels");
+    let scene = SceneVm::from_def(&edited).unwrap();
+    let domain = scene.objects.iter().find_map(|row| match row {
+        SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => row.fluid_domain,
+        _ => None,
+    }).expect("assigned domain bounds survive save/reload and mesh edit");
+    assert_eq!(domain.size, [5.0, 3.125, 2.5]);
+    let lines = manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(domain);
+    let projected = manifold_renderer::node_graph::project_lines(&camera.to_camera(), WIDTH, HEIGHT, &lines);
+    assert_eq!(projected.len(), 12, "container entirely in the editor view");
+    let mut pixels = manifold_renderer::headless_readback::readback_tonemapped_rgba8(&harness.device, &target.texture, WIDTH, HEIGHT);
+    let clean = pixels.clone();
+    manifold_renderer::node_graph::composite_overlay_lines_rgba8(&mut pixels, WIDTH, HEIGHT, &projected);
+    assert!(clean.chunks_exact(4).zip(pixels.chunks_exact(4)).filter(|(a,b)| a != b).count() > 100,
+        "domain must be visibly outlined");
     std::fs::write("/tmp/manifold_assigned_fluid.png",
-        readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+        manifold_renderer::headless_readback::encode_rgba8_png(&pixels, WIDTH, HEIGHT)).unwrap();
 }

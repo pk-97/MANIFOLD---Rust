@@ -117,6 +117,9 @@ pub struct Workspace {
     /// (editor state per `docs/REALTIME_3D_DESIGN.md` section 5's "Forbidden"
     /// list: "viewport/gizmo state in `manifold-core`").
     pub viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode,
+    /// Reusable world-space editor lines appended to the viewport's gizmo
+    /// lines for selected scene overlays (currently fluid domain bounds).
+    pub viewport_overlay_lines: Vec<manifold_renderer::node_graph::WorldLine>,
     /// The `node.scene_object` doc id the gizmo is attached to this session,
     /// set by a viewport object-pick (`viewport_gizmo::pick_object`) and
     /// cleared when the viewport closes or the def no longer resolves it
@@ -178,6 +181,10 @@ impl Workspace {
             viewport_rect: None,
             viewport_drag: None,
             viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode::default(),
+            // 12 fluid-domain edges plus the largest (three 24-segment
+            // rotate rings) gizmo geometry, so combining them stays bounded
+            // without a display-frame reallocation.
+            viewport_overlay_lines: Vec::with_capacity(84),
             viewport_selected_object: None,
             viewport_gizmo_drag: None,
         }

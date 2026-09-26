@@ -1659,19 +1659,38 @@ impl Application {
             // built against THIS frame's def and editor camera — see
             // `viewport_gizmo` and the `ws.viewport_selected_object`/
             // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
-            let gizmo_lines: Vec<manifold_renderer::node_graph::WorldLine> = viewport_def
+            let scene = viewport_def
                 .as_ref()
-                .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def)
+                .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def);
+            let gizmo_lines: Vec<manifold_renderer::node_graph::WorldLine> = scene
+                .as_ref()
                 .zip(ws.viewport_selected_object)
-                .and_then(|(scene, object_id)| manifold_renderer::node_graph::gizmo_target_for(&scene, object_id))
+                .and_then(|(scene, object_id)| manifold_renderer::node_graph::gizmo_target_for(scene, object_id))
                 .map(|target| manifold_renderer::node_graph::gizmo_lines(ws.viewport_gizmo_mode, &target))
                 .unwrap_or_default();
+            let fluid_domain = scene
+                .as_ref()
+                .zip(ws.viewport_selected_object)
+                .and_then(|(scene, object_id)| {
+                    scene.objects.iter().find_map(|object| match object {
+                        manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                            if row.object_node_id == object_id => row.fluid_domain,
+                        _ => None,
+                    })
+                });
+            ws.viewport_overlay_lines.clear();
+            if let Some(domain) = fluid_domain {
+                ws.viewport_overlay_lines.extend(
+                    manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(domain),
+                );
+            }
+            ws.viewport_overlay_lines.extend(gizmo_lines);
             let rgba = session.render_if_dirty(
                 &viewport_ctx,
                 &manifold_renderer::node_graph::ViewportOverlayConfig::default(),
                 None,
                 &[],
-                &gizmo_lines,
+                &ws.viewport_overlay_lines,
             );
             let need_new_tex = !matches!(
                 ws.viewport_pane.as_ref().and_then(|p| p.local_target()),

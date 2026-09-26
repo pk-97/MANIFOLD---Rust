@@ -5,7 +5,7 @@ use std::sync::Arc;
 use manifold_fluids::{FluidWorld, InflowOptions, MeshHandle, MeshRole};
 use manifold_physics::{BodyPose, TriangleMesh};
 
-use super::{HISTORY_CAPACITY, Sample, TICK};
+use super::{FluidDomainLayout, HISTORY_CAPACITY, Sample, TICK};
 use crate::node_graph::fluid_role::{
     FluidRole, FluidRoleKind, MAX_FLUID_ROLES, PreparedFluidGeometry,
 };
@@ -53,10 +53,9 @@ impl Controls {
         }
     }
 
-    fn pose(self, domain_size: f32) -> BodyPose {
+    fn pose(self, domain: FluidDomainLayout) -> BodyPose {
         let mut pose = pose_from_transform(self.transform);
-        pose.position[0] += domain_size * 0.5;
-        pose.position[2] += domain_size * 0.5;
+        pose.position = domain.to_native(pose.position);
         pose
     }
 }
@@ -149,6 +148,28 @@ mod tests {
     use super::*;
     use crate::node_graph::fluid::{FluidControls, FluidRuntime, FluidSettings};
     use manifold_core::Seconds;
+
+    #[test]
+    fn scene_physics_domain_role_pose_uses_all_three_origin_axes() {
+        let role = role(FluidRoleKind::Inflow);
+        let mut controls = Controls::from_role(&role);
+        controls.transform.pos = [9.0, -2.0, 4.0];
+        controls.transform.rot_euler = [0.0, 0.4, 0.0];
+        let domain = FluidSettings {
+            domain: Some(Transform {
+                pos: [8.0, -3.0, 5.0],
+                scale: [6.0, 2.0, 2.0],
+                ..Transform::default()
+            }),
+            ..FluidSettings::default()
+        }
+        .domain_layout()
+        .unwrap();
+        let pose = controls.pose(domain);
+        assert_eq!(pose.position, [4.0, 2.0, 0.0]);
+        let scene_pose = pose_from_transform(controls.transform);
+        assert_eq!(pose.rotation, scene_pose.rotation);
+    }
 
     fn role(kind: FluidRoleKind) -> FluidRole {
         FluidRole {
@@ -479,7 +500,11 @@ pub(super) struct NativeRoles {
 }
 
 impl NativeRoles {
-    pub fn prepare(world: &mut FluidWorld, setup: &Setup, size: f32) -> Result<Self, String> {
+    pub fn prepare(
+        world: &mut FluidWorld,
+        setup: &Setup,
+        domain: FluidDomainLayout,
+    ) -> Result<Self, String> {
         let mut result = Self {
             handles: Vec::with_capacity(setup.len()),
         };
@@ -495,7 +520,7 @@ impl NativeRoles {
                     triangles: mesh.triangles.clone(),
                 };
                 let initial = role.initial;
-                let pose = initial.pose(size);
+                let pose = initial.pose(domain);
                 let native = (|| {
                     if role.kind == FluidRoleKind::InitialFill {
                         if initial.enabled {
@@ -539,7 +564,7 @@ impl NativeRoles {
         samples: &[Sample],
         values: &[Controls],
         tick: u64,
-        size: f32,
+        domain: FluidDomainLayout,
     ) -> Result<(), String> {
         let current_time = tick as f64 * TICK;
         for (index, role) in setup.roles.iter().enumerate() {
@@ -554,9 +579,9 @@ impl NativeRoles {
                 let native = (|| {
                     world.set_mesh_motion(
                         handle,
-                        previous.pose(size),
-                        current.pose(size),
-                        next.pose(size),
+                        previous.pose(domain),
+                        current.pose(domain),
+                        next.pose(domain),
                     )?;
                     world.set_mesh_enabled(handle, current.enabled)?;
                     match role.kind {
