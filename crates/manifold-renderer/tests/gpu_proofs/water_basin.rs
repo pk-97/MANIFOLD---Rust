@@ -237,3 +237,81 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     std::fs::write("/tmp/manifold_added_fluid.png",
         readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
 }
+
+#[test]
+fn scene_physics_mesh_role_renders_after_graph_round_trip() {
+    let mut def: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
+    let nodes = def["nodes"].as_array_mut().unwrap();
+    let fluid = nodes.iter_mut().find(|node| node["id"] == 4).unwrap();
+    for (name, value) in [("resolution", 12.0), ("fill_height", 0.0), ("emission", 0.0), ("gravity", 0.0)] {
+        fluid["params"][name] = serde_json::json!({"type": "Float", "value": value});
+    }
+    nodes.extend([
+        serde_json::json!({"id": 500, "nodeId": "mesh_fill_pose", "typeId": "node.transform_3d", "params": {
+            "pos_y": {"type": "Float", "value": 1.3},
+            "rot_y": {"type": "Float", "value": 0.7}
+        }}),
+        serde_json::json!({"id": 501, "nodeId": "mesh_fill", "typeId": "node.fluid_role_source", "params": {
+            "role": {"type": "Enum", "value": 0},
+            "shape": {"type": "Enum", "value": 0},
+            "radius": {"type": "Float", "value": 1.2},
+            "enabled": {"type": "Bool", "value": true}
+        }})
+    ]);
+    let wires = def["wires"].as_array_mut().unwrap();
+    wires.retain(|wire| wire["toNode"] != 4);
+    wires.extend([
+        serde_json::json!({"fromNode": 500, "fromPort": "transform", "toNode": 501, "toPort": "transform"}),
+        serde_json::json!({"fromNode": 501, "fromPort": "role", "toNode": 4, "toPort": "role_0"})
+    ]);
+    let typed: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_value(def.clone()).unwrap();
+    let saved = serde_json::to_string(&typed).unwrap();
+    let restored: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
+    assert_eq!(typed, restored);
+    let harness = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let build = |json: &str| PresetRuntime::from_json_str_with_device(
+        json, &registry, Arc::clone(&harness.device), WIDTH, HEIGHT,
+        GpuTextureFormat::Rgba16Float, None).unwrap();
+    let mut fluid_runtime = build(&saved);
+    def["nodes"].as_array_mut().unwrap().iter_mut().find(|n| n["id"] == 501).unwrap()
+        ["params"]["enabled"]["value"] = serde_json::json!(false);
+    let mut empty_runtime = build(&def.to_string());
+    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
+        GpuTextureFormat::Rgba16Float, "mesh-role-proof");
+    let _offline = PhysicsStepScope::for_render(true);
+    // Async geometry preparation is pumped at unchanged transport time, as
+    // export pre-roll does. Only a complete frame may advance the simulation.
+    for runtime in [&mut fluid_runtime, &mut empty_runtime] {
+        let mut complete = false;
+        for _ in 0..200 {
+            let mut encoder = harness.device.create_encoder("mesh-role-warmup");
+            let status = {
+                let mut gpu = RendererGpuEncoder::new(&mut encoder, &harness.device);
+                runtime.render(&mut gpu, &target.texture, &context(0), &ParamManifest::default());
+                gpu.frame_status()
+            };
+            encoder.commit_and_wait_completed();
+            assert!(!matches!(status, FrameRenderStatus::Failed(_)), "role warmup: {status:?}");
+            if status == FrameRenderStatus::Complete && !runtime.warmup_pending() {
+                complete = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(complete, "mesh role preparation must finish within bounded pre-roll");
+    }
+    let empty = render_frame(&mut empty_runtime, &target, &harness.device, 1);
+    let liquid = render_frame(&mut fluid_runtime, &target, &harness.device, 1);
+    assert_finite_and_nonempty(&liquid, 1);
+    let changed = empty.chunks_exact(8).zip(liquid.chunks_exact(8)).filter(|(a, b)| {
+        (0..3).any(|axis| {
+            let i = axis * 2;
+            (f16::from_le_bytes([a[i], a[i + 1]]).to_f32()
+                - f16::from_le_bytes([b[i], b[i + 1]]).to_f32()).abs() > 0.01
+        })
+    }).count();
+    assert!(changed > 100, "mesh-based fill must visibly affect the scene: {changed} pixels");
+    std::fs::write("/tmp/manifold_fluid_mesh_role.png",
+        readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+}

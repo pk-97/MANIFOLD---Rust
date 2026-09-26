@@ -6,6 +6,7 @@ use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidControls, FluidRuntime, FluidSettings};
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::fluid_cache::CacheMode;
 use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
@@ -13,11 +14,77 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 
+const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = ["role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8", "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17", "role_18", "role_19", "role_20", "role_21", "role_22", "role_23", "role_24", "role_25", "role_26", "role_27", "role_28", "role_29", "role_30", "role_31", "role_32", "role_33", "role_34", "role_35", "role_36", "role_37", "role_38", "role_39", "role_40", "role_41", "role_42", "role_43", "role_44", "role_45", "role_46", "role_47", "role_48", "role_49", "role_50", "role_51", "role_52", "role_53", "role_54", "role_55", "role_56", "role_57", "role_58", "role_59", "role_60", "role_61", "role_62", "role_63"];
+
 crate::primitive! {
     name: FluidSurface,
     type_id: "node.fluid_surface",
-    purpose: "Simulate a cubic liquid domain with the native FLIP Fluids CPU engine and output its reconstructed surface. Translate emitter and obstacle boxes through Transform inputs; use the accepted obstacle_pose to render the collider at the same simulation time as the liquid.",
+    purpose: "Simulate a cubic liquid domain with the native FLIP Fluids CPU engine and output its reconstructed surface. Connect FluidRole inputs for mesh fills, inflows, drains and colliders, with retained live motion controls. Legacy box Transform inputs remain supported.",
     inputs: {
+        role_0: FluidRole optional,
+        role_1: FluidRole optional,
+        role_2: FluidRole optional,
+        role_3: FluidRole optional,
+        role_4: FluidRole optional,
+        role_5: FluidRole optional,
+        role_6: FluidRole optional,
+        role_7: FluidRole optional,
+        role_8: FluidRole optional,
+        role_9: FluidRole optional,
+        role_10: FluidRole optional,
+        role_11: FluidRole optional,
+        role_12: FluidRole optional,
+        role_13: FluidRole optional,
+        role_14: FluidRole optional,
+        role_15: FluidRole optional,
+        role_16: FluidRole optional,
+        role_17: FluidRole optional,
+        role_18: FluidRole optional,
+        role_19: FluidRole optional,
+        role_20: FluidRole optional,
+        role_21: FluidRole optional,
+        role_22: FluidRole optional,
+        role_23: FluidRole optional,
+        role_24: FluidRole optional,
+        role_25: FluidRole optional,
+        role_26: FluidRole optional,
+        role_27: FluidRole optional,
+        role_28: FluidRole optional,
+        role_29: FluidRole optional,
+        role_30: FluidRole optional,
+        role_31: FluidRole optional,
+        role_32: FluidRole optional,
+        role_33: FluidRole optional,
+        role_34: FluidRole optional,
+        role_35: FluidRole optional,
+        role_36: FluidRole optional,
+        role_37: FluidRole optional,
+        role_38: FluidRole optional,
+        role_39: FluidRole optional,
+        role_40: FluidRole optional,
+        role_41: FluidRole optional,
+        role_42: FluidRole optional,
+        role_43: FluidRole optional,
+        role_44: FluidRole optional,
+        role_45: FluidRole optional,
+        role_46: FluidRole optional,
+        role_47: FluidRole optional,
+        role_48: FluidRole optional,
+        role_49: FluidRole optional,
+        role_50: FluidRole optional,
+        role_51: FluidRole optional,
+        role_52: FluidRole optional,
+        role_53: FluidRole optional,
+        role_54: FluidRole optional,
+        role_55: FluidRole optional,
+        role_56: FluidRole optional,
+        role_57: FluidRole optional,
+        role_58: FluidRole optional,
+        role_59: FluidRole optional,
+        role_60: FluidRole optional,
+        role_61: FluidRole optional,
+        role_62: FluidRole optional,
+        role_63: FluidRole optional,
         emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
         resolution: ScalarF32 optional, domain_size: ScalarF32 optional, fill_height: ScalarF32 optional,
         viscosity: ScalarF32 optional, surface_tension: ScalarF32 optional,
@@ -62,7 +129,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
+    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. Mesh-role graphs currently require Live mode pending complete cache identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
     examples: ["WaterBasin", "WaterDamBreak", "HoneyDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion.",
@@ -77,6 +144,7 @@ crate::primitive! {
         spray_upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
         last_version: u64 = u64::MAX,
         last_lag: u32 = u32::MAX,
+        role_pending: bool = false,
     },
 }
 
@@ -93,9 +161,10 @@ impl FluidSurface {
 impl Primitive for FluidSurface {
     fn clear_state(&mut self) {
         self.runtime.clear();
+        self.role_pending = false;
     }
     fn warmup_pending(&self) -> bool {
-        self.runtime.warmup_pending()
+        self.role_pending || self.runtime.warmup_pending()
     }
     fn array_output_capacity(
         &self,
@@ -120,6 +189,19 @@ impl Primitive for FluidSurface {
         Some((value.clamp(3.0, 3145728.0) as u32 / 3) * 3)
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let mut roles = std::array::from_fn::<_, MAX_FLUID_ROLES, _>(|_| None);
+        self.role_pending = false;
+        for (index, port) in ROLE_PORTS.iter().enumerate() {
+            if let Some(slot) = ctx.inputs.slot(port) {
+                roles[index] = ctx.inputs.fluid_role(port);
+                self.role_pending |= !ctx.inputs.slot_content_ready(slot) || roles[index].is_none();
+            }
+        }
+        if self.role_pending {
+            self.runtime.hold_pending(ctx.time.seconds);
+            ctx.mark_outputs_pending();
+            return;
+        }
         for (name, fallback) in [
             ("resolution", 24.0),
             ("viscosity", 0.0),
@@ -218,9 +300,10 @@ impl Primitive for FluidSurface {
             emission: emitter.is_some() && ctx.scalar_or_param("emission", 1.0) > 0.5,
             inflow_speed: ctx.scalar_or_param("inflow_speed", 1.5),
         };
-        if let Err(error) = self.runtime.observe(
+        if let Err(error) = self.runtime.observe_scene(
             settings,
             controls,
+            &roles,
             ctx.time.seconds,
             ctx.scalar_or_param("speed", 1.0),
             ctx.scalar_or_param("reset", 0.0),

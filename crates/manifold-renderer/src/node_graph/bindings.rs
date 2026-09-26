@@ -26,6 +26,7 @@ use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::physics::RigidBody;
 use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::transform::Transform;
+use crate::node_graph::fluid_role::FluidRole;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
 ///
@@ -258,6 +259,13 @@ impl<'a> NodeInputs<'a> {
         self.backend.rigid_body(self.slot(port)?)
     }
 
+    /// [`FluidRole`] bound to the named [`PortType::FluidRole`] input port.
+    /// `None` if unwired. The prepared geometry remains shared through its
+    /// `Arc`; field access does not clone mesh data.
+    pub fn fluid_role(&self, port: &str) -> Option<FluidRole> {
+        self.backend.fluid_role(self.slot(port)?)
+    }
+
     /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
     /// `None` if unwired. Same CPU-struct drain shape as `Atmosphere` —
     /// produced by `node.scene_object`, consumed by `render_scene`'s
@@ -353,6 +361,11 @@ impl<'a> NodeInputs<'a> {
     pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
         self.backend.object(slot)
     }
+
+    /// [`FluidRole`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn fluid_role_slot(&self, slot: Slot) -> Option<FluidRole> {
+        self.backend.fluid_role(slot)
+    }
 }
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
@@ -386,6 +399,7 @@ pub struct NodeOutputs<'a> {
     pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
     /// Sibling scratch for `RenderMode` writes — same shape as atmospheres.
     pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
+    pending_fluid_role_writes: Option<&'a mut Vec<(Slot, FluidRole)>>,
     pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
     pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
@@ -416,6 +430,7 @@ impl<'a> NodeOutputs<'a> {
             pending_atmosphere_writes,
             pending_render_mode_writes,
             pending_rigid_body_writes: None,
+            pending_fluid_role_writes: None,
             pending_object_writes,
         }
     }
@@ -429,6 +444,25 @@ impl<'a> NodeOutputs<'a> {
         if let Some(slot) = self.slot(port) {
             self.pending_rigid_body_writes.as_mut()
                 .expect("executor must provide rigid-body output scratch").push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_fluid_role_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, FluidRole)>,
+    ) -> Self {
+        self.pending_fluid_role_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`FluidRole`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_fluid_role(&mut self, port: &str, value: FluidRole) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_fluid_role_writes
+                .as_mut()
+                .expect("executor must provide fluid-role output scratch")
+                .push((slot, value));
         }
     }
 

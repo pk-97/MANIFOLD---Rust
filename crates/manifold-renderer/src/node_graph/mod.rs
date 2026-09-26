@@ -43,6 +43,7 @@ pub(crate) mod execution;
 mod execution_plan;
 pub mod freeze;
 pub mod fluid;
+pub mod fluid_role;
 pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;
@@ -92,6 +93,7 @@ pub use light::{Light, LightMode, ShadowSoftness};
 pub use material::{Material, MaterialKind};
 pub use scene_object::SceneObject;
 pub use transform::Transform;
+pub use fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry, MAX_FLUID_ROLES};
 pub use viewport_camera::ViewportCamera;
 pub use viewport_overlay::{
     ScreenLine, ViewportOverlayConfig, WorldLine, build_overlay_lines, camera_frustum_lines,

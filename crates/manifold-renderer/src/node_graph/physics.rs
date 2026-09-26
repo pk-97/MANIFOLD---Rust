@@ -182,28 +182,36 @@ impl Default for RigidBody {
 
 impl RigidBody {
     fn config(&self) -> BodyConfig {
-        // Same Rz * Ry * Rx convention as render_scene, quaternion stored xyzw.
-        let [x, y, z] = self.transform.rot_euler;
-        let (sx, cx) = (x * 0.5).sin_cos();
-        let (sy, cy) = (y * 0.5).sin_cos();
-        let (sz, cz) = (z * 0.5).sin_cos();
+        let pose = pose_from_transform(self.transform);
         BodyConfig {
             kind: match self.kind {
                 0 => BodyKind::Fixed,
                 2 => BodyKind::Animated,
                 _ => BodyKind::Dynamic,
             },
-            position: self.transform.pos,
-            rotation: [
-                sx * cy * cz - cx * sy * sz,
-                cx * sy * cz + sx * cy * sz,
-                cx * cy * sz - sx * sy * cz,
-                cx * cy * cz + sx * sy * sz,
-            ],
+            position: pose.position,
+            rotation: pose.rotation,
             mass: self.mass,
             friction: self.friction,
             restitution: self.bounce,
         }
+    }
+}
+
+/// Shared scene Rz * Ry * Rx convention, with quaternion stored xyzw.
+pub(crate) fn pose_from_transform(transform: Transform) -> manifold_physics::BodyPose {
+    let [x, y, z] = transform.rot_euler;
+    let (sx, cx) = (x * 0.5).sin_cos();
+    let (sy, cy) = (y * 0.5).sin_cos();
+    let (sz, cz) = (z * 0.5).sin_cos();
+    manifold_physics::BodyPose {
+        position: transform.pos,
+        rotation: [
+            sx * cy * cz - cx * sy * sz,
+            cx * sy * cz + sx * cy * sz,
+            cx * cy * sz - sx * sy * cz,
+            cx * cy * cz + sx * sy * sz,
+        ],
     }
 }
 

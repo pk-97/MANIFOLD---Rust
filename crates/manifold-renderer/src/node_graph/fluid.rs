@@ -15,6 +15,9 @@ use manifold_fluids::{
 use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use super::fluid_role::FluidRole;
+
+mod roles;
 
 pub const TICK: f64 = 1.0 / 60.0;
 const HISTORY_CAPACITY: usize = 8192;
@@ -280,6 +283,8 @@ struct Request {
     start_tick: u64,
     count: usize,
     history: Vec<Sample>,
+    role_setup: Arc<roles::Setup>,
+    role_history: Vec<roles::Controls>,
     recycle: Vec<MeshVertex>,
     recycle_whitewater: WhitewaterFrame,
     cache_mode: CacheMode,
@@ -290,6 +295,7 @@ struct Reply {
     epoch: u64,
     tick: u64,
     history: Vec<Sample>,
+    role_history: Vec<roles::Controls>,
     vertices: Vec<MeshVertex>,
     whitewater: WhitewaterFrame,
     obstacle: Transform,
@@ -302,6 +308,7 @@ fn cancelled_reply(request: Request) -> Reply {
         epoch: request.epoch,
         tick: request.start_tick,
         history: request.history,
+        role_history: request.role_history,
         vertices: request.recycle,
         whitewater: request.recycle_whitewater,
         obstacle: request.initial.obstacle,
@@ -323,6 +330,7 @@ impl Worker {
         let (sender, replies) = mpsc::sync_channel::<Reply>(1);
         std::thread::Builder::new().name("fluid-reference".into()).spawn(move || {
             let mut world: Option<(u64, FluidWorld)> = None;
+            let mut native_roles = roles::NativeRoles::default();
             let mut surface = Vec::<SurfaceVertex>::new();
             let mut whitewater = Vec::<WhitewaterParticle>::new();
             let mut writer: Option<CacheWriter> = None;
@@ -408,6 +416,7 @@ impl Worker {
                             new.add_fluid_box(request.settings.bounds(volume), [0.0; 3])
                                 .map_err(|e| e.to_string())?;
                         }
+                        native_roles = roles::NativeRoles::prepare(&mut new, &request.role_setup, size)?;
                         world = Some((request.epoch, new));
                     }
                     request.recycle.clear();
@@ -431,6 +440,8 @@ impl Worker {
                         } else {
                             native.clear_obstacle().map_err(|e| e.to_string())?;
                         }
+                        native_roles.apply(native, &request.role_setup, &request.history,
+                            &request.role_history, tick, request.settings.domain_size)?;
                         stats = native.step(Seconds(TICK)).map_err(|e| e.to_string())?;
                         completed_count += 1;
                         pose = step.next.obstacle;
@@ -473,6 +484,7 @@ impl Worker {
                 })();
                 let reply = Reply { epoch: request.epoch, tick: request.start_tick + completed_count as u64,
                     history: request.history,
+                    role_history: request.role_history,
                     vertices: request.recycle, whitewater: request.recycle_whitewater,
                     obstacle: pose, stats, error: result.err() };
                 if sender.send(reply).is_err() { break; }
@@ -496,8 +508,10 @@ pub struct FluidRuntime {
     worker: Option<Worker>,
     settings: Option<FluidSettings>,
     history: VecDeque<Sample>,
+    role_setup: Arc<roles::Setup>,
+    role_history: roles::History,
     last_transport: Option<f64>,
-    previous_reset: f32,
+    previous_reset: Option<f32>,
     target_time: f64,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -506,6 +520,7 @@ pub struct FluidRuntime {
     spare: Option<Vec<MeshVertex>>,
     spare_whitewater: Option<WhitewaterFrame>,
     spare_history: Option<Vec<Sample>>,
+    spare_role_history: Option<Vec<roles::Controls>>,
     failure: Option<String>,
     pub vertices: Vec<MeshVertex>,
     pub whitewater: WhitewaterFrame,
@@ -523,8 +538,10 @@ impl Default for FluidRuntime {
             worker: None,
             settings: None,
             history: VecDeque::with_capacity(HISTORY_CAPACITY),
+            role_setup: Arc::new(roles::Setup::default()),
+            role_history: roles::History::default(),
             last_transport: None,
-            previous_reset: 0.0,
+            previous_reset: None,
             target_time: 0.0,
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -533,6 +550,7 @@ impl Default for FluidRuntime {
             spare: Some(Vec::new()),
             spare_whitewater: Some(WhitewaterFrame::default()),
             spare_history: Some(Vec::with_capacity(HISTORY_CAPACITY)),
+            spare_role_history: Some(Vec::new()),
             failure: None,
             vertices: Vec::new(),
             whitewater: WhitewaterFrame::default(),
@@ -575,6 +593,7 @@ impl FluidRuntime {
         self.settings = None;
         self.last_transport = None;
         self.history.clear();
+        self.role_history.clear();
         self.target_time = 0.0;
         self.completed_tick = 0;
         self.epoch = self.epoch.wrapping_add(1);
@@ -607,7 +626,24 @@ impl FluidRuntime {
         speed: f32,
         reset: f32,
     ) -> Result<(), String> {
+        self.observe_scene(settings, controls, &[], transport, speed, reset)
+    }
+
+    /// Scene roles share the fixed-tick input history and worker ownership.
+    pub fn observe_scene(
+        &mut self,
+        settings: FluidSettings,
+        controls: FluidControls,
+        scene_roles: &[Option<FluidRole>],
+        transport: Seconds,
+        speed: f32,
+        reset: f32,
+    ) -> Result<(), String> {
         settings.validate()?;
+        roles::Setup::validate(scene_roles)?;
+        if self.cache_mode != CacheMode::Live && scene_roles.iter().any(Option::is_some) {
+            return Err("Fluid scene roles require Live mode until their geometry and input take are recorded in the cache manifest".into());
+        }
         if self.cache_mode != CacheMode::Playback {
             controls.validate()?;
         }
@@ -618,9 +654,13 @@ impl FluidRuntime {
         {
             return Err("Water: invalid transport, speed or reset value".into());
         }
-        let reset_edge = reset > 0.5 && self.previous_reset <= 0.5;
-        self.previous_reset = reset;
+        // Trigger buttons publish a counter, just like Physics World. Every
+        // changed count (including undo) resets once; a held count is inert.
+        let reset_edge = self.previous_reset.is_some_and(|previous| previous != reset);
+        self.previous_reset = Some(reset);
+        let role_topology_changed = !self.role_setup.matches(scene_roles);
         if self.settings != Some(settings)
+            || role_topology_changed
             || reset_edge
             || self
                 .last_transport
@@ -629,6 +669,10 @@ impl FluidRuntime {
             self.clear();
             self.settings = Some(settings);
             self.obstacle = controls.obstacle;
+        }
+        if role_topology_changed {
+            self.role_setup = Arc::new(roles::Setup::new(scene_roles));
+            self.role_history.prepare(self.role_setup.len());
         }
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -643,6 +687,7 @@ impl FluidRuntime {
             && (last.time - self.target_time).abs() < 1e-10
         {
             last.controls = controls;
+            self.role_history.observe(&self.role_setup, scene_roles, true);
             return Ok(());
         }
         self.prune_history();
@@ -655,13 +700,19 @@ impl FluidRuntime {
             time: self.target_time,
             controls,
         });
+        self.role_history.observe(&self.role_setup, scene_roles, false);
         Ok(())
+    }
+
+    pub fn hold_pending(&mut self, transport: Seconds) {
+        self.last_transport = Some(transport.0);
     }
 
     fn prune_history(&mut self) {
         let retain_from = (self.simulation_time() - TICK).max(0.0);
         while self.history.len() > 2 && self.history[1].time < retain_from - 1e-10 {
             self.history.pop_front();
+            self.role_history.pop_front();
         }
     }
 
@@ -716,6 +767,7 @@ impl FluidRuntime {
 
     fn accept(&mut self, reply: Reply) -> Result<(), String> {
         self.busy = false;
+        self.spare_role_history = Some(reply.role_history);
         if reply.epoch != self.epoch {
             self.spare = Some(reply.vertices);
             self.spare_whitewater = Some(reply.whitewater);
@@ -800,6 +852,9 @@ impl FluidRuntime {
                 .expect("one recycled history snapshot per request");
             history.clear();
             history.extend(self.history.iter().copied());
+            let mut role_history = self.spare_role_history.take()
+                .expect("one recycled role history per request");
+            self.role_history.snapshot(&mut role_history);
             let request = Request {
                 epoch: self.epoch,
                 settings,
@@ -811,6 +866,8 @@ impl FluidRuntime {
                 },
                 count,
                 history,
+                role_setup: Arc::clone(&self.role_setup),
+                role_history,
                 recycle: self.spare.take().expect("one recycled mesh per request"),
                 recycle_whitewater: self
                     .spare_whitewater
@@ -825,6 +882,7 @@ impl FluidRuntime {
                 self.spare = Some(request.recycle);
                 self.spare_whitewater = Some(request.recycle_whitewater);
                 self.spare_history = Some(request.history);
+                self.spare_role_history = Some(request.role_history);
                 let message = "Water worker disconnected".to_owned();
                 self.failure = Some(message.clone());
                 return Err(message);
@@ -868,6 +926,7 @@ mod tests {
                     epoch: init.epoch,
                     tick: init.start_tick + init.count as u64,
                     history: init.history,
+                    role_history: init.role_history,
                     vertices: init.recycle,
                     whitewater: init.recycle_whitewater,
                     obstacle: init.initial.obstacle,
@@ -899,6 +958,7 @@ mod tests {
                                 epoch: request.epoch,
                                 tick: request.start_tick + request.count as u64,
                                 history: request.history,
+                                role_history: request.role_history,
                                 vertices: request.recycle,
                                 whitewater: request.recycle_whitewater,
                                 obstacle: request.initial.obstacle,
@@ -943,6 +1003,7 @@ mod tests {
                 epoch: init.epoch,
                 tick: init.start_tick,
                 history: init.history,
+                role_history: init.role_history,
                 vertices: init.recycle,
                 whitewater: init.recycle_whitewater,
                 obstacle: init.initial.obstacle,
@@ -968,6 +1029,7 @@ mod tests {
                 epoch: hitch.epoch,
                 tick: hitch.start_tick + hitch.count as u64,
                 history: hitch.history,
+                role_history: hitch.role_history,
                 vertices: hitch.recycle,
                 whitewater: hitch.recycle_whitewater,
                 obstacle: hitch.initial.obstacle,
@@ -1023,6 +1085,7 @@ mod tests {
                 epoch: runtime.epoch,
                 tick: 7,
                 history: Vec::new(),
+                role_history: Vec::new(),
                 vertices: Vec::new(),
                 whitewater,
                 obstacle: Transform::default(),
@@ -1042,6 +1105,7 @@ mod tests {
                 epoch: old_epoch,
                 tick: 8,
                 history: Vec::new(),
+                role_history: Vec::new(),
                 vertices: Vec::new(),
                 whitewater: stale,
                 obstacle: Transform::default(),
@@ -1171,6 +1235,23 @@ mod tests {
             (runtime.target_time - 0.1).abs() < 1e-9,
             "held trigger must not reset repeatedly"
         );
+        let first_reset_epoch = runtime.epoch;
+        runtime
+            .observe(settings, controls, Seconds(10.7), 1.0, 2.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, first_reset_epoch, "a second button press resets");
+        assert_eq!(runtime.target_time, 0.0);
+        let second_reset_epoch = runtime.epoch;
+        runtime
+            .observe(settings, controls, Seconds(10.8), 1.0, 2.0)
+            .unwrap();
+        assert_eq!(runtime.epoch, second_reset_epoch);
+        assert!((runtime.target_time - 0.1).abs() < 1e-9);
+        runtime
+            .observe(settings, controls, Seconds(10.8), 1.0, 1.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, second_reset_epoch, "undo follows the same reset rule");
+        assert_eq!(runtime.target_time, 0.0);
         runtime
             .observe(settings, controls, Seconds(1.0), 1.0, 0.0)
             .unwrap();
@@ -1423,6 +1504,7 @@ mod tests {
                 epoch: old,
                 tick: 123,
                 history: Vec::new(),
+                role_history: Vec::new(),
                 vertices: Vec::new(),
                 whitewater: WhitewaterFrame::default(),
                 obstacle: Transform::default(),

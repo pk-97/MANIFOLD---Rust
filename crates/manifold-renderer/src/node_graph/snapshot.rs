@@ -310,6 +310,7 @@ pub enum PortKindSnapshot {
     Atmosphere,
     RenderMode,
     RigidBody,
+    FluidRole,
     Object,
 }
 
@@ -369,6 +370,7 @@ impl From<PortType> for PortKindSnapshot {
             PortType::Atmosphere => Self::Atmosphere,
             PortType::RenderMode => Self::RenderMode,
             PortType::RigidBody => Self::RigidBody,
+            PortType::FluidRole => Self::FluidRole,
             PortType::Object => Self::Object,
         }
     }

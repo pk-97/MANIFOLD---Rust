@@ -44,6 +44,7 @@ pub(super) fn physics_sample_steps(
             type_id,
             "node.physics_world"
                 | "node.fluid_surface"
+                | "node.fluid_role_source"
                 | "node.rigid_body"
                 | "node.transform_3d"
                 | "node.lfo"
@@ -128,6 +129,34 @@ impl PresetRuntime {
 mod tests {
     use super::*;
     use crate::node_graph::PrimitiveRegistry;
+
+    #[test]
+    fn scene_physics_role_history_samples_live_controls_without_rendering() {
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(
+            "../../assets/generator-presets/WaterBasin.json"
+        )).unwrap();
+        def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": 500, "nodeId": "pouring_mesh", "typeId": "node.fluid_role_source"
+        }));
+        def["wires"].as_array_mut().unwrap().extend([
+            serde_json::json!({"fromNode": 5, "fromPort": "transform", "toNode": 500, "toPort": "transform"}),
+            serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"}),
+        ]);
+        let runtime = PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_builtin())
+            .expect("typed fluid role ancestry loads");
+        let mut saw_source = false;
+        let mut saw_motion = false;
+        for (step, sampled) in runtime.plan.steps().iter().zip(runtime.physics_sample_steps.as_ref().unwrap()) {
+            let kind = runtime.graph.get_node(step.node).unwrap().node.type_id();
+            match kind.as_str() {
+                "node.fluid_role_source" => { assert!(sampled); saw_source = true; }
+                "node.lfo" => { assert!(sampled); saw_motion = true; }
+                "node.scene_object" | "node.render_scene" => assert!(!sampled),
+                _ => {}
+            }
+        }
+        assert!(saw_source && saw_motion);
+    }
 
     #[test]
     fn water_history_samples_fluid_controls_without_rendering() {

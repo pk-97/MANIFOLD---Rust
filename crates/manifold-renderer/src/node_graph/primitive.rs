@@ -1325,6 +1325,9 @@ macro_rules! __primitive_port_type {
     (RigidBody) => {
         $crate::node_graph::ports::PortType::RigidBody
     };
+    (FluidRole) => {
+        $crate::node_graph::ports::PortType::FluidRole
+    };
     (RenderMode) => {
         $crate::node_graph::ports::PortType::RenderMode
     };
