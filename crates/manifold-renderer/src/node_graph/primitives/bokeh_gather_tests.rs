@@ -566,7 +566,7 @@ fn zero_coc_is_bit_exact_identity() {
             let x = (i % w) as f32 / w as f32;
             let y = (i / w) as f32 / h as f32;
             Pixel {
-                rgba: [x * 3.0, y * 2.0, 0.25, 0.37],
+                rgba: [x * 3.0, y * 2.0, 0.25, if i % 4 == 0 { 0.0 } else { 0.37 }],
             }
         })
         .collect::<Vec<_>>();

@@ -2795,7 +2795,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r4);
 }
 
-=== effect:DepthOfField node:22 ===
+=== effect:DepthOfField node:19 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_scale: f32,
@@ -2859,7 +2859,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r3);
 }
 
-=== effect:DepthOfField node:23 ===
+=== effect:DepthOfField node:20 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_intensity: f32,
@@ -2867,6 +2867,10 @@ struct Params {
     n1_offset: f32,
     n2_min: f32,
     n2_max: f32,
+    n3_default_r: f32,
+    n3_default_g: f32,
+    n3_default_b: f32,
+    n3_default_a: f32,
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
@@ -2874,7 +2878,8 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var dst_0: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var dst_1: texture_storage_2d<rgba16float, write>;
 
 fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
     let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
@@ -2894,9 +2899,18 @@ fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32)
     return vec4<f32>(clamp(c.rgb, vec3<f32>(min_v), vec3<f32>(max_v)), c.a);
 }
 
+fn n3_body(c_r: vec4<f32>, c_g: vec4<f32>, c_b: vec4<f32>, c_a: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, default_r: f32, default_g: f32, default_b: f32, default_a: f32, use_r: u32, use_g: u32, use_b: u32, use_a: u32) -> vec4<f32> {
+    var rgba = vec4<f32>(default_r, default_g, default_b, default_a);
+    if use_r != 0u { rgba.r = c_r.r; }
+    if use_g != 0u { rgba.g = c_g.r; }
+    if use_b != 0u { rgba.b = c_b.r; }
+    if use_a != 0u { rgba.a = c_a.r; }
+    return rgba;
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(dst);
+    let dims = textureDimensions(dst_0);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
@@ -2906,7 +2920,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_intensity);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_scale, params.n1_offset);
     let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_min, params.n2_max);
-    textureStore(dst, coord, r2);
+    let r3 = n3_body(r2, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0), uv, vec2<f32>(dims), params.n3_default_r, params.n3_default_g, params.n3_default_b, params.n3_default_a, 1u, 0u, 0u, 0u);
+    textureStore(dst_0, coord, r2);
+    textureStore(dst_1, coord, r3);
 }
 
 === effect:DigitalDrift node:21 ===

@@ -29,12 +29,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     var far_rgb = vec3<f32>(0.0);
     var far_weight = 0.0;
     var far_support = 0.0;
+    var far_reach = 0.0;
     var near_rgba = vec4<f32>(0.0);
     for(var y=0;y<2;y++) {
         for(var x=0;x<2;x++) {
             let p = clamp(p0+vec2<i32>(x,y),vec2<i32>(0),vec2<i32>(half_dims)-1);
             let bilinear = select(1.0-f.x,f.x,x==1)*select(1.0-f.y,f.y,y==1);
             let g = textureLoad(guide,p,0);
+            far_reach = max(far_reach,g.b*u.radius);
             let far_sample = textureLoad(far,p,0);
             // Radius discontinuities reject unrelated far surfaces. Near
             // pixels need a background fill, so accept available far samples.
@@ -58,12 +60,15 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let original_pm = vec4<f32>(original.rgb*original.a,original.a);
         let far_pm = vec4<f32>(far_rgb,far_weight)/max(far_support,1e-6);
         var background = mix(original_pm,far_pm,blur_amount);
-        if original.a <= 1e-6 { background = far_pm; }
+        // The half-resolution color filter alone must not expand a focused
+        // silhouette. Only an actual defocused far footprint can add coverage
+        // to a transparent full-resolution receiver.
+        if original.a <= 1e-6 { background = far_pm*smoothstep(1.0,2.0,far_reach); }
         var result = near_rgba + background*(1.0-near_rgba.a);
         if is_near {
             result = mix(original_pm,near_rgba+far_pm*(1.0-near_rgba.a),blur_amount);
         }
-        if radius == 0.0 && near_rgba.a == 0.0 && (original.a > 0.0 || result.a == 0.0) {
+        if blur_amount == 0.0 && near_rgba.a == 0.0 && (original.a > 0.0 || result.a == 0.0) {
             textureStore(output_tex,vec2<i32>(id.xy),original);
         } else {
             textureStore(output_tex,vec2<i32>(id.xy),vec4<f32>(result.rgb/max(result.a,1e-6),clamp(result.a,0.0,1.0)));
