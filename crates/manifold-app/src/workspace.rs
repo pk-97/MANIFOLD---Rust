@@ -127,21 +127,14 @@ pub struct Workspace {
     /// Setup panel's own `SceneSelection` (`window_input.rs`) so Properties
     /// follows a viewport click — one selection store, not two.
     pub viewport_selected_object: Option<u32>,
-    /// Active gizmo axis drag: armed on a press that hits a gizmo handle
-    /// (`viewport_gizmo::pick_axis`), fed per-move deltas that dispatch
-    /// `SetGraphNodeParamCommand` writes (P6's undo-round-trips-per-write
-    /// gate), cleared on release. `transform_node_id` is resolved once at
-    /// arm time — either the object's existing `node.transform_3d` (D8) or
-    /// the id `AddObjectTransformCommand` just created (P6's "unwired
-    /// transform_n → offers to create the atom" entry state) — so every
-    /// subsequent move in the same gesture writes the SAME node without
-    /// re-resolving the wire each time.
+    /// Active gizmo axis drag, cleared on release or cancellation. Fluid
+    /// bounds preview without editing the graph; ordinary object transforms
+    /// retain their existing live-write path.
     pub viewport_gizmo_drag: Option<GizmoDrag>,
 }
 
-/// One active gizmo axis drag (P6). `transform_node_id` is resolved once at
-/// arm time (see `viewport_gizmo_drag`'s field doc) and reused for every
-/// `SetGraphNodeParamCommand` the gesture dispatches.
+/// One active gizmo axis drag. Fluid setup edits remain a UI-only bounds
+/// preview until release; content commits the complete gesture once.
 #[derive(Debug, Clone)]
 pub struct GizmoDrag {
     pub axis: manifold_renderer::node_graph::GizmoAxis,
@@ -149,6 +142,7 @@ pub struct GizmoDrag {
     pub layer_id: manifold_core::LayerId,
     pub last_x: f32,
     pub last_y: f32,
+    pub fluid_domain: Option<crate::fluid_domain_edit::FluidDomainDrag>,
 }
 
 impl Workspace {

@@ -25,6 +25,23 @@
 use manifold_renderer::node_graph::ViewportSession;
 use winit::event::MouseButton;
 
+/// Gizmo projection operates in texture pixels; pointer events arrive in
+/// window logical coordinates. Keep the dock offset and display scale in
+/// the same conversion for picking and every subsequent drag packet.
+/// Outside points remain valid while a captured drag leaves the viewport.
+pub(crate) fn gizmo_point(
+    rect: manifold_ui::Rect,
+    dimensions: (u32, u32),
+    point: (f32, f32),
+) -> Option<(f32, f32)> {
+    if rect.width <= 0.0 || rect.height <= 0.0 || dimensions.0 == 0 || dimensions.1 == 0 {
+        return None;
+    }
+    let x = (point.0 - rect.x) * dimensions.0 as f32 / rect.width;
+    let y = (point.1 - rect.y) * dimensions.1 as f32 / rect.height;
+    (x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
 /// Per-device-family sensitivity constants — the panel owns these (D7: "the
 /// panel owns the constant so it can tune per input device", already the
 /// convention `ViewportCamera`'s own doc comments state). Mouse and trackpad
@@ -126,6 +143,17 @@ pub fn apply(session: &mut ViewportSession, gesture: ViewportGesture, sens: &Vie
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gizmo_pointer_uses_dock_origin_and_actual_texture_scale() {
+        let rect = manifold_ui::Rect::new(12.0, 150.0, 200.0, 100.0);
+        assert_eq!(gizmo_point(rect, (400, 200), (112.0, 200.0)), Some((200.0, 100.0)));
+        assert_eq!(gizmo_point(rect, (200, 100), (112.0, 200.0)), Some((100.0, 50.0)));
+        assert_eq!(gizmo_point(rect, (400, 200), (-8.0, 140.0)), Some((-40.0, -20.0)));
+        assert_eq!(gizmo_point(rect, (400, 200), (f32::NAN, 200.0)), None);
+        assert_eq!(gizmo_point(manifold_ui::Rect::new(0.0, 0.0, 0.0, 100.0),
+            (400, 200), (20.0, 20.0)), None);
+    }
 
     #[test]
     fn left_drag_without_shift_orbits() {

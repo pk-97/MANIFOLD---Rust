@@ -26,6 +26,80 @@ use manifold_renderer::preset_context::PresetContext;
 
 use crate::harness;
 
+/// Bounds and handles must redraw over the cached scene while a setup drag
+/// is still a UI draft. No fluid solver or graph rebuild should run for it.
+#[test]
+fn viewport_session_fluid_domain_draft_redraws_without_rebuilding() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_renderer::node_graph::{GizmoMode, gizmo_lines, gizmo_target_for};
+    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines;
+
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let def: EffectGraphDef = serde_json::from_str(&scene_json()).unwrap();
+    let mut frame_ctx = ctx(h);
+    frame_ctx.width = 640;
+    frame_ctx.height = 400;
+    frame_ctx.output_width = 640;
+    frame_ctx.output_height = 400;
+    frame_ctx.aspect = 1.6;
+    let mut session = ViewportSession::open(
+        &def, &NodeId::new("scene"), &registry, std::sync::Arc::clone(&h.device),
+        frame_ctx.width, frame_ctx.height, &frame_ctx,
+    ).unwrap();
+    session.pan(-20.0, 25.0, 0.01);
+    session.dolly(-2.5, 0.3);
+    let cfg = ViewportOverlayConfig::default();
+    let clean = session.render_if_dirty(&frame_ctx, &cfg, None, &[], &[]);
+    let mut fluid: EffectGraphDef = serde_json::from_str(r#"{
+        "version":2,"nodes":[
+            {"id":1,"nodeId":"domain","typeId":"node.transform_3d","params":{
+                "pos_y":{"type":"Float","value":2.0},
+                "scale_x":{"type":"Float","value":4.0},
+                "scale_y":{"type":"Float","value":4.0},
+                "scale_z":{"type":"Float","value":4.0}}},
+            {"id":2,"nodeId":"water","typeId":"node.fluid_surface"},
+            {"id":3,"nodeId":"surface","typeId":"node.scene_object"},
+            {"id":4,"nodeId":"scene","typeId":"node.render_scene","params":{
+                "objects":{"type":"Int","value":1}}},
+            {"id":5,"nodeId":"out","typeId":"system.final_output"}
+        ],"wires":[
+            {"fromNode":1,"fromPort":"transform","toNode":2,"toPort":"domain"},
+            {"fromNode":2,"fromPort":"vertices","toNode":3,"toPort":"vertices"},
+            {"fromNode":3,"fromPort":"object","toNode":4,"toPort":"object_0"},
+            {"fromNode":4,"fromPort":"color","toNode":5,"toPort":"in"}
+        ]}"#).unwrap();
+    let mut frames = Vec::new();
+    for (label, mode, edit) in [
+        ("original", GizmoMode::Move, None),
+        ("moved", GizmoMode::Move, Some(("pos_x", 2.0))),
+        ("resized", GizmoMode::Scale, Some(("scale_x", 6.0))),
+    ] {
+        if let Some((param, value)) = edit {
+            fluid.nodes[0].params.insert(param.into(), SerializedParamValue::Float { value });
+        }
+        let scene = SceneVm::from_def(&fluid).expect("fluid authoring scene");
+        let target = gizmo_target_for(&scene, 3).expect("editable fluid domain");
+        let domain = scene.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.object_node_id == 3 => row.fluid_domain,
+            _ => None,
+        }).unwrap();
+        let mut lines = fluid_domain_lines(domain).to_vec();
+        lines.extend(gizmo_lines(mode, &target));
+        let frame = session.render_if_dirty(&frame_ctx, &cfg, None, &[], &lines);
+        assert_ne!(frame, clean, "{label} bounds must be visible");
+        assert!(!session.is_dirty(), "overlay drafts must not rebuild or simulate");
+        std::fs::write(format!("/tmp/fluid_domain_draft_{label}.png"),
+            encode_rgba8_png(&frame, frame_ctx.width, frame_ctx.height)).unwrap();
+        frames.push(frame);
+    }
+    assert_ne!(frames[0], frames[1], "moving the bounds must redraw");
+    assert_ne!(frames[1], frames[2], "resizing the bounds must redraw");
+    assert_eq!(clean, session.render_if_dirty(&frame_ctx, &cfg, None, &[], &[]),
+        "cancelling a draft restores the unchanged cached scene");
+}
+
 /// Ground plane lit by one sun, wired to an `orbit_camera` (the SHOW
 /// camera) — identical scene to `scene_viewport_navigate.rs`'s proof scene,
 /// deliberately: this test is about session lifecycle/dirty-tracking, not

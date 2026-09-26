@@ -40,6 +40,7 @@ pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
 mod graph_target;
+mod fluid_domain_edit;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod object_modifier_transfer;

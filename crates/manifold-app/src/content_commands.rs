@@ -1104,6 +1104,15 @@ impl ContentThread {
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
+            ContentCommand::FluidDomainEdit(drag) => {
+                let result = self.engine.project()
+                    .ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::fluid_domain_edit::build_action(project, *drag));
+                match result {
+                    Ok(command) => { self.handle_command(ContentCommand::ExecuteOnContent(command)); }
+                    Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
             ContentCommand::PreviewAutomationLane { target, param_id, points } => {
                 self.engine.set_automation_lane_preview(target, param_id, points);
             }

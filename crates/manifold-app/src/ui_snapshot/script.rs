@@ -643,6 +643,12 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
+                ContentCommand::FluidDomainEdit(drag) => {
+                    match crate::fluid_domain_edit::build_action(&data.project, *drag) {
+                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
                 ContentCommand::ObjectModifier(action) => {
                     match crate::object_modifier_transfer::build_action(&data.project, action) {
                         Ok(command) => ContentCommand::ExecuteOnContent(command),

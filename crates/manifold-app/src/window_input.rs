@@ -1097,6 +1097,16 @@ impl Application {
         // release path, whose `on_release` would otherwise commit a live range
         // scrub. The popover APIs are idempotent when no drag is active.
         self.editor_mapping_popover.close();
+        // Domain motion has not touched the project yet: Escape/focus loss
+        // discards the draft instead of turning cancellation into a setup edit.
+        let cancelled_domain = self.graph_editor.as_mut().is_some_and(|ed| {
+            if ed.viewport_gizmo_drag.as_ref().is_some_and(|drag| drag.fluid_domain.is_some()) {
+                ed.viewport_gizmo_drag = None;
+                true
+            } else {
+                false
+            }
+        });
         if let Some(canvas) = self.graph_canvas.as_mut()
             && canvas.popover_open()
         {
@@ -1124,7 +1134,7 @@ impl Application {
         self.editor_mouse_input(window_id, MouseButton::Left, ElementState::Released);
         self.editor_mouse_input(window_id, MouseButton::Middle, ElementState::Released);
 
-        let capture_cancelled = canvas_capture || ui_pressed || had_mapping || had_canvas_popover;
+        let capture_cancelled = canvas_capture || ui_pressed || had_mapping || had_canvas_popover || cancelled_domain;
         if capture_cancelled
             && let Some(ed) = self.graph_editor.as_mut()
         {
@@ -1145,7 +1155,7 @@ impl Application {
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
         };
-        let Some(def) = self.watched_def_cloned() else { return false };
+        let Some(def) = self.viewport_def_cloned() else { return false };
         let Some(scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
             return false;
         };
@@ -1155,6 +1165,8 @@ impl Application {
             let (w, h) = session.dimensions();
             (w, h, session.camera().to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected_object)
         };
+        let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
+        let Some((cx, cy)) = crate::viewport_input::gizmo_point(rect, (w, h), (cx, cy)) else { return false };
 
         // Try the currently selected object's gizmo handles first.
         if let Some(obj_id) = selected
@@ -1170,6 +1182,19 @@ impl Application {
                 // through to orbit.
                 return true;
             }
+            let fluid_domain = if target.kind == manifold_renderer::node_graph::GizmoTargetKind::FluidDomain {
+                match crate::fluid_domain_edit::FluidDomainDrag::begin(
+                    &self.local_project, layer_id.clone(), obj_id, mode, axis,
+                ) {
+                    Ok(draft) => Some(draft),
+                    Err(message) => {
+                        self.send_content_cmd(ContentCommand::GraphEditRejected(message));
+                        return true;
+                    }
+                }
+            } else {
+                None
+            };
             if target.transform.is_none() {
                 // P6 entry state (D8 amendment): the object's `transform`
                 // port is unwired — create the atom now (one undo unit).
@@ -1202,6 +1227,7 @@ impl Application {
                     layer_id,
                     last_x: cx,
                     last_y: cy,
+                    fluid_domain,
                 });
                 ed.offscreen_dirty = true;
             }
@@ -1243,10 +1269,38 @@ impl Application {
     /// Returns `true` if a drag was armed and handled (whether or not the
     /// axis turned out to be driven mid-drag, which just no-ops the write).
     fn editor_viewport_gizmo_drag_move(&mut self, x: f32, y: f32) -> bool {
+        let Some(ed) = self.graph_editor.as_ref() else { return false };
+        if ed.viewport_gizmo_drag.is_none() { return false; }
+        let Some(rect) = ed.viewport_rect else { return true };
+        let Some(session) = ed.viewport_session.as_ref() else { return true };
+        let Some((x, y)) = crate::viewport_input::gizmo_point(rect, session.dimensions(), (x, y)) else { return true };
+        if let Some(ed) = self.graph_editor.as_mut()
+            && let Some(drag) = ed.viewport_gizmo_drag.as_mut()
+            && let Some(domain) = drag.fluid_domain.as_mut()
+        {
+            if !matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &drag.layer_id) {
+                ed.viewport_gizmo_drag = None;
+                ed.offscreen_dirty = true;
+                return true;
+            }
+            if let Some(session) = ed.viewport_session.as_ref() {
+                let (w, h) = session.dimensions();
+                if let Some(delta) = domain.target.projected_drag_delta(
+                    drag.axis, &session.camera().to_camera(), w, h,
+                    (x - drag.last_x, y - drag.last_y),
+                ) {
+                    domain.update(domain.value + delta);
+                }
+            }
+            drag.last_x = x;
+            drag.last_y = y;
+            ed.offscreen_dirty = true;
+            return true;
+        }
         let Some(drag) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_gizmo_drag.clone()) else {
             return false;
         };
-        let Some(def) = self.watched_def_cloned() else { return true };
+        let Some(def) = self.viewport_def_cloned() else { return true };
         let Some(scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
             return true;
         };
@@ -1517,10 +1571,20 @@ impl Application {
         // P6: a release also clears any in-flight gizmo axis drag — same
         // "release always clears first" precedence the orbit/pan drag uses.
         if state == ElementState::Released
-            && let Some(ed) = self.graph_editor.as_mut()
-            && ed.viewport_gizmo_drag.take().is_some()
+            && button == MouseButton::Left
+            && let Some(drag) = self.graph_editor.as_mut().and_then(|ed| {
+                let drag = ed.viewport_gizmo_drag.take()?;
+                ed.offscreen_dirty = true;
+                Some(drag)
+            })
         {
-            ed.offscreen_dirty = true;
+            if let Some(domain) = drag.fluid_domain
+                && domain.changed()
+                && matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &domain.layer_id)
+                && self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_selected_object == Some(domain.object_node_id))
+            {
+                self.send_content_cmd(ContentCommand::FluidDomainEdit(Box::new(domain)));
+            }
             return;
         }
         if state == ElementState::Released
@@ -2163,6 +2227,7 @@ impl Application {
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.viewport_open = !ed.viewport_open;
                         ed.viewport_drag = None;
+                        ed.viewport_gizmo_drag = None;
                         if !ed.viewport_open {
                             // Tear down immediately — GPU resources release
                             // this frame, not on some later poll.

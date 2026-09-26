@@ -102,7 +102,7 @@ pub use viewport_overlay::{
     composite_overlay_lines_rgba8, grid_lines, light_billboard_lines, project_lines,
 };
 pub use viewport_gizmo::{
-    GizmoAxis, GizmoMode, GizmoTarget, drag_write, gizmo_lines, gizmo_target_for, move_drag_delta,
+    GizmoAxis, GizmoMode, GizmoTarget, GizmoTargetKind, drag_write, gizmo_lines, gizmo_target_for, move_drag_delta,
     pick_axis, pick_object, rotate_drag_delta, scale_drag_delta,
 };
 pub use viewport_render::{ViewportRenderError, override_camera_def, render_viewport_frame};
@@ -148,7 +148,7 @@ pub(crate) use param_binding::Reshape;
 pub use param_binding::{
     BindingCacheEntry, BindingSource, LastAppliedCache, ParamBinding, ParamConvert, ParamId,
     ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,
-    binding_value, outer_routings_from_bindings,
+    binding_value, convert_param_value, outer_routings_from_bindings,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use persistence::{

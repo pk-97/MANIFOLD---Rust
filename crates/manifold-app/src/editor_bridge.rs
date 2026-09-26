@@ -984,6 +984,12 @@ impl Application {
         crate::graph_target::resolve(&self.local_project, self.watched_graph_target.as_ref()?).cloned()
     }
 
+    /// Authoring values for viewport geometry, including exposed controls.
+    /// This is a disposable projection, never a project edit or runtime result.
+    pub(crate) fn viewport_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+        crate::fluid_domain_edit::authored_def(&self.local_project, self.watched_graph_target.as_ref()?)
+    }
+
     /// Resolve the canvas's current selection into copy-ready data: the selected
     /// def nodes plus the wires whose BOTH endpoints are selected (internal
     /// connectivity only). `None` when nothing is watched or selected. Backs
@@ -1385,7 +1391,7 @@ impl Application {
         });
         let viewport_open = self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open);
         let viewport_def = if viewport_is_scene_node && viewport_open {
-            self.watched_def_cloned()
+            self.viewport_def_cloned()
         } else {
             None
         };
@@ -1662,13 +1668,20 @@ impl Application {
             let scene = viewport_def
                 .as_ref()
                 .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def);
-            let gizmo_lines: Vec<manifold_renderer::node_graph::WorldLine> = scene
+            let draft = ws.viewport_gizmo_drag.as_ref()
+                .and_then(|drag| drag.fluid_domain.as_ref())
+                .filter(|drag| Some(drag.object_node_id) == ws.viewport_selected_object
+                    && matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &drag.layer_id));
+            let target = scene
                 .as_ref()
                 .zip(ws.viewport_selected_object)
-                .and_then(|(scene, object_id)| manifold_renderer::node_graph::gizmo_target_for(scene, object_id))
-                .map(|target| manifold_renderer::node_graph::gizmo_lines(ws.viewport_gizmo_mode, &target))
+                .filter(|_| draft.is_none())
+                .and_then(|(scene, object_id)| manifold_renderer::node_graph::gizmo_target_for(scene, object_id));
+            let gizmo_lines = draft.map(|drag| (&drag.target, drag.mode))
+                .or_else(|| target.as_ref().map(|target| (target, ws.viewport_gizmo_mode)))
+                .map(|(target, mode)| manifold_renderer::node_graph::gizmo_lines(mode, target))
                 .unwrap_or_default();
-            let fluid_domain = scene
+            let fluid_domain = draft.map(|drag| drag.layout).or_else(|| scene
                 .as_ref()
                 .zip(ws.viewport_selected_object)
                 .and_then(|(scene, object_id)| {
@@ -1677,7 +1690,7 @@ impl Application {
                             if row.object_node_id == object_id => row.fluid_domain,
                         _ => None,
                     })
-                });
+                }));
             ws.viewport_overlay_lines.clear();
             if let Some(domain) = fluid_domain {
                 ws.viewport_overlay_lines.extend(
