@@ -171,7 +171,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     receiver_model[3][2] = RECEIVER_WP[2];
 
     let objects = [
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &emissive_buffer,
             vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
             vertex_offset: 0,
@@ -187,6 +187,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -195,8 +196,14 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             instance_slots: 2,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &receiver_buffer,
             vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
             vertex_offset: 0,
@@ -212,6 +219,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -220,6 +228,12 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
     ];
     let materials = [

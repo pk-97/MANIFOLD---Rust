@@ -337,8 +337,9 @@ mod gpu_tests {
             uv: [0.0, 0.0],
             _pad2: [0.0; 2],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
     fn dispatch(
         wgsl: &str,
         src_vertices: &[MeshVertex],

@@ -30,6 +30,7 @@ struct MeshVertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

@@ -89,7 +89,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     ];
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
         vertex_offset: 0,
@@ -107,6 +107,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         mr_texture: None,
         normal_texture: None,
                     emissive_texture: None,
+        extra_material_textures: [None; 3],
                     emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                     emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -115,6 +116,12 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
 
     let mut normal_sources_slot = None;
@@ -141,4 +148,70 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     //   = (0.8164965809277261, 0.4082482904638631, 0.4082482904638631).
     let got1 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 1, [0.25, 0.5], slot_row_base);
     assert_close(got1, [0.8164_966, 0.4082_483, 0.4082_483], "triangle 1");
+}
+
+#[test]
+fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
+    let h = harness::shared();
+    let device = &h.device;
+    let verts = [
+        PackedVertexN { pos: [-1.0, -1.0, 0.0], normal: [1.0, 1.0, 1.0] },
+        PackedVertexN { pos: [1.0, -1.0, 0.0], normal: [1.0, 1.0, 1.0] },
+        PackedVertexN { pos: [0.0, 1.0, 0.0], normal: [1.0, 1.0, 1.0] },
+    ];
+    let vertex_buffer = write_shared_buffer(device, &verts);
+    let nonuniform_scale = [
+        [2.0, 0.0, 0.0, 0.0],
+        [0.0, 3.0, 0.0, 0.0],
+        [0.0, 0.0, 4.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let objects = [RtObjectGeometry {
+        material_attributes: Default::default(),
+        vertex_buffer: &vertex_buffer,
+        vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
+        vertex_offset: 0,
+        index_buffer: None,
+        triangle_count: 1,
+        transform: nonuniform_scale,
+        normal_offset: 12,
+        uv_offset: 0,
+        alpha_mask: false,
+        translucent: false,
+        alpha_cutoff: 0.5,
+        base_color_texture: None,
+        mr_texture: None,
+        normal_texture: None,
+        emissive_texture: None,
+        extra_material_textures: [None; 3],
+        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+        emissive_uv_t: [0.0, 0.0],
+        cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
+    }];
+    let mut normal_sources_slot = None;
+    let mut normal_sources_capacity = 0usize;
+    ensure_normal_sources(&mut normal_sources_slot, &mut normal_sources_capacity, device, &objects);
+    let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
+    let tracer = MetalShadowRayTracer::new(device);
+    let got = tracer.debug_fetch_interpolated_normal(
+        device,
+        &normal_sources,
+        0,
+        0,
+        [1.0 / 3.0, 1.0 / 3.0],
+        objects.len() as u32,
+    );
+    // inverse-transpose([2,3,4]) * (1,1,1) = (1/2,1/3,1/4), normalized.
+    assert_close(got, [0.768_221_26, 0.512_147_5, 0.384_110_63], "nonuniform inverse-transpose");
 }

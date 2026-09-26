@@ -21,6 +21,7 @@ struct MeshVertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -45,8 +46,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dst[idx].normal = n;
         dst[idx]._pad1 = 0.0;
         dst[idx].uv = self_v.uv;
-        dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+        dst[idx]._pad2 = self_v._pad2;
         dst[idx].tangent = self_v.tangent;
+        dst[idx].color = self_v.color;
     } else {
         dst[idx] = self_v;
     }

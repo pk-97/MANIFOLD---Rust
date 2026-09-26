@@ -12,9 +12,9 @@
 //      object 0 with GpuLoadAction::Clear and objects 1..N with
 //      GpuLoadAction::Load, so the depth test resolves real occlusion
 //      between objects instead of each rendering into its own buffer.
-//   2. A runtime-sized `lights: array<vec4<f32>>` buffer (3
-//      vec4s each — direction/position and mode, premultiplied colour
-//      and caster slot, then range) so the Phong/PBR/Cel
+//   2. A runtime-sized `lights: array<vec4<f32>>` buffer (4
+//      vec4s each — position/direction and mode, premultiplied colour
+//      and caster slot, range/falloff/cone cosines, then spot forward) so the Phong/PBR/Cel
 //      entry points sum every wired light's direct term instead of
 //      reading exactly one `light_dir`/`light_color` pair. Ambient and
 //      emission are added exactly once (after the light loop), not
@@ -29,7 +29,7 @@
 // pattern), byte-identical output. ONE envmap is shared across every PBR
 // object in the scene (an environment map is scene-wide, not per-object).
 //
-// MeshVertex layout (64 bytes — BUG-wfxe added tangent), entry point
+// MeshVertex layout (80 bytes including authored tangent and RGBA colour), entry point
 // names, and per-kind dispatch: identical to render_3d_mesh.wgsl.
 
 const PI: f32 = 3.14159265358979;
@@ -42,6 +42,7 @@ struct Vertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
@@ -62,9 +63,7 @@ struct Uniforms {
     // This object's world transform, composed CPU-side from
     // pos_x/y/z + rot_x/y/z (Euler, X→Y→Z order, matching
     // render_instanced_3d_mesh.wgsl's euler_xyz) + scale_x/y/z.
-    // v1 ignores non-uniform-scale normal skew (no inverse-transpose
-    // applied to the normal) — fine for uniform/near-uniform scale, a
-    // known limitation for extreme non-uniform scale.
+    // Normals use the inverse transpose; tangent directions use its linear part.
     model: mat4x4<f32>,
     camera_pos: vec4<f32>,
     // rgb: surface diffuse / base colour, w: opacity (informational).
@@ -256,17 +255,18 @@ struct Uniforms {
 @group(0) @binding(5) var roughness_map: texture_2d<f32>;
 @group(0) @binding(6) var base_color_map: texture_2d<f32>;
 @group(0) @binding(7) var metallic_map: texture_2d<f32>;
-// Scene lights, 3 vec4s each, runtime-sized (was a fixed `array<vec4,8>`
+// Scene lights, 4 vec4s each, runtime-sized (was a fixed `array<vec4,8>`
 // inside Uniforms; the old cap of 4 lights is gone). Only the first
 // `scene_params.x` entries are meaningful — count flows through the
 // uniform, NOT `arrayLength` (D1). At zero lights the CPU still binds one
 // zeroed entry so Metal always sees a bound buffer (D4).
 // Same layout as shaft_lights: Sun direction is toward the light.
-//   lights[i*3]   = (Sun: direction / Point: position, w: Sun 0 / Point 1)
-//   lights[i*3+1] = (colour.rgb premultiplied with intensity, w: caster slot)
-//   lights[i*3+2] = (range, 0, 0, 0)
+//   lights[i*4]   = (Sun: direction / Point/Spot: position, w: mode 0/1/2)
+//   lights[i*4+1] = (colour.rgb premultiplied with intensity, w: caster slot)
+//   lights[i*4+2] = (range, falloff 0/1, cos(inner), cos(outer))
+//   lights[i*4+3] = (Spot forward direction, w: 0)
 @group(0) @binding(8) var<storage, read> lights: array<vec4<f32>>;
-const LIGHT_STRIDE: u32 = 3u;
+const LIGHT_STRIDE: u32 = 4u;
 
 // Same Point meaning as Light::light_dir_at/attenuation_at and shaft_march:
 // return direction toward the light in xyz and distance attenuation in w.
@@ -278,14 +278,38 @@ fn light_direction_attenuation(index: u32, world_pos: vec3<f32>) -> vec4<f32> {
     }
     let delta = pos_or_dir.xyz - world_pos;
     let d_sq = dot(delta, delta);
+    let falloff = lights[base + 2u].y;
     let range = lights[base + 2u].x;
-    let r_sq = range * range;
     let direction = select(
         vec3<f32>(0.0, 0.0, 1.0),
         delta * inverseSqrt(max(d_sq, 1e-20)),
         d_sq >= 1e-20,
     );
-    let attenuation = select(1.0 / (1.0 + d_sq / max(r_sq, 1e-10)), 0.0, r_sq < 1e-10);
+    let distance = sqrt(d_sq);
+    let r_sq = range * range;
+    var attenuation = 1.0 / (1.0 + d_sq / max(r_sq, 1e-10));
+    if falloff > 0.5 {
+        attenuation = select(
+            (1.0 - pow(distance / max(range, 1e-6), 4.0)) / max(d_sq, 1e-6),
+            1.0 / max(d_sq, 1e-6),
+            range <= 0.0,
+        );
+        if range > 0.0 {
+            attenuation = max(1.0 - pow(distance / range, 4.0), 0.0) / max(d_sq, 1e-6);
+        }
+    } else {
+        attenuation = select(attenuation, 0.0, r_sq < 1e-10);
+    }
+    if pos_or_dir.w > 1.5 {
+        let cone = lights[base + 2u];
+        let forward = lights[base + 3u].xyz;
+        let cone_factor = clamp(
+            (dot(forward, -direction) - cone.w) / max(cone.z - cone.w, 0.001),
+            0.0,
+            1.0,
+        );
+        attenuation = attenuation * cone_factor * cone_factor;
+    }
     return vec4<f32>(direction, attenuation);
 }
 
@@ -293,7 +317,7 @@ fn light_direction_attenuation(index: u32, world_pos: vec3<f32>) -> vec4<f32> {
 // Per slot: [0..3] = the caster's light-space view_proj columns,
 // [4] = (bias, kernel_half_width, texel_size, light_size). Filled only for
 // active casters (zeroed otherwise); a light's caster slot rides
-// lights[i*3+1].w (−1.0 = this light casts no shadow). The four shadow maps
+// lights[i*4+1].w (−1.0 = this light casts no shadow). The four shadow maps
 // are separate bindings because WGSL has no dynamic texture-binding
 // indexing — the K=4 switch in sample_shadow() picks the right one.
 // `kernel_half_width` doubles as the PCSS dispatch: a NEGATIVE value (D12,
@@ -437,6 +461,69 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // vertex buffer here as an unused ABI dummy; the vertex shader never reads it
 // unless `u.appearance.y` is set.
 @group(0) @binding(46) var<storage, read> weights: array<f32>;
+@group(0) @binding(47) var diffuse_transmission_map: texture_2d<f32>;
+@group(0) @binding(48) var diffuse_transmission_color_map: texture_2d<f32>;
+@group(0) @binding(49) var prefiltered_sheen: texture_2d<f32>;
+
+struct MaterialMapUniform {
+    matrix: vec4<f32>,
+    offset_set: vec4<f32>,
+    sampling: vec4<u32>,
+};
+struct MaterialMaps { maps: array<MaterialMapUniform, 19>, };
+@group(0) @binding(51) var<uniform> subsurface_binding: vec4<f32>;
+@group(0) @binding(52) var subsurface_radiance: texture_2d<f32>;
+@group(0) @binding(50) var<uniform> material_maps: MaterialMaps;
+
+fn material_uv(uv: vec4<f32>, index: u32) -> vec2<f32> {
+    let m = material_maps.maps[index];
+    let xy = select(uv.xy, uv.zw, m.offset_set.z == 1.0);
+    return vec2<f32>(dot(m.matrix.xy, xy), dot(m.matrix.zw, xy)) + m.offset_set.xy;
+}
+
+fn map_address(i: i32, size: i32, mode: u32) -> i32 {
+    if mode == 1u { return ((i % size) + size) % size; }
+    if mode == 2u {
+        let mirrored = ((i % (2 * size)) + 2 * size) % (2 * size);
+        return min(mirrored, 2 * size - mirrored - 1);
+    }
+    return clamp(i, 0, size - 1);
+}
+
+fn map_texel(tex: texture_2d<f32>, p: vec2<i32>, level: i32, wrap: vec2<u32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(tex, level));
+    let valid = !((wrap.x == 3u && (p.x < 0 || p.x >= size.x))
+        || (wrap.y == 3u && (p.y < 0 || p.y >= size.y)));
+    let xy = vec2<i32>(map_address(p.x, size.x, wrap.x), map_address(p.y, size.y, wrap.y));
+    return select(vec4<f32>(0.0), textureLoad(tex, xy, level), valid);
+}
+
+fn map_level(tex: texture_2d<f32>, uv: vec2<f32>, level: i32, wrap: vec2<u32>, linear: bool) -> vec4<f32> {
+    let p = uv * vec2<f32>(textureDimensions(tex, level));
+    if !linear { return map_texel(tex, vec2<i32>(floor(p)), level, wrap); }
+    let base = vec2<i32>(floor(p - 0.5));
+    let t = fract(p - 0.5);
+    let a = mix(map_texel(tex, base, level, wrap), map_texel(tex, base + vec2<i32>(1, 0), level, wrap), t.x);
+    let b = mix(map_texel(tex, base + vec2<i32>(0, 1), level, wrap), map_texel(tex, base + vec2<i32>(1, 1), level, wrap), t.x);
+    return mix(a, b, t.y);
+}
+
+// Extension maps keep independent wrap, texel and mip filters without
+// allocating a hardware sampler slot for every possible map family.
+fn sample_extension_map(tex: texture_2d<f32>, uv: vec4<f32>, index: u32) -> vec4<f32> {
+    let coord = material_uv(uv, index);
+    let settings = material_maps.maps[index].sampling;
+    let dim = vec2<f32>(textureDimensions(tex, 0));
+    let footprint = max(length(dpdx(coord) * dim), length(dpdy(coord) * dim));
+    let lod = clamp(log2(max(footprint, 1e-8)), 0.0, f32(textureNumLevels(tex) - 1u));
+    let linear = select((settings.z & 1u) != 0u, (settings.z & 2u) != 0u, footprint > 1.0);
+    if settings.w == 0u { return map_level(tex, coord, 0, settings.xy, linear); }
+    if settings.w == 1u { return map_level(tex, coord, i32(round(lod)), settings.xy, linear); }
+    let low = i32(floor(lod));
+    let high = min(low + 1, i32(textureNumLevels(tex)) - 1);
+    return mix(map_level(tex, coord, low, settings.xy, linear),
+        map_level(tex, coord, high, settings.xy, linear), fract(lod));
+}
 
 // RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
@@ -686,7 +773,7 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 }
 
 // Light visibility in [0,1]: 1 = fully lit, 0 = fully shadowed. `slot_f` is
-// lights[i*3+1].w — negative means this light casts no shadow, so the point
+// lights[i*4+1].w — negative means this light casts no shadow, so the point
 // is always lit. Reconstructs the fragment's light-space position, then
 // either runs the fixed (2·khw+1)² PCF kernel or (D12) the PCSS branch — a
 // NEGATIVE `kernel_half_width` in the caster table is the Contact-tier
@@ -778,7 +865,7 @@ struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
+    @location(2) uv: vec4<f32>,
     // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
     // `@location(3) clip_now: vec4<f32>, @location(4) clip_prev: vec4<f32>,`
     // here — the CURRENT and PREVIOUS clip-space positions, carried as
@@ -793,6 +880,7 @@ struct VsOut {
     // because EMIT_VELOCITY takes 3 and 4.
     @location(5) world_tangent: vec4<f32>,
     @location(6) appearance_weight: f32,
+    @location(8) vertex_color: vec4<f32>,
 };
 
 // Instance TRS applies FIRST, the object group's `model` (transform_n)
@@ -827,11 +915,13 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
         select(1.0, -1.0, marker == 3u),
     );
     let inst_pos = rot * ((v.position * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
-    let inst_normal = rot * (v.normal * msign);
+    let scale_sign = select(1.0, -1.0, inst.pos_scale.w < 0.0);
+    let inst_normal = rot * (v.normal * msign * scale_sign);
 
     var out: VsOut;
     let world = u.model * vec4<f32>(inst_pos, 1.0);
     out.world_pos = world.xyz;
+    out.vertex_color = v.color;
     out.clip_pos = u.view_proj * world;
     // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
     // `out.clip_now = out.clip_pos; let prev_world = u.prev_model *
@@ -844,16 +934,25 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     // rigid-only-motion limitation D5 states for deform atoms. Inert
     // comment in the velocity-off compile.
     // GBUFFER_VS_VELOCITY_BODY
-    out.world_normal = normalize((u.model * vec4<f32>(inst_normal, 0.0)).xyz);
-    out.uv = v.uv;
+    // Cofactors give the inverse transpose up to determinant magnitude.
+    // Preserve its sign for reflected models, without dividing by a tiny scale.
+    let cofactor = mat3x3<f32>(
+        cross(u.model[1].xyz, u.model[2].xyz),
+        cross(u.model[2].xyz, u.model[0].xyz),
+        cross(u.model[0].xyz, u.model[1].xyz),
+    );
+    let model_sign = select(1.0, -1.0, dot(u.model[0].xyz, cofactor[0]) < 0.0);
+    out.world_normal = normalize(cofactor * inst_normal * model_sign);
+    out.uv = vec4<f32>(v.uv, v._pad2);
     // BUG-wfxe: tangent transforms with the same instance-rotation + model
     // chain as the normal (a direction); the mirror marker flips it with
     // the same sign vector (M R t = R' M t). w carries the bitangent sign
     // through unscaled; w == 0 (no authored tangent) passes the zero
     // sentinel through — normalize() of a zero vector would be NaN, so the
     // direction is selected, not branched (uniform control flow).
-    let t_world = normalize((u.model * vec4<f32>(rot * (v.tangent.xyz * msign), 0.0)).xyz);
-    out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w);
+    let t_world = normalize((u.model * vec4<f32>(rot * (v.tangent.xyz * msign * scale_sign), 0.0)).xyz);
+    let handedness = model_sign * msign.x * msign.y * msign.z * scale_sign;
+    out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w * handedness);
     if u.appearance.y > 0.5 {
         out.appearance_weight = weights[vid];
     } else {
@@ -884,10 +983,11 @@ struct VsOutPoints {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
+    @location(2) uv: vec4<f32>,
     @location(5) world_tangent: vec4<f32>,
     @location(6) appearance_weight: f32,
     @location(7) point_size: f32,
+    @location(8) vertex_color: vec4<f32>,
 };
 
 // Points mode draws the SAME vertex buffers with point topology — every
@@ -909,6 +1009,7 @@ fn vs_points(
         o.world_tangent,
         o.appearance_weight,
         u.render_mode.x,
+        o.vertex_color,
     );
 }
 
@@ -917,7 +1018,8 @@ fn vs_points(
 // while values above one brighten HDR output without exceeding opacity 1.
 fn apply_appearance(rgb: vec3<f32>, alpha: f32, weight: f32) -> vec4<f32> {
     let level = u.appearance.x * weight;
-    return vec4<f32>(rgb * max(level, 1.0), alpha * clamp(level, 0.0, 1.0));
+    let coverage = select(1.0, alpha, u.alpha_params.x == 2.0);
+    return vec4<f32>(rgb * max(level, 1.0), coverage * clamp(level, 0.0, 1.0));
 }
 
 fn appearance_discard(weight: f32) -> bool {
@@ -946,7 +1048,7 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
     let t = dp2perp * duv1.x + dp1perp * duv2.x;
     let b = dp2perp * duv1.y + dp1perp * duv2.y;
 
-    let inv_max = inverseSqrt(max(dot(t, t), dot(b, b)));
+    let inv_max = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-16));
     return mat3x3<f32>(t * inv_max, b * inv_max, n);
 }
 
@@ -976,23 +1078,18 @@ fn tbn_for(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tangent: vec4<f32>) -> mat
 // to [0,1], B = tangent-space Z), reconstructed into world space via the
 // authored tangent frame when present (BUG-wfxe), the cotangent frame
 // otherwise.
-fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
+fn resolve_normal(uv: vec4<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if u.texture_flags.x > 0.5 {
+        if (u32(u.appearance.z) & 1u) != 0u {
+            return normalize(textureSample(normal_map, normal_sampler, uv.xy).xyz);
+        }
         let n = normalize(vertex_normal);
-        // G-P4: per-map KHR_texture_transform. The frame is built from
-        // the SAME transformed UV the texture is sampled with — a
-        // rotated/scaled UV space rotates/scales the tangent directions,
-        // and deriving T/B from the untransformed uv would bend the
-        // decoded normals off-axis. Identity transform makes uv_t == uv
-        // bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
-        // byte-identical. NOTE: the AUTHORED tangent frame belongs to the
-        // mesh's ORIGINAL UV space — a non-identity normal_uv_m rotation
-        // with authored tangents is an unresolved mismatch (glTF keeps
-        // tangent space tied to the same texcoords the transform edits);
-        // no shipped asset combines the two.
-        let uv_t = apply_uv_transform(uv, u.normal_uv_m, u.normal_uv_t);
+        let uv_t = material_uv(uv, 1u);
         let sampled = textureSample(normal_map, normal_sampler, uv_t).rgb;
-        let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
+        var tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
+        tangent_normal = vec3<f32>(tangent_normal.xy * u.normal_uv_t.z, tangent_normal.z);
+        // glTF TANGENT is the authored normal-map frame. Only meshes
+        // without it derive a frame from the selected, transformed UVs.
         let tbn = tbn_for(n, world_pos, uv_t, tangent);
         return normalize(tbn * tangent_normal);
     }
@@ -1011,13 +1108,13 @@ fn apply_uv_transform(uv: vec2<f32>, m: vec4<f32>, t: vec4<f32>) -> vec2<f32> {
     );
 }
 
-fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
+fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
-        let uv_t = apply_uv_transform(uv, u.base_color_uv_m, u.base_color_uv_t);
+        let uv_t = material_uv(uv, 0u);
         let t = textureSample(base_color_map, base_color_sampler, uv_t);
-        return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
+        return u.base_color * t * color;
     }
-    return u.base_color;
+    return u.base_color * color;
 }
 
 // IMPORT_FIDELITY_DESIGN.md D3/F-P2: glTF metallic-roughness packing
@@ -1025,23 +1122,37 @@ fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
 // channel-select mode on the (now-dead) roughness_map/metallic_map
 // bindings, per D3's explicit rejection of that shape. Returns
 // (roughness, metallic).
-fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
+fn resolve_mr(uv: vec4<f32>) -> vec2<f32> {
     if u.texture_flags2.x > 0.5 {
-        let uv_t = apply_uv_transform(uv, u.mr_uv_m, u.mr_uv_t);
+        let uv_t = material_uv(uv, 2u);
         let t = textureSample(mr_map, mr_sampler, uv_t);
-        return vec2<f32>(max(t.g, 0.01), clamp(t.b, 0.0, 1.0));
+        // glTF's packed channels multiply the material factors.  A texture
+        // is a modulation map, not a replacement for the authored values.
+        return vec2<f32>(
+            max(u.pbr_metallic_roughness.y * t.g, 0.01),
+            clamp(u.pbr_metallic_roughness.x * t.b, 0.0, 1.0),
+        );
     }
-    return vec2<f32>(max(u.pbr_metallic_roughness.y, 0.01), clamp(u.pbr_metallic_roughness.x, 0.0, 1.0));
+    var roughness = u.pbr_metallic_roughness.y;
+    var metallic = u.pbr_metallic_roughness.x;
+    // Separate red-channel maps are the original mesh-node absolute inputs.
+    if (u32(u.appearance.z) & 2u) != 0u {
+        roughness = textureSample(roughness_map, envmap_sampler, uv.xy).r;
+    }
+    if (u32(u.appearance.z) & 4u) != 0u {
+        metallic = textureSample(metallic_map, envmap_sampler, uv.xy).r;
+    }
+    return vec2<f32>(max(roughness, 0.01), clamp(metallic, 0.0, 1.0));
 }
 
 // IMPORT_FIDELITY_DESIGN.md D3/F-P2: R-channel ambient occlusion. Unwired
 // = 1.0 (no darkening) — used ONLY to darken fs_pbr's diffuse IBL term
 // (never direct lighting, never specular IBL), per the design's Invariants
 // table.
-fn resolve_occlusion(uv: vec2<f32>) -> f32 {
+fn resolve_occlusion(uv: vec4<f32>) -> f32 {
     if u.texture_flags2.y > 0.5 {
-        let uv_t = apply_uv_transform(uv, u.occlusion_uv_m, u.occlusion_uv_t);
-        return textureSample(occlusion_map, occlusion_sampler, uv_t).r;
+        let uv_t = material_uv(uv, 3u);
+        return mix(1.0, textureSample(occlusion_map, occlusion_sampler, uv_t).r, u.occlusion_uv_t.z);
     }
     return 1.0;
 }
@@ -1053,10 +1164,10 @@ fn resolve_occlusion(uv: vec2<f32>) -> f32 {
 // existed when `emission.w` is 1.0). Used in EVERY entry point (fs_unlit
 // included, per M6-D1's albedo precedent) — emission is always added AFTER
 // lighting.
-fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
+fn resolve_emissive(uv: vec4<f32>) -> vec3<f32> {
     let strength = u.emission.w;
     if u.texture_flags2.z > 0.5 {
-        let uv_t = apply_uv_transform(uv, u.emissive_uv_m, u.emissive_uv_t);
+        let uv_t = material_uv(uv, 4u);
         let t = textureSample(emissive_map, emissive_sampler, uv_t).rgb;
         return u.emission.rgb * strength * t;
     }
@@ -1071,14 +1182,14 @@ fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
 // (unlike the base five) — sampled at the raw mesh UV; acceptable because
 // no Compare/gate asset in this doc's manifest combines sheen with a UV
 // transform on the sheen maps specifically.
-fn resolve_sheen(uv: vec2<f32>) -> vec4<f32> {
+fn resolve_sheen(uv: vec4<f32>) -> vec4<f32> {
     var color = u.sheen_params.rgb;
     if u.texture_flags.y > 0.5 {
-        color = color * textureSample(sheen_color_map, base_color_sampler, uv).rgb;
+        color = color * sample_extension_map(sheen_color_map, uv, 5u).rgb;
     }
     var roughness = u.sheen_params.w;
     if u.texture_flags.w > 0.5 {
-        roughness = roughness * textureSample(sheen_roughness_map, mr_sampler, uv).a;
+        roughness = roughness * sample_extension_map(sheen_roughness_map, uv, 6u).a;
     }
     return vec4<f32>(color, roughness);
 }
@@ -1089,14 +1200,14 @@ fn resolve_sheen(uv: vec2<f32>) -> vec4<f32> {
 // channel lerps between `iridescenceThicknessMinimum`/`Maximum` — both per
 // spec. Same "no KHR_texture_transform on these maps" v1 simplification as
 // resolve_sheen. Returns (factor, ior, thickness_nm, 0).
-fn resolve_iridescence(uv: vec2<f32>) -> vec3<f32> {
+fn resolve_iridescence(uv: vec4<f32>) -> vec3<f32> {
     var factor = u.iridescence_params.x;
     if u.texture_flags2.w > 0.5 {
-        factor = factor * textureSample(iridescence_map, mr_sampler, uv).r;
+        factor = factor * sample_extension_map(iridescence_map, uv, 7u).r;
     }
     var thickness = u.iridescence_params.w; // default = thicknessMaximum (spec: texture absent → max)
     if u.anisotropy_dispersion_params.w > 0.5 {
-        let t = textureSample(iridescence_thickness_map, mr_sampler, uv).g;
+        let t = sample_extension_map(iridescence_thickness_map, uv, 8u).g;
         thickness = mix(u.iridescence_params.z, u.iridescence_params.w, t);
     }
     return vec3<f32>(factor, u.iridescence_params.y, thickness);
@@ -1109,11 +1220,11 @@ fn resolve_iridescence(uv: vec2<f32>) -> vec3<f32> {
 // `anisotropyStrength` — both per spec ("Direction and strength ... encoded
 // in the .rg and .b channels ... rotated by anisotropyRotation"). Returns
 // (strength, rotation_radians).
-fn resolve_anisotropy(uv: vec2<f32>) -> vec2<f32> {
+fn resolve_anisotropy(uv: vec4<f32>) -> vec2<f32> {
     var strength = u.anisotropy_dispersion_params.x;
     var rotation = u.anisotropy_dispersion_params.y;
     if u.transmission_volume_params.w > 0.5 {
-        let t = textureSample(anisotropy_map, mr_sampler, uv).rgb;
+        let t = sample_extension_map(anisotropy_map, uv, 9u).rgb;
         let tex_rotation = atan2(t.g * 2.0 - 1.0, t.r * 2.0 - 1.0);
         rotation = rotation + tex_rotation;
         strength = strength * t.b;
@@ -1126,15 +1237,15 @@ fn resolve_anisotropy(uv: vec2<f32>) -> vec2<f32> {
 // clearcoatTexture's R channel scales clearcoatFactor; clearcoatRoughness
 // Texture's G channel scales clearcoatRoughnessFactor — both per spec.
 // Returns (clearcoat_factor, clearcoat_roughness).
-fn resolve_clearcoat(uv: vec2<f32>) -> vec2<f32> {
+fn resolve_clearcoat(uv: vec4<f32>) -> vec2<f32> {
     var factor = u.alpha_params.z;
     var roughness = u.alpha_params.w;
     let flags = clearcoat_family_flags();
     if (flags & 1u) != 0u {
-        factor = factor * textureSample(clearcoat_map, mr_sampler, uv).r;
+        factor = factor * sample_extension_map(clearcoat_map, uv, 10u).r;
     }
     if (flags & 2u) != 0u {
-        roughness = roughness * textureSample(clearcoat_roughness_map, mr_sampler, uv).g;
+        roughness = roughness * sample_extension_map(clearcoat_roughness_map, uv, 11u).g;
     }
     return vec2<f32>(factor, roughness);
 }
@@ -1142,16 +1253,14 @@ fn resolve_clearcoat(uv: vec2<f32>) -> vec2<f32> {
 // `clearcoatNormalTexture` — a standard tangent-space normal map (same RGB
 // convention/cotangent-frame reconstruction as the base `normalTexture`'s
 // `resolve_normal`) that perturbs ONLY the clearcoat lobe's shading normal.
-// Absent (the default, or no extension) falls back to the base layer's
-// already-resolved shading normal `n` UNCHANGED — the Khronos-documented
-// fallback ("if this texture is not given, the geometry/base normal is
-// used instead") and the byte-identical path for every material without
-// this specific texture.
-fn resolve_clearcoat_normal(uv: vec2<f32>, n: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
+// Without a coat map, keep the oriented geometric normal.
+fn resolve_clearcoat_normal(uv: vec4<f32>, n: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if (clearcoat_family_flags() & 4u) != 0u {
-        let sampled = textureSample(clearcoat_normal_map, normal_sampler, uv).rgb;
-        let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
-        let tbn = tbn_for(n, world_pos, uv, tangent);
+        let sampled = sample_extension_map(clearcoat_normal_map, uv, 12u).rgb;
+        var tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
+        tangent_normal = vec3<f32>(tangent_normal.xy * u.normal_uv_t.w, tangent_normal.z);
+        let frame_uv = select(material_uv(uv, 12u), material_uv(uv, 1u), u.texture_flags.x > 0.5);
+        let tbn = tbn_for(n, world_pos, frame_uv, tangent);
         return normalize(tbn * tangent_normal);
     }
     return n;
@@ -1162,15 +1271,15 @@ fn resolve_clearcoat_normal(uv: vec2<f32>, n: vec3<f32>, world_pos: vec3<f32>, t
 // specularTexture's ALPHA channel scales specularFactor; specularColor
 // Texture (sRGB) tints specularColorFactor — both per spec. Returns
 // (specular_factor, specular_tint.rgb).
-fn resolve_specular(uv: vec2<f32>) -> vec4<f32> {
+fn resolve_specular(uv: vec4<f32>) -> vec4<f32> {
     var factor = u.pbr_metallic_roughness.w;
     var tint = u.pbr_specular_tint.rgb;
     let flags = specular_family_flags();
     if (flags & 1u) != 0u {
-        factor = factor * textureSample(specular_map, mr_sampler, uv).a;
+        factor = factor * sample_extension_map(specular_map, uv, 13u).a;
     }
     if (flags & 2u) != 0u {
-        tint = tint * textureSample(specular_color_map, base_color_sampler, uv).rgb;
+        tint = tint * sample_extension_map(specular_color_map, uv, 14u).rgb;
     }
     return vec4<f32>(tint, factor);
 }
@@ -1178,10 +1287,10 @@ fn resolve_specular(uv: vec2<f32>) -> vec4<f32> {
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
 // sweep): `KHR_materials_transmission`'s `transmissionTexture` — R channel
 // scales `transmissionFactor` per spec.
-fn resolve_transmission_factor(uv: vec2<f32>) -> f32 {
+fn resolve_transmission_factor(uv: vec4<f32>) -> f32 {
     var factor = u.transmission_volume_params.x;
     if (specular_family_flags() & 4u) != 0u {
-        factor = factor * textureSample(transmission_map, mr_sampler, uv).r;
+        factor = factor * sample_extension_map(transmission_map, uv, 15u).r;
     }
     return factor;
 }
@@ -1189,12 +1298,27 @@ fn resolve_transmission_factor(uv: vec2<f32>) -> f32 {
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
 // sweep): `KHR_materials_volume`'s `thicknessTexture` — G channel scales
 // `thicknessFactor` per spec.
-fn resolve_volume_thickness(uv: vec2<f32>) -> f32 {
+fn resolve_volume_thickness(uv: vec4<f32>) -> f32 {
     var thickness = u.transmission_volume_params.y;
     if (specular_family_flags() & 8u) != 0u {
-        thickness = thickness * textureSample(volume_thickness_map, mr_sampler, uv).g;
+        thickness = thickness * sample_extension_map(volume_thickness_map, uv, 16u).g;
     }
     return thickness;
+}
+
+// KHR_materials_diffuse_transmission: A scales the factor, RGB scales
+// the independently authored colour. Colour textures are decoded to linear.
+fn resolve_diffuse_transmission(uv: vec4<f32>) -> vec4<f32> {
+    var factor = u.diffuse_transmission_params.x;
+    var color = u.diffuse_transmission_params.yzw;
+    let flags = specular_family_flags();
+    if (flags & 16u) != 0u {
+        factor *= sample_extension_map(diffuse_transmission_map, uv, 17u).a;
+    }
+    if (flags & 32u) != 0u {
+        color *= sample_extension_map(diffuse_transmission_color_map, uv, 18u).rgb;
+    }
+    return vec4<f32>(color, clamp(factor, 0.0, 1.0));
 }
 
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: KHR_materials_transmission +
@@ -1242,11 +1366,26 @@ fn sample_transmission(
     let transmission_ray = refraction_dir * thickness * model_scale;
     let exit_pos = world_pos + transmission_ray;
     let ndc = u.view_proj * vec4<f32>(exit_pos, 1.0);
-    let ndc_xy = ndc.xy / ndc.w;
+    let ndc_xy = ndc.xy / max(ndc.w, 1e-6);
     // Same NDC->UV convention as `shadow_factor`'s `project_to_shadow_uv`
     // above: y flipped (Metal texture origin is top-left).
     let refraction_uv = vec2<f32>(ndc_xy.x * 0.5 + 0.5, ndc_xy.y * -0.5 + 0.5);
-    return textureSampleLevel(opaque_scene_color, opaque_scene_color_sampler, refraction_uv, mip_level).rgb;
+    let env_uv = vec2<f32>(atan2(refraction_dir.z, refraction_dir.x) / (2.0 * PI) + 0.5,
+        asin(clamp(refraction_dir.y, -1.0, 1.0)) / PI + 0.5);
+    let env = textureSampleLevel(prefiltered_specular, envmap_sampler, env_uv, mip_level).rgb;
+    let edge = min(min(refraction_uv.x, refraction_uv.y), min(1.0 - refraction_uv.x, 1.0 - refraction_uv.y));
+    let screen_weight = smoothstep(0.0, 0.025, edge) * select(0.0, 1.0, ndc.w > 0.0);
+    let background = textureSampleLevel(opaque_scene_color, opaque_scene_color_sampler,
+        clamp(refraction_uv, vec2<f32>(0.0), vec2<f32>(1.0)), mip_level);
+    // The screen snapshot is premultiplied, exposed and fogged. Recover
+    // radiance at this surface before its own fog/exposure is applied.
+    // Empty background coverage receives the environment, not black.
+    let screen_rgb = background.rgb * exp2(-u.scene_params.z);
+    let fog_transmittance = exp(-max(u.fog_params.x, 0.0) * length(u.camera_pos.xyz - world_pos)
+        * exp(-u.fog_params.y * max(world_pos.y, 0.0)));
+    let surface_rgb = max((screen_rgb - u.fog_color.rgb * (1.0 - fog_transmittance) * background.a)
+        / max(fog_transmittance, 1e-4), vec3<f32>(0.0));
+    return mix(env, surface_rgb + env * (1.0 - background.a), screen_weight);
 }
 
 fn transmission_diffuse(
@@ -1257,6 +1396,7 @@ fn transmission_diffuse(
     ior: f32,
     albedo_rgb: vec3<f32>,
     F0: vec3<f32>,
+    F90: vec3<f32>,
     env_brdf: vec2<f32>,
     thickness: f32,
     dispersion: f32,
@@ -1275,7 +1415,7 @@ fn transmission_diffuse(
     );
 
     let max_mip = f32(textureNumLevels(opaque_scene_color) - 1u);
-    let mip_level = clamp(roughness * max_mip, 0.0, max_mip);
+    let mip_level = clamp(roughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0) * max_mip, 0.0, max_mip);
 
     var transmitted: vec3<f32>;
     if dispersion > 0.0 {
@@ -1328,7 +1468,7 @@ fn transmission_diffuse(
     // refracted sample, per the glTF sample viewer's f_diffuse
     // substitution — surface base_color still tints the see-through
     // (real glass isn't perfectly colorless).
-    let specular_color = F0 * env_brdf.x + env_brdf.y;
+    let specular_color = F0 * env_brdf.x + F90 * env_brdf.y;
     return (vec3<f32>(1.0) - specular_color) * attenuated * albedo_rgb;
 }
 
@@ -1357,7 +1497,7 @@ fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
 // light loop (matches render_3d_mesh.wgsl exactly).
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv);
+    let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
     }
@@ -1377,7 +1517,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 // light the way the single-light render_3d_mesh.wgsl does it).
 @fragment
 fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv);
+    let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
     }
@@ -1396,7 +1536,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         let l_dir = light_direction_attenuation(i, in.world_pos);
         let l_col = lights[i * LIGHT_STRIDE + 1u];
         let L = l_dir.xyz;
-        let H = normalize(L + V);
+        let H = (L + V) / max(length(L + V), 1e-6);
         let n_dot_l = max(dot(N, L), 0.0);
         let n_dot_h = max(dot(N, H), 0.0);
         let diffuse = albedo.rgb * n_dot_l;
@@ -1413,7 +1553,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: `KHR_materials_sheen`'s Charlie
 // (velvet) NDF — the glTF spec's own reference distribution.
 fn D_Charlie(sheen_roughness: f32, n_dot_h: f32) -> f32 {
-    let alpha = max(sheen_roughness * sheen_roughness, 0.000001);
+    let alpha = max(sheen_roughness * sheen_roughness, 0.0001);
     let inv_alpha = 1.0 / alpha;
     let cos2h = n_dot_h * n_dot_h;
     let sin2h = max(1.0 - cos2h, 0.0000001);
@@ -1427,7 +1567,7 @@ fn D_Charlie(sheen_roughness: f32, n_dot_h: f32) -> f32 {
 // the `4·NdotV·NdotL` normalization, same convention as the base
 // microfacet `specular` term below.
 fn V_Ashikhmin(n_dot_v: f32, n_dot_l: f32) -> f32 {
-    return clamp(1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)), 0.0, 1.0);
+    return 1.0 / max(4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v), 0.0001);
 }
 
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: `KHR_materials_iridescence`'s
@@ -1469,6 +1609,19 @@ fn iridescence_sensitivity(opd: f32, shift: vec3<f32>) -> vec3<f32> {
     xyz = xyz / 1.0685e-7;
 
     return vec3<f32>(dot(XYZ_TO_REC709_0, xyz), dot(XYZ_TO_REC709_1, xyz), dot(XYZ_TO_REC709_2, xyz));
+}
+
+fn schlick_fresnel(f0: vec3<f32>, f90: vec3<f32>, cos_theta: f32) -> vec3<f32> {
+    let weight = pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+    return f0 + (f90 - f0) * weight;
+}
+
+// The split-sum LUT is parameterized by Schlick's F0. Convert measured view
+// reflectance back to that parameter, keeping the grazing limit finite.
+fn schlick_equivalent_f0(reflectance: vec3<f32>, f90: vec3<f32>, cos_theta: f32) -> vec3<f32> {
+    let weight = pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+    let denominator = max(1.0 - weight, 0.0001);
+    return clamp((reflectance - f90 * weight) / denominator, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // Returns the thin-film reflectance (RGB) to mix into the base F0 by
@@ -1535,21 +1688,21 @@ fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32
 // (view-only Schlick) rather than the light-dependent N·H term any
 // single light would give — the standard split-sum substitute for IBL,
 // and the only well-defined choice when light_count can be 0.
-// RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant for the
-// backlit thin-surface term. Range [0, 1] — 0 = sharp terminator
-// (only dead-on backlight), 1 = full wrap (petals glow at wide angles).
-const RT_TRANSMISSION_WRAP: f32 = 0.5;
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv);
+    let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
     }
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
+    var geometric_N = normalize(in.world_normal);
+    if dot(geometric_N, V) < 0.0 {
+        geometric_N = -geometric_N;
+    }
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     if dot(N, V) < 0.0 {
         N = -N;
     }
@@ -1565,6 +1718,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let sheen = resolve_sheen(in.uv);
     let sheen_color = sheen.rgb;
     let sheen_roughness = sheen.w;
+    let translucency = resolve_diffuse_transmission(in.uv);
 
     let n_dot_v = max(dot(N, V), 0.001);
     // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior →
@@ -1576,12 +1730,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     //                   * specularFactor
     // Defaults (ior=1.5, specular_factor=1.0, specular_tint=(1,1,1))
     // reduce this to exactly (0.04, 0.04, 0.04) — the pre-G-P4 hardcoded
-    // dielectric baseline. v1 scope: F0 only (dielectric_f90 stays 1.0,
-    // i.e. the Schlick term below still assumes a white grazing edge —
-    // KHR_materials_specular also modulates f90 by specular_factor, which
-    // this phase's brief scoped OUT ("map to F0 scale"); a specular_factor
-    // of 0 dims but does not zero the grazing reflection, a known v1
-    // limitation).
+    // dielectric baseline. The same specular factor controls the dielectric
+    // grazing reflectance; metals retain the physical F90 = 1.
     let ior = u.pbr_metallic_roughness.z;
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
     // completion sweep): specularTexture/specularColorTexture now scale
@@ -1593,19 +1743,13 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let dielectric_reflectance = pow((ior - 1.0) / (ior + 1.0), 2.0);
     let dielectric_f0 = min(dielectric_reflectance * specular_tint, vec3<f32>(1.0)) * specular_factor;
     let base_f0 = mix(dielectric_f0, albedo.rgb, metallic);
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: `KHR_materials_iridescence`
-    // modifies the BASE layer's F0 (feeding both direct lighting and IBL
-    // below) — thin-film interference between air and the base
-    // dielectric/metal surface. `iridescence_factor == 0.0` (the default,
-    // no extension) makes `F0 == base_f0` exactly (mix at t=0), byte-
-    // identical to pre-E4 output for every material without the
-    // extension. Resolved once per fragment (not per light — the film's
-    // reflectance depends only on view angle, same "IBL's view-only
-    // Fresnel" reasoning this file already uses elsewhere).
+    let base_f90 = mix(vec3<f32>(specular_factor), vec3<f32>(1.0), vec3<f32>(metallic));
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: direct lights evaluate the
+    // thin-film reflectance at each light's V·H. IBL evaluates view
+    // reflectance once, then converts it to the Schlick-equivalent F0 the
+    // split-sum LUT expects.
     let iridescence = resolve_iridescence(in.uv);
     let iridescence_factor = iridescence.x;
-    let iridescence_fresnel = eval_iridescence(1.0, iridescence.y, n_dot_v, iridescence.z, base_f0);
-    let F0 = mix(base_f0, iridescence_fresnel, iridescence_factor);
     let a = roughness * roughness;
     let a2 = a * a;
     let r = roughness + 1.0;
@@ -1618,7 +1762,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // `resolve_normal` uses otherwise — anisotropy's T and the normal
     // map's T must be the SAME frame or the stretch axis drifts off the
     // mapped surface detail.
-    let tbn = tbn_for(N, in.world_pos, in.uv, in.world_tangent);
+    let tangent_uv = select(in.uv.xy, material_uv(in.uv, 1u), u.texture_flags.x > 0.5);
+    let tbn = tbn_for(N, in.world_pos, tangent_uv, in.world_tangent);
     let anisotropy = resolve_anisotropy(in.uv);
     let anisotropy_strength = clamp(anisotropy.x, 0.0, 1.0);
     let anisotropy_rotation = anisotropy.y;
@@ -1628,15 +1773,16 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // per-texel rotation, folded in by `resolve_anisotropy`).
     let cos_ar = cos(anisotropy_rotation);
     let sin_ar = sin(anisotropy_rotation);
-    let aniso_t = tbn[0] * cos_ar + tbn[1] * sin_ar;
-    let aniso_b = tbn[1] * cos_ar - tbn[0] * sin_ar;
-    // Burley 2012 ("Physically Based Shading at Disney" eq. 4) anisotropic
-    // alpha split — verified this session to collapse EXACTLY to the
-    // isotropic `a2`/`denom_d` shape above at `anisotropy_strength == 0`
-    // (at = ab = a), so the branch below is a genuine specialization, not
-    // an approximation swap, for every non-anisotropic material.
-    let at = max(a * (1.0 + anisotropy_strength), 0.001);
-    let ab = max(a * (1.0 - anisotropy_strength), 0.001);
+    let tangent_axis = normalize(tbn[0]);
+    let bitangent_axis = normalize(cross(N, tangent_axis))
+        * select(1.0, -1.0, dot(cross(N, tangent_axis), tbn[1]) < 0.0);
+    let aniso_t = tangent_axis * cos_ar + bitangent_axis * sin_ar;
+    let aniso_b = bitangent_axis * cos_ar - tangent_axis * sin_ar;
+    // glTF KHR_materials_anisotropy: alphaT widens toward 1 with the square
+    // of strength while alphaB remains the authored alpha. At zero strength
+    // both widths are exactly alpha, preserving isotropic continuity.
+    let at = max(mix(a, 1.0, anisotropy_strength * anisotropy_strength), 0.001);
+    let ab = max(a, 0.001);
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat — a
     // second, always-dielectric GGX lobe layered on top of the base BRDF.
@@ -1648,15 +1794,13 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // completion sweep): clearcoatTexture/clearcoatRoughnessTexture now
     // scale the factors (`resolve_clearcoat`), and clearcoatNormalTexture
     // now perturbs its own shading normal `Nc` (`resolve_clearcoat_normal`)
-    // — unwired falls back to the base layer's `N` unchanged, byte-
-    // identical to pre-E6 output (the Khronos-documented fallback: "if
-    // this texture is not given, the geometry/base normal is used
-    // instead").
+    // — unwired falls back to the oriented geometric normal, as required by
+    // the Khronos clearcoat normal fallback.
     const CLEARCOAT_F0: f32 = 0.04;
     let clearcoat_resolved = resolve_clearcoat(in.uv);
     let clearcoat = clearcoat_resolved.x;
     let clearcoat_roughness = clearcoat_resolved.y;
-    let Nc = resolve_clearcoat_normal(in.uv, N, in.world_pos, in.world_tangent);
+    let Nc = resolve_clearcoat_normal(in.uv, geometric_N, in.world_pos, in.world_tangent);
     let cc_n_dot_v = max(dot(Nc, V), 0.001);
     let cc_a = clearcoat_roughness * clearcoat_roughness;
     let cc_a2 = cc_a * cc_a;
@@ -1687,7 +1831,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let l_dir = light_direction_attenuation(i, in.world_pos);
         let l_col = lights[i * LIGHT_STRIDE + 1u];
         let L = l_dir.xyz;
-        let H = normalize(L + V);
+        let H = (L + V) / max(length(L + V), 1e-6);
         let n_dot_l = max(dot(N, L), 0.0);
         let n_dot_h = max(dot(N, H), 0.0);
         let v_dot_h = max(dot(V, H), 0.001);
@@ -1698,7 +1842,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
         let G = g_v * g_l;
 
-        let F = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+        let plain_f = schlick_fresnel(base_f0, base_f90, v_dot_h);
+        let film_f = eval_iridescence(1.0, iridescence.y, v_dot_h, iridescence.z, base_f0);
+        let F = mix(plain_f, film_f, iridescence_factor);
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: swap in the anisotropic
         // GGX D/V (Burley D, Heitz height-correlated Smith V) ONLY when
         // `anisotropy_strength > 0.0` — a per-fragment branch (this value
@@ -1730,7 +1876,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
             let vis_aniso = 0.5 / max(lambda_v + lambda_l, 0.0000001);
             specular = vec3<f32>(d_aniso * vis_aniso) * F;
         }
-        let kd = (1.0 - F) * (1.0 - metallic);
+        let f_max = max(F.r, max(F.g, F.b));
+        let kd = (1.0 - f_max) * (1.0 - metallic);
         let diffuse = kd * albedo.rgb / PI;
 
         let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
@@ -1769,15 +1916,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
         let specular_sheen = sheen_color * D_sheen * V_sheen;
         direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis3;
-        // RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse translucency
-        // around the backward normal — light arriving at the BACK of
-        // the surface. factor 0 makes this exactly zero (byte-identical).
-        // The wrap softens the terminator so petals glow at wide angles, not
-        // just dead-on. vis is the same per-light shadow_factor every other
-        // term uses (RT sv mask when RT is on, shadow map otherwise).
-        let back_l = saturate((dot(-N, L) + RT_TRANSMISSION_WRAP) / (1.0 + RT_TRANSMISSION_WRAP));
-        let factor = u.diffuse_transmission_params.x;
-        direct_translucent = direct_translucent + factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis3;
+        // Thin diffuse transmission redirects the diffuse lobe to the
+        // opposite hemisphere; its colour is independent of base colour.
+        let back_l = max(dot(-N, L), 0.0);
+        direct_translucent += translucency.a * kd * translucency.rgb / PI
+            * l_col.rgb * back_l * l_dir.w * vis3;
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
@@ -1792,7 +1935,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     var prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, roughness * PREFILTER_MAX_MIP).rgb;
     // RAYTRACING_DESIGN.md section 9 RD1: traced reflection radiance SUBSTITUTES
     // for the prefiltered env sample (never adds — same physical
-    // quantity; the `(F0 * env_brdf.x + env_brdf.y)` weighting below is
+    // quantity; the Schlick-equivalent weighting below is
     // untouched, so energy conservation and the roughness LUT are
     // unchanged). rt_flags.x gates harder than scene_params.w: the
     // texture only holds traced data when the dispatch ran with
@@ -1845,8 +1988,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    let env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
-    var specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);
+    let env_brdf = textureSampleLevel(brdf_lut, opaque_scene_color_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
+    let view_plain_f = schlick_fresnel(base_f0, base_f90, n_dot_v);
+    let view_film_f = eval_iridescence(1.0, iridescence.y, n_dot_v, iridescence.z, base_f0);
+    let f_view = mix(view_plain_f, view_film_f, iridescence_factor);
+    let ibl_f0 = schlick_equivalent_f0(f_view, base_f90, n_dot_v);
+    var specular_ibl = prefiltered * (ibl_f0 * env_brdf.x + base_f90 * env_brdf.y);
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: anisotropic IBL via the
     // well-known "bent normal" trick (Filament, Kaplanyan 2016) — bend the
     // reflection vector toward the anisotropic tangent's cross-normal
@@ -1864,7 +2011,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // hit it. The branch makes that path unreachable when strength is 0.
     if anisotropy_strength > 0.0 {
         let aniso_bend_tangent = cross(aniso_b, V);
-        let aniso_bent_normal = normalize(mix(N, normalize(cross(aniso_bend_tangent, aniso_b)), anisotropy_strength));
+        let bend = cross(aniso_bend_tangent, aniso_b);
+        let bend_normal = select(N, bend / max(length(bend), 1e-6), dot(bend, bend) > 1e-12);
+        let aniso_bent_normal = normalize(mix(N, bend_normal, anisotropy_strength));
         let r_aniso = reflect(-V, aniso_bent_normal);
         let r_aniso_azimuth = atan2(r_aniso.z, r_aniso.x);
         let r_aniso_elevation = asin(clamp(r_aniso.y, -1.0, 1.0));
@@ -1879,7 +2028,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         if u.scene_params.w > 0.5 && u.rt_flags.x > 0.5 {
             aniso_spec = prefiltered;
         }
-        specular_ibl = aniso_spec * (F0 * env_brdf.x + env_brdf.y);
+        specular_ibl = aniso_spec * (ibl_f0 * env_brdf.x + base_f90 * env_brdf.y);
     }
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: coat IBL — same split-sum
@@ -1892,30 +2041,23 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let r_coat_elevation = asin(clamp(r_coat.y, -1.0, 1.0));
     let r_coat_uv = vec2<f32>(r_coat_azimuth / (2.0 * PI) + 0.5, r_coat_elevation / PI + 0.5);
     let coat_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_coat_uv, clearcoat_roughness * PREFILTER_MAX_MIP).rgb;
-    let coat_env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(cc_n_dot_v, clearcoat_roughness), 0.0).rg;
+    let coat_env_brdf = textureSampleLevel(brdf_lut, opaque_scene_color_sampler, vec2<f32>(cc_n_dot_v, clearcoat_roughness), 0.0).rg;
     let coat_ibl = coat_prefiltered * (CLEARCOAT_F0 * coat_env_brdf.x + coat_env_brdf.y);
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: sheen IBL. No dedicated
-    // Charlie-DFG LUT exists in this codebase (adding one is its own
-    // precompute-pass project, out of this phase's scope) — reused
-    // approximation, same precedent as the clearcoat IBL resample two
-    // lines up reusing the metallic-roughness split-sum LUT for a
-    // different distribution: resample the prefiltered environment at
-    // `sheen_roughness` and weight by the LUT's grazing-independent bias
-    // term (`env_brdf.y` at `sheen_roughness`) — Charlie's own lobe has no
-    // Fresnel/F0 dependence, so the bias-only term is the closer of the
-    // LUT's two components to what a real sheen-DFG would give.
-    let sheen_env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, sheen_roughness), 0.0).rg;
-    let sheen_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, sheen_roughness * PREFILTER_MAX_MIP).rgb;
-    let sheen_ibl = sheen_color * sheen_prefiltered * clamp(sheen_env_brdf.y, 0.0, 1.0);
+    // Charlie directional albedo is integrated independently of GGX in
+    // LUT.b. Its environment chain uses the same Charlie distribution.
+    let sheen_energy = clamp(textureSampleLevel(brdf_lut, opaque_scene_color_sampler,
+        vec2<f32>(n_dot_v, sheen_roughness), 0.0).b, 0.0, 1.0);
+    let sheen_env = textureSampleLevel(prefiltered_sheen, envmap_sampler,
+        r_uv, sheen_roughness * PREFILTER_MAX_MIP).rgb;
+    let sheen_ibl = sheen_color * sheen_env * sheen_energy;
+    let sheen_base_scale = 1.0 - max(sheen_color.r, max(sheen_color.g, sheen_color.b)) * sheen_energy;
 
-    // View-angle Fresnel splits IBL energy between specular and diffuse —
-    // the standard split-sum substitute for the light-dependent N·H term a
-    // single direct light would give, and the only well-defined choice
-    // when light_count can be 0 (same reasoning the deleted roughness-fade
-    // heuristic's neighbouring comment already documented for this split).
-    let f_view = F0 + (1.0 - F0) * pow(clamp(1.0 - n_dot_v, 0.0, 1.0), 5.0);
-    let kd_ibl = (1.0 - f_view) * (1.0 - metallic);
+    // Use the measured view reflectance for the diffuse energy split. A
+    // scalar max-channel reduction keeps coloured Fresnel from creating
+    // diffuse energy in the other channels.
+    let f_view_max = max(f_view.r, max(f_view.g, f_view.b));
+    let kd_ibl = (1.0 - f_view_max) * (1.0 - metallic);
     // IMPORT_FIDELITY_DESIGN.md D3/F-P2: occlusion darkens the diffuse IBL
     // term ONLY — never direct lighting (the `direct` accumulator above),
     // never specular IBL (`specular_ibl`) — per the design's Invariants
@@ -1924,79 +2066,42 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let occlusion = resolve_occlusion(in.uv);
     let diffuse_ibl = kd_ibl * albedo.rgb * irradiance * occlusion;
 
-    let ibl = specular_ibl + diffuse_ibl;
-
-    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
-
-    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: clearcoat energy compensation.
-    // Khronos KHR_materials_clearcoat's normative layering equation —
-    // `coated_material = mix(material, clearcoat_brdf, clearcoat *
-    // clearcoat_fresnel)`, i.e. `material * (1 - Fc) + clearcoat_brdf * Fc`
-    // with `Fc = clearcoat * clearcoat_fresnel` and `clearcoat_fresnel =
-    // 0.04 + 0.96 * (1 - |V·Nc|)^5` — verified against the extension
-    // README (see the G-P5 execution report). "material" in the spec's own
-    // words is "the glTF 2.0 Metallic-Roughness material, including
-    // emission and all extensions" — wider than this doc's summarizing
-    // "base *= 1 - Fc" prose (which named only diffuse+base specular); this
-    // implementation follows the README and scales the FULL base term
-    // (direct + IBL + ambient + emission) by `(1 - Fc)`, then adds the
-    // coat's own direct+IBL response weighted by `Fc` — see the report for
-    // why this is not a shape contradiction, only a wider "base".
-    // `clearcoat = 0` (the default, no extension) makes `Fc` exactly zero:
-    // base * 1.0 + coat * 0.0 = base, byte-identical to pre-G-P5.
-    let v_dot_nc = cc_n_dot_v;
-    let clearcoat_fresnel = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_nc, 0.0, 1.0), 5.0);
-    let fc = clearcoat * clearcoat_fresnel;
-    let emissive = resolve_emissive(in.uv);
-    var base_rgb = direct + ibl + ambient + emissive;
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: sheen is its own additive
-    // layer over the base material (glTF extension layering order: sheen
-    // sits ON the metallic-roughness base, clearcoat mixes over the result
-    // of everything below it — hence added here, before the clearcoat mix
-    // a few lines down). `sheen_color == 0` (the default, no extension)
-    // makes both terms exactly zero, byte-identical to pre-E3 output. No
-    // energy-compensation scaling on the base term (spec-optional, needs
-    // the same DFG LUT the IBL approximation above doesn't have) — known
-    // v1 limitation, same doctrine as `specular_factor`'s f90 note above.
-    base_rgb = base_rgb + direct_sheen + sheen_ibl;
-    // RAYTRACING_DESIGN.md section 16 TL1: translucency adds to `base_rgb`
-    // BEFORE the glass block — `transmission_factor` and
-    // `translucency` are independent lobes; a material with both gets both,
-    // matching the Khronos layering where diffuse-transmission and
-    // specular-transmission coexist. factor 0 adds exactly zero.
-    base_rgb = base_rgb + direct_translucent;
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: transmission REPLACES the
-    // diffuse response with the refracted-and-tinted background sample
-    // (mixed by transmission_factor, per the glTF sample viewer's
-    // f_diffuse substitution) rather than layering on top of it — D3's
-    // explicit rejection of "alpha-blend approximation kept permanently"
-    // means this and the old approximation must never both be active. The
-    // import side (gltf_import.rs) no longer darkens base_color.a by
-    // transmission_factor (that darkening WAS the old approximation), so
-    // there is nothing left for this to double up against; specular
-    // (direct_specular = direct - direct_diffuse, and specular_ibl) stays
-    // untouched — only diffuse is swapped. `transmission_factor == 0.0`
-    // (every non-glass object, the overwhelming common case) skips this
-    // block entirely: `base_rgb` is left exactly as computed above, byte-
-    // identical to pre-E2b output.
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-    // completion sweep): transmissionTexture/thicknessTexture now scale
-    // their factors (`resolve_transmission_factor`/`resolve_volume_
-    // thickness`) — unwired is byte-identical to the pre-E6 direct uniform
-    // reads.
+    let back_uv = vec2<f32>(atan2(-N.z, -N.x) / (2.0 * PI) + 0.5,
+        asin(clamp(-N.y, -1.0, 1.0)) / PI + 0.5);
+    let back_irradiance = textureSampleLevel(irradiance_map, envmap_sampler, back_uv, 0.0).rgb;
+    let diffuse_transmission = translucency.a;
+    let translucent_ibl = kd_ibl * translucency.rgb * back_irradiance
+        * diffuse_transmission * occlusion;
+    var diffuse_component = (direct_diffuse + diffuse_ibl) * (1.0 - diffuse_transmission)
+        + direct_translucent + translucent_ibl;
+    if subsurface_binding.x > 0.0 {
+        let scattered = textureLoad(subsurface_radiance, vec2<i32>(in.clip_pos.xy), 0);
+        if scattered.a < 0.0 {
+            // An open boundary or exhausted random walk must be visible;
+            // never silently show a different transport mode as successful.
+            diffuse_component = vec3<f32>(1.0, 0.0, 1.0);
+        } else if scattered.a == subsurface_binding.y {
+            diffuse_component = mix(diffuse_component, kd_ibl * scattered.rgb, subsurface_binding.x);
+        }
+    }
     let transmission_factor = resolve_transmission_factor(in.uv);
     if transmission_factor > 0.0 {
-        let diffuse_component = direct_diffuse + diffuse_ibl;
         let volume_thickness = resolve_volume_thickness(in.uv);
-        let dispersion = u.anisotropy_dispersion_params.z;
         let transmitted_diffuse = transmission_diffuse(
-            N, V, in.world_pos, roughness, ior, albedo.rgb, F0, env_brdf, volume_thickness, dispersion
-        );
-        let final_diffuse = mix(diffuse_component, transmitted_diffuse, transmission_factor);
-        base_rgb = base_rgb + final_diffuse - diffuse_component;
+            N, V, in.world_pos, roughness, ior, albedo.rgb, ibl_f0, base_f90,
+            env_brdf, volume_thickness, u.anisotropy_dispersion_params.z
+        ) * (1.0 - metallic);
+        diffuse_component = mix(diffuse_component, transmitted_diffuse, transmission_factor);
     }
+    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
+    let emissive = resolve_emissive(in.uv);
+    let base_rgb = (direct - direct_diffuse + specular_ibl + diffuse_component + ambient)
+        * sheen_base_scale + direct_sheen + sheen_ibl + emissive;
+    let clearcoat_fresnel = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0)
+        * pow(clamp(1.0 - cc_n_dot_v, 0.0, 1.0), 5.0);
+    let fc = clearcoat * clearcoat_fresnel;
     let coat_rgb = direct_coat + coat_ibl;
-    let lit = base_rgb * (1.0 - fc) + coat_rgb * fc;
+    let lit = base_rgb * (1.0 - fc) + coat_rgb * clearcoat;
 
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit, in.world_pos) * exp2(u.scene_params.z);
@@ -2007,7 +2112,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 // every wired light; ambient + emission added exactly once.
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv);
+    let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
     }

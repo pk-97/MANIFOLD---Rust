@@ -134,8 +134,9 @@ mod gpu_tests {
             uv,
             _pad2: [23.0, 29.0],
             tangent,
+            color: [1.0; 4],
         }
-    }
+}
 
     fn map(bary: [f32; 3], triangle: f32) -> Vec4Vertex {
         Vec4Vertex {

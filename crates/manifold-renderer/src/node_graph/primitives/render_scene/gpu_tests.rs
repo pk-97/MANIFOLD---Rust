@@ -1,6 +1,7 @@
     use super::*;
     use crate::generators::mesh_common::InstanceTransform;
     use crate::node_graph::light::{Light, LightMode, ShadowSoftness};
+    use bytemuck::Zeroable;
     use half::f16;
     use manifold_gpu::{
         GpuCompareFunction, GpuDepthStencilDesc, GpuTextureDesc, GpuTextureDimension,
@@ -440,6 +441,7 @@
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         };
         let quad_verts = [
             mk_vertex(-ext, -ext),
@@ -472,12 +474,17 @@
             light_view_proj: vp,
             model: IDENTITY4,
             appearance: [1.0, 0.0, 0.0, 0.0],
+            ..bytemuck::Zeroable::zeroed()
         };
+        let alpha_texture = upload_rgba16f(&device, 1, 1, &[[1.0; 4]], "shadow-alpha");
+        let alpha_sampler = device.create_sampler(&Default::default());
         let shadow_bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&shadow_uniforms) },
             GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: &vbuf, offset: 0 },
+            GpuBinding::Texture { binding: 4, texture: &alpha_texture },
+            GpuBinding::Sampler { binding: 5, sampler: &alpha_sampler },
         ];
         let shadow_draw =
             manifold_gpu::GpuEncoder::depth_msaa_draw(&shadow_pipeline, &shadow_bindings, 6, 1);
@@ -494,19 +501,8 @@
         caster_table[4] = [bias, 2.0, 1.0 / smap_res as f32, 0.0];
         let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
 
-        // 3-vec4-per-light packing (matches `shaft_march.wgsl`'s
-        // binding(2) layout / `RenderScene::evaluate`'s shaft_light_data
-        // build): [pos_or_dir(.w=mode)], [color.rgb, slot], [range, 0,0,0].
-        // Sun (slot 0, this fixture's only caster) -> dir-toward-light,
-        // mode 0. Point (slot -1, unshadowed) -> world pos, mode 1.
-        let shaft_light_data: Vec<[f32; 4]> = vec![
-            [-light.dir[0], -light.dir[1], -light.dir[2], 0.0],
-            [light.color[0], light.color[1], light.color[2], 0.0],
-            [light.range, 0.0, 0.0, 0.0],
-            [point_light.pos[0], point_light.pos[1], point_light.pos[2], 1.0],
-            [point_light.color[0], point_light.color[1], point_light.color[2], -1.0],
-            [point_light.range, 0.0, 0.0, 0.0],
-        ];
+        let shaft_light_data: Vec<[f32; 4]> = light.packed(0.0).into_iter()
+            .chain(point_light.packed(-1.0)).collect();
         let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
 
         let dummy_depth = device.create_texture(&GpuTextureDesc {
@@ -680,6 +676,8 @@
             write_enabled: true,
         });
 
+        let alpha_texture = upload_rgba16f(&device, 1, 1, &[[1.0; 4]], "shadow-alpha");
+        let alpha_sampler = device.create_sampler(&Default::default());
         let render = |weights: &manifold_gpu::GpuBuffer| {
             let target = device.create_texture(&GpuTextureDesc {
                 width: w,
@@ -695,12 +693,15 @@
                 light_view_proj: identity,
                 model: identity,
                 appearance: [1.0, 1.0, 0.0, 0.0],
+                ..bytemuck::Zeroable::zeroed()
             };
             let bindings = [
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: weights, offset: 0 },
+                GpuBinding::Texture { binding: 4, texture: &alpha_texture },
+                GpuBinding::Sampler { binding: 5, sampler: &alpha_sampler },
             ];
             let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, &bindings, 6, 1);
             let mut enc = device.create_encoder("appearance-weight-shadow-proof-pass");
@@ -719,6 +720,196 @@
         assert!((right(&masked) - right(&baseline)).abs() < 1e-5, "visible triangle depth changed");
     }
 
+    #[test]
+    fn shadow_alpha_mask_preserves_uv_selection_transform_factor_and_mirror() {
+        let device = crate::test_device();
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0],
+        ];
+        let mut vertices = Vec::new();
+        for (left, right, uv) in [(-1.0, 0.0, 0.25), (0.0, 1.0, 0.75)] {
+            for (x, y) in [(left, -1.0), (right, -1.0), (right, 1.0),
+                (left, -1.0), (right, 1.0), (left, 1.0)] {
+                let mut v = test_mesh_vertex([x, y, 0.5]);
+                v.uv = [uv, 0.5];
+                v._pad2 = [1.0 - uv, 0.5];
+                vertices.push(v);
+            }
+        }
+        let vbuf = device.create_buffer_shared((vertices.len() * std::mem::size_of::<MeshVertex>()) as u64);
+        let vertex_count = vertices.len() as u32;
+        unsafe { vbuf.write(0, bytemuck::cast_slice(&vertices)); }
+        let ibuf = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+        let map = upload_rgba16f(&device, 2, 1, &[[1.0, 1.0, 1.0, 0.0], [1.0; 4]], "cutout-proof-map");
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+            min_filter: manifold_gpu::GpuFilterMode::Nearest,
+            ..Default::default()
+        });
+        let pipeline = device.create_render_pipeline_depth_only(
+            include_str!("../shaders/shadow_depth.wgsl"), "vs_main", "fs_shadow",
+            GpuTextureFormat::Depth32Float, "cutout-depth-proof");
+        let depth_state = device.create_depth_stencil_state(&GpuDepthStencilDesc {
+            compare: GpuCompareFunction::Less, write_enabled: true,
+        });
+        let render = |uv_set: f32, uv_m: [f32; 4], uv_tx: f32, alpha: f32, mirror: f32| {
+            let target = device.create_texture(&GpuTextureDesc {
+                width: 8, height: 4, depth: 1, format: GpuTextureFormat::Depth32Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
+                label: "cutout-proof-depth", mip_levels: 1,
+            });
+            let instance = InstanceTransform { pos_scale: [0.0, 0.0, 0.0, 1.0], rot_pad: [0.0, 0.0, 0.0, mirror] };
+            unsafe { ibuf.write(0, bytemuck::bytes_of(&instance)); }
+            let uniforms = ShadowUniforms {
+                light_view_proj: identity, model: identity, appearance: [1.0, 0.0, 0.0, 0.0],
+                alpha: [1.0, 0.5, alpha, 1.0], uv_m, uv_t: [uv_tx, 0.0, uv_set, 0.0],
+            };
+            let bindings = [
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: &vbuf, offset: 0 },
+                GpuBinding::Texture { binding: 4, texture: &map },
+                GpuBinding::Sampler { binding: 5, sampler: &sampler },
+            ];
+            let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, &bindings, vertex_count, 1);
+            let mut enc = device.create_encoder("cutout-proof-pass");
+            enc.draw_instanced_depth_only_batch(&target, &depth_state, &[draw], "cutout-proof");
+            enc.commit_and_wait_completed();
+            let pixels = readback_depth32f(&device, &target, 8, 4);
+            [pixels[17], pixels[22]]
+        };
+        let uv_identity = [1.0, 0.0, 0.0, 1.0];
+        assert_eq!(render(0.0, uv_identity, 0.0, 1.0, 0.0), [1.0, 0.5], "UV0 cutout");
+        assert_eq!(render(1.0, uv_identity, 0.0, 1.0, 0.0), [0.5, 1.0], "UV1 cutout");
+        assert_eq!(render(0.0, [-1.0, 0.0, 0.0, 1.0], 1.0, 1.0, 0.0), [0.5, 1.0], "transformed cutout");
+        assert_eq!(render(0.0, uv_identity, 0.0, 0.4, 0.0), [1.0, 1.0], "factor times map alpha");
+        assert_eq!(render(0.0, uv_identity, 0.0, 1.0, 1.0), [0.5, 1.0], "mirrored silhouette");
+
+        for vertex in &mut vertices {
+            vertex.color[3] = 0.0;
+        }
+        unsafe { vbuf.write(0, bytemuck::cast_slice(&vertices)); }
+        assert_eq!(
+            render(0.0, uv_identity, 0.0, 1.0, 0.0),
+            [1.0, 1.0],
+            "vertex alpha zero must pass both shadow rays even with an opaque map"
+        );
+    }
+
+    #[test]
+    fn render_scene_vertex_color_interpolation_and_albedo_product() {
+        let device = crate::test_device();
+        let vertices = [
+            MeshVertex {
+                position: [-1.0, -1.0, 0.0],
+                _pad0: 0.0,
+                normal: [0.0, 0.0, 1.0],
+                _pad1: 0.0,
+                uv: [0.0, 0.0],
+                _pad2: [0.0, 0.0],
+                tangent: [0.0; 4],
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+            MeshVertex {
+                position: [3.0, -1.0, 0.0],
+                _pad0: 0.0,
+                normal: [0.0, 0.0, 1.0],
+                _pad1: 0.0,
+                uv: [0.0, 0.0],
+                _pad2: [0.0, 0.0],
+                tangent: [0.0; 4],
+                color: [0.0, 1.0, 0.0, 1.0],
+            },
+            MeshVertex {
+                position: [-1.0, 3.0, 0.0],
+                _pad0: 0.0,
+                normal: [0.0, 0.0, 1.0],
+                _pad1: 0.0,
+                uv: [0.0, 0.0],
+                _pad2: [0.0, 0.0],
+                tangent: [0.0; 4],
+                color: [0.0, 0.0, 1.0, 1.0],
+            },
+        ];
+        let vertex_buffer = device.create_buffer_shared(std::mem::size_of_val(&vertices) as u64);
+        unsafe { vertex_buffer.write(0, bytemuck::cast_slice(&vertices)); }
+        let instance = InstanceTransform { pos_scale: [0.0, 0.0, 0.0, 1.0], rot_pad: [0.0; 4] };
+        let instance_buffer = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+        unsafe { instance_buffer.write(0, bytemuck::bytes_of(&instance)); }
+        let weights_buffer = device.create_buffer_shared(4);
+        unsafe { weights_buffer.write(0, bytemuck::bytes_of(&1.0f32)); }
+        let base_map = upload_rgba16f(&device, 1, 1, &[[0.5, 1.0, 0.25, 1.0]], "vertex-color-base-map");
+        let base_sampler = device.create_sampler(&Default::default());
+        let mut uniforms = RenderSceneUniforms::zeroed();
+        uniforms.view_proj = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        uniforms.model = uniforms.view_proj;
+        uniforms.base_color = [0.8, 0.6, 0.4, 1.0];
+        uniforms.texture_flags[2] = 1.0;
+        uniforms.base_color_uv_m = [1.0, 0.0, 0.0, 1.0];
+        let output = rgba16f_target(&device, 1, 1, "vertex-color-output");
+        const PROBE: &str = r#"
+@fragment
+fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
+    return resolve_albedo(input.uv, input.vertex_color);
+}
+"#;
+        let shader = format!("{}\n{}", include_str!("../shaders/render_scene.wgsl"), PROBE);
+        let pipeline = device.create_render_pipeline(
+            &shader,
+            "vs_main",
+            "fs_vertex_color_probe",
+            GpuTextureFormat::Rgba16Float,
+            None,
+            "vertex-color-albedo-proof",
+        );
+        let bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: &vertex_buffer, offset: 0 },
+            GpuBinding::Buffer { binding: 15, buffer: &instance_buffer, offset: 0 },
+            GpuBinding::Buffer { binding: 46, buffer: &weights_buffer, offset: 0 },
+            GpuBinding::Texture { binding: 6, texture: &base_map },
+            GpuBinding::Sampler { binding: 22, sampler: &base_sampler },
+        ];
+        let mut encoder = device.create_encoder("vertex-color-albedo-proof");
+        encoder.draw_instanced(
+            &pipeline,
+            &output,
+            &bindings,
+            3,
+            1,
+            manifold_gpu::GpuLoadAction::Clear,
+            "vertex-color-albedo-proof-draw",
+        );
+        encoder.commit_and_wait_completed();
+        let actual = readback_rgba16f(&device, &output, 1, 1)[0];
+        let barycentric = [0.5f32, 0.25, 0.25];
+        let vertex_color = [
+            barycentric[0],
+            barycentric[1],
+            barycentric[2],
+            1.0,
+        ];
+        let expected = [
+            uniforms.base_color[0] * 0.5 * vertex_color[0],
+            uniforms.base_color[1] * 1.0 * vertex_color[1],
+            uniforms.base_color[2] * 0.25 * vertex_color[2],
+            1.0,
+        ];
+        for channel in 0..4 {
+            assert!((actual[channel] - expected[channel]).abs() < 0.02,
+                "vertex color/albedo channel {channel}: expected {}, got {}",
+                expected[channel], actual[channel]);
+        }
+    }
+
     fn test_mesh_vertex(position: [f32; 3]) -> MeshVertex {
         MeshVertex {
             position,
@@ -728,6 +919,169 @@
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
+        }
+    }
+
+    /// The extension-map sampler uses the production WGSL helper rather than
+    /// a test-side copy. Each output pixel selects a distinct metadata row,
+    /// covering UV0/UV1 selection, affine flipping, clamp/repeat/mirror
+    /// addressing, and nearest versus linear filtering.
+    #[test]
+    fn extension_map_sampling_metadata_matches_production_helper() {
+        use bytemuck::Zeroable;
+        let device = crate::test_device();
+        let pixels = [
+            [0.1, 0.1, 0.0, 1.0],
+            [0.2, 0.1, 0.0, 1.0],
+            [0.3, 0.1, 0.0, 1.0],
+            [0.4, 0.1, 0.0, 1.0],
+            [0.1, 0.9, 0.0, 1.0],
+            [0.2, 0.9, 0.0, 1.0],
+            [0.3, 0.9, 0.0, 1.0],
+            [0.4, 0.9, 0.0, 1.0],
+        ];
+        let map = upload_rgba16f(&device, 4, 2, &pixels, "extension-map-proof");
+
+        let sampler = |wrap_u, wrap_v, mag_filter, min_filter, mip_filter| {
+            crate::node_graph::material::MapSamplerDesc {
+                wrap_u,
+                wrap_v,
+                mag_filter,
+                min_filter,
+                mip_filter,
+            }
+        };
+        let info = |uv_transform, tex_coord, sampler| {
+            crate::node_graph::material::MaterialMapInfo { uv_transform, tex_coord, sampler }
+        };
+        let nearest = manifold_gpu::GpuFilterMode::Nearest;
+        let linear = manifold_gpu::GpuFilterMode::Linear;
+        let clamp = manifold_gpu::GpuAddressMode::ClampToEdge;
+        let repeat = manifold_gpu::GpuAddressMode::Repeat;
+        let mirror = manifold_gpu::GpuAddressMode::MirrorRepeat;
+        let mut maps = [MaterialMapUniform::zeroed(); 19];
+        maps[5] = MaterialMapUniform::from(info(
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            0,
+            sampler(clamp, clamp, nearest, nearest, None),
+        ));
+        maps[6] = MaterialMapUniform::from(info(
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            1,
+            sampler(clamp, clamp, nearest, nearest, None),
+        ));
+        maps[7] = MaterialMapUniform::from(info(
+            [-1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+            0,
+            sampler(clamp, clamp, nearest, nearest, None),
+        ));
+        maps[8] = MaterialMapUniform::from(info(
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            0,
+            sampler(repeat, repeat, nearest, nearest, None),
+        ));
+        maps[9] = MaterialMapUniform::from(info(
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            0,
+            sampler(mirror, mirror, nearest, nearest, None),
+        ));
+        maps[10] = MaterialMapUniform::from(info(
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            0,
+            sampler(clamp, clamp, linear, linear, None),
+        ));
+
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let mut uniforms = RenderSceneUniforms::zeroed();
+        uniforms.view_proj = identity;
+        uniforms.model = identity;
+        uniforms.appearance = [1.0, 0.0, 0.0, 0.0];
+        let instance = InstanceTransform {
+            pos_scale: [0.0, 0.0, 0.0, 1.0],
+            rot_pad: [0.0, 0.0, 0.0, 0.0],
+        };
+        let instances = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+        unsafe { instances.write(0, bytemuck::bytes_of(&instance)); }
+        let vertices = [
+            test_mesh_vertex([-1.0, -1.0, 0.0]),
+            test_mesh_vertex([1.0, -1.0, 0.0]),
+            test_mesh_vertex([1.0, 1.0, 0.0]),
+            test_mesh_vertex([-1.0, -1.0, 0.0]),
+            test_mesh_vertex([1.0, 1.0, 0.0]),
+            test_mesh_vertex([-1.0, 1.0, 0.0]),
+        ];
+        let vertex_buffer = device.create_buffer_shared(std::mem::size_of_val(&vertices) as u64);
+        unsafe { vertex_buffer.write(0, bytemuck::cast_slice(&vertices)); }
+        let output = device.create_texture(&GpuTextureDesc {
+            width: 6, height: 1, depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::COPY_SRC,
+            label: "extension-map-proof-output", mip_levels: 1,
+        });
+        const PROBE: &str = r#"
+@fragment
+fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
+    let pixel = u32(floor(in.clip_pos.x));
+    var index = 5u;
+    var probe_uv = vec4<f32>(0.25, 0.25, 0.75, 0.25);
+    if pixel == 1u { index = 6u; }
+    if pixel == 2u { index = 7u; probe_uv.x = 0.75; }
+    if pixel == 3u { index = 8u; probe_uv.x = 1.25; }
+    if pixel == 4u { index = 9u; probe_uv.x = -0.25; }
+    if pixel == 5u { index = 10u; probe_uv = vec4<f32>(0.5); }
+    return sample_extension_map(sheen_color_map, probe_uv, index);
+}
+"#;
+        let shader = format!("{}\n{}", include_str!("../shaders/render_scene.wgsl"), PROBE);
+        let pipeline = device.create_render_pipeline(
+            &shader,
+            "vs_main",
+            "fs_extension_map_probe",
+            GpuTextureFormat::Rgba16Float,
+            None,
+            "extension-map-proof-pipeline",
+        );
+        let bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: &vertex_buffer, offset: 0 },
+            GpuBinding::Buffer { binding: 15, buffer: &instances, offset: 0 },
+            GpuBinding::Buffer { binding: 46, buffer: &vertex_buffer, offset: 0 },
+            GpuBinding::Texture { binding: 29, texture: &map },
+            GpuBinding::Bytes { binding: 50, data: bytemuck::cast_slice(&maps) },
+        ];
+        let mut enc = device.create_encoder("extension-map-proof");
+        enc.draw_instanced(
+            &pipeline,
+            &output,
+            &bindings,
+            6,
+            1,
+            manifold_gpu::GpuLoadAction::Clear,
+            "extension-map-proof-draw",
+        );
+        enc.commit_and_wait_completed();
+        let actual = readback_rgba16f(&device, &output, 6, 1);
+        let expected = [
+            [0.2, 0.1, 0.0, 1.0],
+            [0.4, 0.1, 0.0, 1.0],
+            [0.2, 0.1, 0.0, 1.0],
+            [0.2, 0.1, 0.0, 1.0],
+            [0.1, 0.1, 0.0, 1.0],
+            [0.25, 0.5, 0.0, 1.0],
+        ];
+        for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            for channel in 0..4 {
+                assert!((actual[channel] - expected[channel]).abs() < 0.02,
+                    "extension map probe pixel {index} channel {channel}: expected {}, got {}",
+                    expected[channel], actual[channel]);
+            }
         }
     }
 
@@ -843,6 +1197,73 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+    #[test]
+    fn extension_map_mip_filters_follow_authored_choice() {
+        use bytemuck::Zeroable;
+        let device = crate::test_device();
+        let map = device.create_texture(&GpuTextureDesc {
+            width: 4, height: 4, depth: 1, format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "material-mip-checker", mip_levels: 3,
+        });
+        let data: Vec<u8> = (0..16).flat_map(|i| {
+            let c = if (i % 4 + i / 4) % 2 == 0 { 0 } else { 255 };
+            [c, c, c, 255]
+        }).collect();
+        device.upload_texture(&map, &data);
+        let mut encoder = device.create_encoder("material-mips");
+        encoder.generate_mipmaps(&map);
+        encoder.commit_and_wait_completed();
+        // Each 2x2 block averages to 0.5 in mip 1. The first mip is black
+        // at (1/8,1/8). A 2^0.6 texel footprint independently predicts
+        // no mip = 0, nearest mip = 0.5, linear mip = 0.3.
+        let shader = format!("{}\n{}", include_str!("../shaders/render_scene.wgsl"), r#"
+@vertex fn vs_mip_probe(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let x = f32((i << 1u) & 2u);
+    let y = f32(i & 2u);
+    return vec4<f32>(x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment fn fs_mip_probe(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let uv = vec2<f32>(0.125) + (p.xy - vec2<f32>(0.5)) * (exp2(0.6) / 4.0);
+    return sample_extension_map(sheen_color_map, vec4<f32>(uv, uv), 5u);
+}
+"#);
+        let pipeline = device.create_render_pipeline(&shader, "vs_mip_probe", "fs_mip_probe",
+            GpuTextureFormat::Rgba16Float, None, "material-mip-proof");
+        let output = device.create_texture(&GpuTextureDesc {
+            width: 2, height: 2, depth: 1, format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::COPY_SRC,
+            label: "material-mip-output", mip_levels: 1,
+        });
+        for (filter, expected) in [(None, 0.0),
+            (Some(manifold_gpu::GpuFilterMode::Nearest), 0.5),
+            (Some(manifold_gpu::GpuFilterMode::Linear), 0.3)] {
+            let mut maps = [MaterialMapUniform::zeroed(); 19];
+            maps[5] = MaterialMapUniform::from(crate::node_graph::material::MaterialMapInfo {
+                sampler: crate::node_graph::material::MapSamplerDesc {
+                    min_filter: manifold_gpu::GpuFilterMode::Nearest,
+                    mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+                    mip_filter: filter,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+            let bindings = [
+                GpuBinding::Texture { binding: 29, texture: &map },
+                GpuBinding::Bytes { binding: 50, data: bytemuck::cast_slice(&maps) },
+            ];
+            let mut enc = device.create_encoder("material-mip-proof");
+            enc.draw_instanced(&pipeline, &output, &bindings, 3, 1,
+                manifold_gpu::GpuLoadAction::Clear, "material-mip-proof");
+            enc.commit_and_wait_completed();
+            let actual = readback_rgba16f(&device, &output, 2, 2)[0][0];
+            assert!((actual - expected).abs() < 0.005,
+                "mip filter {filter:?}: expected {expected}, got {actual}");
+        }
+    }
+
     /// 128x128 Rgba8Unorm, `ANISO_TEST_BANDS` horizontal bands alternating
     /// ~0.05 / ~0.95 (avoids pure 0/1 clipping ambiguity), full mip chain
     /// via the same hardware `generate_mipmaps` blit `gltf_texture_source`
@@ -937,6 +1358,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
             compare: None,
             max_anisotropy: 1,
+            ..Default::default()
         });
 
         let a = sample_grazing_row(&device, &tex, &untouched);

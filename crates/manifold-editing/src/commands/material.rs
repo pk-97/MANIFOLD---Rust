@@ -165,7 +165,6 @@ fn validate_graph_ownership(
         .preset_metadata
         .as_ref()
         .or_else(|| catalog_default.and_then(|default| default.preset_metadata.as_ref()));
-    let mut look_writes_metallic_roughness = false;
     for change in changes {
         let id = change.param_id.as_ref();
         let bindings: Vec<_> = metadata
@@ -206,14 +205,6 @@ fn validate_graph_ownership(
                 context.kind,
                 id,
             )?;
-            if context.kind == MaterialEditKind::Look
-                && matches!(param.as_str(), "metallic" | "roughness")
-                // Restoring authored factors preserves the mapped material's
-                // original response; stylized look overrides remain blocked.
-                && change.value != slot.spec.default_value
-            {
-                look_writes_metallic_roughness = true;
-            }
         }
     }
 
@@ -221,18 +212,6 @@ fn validate_graph_ownership(
         && skin_temporarily_owns_object(object_wires, object_doc_id, scope_nodes)
     {
         return Err("material look is blocked while emissive Skin owns this object".to_string());
-    }
-    if context.kind == MaterialEditKind::Look
-        && look_writes_metallic_roughness
-        && object_wires.iter().any(|wire| {
-            wire.to_node == object_doc_id
-                && matches!(wire.to_port.as_str(), "mr_map" | "metallic_roughness_map")
-        })
-    {
-        return Err(
-            "material look is blocked: the selected object's metallic/roughness map owns these values"
-                .to_string(),
-        );
     }
     Ok(())
 }
@@ -965,9 +944,7 @@ mod tests {
                 to_port: "mr_map".to_string(),
             });
         });
-        let reason = validate_material_edit(&project, &target, &context, &changes, None)
-            .expect_err("selected object's MR map must block metallic look writes");
-        assert!(reason.contains("metallic/roughness map"));
+        assert!(validate_material_edit(&project, &target, &context, &changes, None).is_ok());
         with_graph_mut(&mut project, &target, |graph| {
             graph
                 .wires

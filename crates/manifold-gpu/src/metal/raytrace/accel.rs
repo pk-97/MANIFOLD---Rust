@@ -267,7 +267,7 @@ unsafe impl Sync for RtAccel {}
 /// `model_matrix`) — the same layout `render_scene.wgsl`'s `Uniforms.model`
 /// already uses. `vertex_buffer`/`vertex_stride`/`vertex_offset` read
 /// straight from an existing interleaved vertex buffer (e.g.
-/// `render_scene.rs`'s `MeshVertex`, stride 64, position at offset 0) —
+/// `render_scene.rs`'s `MeshVertex`, stride 80, position at offset 0) —
 /// no position-only repack. `index_buffer: None` means a flat,
 /// non-indexed triangle list (every 3 consecutive vertices = 1 triangle
 /// — `render_scene.rs`'s own draw convention), matching Metal's
@@ -330,17 +330,15 @@ pub struct RtObjectGeometry<'a> {
     /// packing) at the reflection ray's primary-hit interpolated UV.
     /// `None` degrades to the flat `GiMaterial::metallic_roughness` factor
     /// (documented at `ensure_normal_sources`'s call site) — an object with
-    /// no map wired renders exactly as before this feature. Consumed ONLY
-    /// in the reflection lobe at the primary hit; GI/AO/shadow rays and the
-    /// reflection-HIT shading stay flat-factor (out of this phase's scope).
+    /// no map wired renders exactly as before this feature. The product is
+    /// consumed at primary and secondary reflection-hit shading sites.
     pub mr_texture: Option<&'a GpuTexture>,
     /// BUG-wytp (rt-reflections-are-normal-map-blind): this object's tangent-
     /// space normal map (glTF packing: R/G = tangent-space X/Y, B = Z),
     /// sampled at the PRIMARY hit's interpolated UV to perturb the shading
     /// normal feeding the reflection lobe's R and the AO/GI cosine-hemisphere
     /// gather. `None` degrades to the barycentric vertex normal (pre-BUG-wytp
-    /// behavior). Consumed ONLY at the primary hit; secondary/extension-ray
-    /// hit shading keeps vertex normals.
+    /// behavior). Applied at primary and secondary hit shading sites.
     pub normal_texture: Option<&'a GpuTexture>,
     /// BUG-1gqt: this object's emissive texture, sampled at the ray hit's
     /// interpolated UV (with `emissive_uv_m/t` applied) and multiplied by
@@ -349,6 +347,10 @@ pub struct RtObjectGeometry<'a> {
     /// (pre-feature behavior). Consumed at every emissive-hit shading
     /// site (the GI gather's emissive term and the reflection hit's).
     pub emissive_texture: Option<&'a GpuTexture>,
+    /// Extension material textures in anisotropy, specular-weight,
+    /// specular-color order. They share the bounded deduplicated table used
+    /// by the core maps and are indexed in `RtNormalSource::extra_tex_indices`.
+    pub extra_material_textures: [Option<&'a GpuTexture>; 3],
     /// BUG-1gqt: KHR_texture_transform fold for the emissive map, in the
     /// raster's `apply_uv_transform` convention:
     /// `uv' = (m[0]*u + m[1]*v + t[0], m[2]*u + m[3]*v + t[1])`.
@@ -402,6 +404,21 @@ pub struct RtObjectGeometry<'a> {
     /// coverage test; a fractional-to-fractional gain change rewrites only
     /// the normal-source table row (rebuilt every RT-ready frame).
     pub appearance_gain: f32,
+    /// KHR_texture_transform fold for the base-color map, in the raster's
+    /// `apply_uv_transform` convention: `(m00, m01, m10, m11, tx, ty)`.
+    pub base_color_uv_transform: [f32; 6],
+    /// KHR_texture_transform fold for the metallic-roughness map.
+    pub mr_uv_transform: [f32; 6],
+    /// KHR_texture_transform fold for the tangent-space normal map.
+    pub normal_uv_transform: [f32; 6],
+    /// Raster normal-map scale applied to the decoded tangent-space XY.
+    pub normal_scale: f32,
+    /// Base-color alpha factor used by alpha-mask candidate tests.
+    pub base_color_alpha: f32,
+    /// Byte offset of the per-vertex tangent (`float4`, xyz + authored
+    /// handedness). `u32::MAX` means the mesh has no authored tangent.
+    pub tangent_offset: u32,
+    pub material_attributes: super::params::RtMaterialAttributes,
 }
 
 pub(crate) fn validate_instance_source_address(instances_addr: u64, source_address: Option<u64>) -> Result<(), &'static str> {
@@ -865,6 +882,7 @@ pub(crate) fn tlas_probe_structure(
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -873,6 +891,13 @@ pub(crate) fn tlas_probe_structure(
         instance_slots: 0,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
+        material_attributes: Default::default(),
     };
     let (_tri, descriptor) = blas_descriptors(&obj);
     let sizes = blas_sizes(device, &descriptor);
@@ -1519,14 +1544,59 @@ fn add_ready_completion_handler<T: Send + 'static>(
 
 
 
-/// Column-major `[[f32; 4]; 4]` model matrix -> its upper-left 3x3 (see
-/// [`RtNormalSource`]'s doc comment for the uniform-scale assumption).
-fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
+/// Column-major `[[f32; 4]; 4]` model matrix -> its upper-left 3x3.
+fn model_matrix_from_transform(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
     [
         [m[0][0], m[0][1], m[0][2]],
         [m[1][0], m[1][1], m[1][2]],
         [m[2][0], m[2][1], m[2][2]],
     ]
+}
+
+/// Return the true inverse-transpose of a column-major 3x3 model matrix.
+/// Singular transforms are invalid for normal mapping; retaining the model
+/// matrix keeps the RT fallback finite while preserving the old behavior for
+/// degenerate test geometry.
+fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
+    let model = model_matrix_from_transform(m);
+    let a = model[0];
+    let b = model[1];
+    let c = model[2];
+    let cross_bc = [
+        b[1] * c[2] - b[2] * c[1],
+        b[2] * c[0] - b[0] * c[2],
+        b[0] * c[1] - b[1] * c[0],
+    ];
+    let det = a[0] * cross_bc[0] + a[1] * cross_bc[1] + a[2] * cross_bc[2];
+    if !det.is_finite() || det.abs() < 1.0e-8 {
+        return model;
+    }
+    let cross_ca = [
+        c[1] * a[2] - c[2] * a[1],
+        c[2] * a[0] - c[0] * a[2],
+        c[0] * a[1] - c[1] * a[0],
+    ];
+    let cross_ab = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+    [
+        [cross_bc[0] / det, cross_bc[1] / det, cross_bc[2] / det],
+        [cross_ca[0] / det, cross_ca[1] / det, cross_ca[2] / det],
+        [cross_ab[0] / det, cross_ab[1] / det, cross_ab[2] / det],
+    ]
+}
+
+fn model_handedness(m: [[f32; 4]; 4]) -> f32 {
+    let model = model_matrix_from_transform(m);
+    let a = model[0];
+    let b = model[1];
+    let c = model[2];
+    let det = a[0] * (b[1] * c[2] - b[2] * c[1])
+        + a[1] * (b[2] * c[0] - b[0] * c[2])
+        + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    if det < 0.0 { -1.0 } else { 1.0 }
 }
 
 /// (Re)allocate-if-needed + rewrite in place the [`RtNormalSource`]
@@ -1569,6 +1639,27 @@ fn normal_source_row_count(objects: &[RtObjectGeometry<'_>]) -> usize {
     (objects.len() + slot_total).max(1)
 }
 
+/// Register one optional material map in the shared bindless table. Existing
+/// entries are found before checking the cap so reusing a texture remains
+/// valid even when the table is full.
+fn register_material_texture<'a>(
+    material_textures: &mut RtMaterialTextures<'a>,
+    texture: Option<&'a GpuTexture>,
+) -> Option<u32> {
+    let texture = texture?;
+    if let Some(index) = material_textures
+        .iter()
+        .position(|&entry| std::ptr::eq(entry, texture))
+    {
+        return Some(index as u32);
+    }
+    if material_textures.len() >= MAX_RT_MATERIAL_TEXTURES {
+        return None;
+    }
+    material_textures.push(texture);
+    Some((material_textures.len() - 1) as u32)
+}
+
 pub fn ensure_normal_sources<'a>(
     slot: &mut Option<GpuBuffer>,
     capacity: &mut usize,
@@ -1593,17 +1684,9 @@ pub fn ensure_normal_sources<'a>(
     for (i, obj) in objects.iter().enumerate() {
         let slots = effective_instance_slots(obj);
         let alpha_tex_index = if obj.alpha_mask {
-            match obj.base_color_texture {
-                Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
-                    // Check if this texture is already bound
-                    let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
-                        .unwrap_or_else(|| {
-                            material_textures.push(tex);
-                            material_textures.len() - 1
-                        });
-                    idx as u32
-                }
-                Some(_) => {
+            match register_material_texture(&mut material_textures, obj.base_color_texture) {
+                Some(index) => index,
+                None if obj.base_color_texture.is_some() => {
                     log::warn!("RT alpha-mask texture table full ({} bound, {} cap) — object {} degraded to always-pass",
                         material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
                     RT_MATERIAL_TEX_INDEX_NONE
@@ -1613,17 +1696,9 @@ pub fn ensure_normal_sources<'a>(
         } else {
             RT_MATERIAL_TEX_INDEX_NONE
         };
-        let base_color_tex_index = match obj.base_color_texture {
-            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
-                // Check if this texture is already bound (deduplicate)
-                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
-                    .unwrap_or_else(|| {
-                        material_textures.push(tex);
-                        material_textures.len() - 1
-                    });
-                idx as u32
-            }
-            Some(_) => {
+        let base_color_tex_index = match register_material_texture(&mut material_textures, obj.base_color_texture) {
+            Some(index) => index,
+            None if obj.base_color_texture.is_some() => {
                 log::warn!("RT material-texture table full ({} bound, {} cap) — object {} base-color degraded to flat albedo",
                     material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
                 RT_MATERIAL_TEX_INDEX_NONE
@@ -1635,16 +1710,9 @@ pub fn ensure_normal_sources<'a>(
         // as `base_color_tex_index` above — rides the one general
         // material-texture cap Raster-parity reflections widened, no
         // separate table.
-        let mr_tex_index = match obj.mr_texture {
-            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
-                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
-                    .unwrap_or_else(|| {
-                        material_textures.push(tex);
-                        material_textures.len() - 1
-                    });
-                idx as u32
-            }
-            Some(_) => {
+        let mr_tex_index = match register_material_texture(&mut material_textures, obj.mr_texture) {
+            Some(index) => index,
+            None if obj.mr_texture.is_some() => {
                 log::warn!("RT material-texture table full ({} bound, {} cap) — object {} MR map degraded to flat metallic_roughness factor",
                     material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
                 RT_MATERIAL_TEX_INDEX_NONE
@@ -1655,16 +1723,9 @@ pub fn ensure_normal_sources<'a>(
         // `material_textures`, cap-check, and log-warn-on-full pattern as
         // `mr_tex_index` above — the normal map rides the one general
         // material-texture cap, no separate table.
-        let normal_tex_index = match obj.normal_texture {
-            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
-                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
-                    .unwrap_or_else(|| {
-                        material_textures.push(tex);
-                        material_textures.len() - 1
-                    });
-                idx as u32
-            }
-            Some(_) => {
+        let normal_tex_index = match register_material_texture(&mut material_textures, obj.normal_texture) {
+            Some(index) => index,
+            None if obj.normal_texture.is_some() => {
                 log::warn!("RT material-texture table full ({} bound, {} cap) — object {} normal map degraded to vertex normal",
                     material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
                 RT_MATERIAL_TEX_INDEX_NONE
@@ -1675,22 +1736,27 @@ pub fn ensure_normal_sources<'a>(
         // `material_textures`, cap-check, and log-warn-on-full pattern as
         // `normal_tex_index` above — the emissive map rides the one general
         // material-texture cap, no separate table.
-        let emissive_tex_index = match obj.emissive_texture {
-            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
-                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
-                    .unwrap_or_else(|| {
-                        material_textures.push(tex);
-                        material_textures.len() - 1
-                    });
-                idx as u32
-            }
-            Some(_) => {
+        let emissive_tex_index = match register_material_texture(&mut material_textures, obj.emissive_texture) {
+            Some(index) => index,
+            None if obj.emissive_texture.is_some() => {
                 log::warn!("RT material-texture table full ({} bound, {} cap) — object {} emissive map degraded to flat emissive factor",
                     material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
                 RT_MATERIAL_TEX_INDEX_NONE
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
+        let mut extra_tex_indices = [RT_MATERIAL_TEX_INDEX_NONE; 3];
+        for (map_index, texture) in obj.extra_material_textures.iter().copied().enumerate() {
+            extra_tex_indices[map_index] = match register_material_texture(&mut material_textures, texture) {
+                Some(index) => index,
+                None if texture.is_some() => {
+                    log::warn!("RT material-texture table full ({} bound, {} cap) — object {} extension map {} degraded to factor",
+                        material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i, map_index);
+                    RT_MATERIAL_TEX_INDEX_NONE
+                }
+                None => RT_MATERIAL_TEX_INDEX_NONE,
+            };
+        }
         let mut src = RtNormalSource {
             vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
             vertex_stride: obj.vertex_stride,
@@ -1720,6 +1786,16 @@ pub fn ensure_normal_sources<'a>(
             index_base_addr: obj.index_buffer.map_or(0, |b| b.gpu_address()),
             vertex_count: mesh_vertex_count(obj),
             _pad_p4b: 0,
+            base_color_uv_transform: obj.base_color_uv_transform,
+            mr_uv_transform: obj.mr_uv_transform,
+            normal_uv_transform: obj.normal_uv_transform,
+            normal_scale: obj.normal_scale,
+            base_color_alpha: obj.base_color_alpha,
+            tangent_offset: obj.tangent_offset,
+            model_matrix: model_matrix_from_transform(obj.transform),
+            model_handedness: model_handedness(obj.transform),
+            material_attributes: obj.material_attributes,
+            extra_tex_indices,
         };
         // D11: canonical row at [0, N).
         unsafe {

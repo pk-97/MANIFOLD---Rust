@@ -13,6 +13,7 @@
 //! since this is a production code path, not a test.
 
 use crate::generators::mesh_common::MeshVertex;
+use crate::node_graph::material::{MapSamplerDesc, MaterialMapInfo};
 
 /// glTF extensions MANIFOLD's importer actually supports, independent of
 /// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
@@ -715,6 +716,7 @@ fn flatten_primitive(
     }
 
     let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+    let uv1s: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
 
     let positions: Vec<[f32; 3]> = reader
         .read_positions()
@@ -722,11 +724,25 @@ fn flatten_primitive(
         .collect();
     let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
     let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
-    // BUG-wfxe: TANGENT (vec4: xyz direction + w bitangent sign) feeds
-    // authored tangent-space normal mapping. Direction transforms with the
-    // normal matrix like any covector-adjacent direction here; w passes
-    // through. Absent → [0,0,0,0], the shader's derived-frame sentinel.
+    let colors: Option<Vec<[f32; 4]>> = reader.read_colors(0).map(|it| it.into_rgba_f32().collect());
+    // TANGENT (vec4: xyz direction + w bitangent sign) feeds authored
+    // tangent-space normal mapping. Tangent directions are vectors, so use
+    // the model's linear transform; the normal matrix is only for normals.
+    // A reflected model flips the handedness sign in w. Absent → [0,0,0,0],
+    // the shader's derived-frame sentinel.
     let tangents: Option<Vec<[f32; 4]>> = reader.read_tangents().map(|it| it.collect());
+
+    let world_linear = mat3_upper_row_major(world);
+    let world_det = world_linear[0][0]
+        * (world_linear[1][1] * world_linear[2][2]
+            - world_linear[1][2] * world_linear[2][1])
+        - world_linear[0][1]
+            * (world_linear[1][0] * world_linear[2][2]
+                - world_linear[1][2] * world_linear[2][0])
+        + world_linear[0][2]
+            * (world_linear[1][0] * world_linear[2][1]
+                - world_linear[1][1] * world_linear[2][0]);
+    let tangent_sign = if world_det < 0.0 { -1.0 } else { 1.0 };
 
     let world_positions: Vec<[f32; 3]> = positions
         .iter()
@@ -738,8 +754,8 @@ fn flatten_primitive(
     let world_tangents: Option<Vec<[f32; 4]>> = tangents.as_ref().map(|ts| {
         ts.iter()
             .map(|t| {
-                let d = normalize3(mat3_mul_vec3(*normal_mat, [t[0], t[1], t[2]]));
-                [d[0], d[1], d[2], t[3]]
+                let d = normalize3(mat3_mul_vec3(world_linear, [t[0], t[1], t[2]]));
+                [d[0], d[1], d[2], t[3] * tangent_sign]
             })
             .collect()
     });
@@ -768,6 +784,8 @@ fn flatten_primitive(
         for &i in &[i0, i1, i2] {
             let normal = world_normals.as_ref().map_or(face_normal, |ns| ns[i]);
             let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+            let uv1 = uv1s.as_ref().map_or([0.0, 0.0], |u| u[i]);
+            let color = colors.as_ref().map_or([1.0, 1.0, 1.0, 1.0], |c| c[i]);
             let tangent = world_tangents.as_ref().map_or([0.0; 4], |ts| ts[i]);
             out.push(MeshVertex {
                 position: world_positions[i],
@@ -775,8 +793,9 @@ fn flatten_primitive(
                 normal,
                 _pad1: 0.0,
                 uv,
-                _pad2: [0.0, 0.0],
+                _pad2: uv1,
                 tangent,
+                color,
             });
         }
     }
@@ -1025,14 +1044,8 @@ pub(crate) enum GltfWrapMode {
     MirrorRepeat,
 }
 
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D3: glTF `magFilter`/`minFilter`, collapsed
-/// to the two states `manifold_gpu::GpuFilterMode` supports — `minFilter`'s
-/// mipmap component (`*_MIPMAP_NEAREST`/`*_MIPMAP_LINEAR`) has no GPU-side
-/// equivalent to plumb per-map (the renderer's `mip_filter` stays fixed
-/// Linear for every sampler, same as the pre-D3 hardcoded material sampler),
-/// so only the base Nearest/Linear choice survives; `TextureSettingsTest`
-/// only exercises wrap anyway (verified: all 5 of its samplers share
-/// `magFilter: LINEAR, minFilter: NEAREST_MIPMAP_LINEAR`).
+/// glTF `magFilter`/`minFilter` components, retaining both the base filter
+/// and the optional mip filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum GltfFilterMode {
     #[default]
@@ -1043,12 +1056,25 @@ pub(crate) enum GltfFilterMode {
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: one map family's sampler settings.
 /// Default reproduces glTF's implicit no-sampler default (Repeat/Repeat/
 /// Linear/Linear) — byte-identical to the pre-D3 hardcoded REPEAT sampler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GltfSamplerInfo {
     pub wrap_u: GltfWrapMode,
     pub wrap_v: GltfWrapMode,
     pub mag_filter: GltfFilterMode,
     pub min_filter: GltfFilterMode,
+    pub mip_filter: Option<GltfFilterMode>,
+}
+
+impl Default for GltfSamplerInfo {
+    fn default() -> Self {
+        Self {
+            wrap_u: GltfWrapMode::Repeat,
+            wrap_v: GltfWrapMode::Repeat,
+            mag_filter: GltfFilterMode::Linear,
+            min_filter: GltfFilterMode::Linear,
+            mip_filter: Some(GltfFilterMode::Linear),
+        }
+    }
 }
 
 /// Read `document.textures().nth(idx)`'s sampler, or the default when `idx`
@@ -1070,17 +1096,77 @@ fn sampler_info_for(document: &gltf::Document, idx: Option<u32>) -> GltfSamplerI
         Some(gltf::texture::MagFilter::Nearest) => GltfFilterMode::Nearest,
         _ => GltfFilterMode::Linear,
     };
-    let min = match s.min_filter() {
-        Some(gltf::texture::MinFilter::Nearest)
-        | Some(gltf::texture::MinFilter::NearestMipmapNearest)
-        | Some(gltf::texture::MinFilter::NearestMipmapLinear) => GltfFilterMode::Nearest,
-        _ => GltfFilterMode::Linear,
+    let (min, mip) = match s.min_filter() {
+        Some(gltf::texture::MinFilter::Nearest) => (GltfFilterMode::Nearest, None),
+        Some(gltf::texture::MinFilter::Linear) => (GltfFilterMode::Linear, None),
+        Some(gltf::texture::MinFilter::NearestMipmapNearest) =>
+            (GltfFilterMode::Nearest, Some(GltfFilterMode::Nearest)),
+        Some(gltf::texture::MinFilter::NearestMipmapLinear) =>
+            (GltfFilterMode::Nearest, Some(GltfFilterMode::Linear)),
+        Some(gltf::texture::MinFilter::LinearMipmapNearest) =>
+            (GltfFilterMode::Linear, Some(GltfFilterMode::Nearest)),
+        Some(gltf::texture::MinFilter::LinearMipmapLinear) | None =>
+            (GltfFilterMode::Linear, Some(GltfFilterMode::Linear)),
     };
     GltfSamplerInfo {
         wrap_u: wrap(s.wrap_s()),
         wrap_v: wrap(s.wrap_t()),
         mag_filter: mag,
         min_filter: min,
+        mip_filter: mip,
+    }
+}
+
+fn material_sampler_info(info: GltfSamplerInfo) -> MapSamplerDesc {
+    let convert = |filter| match filter {
+        GltfFilterMode::Linear => manifold_gpu::GpuFilterMode::Linear,
+        GltfFilterMode::Nearest => manifold_gpu::GpuFilterMode::Nearest,
+    };
+    MapSamplerDesc {
+        wrap_u: match info.wrap_u {
+            GltfWrapMode::Repeat => manifold_gpu::GpuAddressMode::Repeat,
+            GltfWrapMode::ClampToEdge => manifold_gpu::GpuAddressMode::ClampToEdge,
+            GltfWrapMode::MirrorRepeat => manifold_gpu::GpuAddressMode::MirrorRepeat,
+        },
+        wrap_v: match info.wrap_v {
+            GltfWrapMode::Repeat => manifold_gpu::GpuAddressMode::Repeat,
+            GltfWrapMode::ClampToEdge => manifold_gpu::GpuAddressMode::ClampToEdge,
+            GltfWrapMode::MirrorRepeat => manifold_gpu::GpuAddressMode::MirrorRepeat,
+        },
+        mag_filter: convert(info.mag_filter),
+        min_filter: convert(info.min_filter),
+        mip_filter: info.mip_filter.map(convert),
+    }
+}
+
+fn extension_map_info(
+    document: &gltf::Document,
+    extension: Option<&serde_json::Value>,
+    key: &str,
+) -> MaterialMapInfo {
+    let Some(info) = extension.and_then(|v| v.get(key)) else {
+        return MaterialMapInfo::default();
+    };
+    let texture_index = info
+        .get("index")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let transform = info
+        .get("extensions")
+        .and_then(|v| v.get("KHR_texture_transform"));
+    let uv_transform = transform
+        .map(parse_uv_transform_json)
+        .map(|(uv, _)| uv)
+        .unwrap_or(IDENTITY_UV_TRANSFORM);
+    let tex_coord = transform
+        .and_then(|v| v.get("texCoord"))
+        .and_then(|v| v.as_u64())
+        .or_else(|| info.get("texCoord").and_then(|v| v.as_u64()))
+        .unwrap_or(0) as u32;
+    MaterialMapInfo {
+        uv_transform,
+        tex_coord,
+        sampler: material_sampler_info(sampler_info_for(document, texture_index)),
     }
 }
 
@@ -1107,12 +1193,7 @@ pub(crate) struct GltfMaterialInfo {
     /// Index into `document.textures()` for the tangent-space normal map,
     /// if any (glTF `normalTexture`) — IMPORT_FIDELITY_DESIGN.md D3/D5/D6.
     pub normal_texture: Option<u32>,
-    /// glTF `normalTexture.scale` (default 1.0). `render_scene` wires no
-    /// port for it yet (no per-object normal-intensity multiplier exists;
-    /// adding one is shader-ABI scope, out of bounds for this phase) — the
-    /// importer reads this field to emit a D9 report line whenever it
-    /// deviates from neutral, so it is never a silent drop even though it
-    /// isn't applied.
+    /// glTF `normalTexture.scale` (default 1.0).
     pub normal_scale: f32,
     /// Index into `document.textures()` for the glTF metallic-roughness map
     /// (G = roughness, B = metallic), if any.
@@ -1121,8 +1202,7 @@ pub(crate) struct GltfMaterialInfo {
     /// if any. May be the SAME texture index as `mr_texture` (ORM packing)
     /// — the importer wires one source node into both ports in that case.
     pub occlusion_texture: Option<u32>,
-    /// glTF `occlusionTexture.strength` (default 1.0) — same "no wired port
-    /// yet, reported instead" note as `normal_scale`.
+    /// glTF `occlusionTexture.strength` (default 1.0).
     pub occlusion_strength: f32,
     /// Index into `document.textures()` for the emissive map, if any.
     pub emissive_texture: Option<u32>,
@@ -1147,16 +1227,15 @@ pub(crate) struct GltfMaterialInfo {
     /// typed accessor for this extension exists in `gltf`/`gltf-json` 1.4.1.
     /// Maps to `Material::translucency` via the importer's param table.
     pub diffuse_transmission_factor: f32,
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionColorFactor`
+    /// (default `[1,1,1]`).
+    pub diffuse_transmission_color: [f32; 3],
     /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionTexture`
-    /// index, if any (R channel scales `diffuseTransmissionFactor`). Color
-    /// factor/texture fidelity gap per section 16.8 — populated at import,
-    /// logged as a gap, consumed by a deferred phase.
-    #[expect(
-        dead_code,
-        reason = "populated at import for section 16.8 deferred texture path; the BUG-213-style \
-                  gap-report line is generated from the local variable in the parse block"
-    )]
+    /// index, if any (A channel scales `diffuseTransmissionFactor`).
     pub diffuse_transmission_texture: Option<u32>,
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionColorTexture`
+    /// index, if any (RGB tints the diffuse-transmission colour factor).
+    pub diffuse_transmission_color_texture: Option<u32>,
     /// `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0` — glTF's
     /// own implicit default, and the value that makes G-P5's coat lobe
     /// exactly inert). GLB_CONFORMANCE_DESIGN.md G-P5/D5: parsed by raw
@@ -1170,6 +1249,9 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_clearcoat`'s `clearcoatRoughnessFactor` (default
     /// `0.0`).
     pub clearcoat_roughness_factor: f32,
+    /// `KHR_materials_clearcoat`'s `clearcoatNormalTexture.scale` (default
+    /// `1.0`).
+    pub clearcoat_normal_scale: f32,
     /// `clearcoatTexture` index, if any (R channel scales
     /// `clearcoatFactor`). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
     /// revised — full spec surface): E1/G-P5 mapped factors only; the
@@ -1281,7 +1363,8 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_specular`'s `specularFactor` (default 1.0).
     pub specular_factor: f32,
     /// `KHR_materials_specular`'s `specularColorFactor` (default
-    /// `[1,1,1]`).
+    /// `[1,1,1]`), or the dielectric F0 tint recovered from a
+    /// `KHR_materials_pbrSpecularGlossiness` RGB factor.
     pub specular_color_factor: [f32; 3],
     /// `specularTexture` index, if any (ALPHA channel scales
     /// `specularFactor` per spec). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6
@@ -1300,11 +1383,10 @@ pub(crate) struct GltfMaterialInfo {
     /// G-P4: EVERY map family carries its own transform (the four fields
     /// below) — the AMG puts transforms on 9 normalTexture infos and only
     /// 1 baseColorTexture, so base-color-only would leave its normal maps
-    /// sampling untransformed UVs. A `texCoord` index override inside any
-    /// map's transform is a report line (nothing silently dropped) — see
-    /// `uv_tex_coord_override`.
+    /// sampling untransformed UVs. A `texCoord` index override is preserved in
+    /// the per-map metadata below.
     pub base_color_uv_transform: [f32; 6],
-    /// Same folded affine for the normal map's `KHR_texture_transform`
+    /// Same affine transform for the normal map's `KHR_texture_transform`
     /// (gltf 1.4.1's `NormalTexture` has no typed accessor — parsed from
     /// the raw `extensions` JSON via [`parse_uv_transform_json`]).
     pub normal_uv_transform: [f32; 6],
@@ -1314,11 +1396,10 @@ pub(crate) struct GltfMaterialInfo {
     pub occlusion_uv_transform: [f32; 6],
     /// Same for the emissive map (typed accessor).
     pub emissive_uv_transform: [f32; 6],
-    /// `true` when ANY map's `KHR_texture_transform` specifies a
-    /// `texCoord` override (i.e. samples `TEXCOORD_n, n>0`) — v1 has one
-    /// UV channel end to end (`MeshVertex` carries a single `uv`), so a
-    /// texCoord override can't be honoured. Report-only.
-    pub uv_tex_coord_override: bool,
+    /// Core map UV sets in base, normal, metallic-roughness, occlusion,
+    /// emissive order. A transform's `texCoord` override wins over the
+    /// texture-info `texCoord` value.
+    pub core_tex_coords: [u32; 5],
     /// `true` when `mr_texture` above actually points at a
     /// `KHR_materials_pbrSpecularGlossiness` `specularGlossinessTexture`
     /// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167) rather than a genuine
@@ -1327,17 +1408,18 @@ pub(crate) struct GltfMaterialInfo {
     /// `node.gltf_texture_source` feeding this map with `mode =
     /// gloss_to_roughness`, which repacks `(0, 1-gloss, 0, 1)` at decode
     /// time so `render_scene`'s existing G=roughness/B=metallic read stays
-    /// untouched — the shader sees only metal-rough, per D2. The texture's
-    /// RGB specular tint (vs. the scalar `specular_factor` above, which
-    /// IS converted) is Deferred (section 8) — not read here at all.
+    /// untouched — the shader sees only metal-rough, per D2. The same
+    /// texture's RGB is carried as the specular-color map (sRGB) while its
+    /// alpha is repacked as glossiness, so both channels remain available to
+    /// the downstream material.
     pub mr_texture_is_gloss_alpha: bool,
     /// BUG-5mma: `true` when COLOR_0 genuinely varies across the primitives
     /// sharing this material — either within one primitive, or two
     /// primitives disagree on their (otherwise-constant) color, or a
     /// colored primitive shares the material with an uncolored one. See
-    /// [`VertexColorAccum`]. `base_color_factor` above already has any
-    /// AGREED constant color folded in (`fold_vertex_color`); this flag
-    /// exists only to drive the "vertex colors not supported" report line
+    /// [`VertexColorAccum`]. The `base_color_factor` remains the authored
+    /// glTF factor; this flag exists only to drive the
+    /// "vertex colors not supported" report line
     /// in `gltf_import/object_group.rs` for the varying case.
     pub vertex_color_varies: bool,
     pub vertex_count: u32,
@@ -1351,6 +1433,9 @@ pub(crate) struct GltfMaterialInfo {
     pub mr_sampler: GltfSamplerInfo,
     pub occlusion_sampler: GltfSamplerInfo,
     pub emissive_sampler: GltfSamplerInfo,
+    /// UV, UV-set, and sampler metadata for extension maps in the
+    /// fixed [`MaterialMapInfo`] order documented on `Material`.
+    pub extension_maps: [MaterialMapInfo; 14],
     /// GLTF_ANIMATION_DESIGN.md A1/A4: this object's resolved TRS
     /// animation, ONE ENTRY PER PARSED CLIP (aligned to the document's
     /// `animations()` index — A4's D4 clip selection), when its geometry is
@@ -1418,30 +1503,26 @@ pub(crate) struct SpecGlossConversion {
     pub roughness: f32,
     pub metallic: f32,
     pub specular_factor: f32,
+    pub specular_tint: [f32; 3],
 }
 
 /// Convert spec-gloss's `glossinessFactor` + `specularFactor` (RGB) to
-/// metal-rough's `roughness` + the existing scalar `specular_factor` F0
-/// slot (`KHR_materials_specular`'s own slot, GLB_CONFORMANCE_DESIGN.md
-/// G-P4 — reused here rather than adding a second one). `metallic` is
-/// pinned to `0.0`: spec-gloss has no metalness channel of its own, and
-/// 0.0 is the dielectric default under which `specular_factor` alone
-/// drives `fs_pbr`'s F0 term — matching the extension's own dielectric-
-/// first model (a "metal" under spec-gloss is modeled as near-black
-/// diffuse + near-white specular, not a metalness scalar). `specular_factor`
-/// folds the RGB factor to its mean — the per-channel RGB TINT is
-/// Deferred (section 8); this only carries the scalar magnitude, same as
-/// `KHR_materials_specular` already does for factor-only materials.
+/// metal-rough's `roughness` plus the existing dielectric F0 controls
+/// (`KHR_materials_specular`'s slots, GLB_CONFORMANCE_DESIGN.md G-P4).
+/// The authored RGB factor is already an F0 colour, while MANIFOLD's shader
+/// multiplies the tint by the default dielectric reflectance (0.04), so the
+/// tint is normalized by 0.04 and the scalar weight stays at 1.0. `metallic`
+/// is pinned to `0.0`: spec-gloss has no metalness channel of its own.
 pub(crate) fn convert_spec_gloss(
     glossiness_factor: f32,
     specular_factor_rgb: [f32; 3],
 ) -> SpecGlossConversion {
+    let specular_tint = specular_factor_rgb.map(|value| value.clamp(0.0, 1.0) / 0.04);
     SpecGlossConversion {
         roughness: (1.0 - glossiness_factor).clamp(0.0, 1.0),
         metallic: 0.0,
-        specular_factor: ((specular_factor_rgb[0] + specular_factor_rgb[1] + specular_factor_rgb[2])
-            / 3.0)
-            .clamp(0.0, 1.0),
+        specular_factor: 1.0,
+        specular_tint,
     }
 }
 
@@ -2337,6 +2418,8 @@ pub(crate) fn flatten_skinned_node(
             .collect();
         let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
         let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+        let uv1s: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
+        let colors: Option<Vec<[f32; 4]>> = reader.read_colors(0).map(|it| it.into_rgba_f32().collect());
         // BUG-wfxe: authored tangents stay ZERO here deliberately — the GPU
         // skinning path transforms positions/normals with the joints but has
         // no tangent transform, so passing the authored frame through would
@@ -2364,14 +2447,17 @@ pub(crate) fn flatten_skinned_node(
             for &i in &[i0, i1, i2] {
                 let normal = normals.as_ref().map_or(face_normal, |ns| ns[i]);
                 let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                let uv1 = uv1s.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                let color = colors.as_ref().map_or([1.0, 1.0, 1.0, 1.0], |c| c[i]);
                 verts.push(MeshVertex {
                     position: positions[i],
                     _pad0: 0.0,
                     normal,
                     _pad1: 0.0,
                     uv,
-                    _pad2: [0.0, 0.0],
+                    _pad2: uv1,
                     tangent: [0.0; 4],
+                    color,
                 });
                 joints.push(match &vjoints {
                     Some(j) => [j[i][0] as f32, j[i][1] as f32, j[i][2] as f32, j[i][3] as f32],
@@ -2453,6 +2539,8 @@ fn flatten_rigid_multi_node(
                 .collect();
             let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
             let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+            let uv1s: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
+            let colors: Option<Vec<[f32; 4]>> = reader.read_colors(0).map(|it| it.into_rgba_f32().collect());
             let indices: Vec<u32> = match reader.read_indices() {
                 Some(idx) => idx.into_u32().collect(),
                 None => (0..positions.len() as u32).collect(),
@@ -2472,16 +2560,19 @@ fn flatten_rigid_multi_node(
                 for &i in &[i0, i1, i2] {
                     let normal = normals.as_ref().map_or(face_normal, |ns| ns[i]);
                     let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                    let uv1 = uv1s.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                    let color = colors.as_ref().map_or([1.0, 1.0, 1.0, 1.0], |c| c[i]);
                     verts.push(MeshVertex {
                         position: positions[i],
                         _pad0: 0.0,
                         normal,
                         _pad1: 0.0,
                         uv,
-                        _pad2: [0.0, 0.0],
+                        _pad2: uv1,
                         // Zero like the skinned path — GPU node-slot
                         // transforms have no tangent transform (BUG-wfxe).
                         tangent: [0.0; 4],
+                        color,
                     });
                     joints.push([slot as f32, 0.0, 0.0, 0.0]);
                     weights.push([1.0, 0.0, 0.0, 0.0]);
@@ -2665,11 +2756,16 @@ fn flatten_primitive_morph_deltas(
                     normal: wn,
                     _pad1: 0.0,
                     uv: [0.0, 0.0],
+                    // UVs are attributes of the base vertex, not morph
+                    // displacements.  Keeping this lane zero ensures the
+                    // base mesh's UV1 survives the additive morph stage.
                     _pad2: [0.0, 0.0],
                     // Morph TANGENT deltas exist in the spec (the reader's
                     // third tuple element above) but morph-blended tangent
                     // frames are unbuilt — zero = derived-frame sentinel.
                     tangent: [0.0; 4],
+                    // COLOR_0 is a base attribute, never a morph delta.
+                    color: [0.0; 4],
                 });
             }
         }
@@ -2781,7 +2877,7 @@ fn vertex_colors_close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 impl VertexColorAccum {
-    /// Fold one more primitive's own COLOR_0 state into this material's
+    /// Track one more primitive's own COLOR_0 state into this material's
     /// running state. `colors` is `None` when the primitive has no COLOR_0
     /// at all; `Some(values)` is every value `read_colors(0)` yielded for
     /// that primitive (one per POSITION entry, pre-index-expansion — same
@@ -2823,19 +2919,11 @@ impl VertexColorAccum {
     }
 }
 
-/// Fold a material's accumulated COLOR_0 state into its `base_color_factor`
-/// — component-wise multiply when every contributing primitive agreed on
-/// one constant color, otherwise `base` is returned untouched. The second
-/// return value is `vertex_color_varies` (BUG-5mma): whether to emit the
-/// "vertex colors not supported" report line in `object_group.rs`.
-fn fold_vertex_color(base: [f32; 4], accum: Option<VertexColorAccum>) -> ([f32; 4], bool) {
-    match accum {
-        Some(VertexColorAccum::Constant(c)) => {
-            ([base[0] * c[0], base[1] * c[1], base[2] * c[2], base[3] * c[3]], false)
-        }
-        Some(VertexColorAccum::Varies) => (base, true),
-        Some(VertexColorAccum::NoColor) | None => (base, false),
-    }
+/// Preserve the accumulated COLOR_0 agreement state for the informational
+/// importer flag.  Authored colors now travel in `MeshVertex::color`, so the
+/// material factor must remain exactly the glTF-authored value.
+fn vertex_color_varies(accum: Option<VertexColorAccum>) -> bool {
+    matches!(accum, Some(VertexColorAccum::Varies))
 }
 
 /// Recursively accumulate per-material world-combined vertex counts and a
@@ -2953,31 +3041,6 @@ fn summarize_node(
                     "{label}: quantized {name} accessor ({data_type:?}) is not supported — primitive skipped (no dequantization)"
                 ));
                 continue;
-            }
-            // BUG-pm9m: a primitive can carry TEXCOORD_1+ attributes even
-            // when no material slot references them (a common export
-            // habit — bake the second UV set in "just in case"). Nothing
-            // reads them (only `TEXCOORD_0` is ever fetched, e.g. the
-            // `reader.read_tex_coords(0)` calls throughout this module) —
-            // one summary line per primitive rather than per attribute, the
-            // extra sets are ignored as a group.
-            let mut extra_uv_sets: Vec<u32> = prim
-                .attributes()
-                .filter_map(|(semantic, _)| match semantic {
-                    gltf::Semantic::TexCoords(n) if n >= 1 => Some(n),
-                    _ => None,
-                })
-                .collect();
-            if !extra_uv_sets.is_empty() {
-                extra_uv_sets.sort_unstable();
-                extra_uv_sets.dedup();
-                let sets = extra_uv_sets.iter().map(|n| format!("TEXCOORD_{n}")).collect::<Vec<_>>().join(", ");
-                let noun = if extra_uv_sets.len() == 1 { "attribute" } else { "attributes" };
-                report_lines.push(format!(
-                    "mesh {:?} primitive {}: carries {sets} {noun} — additional UV sets are ignored",
-                    mesh.name().unwrap_or("<unnamed>"),
-                    prim.index()
-                ));
             }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
@@ -3464,13 +3527,9 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // occlusion (`NormalTexture`/`OcclusionTexture`) don't, so
             // those parse the raw `extensions` JSON via
             // `parse_uv_transform_json` (identical spec defaults).
-            let mut uv_tex_coord_override = false;
-            let mut fold_typed = |info: Option<gltf::texture::Info>| -> [f32; 6] {
+            let fold_typed = |info: Option<gltf::texture::Info>| -> [f32; 6] {
                 match info.as_ref().and_then(|t| t.texture_transform()) {
-                    Some(t) => {
-                        uv_tex_coord_override |= t.tex_coord().is_some();
-                        fold_uv_transform(t.offset(), t.rotation(), t.scale())
-                    }
+                    Some(t) => fold_uv_transform(t.offset(), t.rotation(), t.scale()),
                     None => IDENTITY_UV_TRANSFORM,
                 }
             };
@@ -3503,7 +3562,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // this spec-gloss override write the SAME variable — one slot,
             // two possible sources, never both.
             let mut specular_factor_override: Option<f32> = None;
+            let mut specular_color_factor_override: Option<[f32; 3]> = None;
+            let mut spec_gloss_color_texture: Option<u32> = None;
+            let mut spec_gloss_color_map: Option<MaterialMapInfo> = None;
+            let mut spec_gloss_present = false;
             if let Some(sg) = m.pbr_specular_glossiness() {
+                spec_gloss_present = true;
                 let conv = convert_spec_gloss(sg.glossiness_factor(), sg.specular_factor());
                 base_color_factor = sg.diffuse_factor();
                 base_color_info = sg.diffuse_texture();
@@ -3511,12 +3575,28 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 roughness = conv.roughness;
                 metallic = conv.metallic;
                 specular_factor_override = Some(conv.specular_factor);
+                specular_color_factor_override = Some(conv.specular_tint);
                 match sg.specular_glossiness_texture() {
                     Some(tex) => {
-                        mr_texture_index = Some(tex.texture().index() as u32);
+                        let texture_index = tex.texture().index() as u32;
+                        let tex_coord = tex
+                            .texture_transform()
+                            .and_then(|transform| transform.tex_coord())
+                            .unwrap_or_else(|| tex.tex_coord());
+                        let uv_transform = fold_typed(Some(tex));
+                        mr_texture_index = Some(texture_index);
                         mr_info = sg.specular_glossiness_texture();
                         mr_uv_transform = fold_typed(sg.specular_glossiness_texture());
                         mr_texture_is_gloss_alpha = true;
+                        spec_gloss_color_texture = Some(texture_index);
+                        spec_gloss_color_map = Some(MaterialMapInfo {
+                            uv_transform,
+                            tex_coord,
+                            sampler: material_sampler_info(sampler_info_for(
+                                &document,
+                                Some(texture_index),
+                            )),
+                        });
                     }
                     None => {
                         mr_texture_index = None;
@@ -3526,12 +3606,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 }
             }
 
-            let mut fold_raw = |ext: Option<&serde_json::Value>| -> [f32; 6] {
+            let fold_raw = |ext: Option<&serde_json::Value>| -> [f32; 6] {
                 match ext {
                     Some(v) => {
-                        let (folded, has_override) = parse_uv_transform_json(v);
-                        uv_tex_coord_override |= has_override;
-                        folded
+                        parse_uv_transform_json(v).0
                     }
                     None => IDENTITY_UV_TRANSFORM,
                 }
@@ -3546,6 +3624,25 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     .as_ref()
                     .and_then(|t| t.extension_value("KHR_texture_transform")),
             );
+            let typed_tex_coord = |info: Option<gltf::texture::Info>| -> u32 {
+                info.map(|t| {
+                    t.texture_transform()
+                        .and_then(|transform| transform.tex_coord())
+                        .unwrap_or_else(|| t.tex_coord())
+                })
+                .unwrap_or(0)
+            };
+            let core_tex_coords = [
+                typed_tex_coord(base_color_info.clone()),
+                m.normal_texture()
+                    .map(|t| t.extension_value("KHR_texture_transform").and_then(|v| v.get("texCoord")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or_else(|| t.tex_coord()))
+                    .unwrap_or(0),
+                typed_tex_coord(mr_info.clone()),
+                m.occlusion_texture()
+                    .map(|t| t.extension_value("KHR_texture_transform").and_then(|v| v.get("texCoord")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or_else(|| t.tex_coord()))
+                    .unwrap_or(0),
+                typed_tex_coord(m.emissive_texture()),
+            ];
 
             // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular +
             // KHR_materials_ior, mapped to F0 scale downstream
@@ -3556,7 +3653,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // `KHR_materials_specular` extension — spec-gloss materials
             // don't also carry that extension in practice, but if one did,
             // D2's conversion is the more specific decision for this slot.
-            let ior = m.ior().unwrap_or(1.5);
+            let ior = if spec_gloss_present {
+                1.5
+            } else {
+                m.ior().unwrap_or(1.5)
+            };
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: raw-JSON texture-index
             // helper, hoisted above its original sheen/iridescence/
             // anisotropy use so clearcoat/specular (parsed below, before
@@ -3572,24 +3673,42 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // texCoord 0 — filtered out below same as every typed slot.
             let tex_coord_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
                 let obj = v.get(key)?;
-                Some(obj.get("texCoord").and_then(|t| t.as_u64()).unwrap_or(0) as u32)
+                Some(obj
+                    .get("extensions")
+                    .and_then(|e| e.get("KHR_texture_transform"))
+                    .and_then(|t| t.get("texCoord"))
+                    .or_else(|| obj.get("texCoord"))
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0) as u32)
             };
             let specular_ext = m.specular();
             let specular_factor = specular_factor_override
                 .unwrap_or_else(|| specular_ext.as_ref().map(|s| s.specular_factor()).unwrap_or(1.0));
-            let specular_color_factor = specular_ext
-                .as_ref()
-                .map(|s| s.specular_color_factor())
-                .unwrap_or([1.0, 1.0, 1.0]);
+            let specular_color_factor = specular_color_factor_override.unwrap_or_else(|| {
+                specular_ext
+                    .as_ref()
+                    .map(|s| s.specular_color_factor())
+                    .unwrap_or([1.0, 1.0, 1.0])
+            });
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
             // surface): specularTexture/specularColorTexture, typed
             // accessors on `Specular<'_>` (gltf 1.4.1 has the feature).
-            let specular_texture =
-                specular_ext.as_ref().and_then(|s| s.specular_texture()).map(|t| t.texture().index() as u32);
-            let specular_color_texture = specular_ext
-                .as_ref()
-                .and_then(|s| s.specular_color_texture())
-                .map(|t| t.texture().index() as u32);
+            let specular_texture = if spec_gloss_present {
+                None
+            } else {
+                specular_ext
+                    .as_ref()
+                    .and_then(|s| s.specular_texture())
+                    .map(|t| t.texture().index() as u32)
+            };
+            let specular_color_texture = if spec_gloss_present {
+                spec_gloss_color_texture
+            } else {
+                specular_ext
+                    .as_ref()
+                    .and_then(|s| s.specular_color_texture())
+                    .map(|t| t.texture().index() as u32)
+            };
 
             // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat.
             // No typed accessor in gltf 1.4.1 (verified: no
@@ -3608,6 +3727,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .and_then(|v| v.get("clearcoatRoughnessFactor"))
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0) as f32;
+            let clearcoat_normal_scale = clearcoat_ext
+                .and_then(|v| v.get("clearcoatNormalTexture"))
+                .and_then(|v| v.get("scale"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
             // surface): clearcoatTexture/clearcoatRoughnessTexture/
             // clearcoatNormalTexture, raw-JSON sniff (same `tex_idx`
@@ -3685,43 +3809,28 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
 
             // RAYTRACING_DESIGN.md section 16 TL3:
             // KHR_materials_diffuse_transmission. Raw-JSON sniff — no typed
-            // accessor at 1.4.1. Factor maps to Material::translucency; color
-            // factor and texture stay deferred per section 16.8 (tint=albedo
-            // is the right default for foliage; the three Khronos conformance
-            // assets become the held-out demo).
+            // accessor at 1.4.1. Factor and colour values feed the material;
+            // both texture families are retained for SceneObject map wiring.
             let diffuse_transmission_ext =
                 m.extension_value("KHR_materials_diffuse_transmission");
             let diffuse_transmission_factor = diffuse_transmission_ext
                 .map(|v| f1(v, "diffuseTransmissionFactor", 0.0))
                 .unwrap_or(0.0);
+            let diffuse_transmission_color = diffuse_transmission_ext
+                .and_then(|v| v.get("diffuseTransmissionColorFactor"))
+                .and_then(|a| a.as_array())
+                .and_then(|a| {
+                    Some([
+                        a.first()?.as_f64()? as f32,
+                        a.get(1)?.as_f64()? as f32,
+                        a.get(2)?.as_f64()? as f32,
+                    ])
+                })
+                .unwrap_or([1.0, 1.0, 1.0]);
             let diffuse_transmission_texture = diffuse_transmission_ext
                 .and_then(|v| tex_idx(v, "diffuseTransmissionTexture"));
-            let _diffuse_transmission_color_texture = diffuse_transmission_ext
+            let diffuse_transmission_color_texture = diffuse_transmission_ext
                 .and_then(|v| tex_idx(v, "diffuseTransmissionColorTexture"));
-            // Log fidelity gaps (section 16.8) — color factor and texture
-            // NOT mapped; tint=albedo is the forward-term default.
-            if let Some(ext) = diffuse_transmission_ext {
-                if ext.get("diffuseTransmissionColorFactor").is_some() {
-                    geometry_report_lines.push(format!(
-                        "{label}: KHR_materials_diffuse_transmission diffuseTransmissionColorFactor \
-                         not mapped (v1 uses albedo tint — see docs/RAYTRACING_DESIGN.md section 16.8)"
-                    ));
-                }
-                if ext.get("diffuseTransmissionColorTexture").is_some() {
-                    geometry_report_lines.push(format!(
-                        "{label}: KHR_materials_diffuse_transmission diffuseTransmissionColorTexture \
-                         given — not mapped (v1 color-texture deferred, section 16.8) and \
-                         texture will not be decoded"
-                    ));
-                }
-            }
-            if diffuse_transmission_texture.is_some() {
-                geometry_report_lines.push(format!(
-                    "{label}: KHR_materials_diffuse_transmission diffuseTransmissionTexture \
-                     given — not mapped (v1 factor-only; texture deferred to section 16.8) \
-                     and texture will not be decoded"
-                ));
-            }
 
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume.
             // Typed accessor (`Material::volume()`) — the Cargo feature IS
@@ -3761,28 +3870,35 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             let occlusion_texture = m.occlusion_texture().map(|t| t.texture().index() as u32);
             let emissive_texture = m.emissive_texture().map(|t| t.texture().index() as u32);
 
-            // BUG-pm9m: `MeshVertex` carries one UV channel end to end (see
-            // the ABI comment near its definition) — every texture slot
-            // samples TEXCOORD_0 regardless of the `texCoord` index it
-            // actually declares. That's a silent wrong-UV bug for any slot
-            // that legitimately points at TEXCOORD_1+ (a baked-AO or
-            // lightmap UV set is the common real-world case). Warning
-            // only, same "never a silent skip" doctrine as the Draco/
-            // meshopt/quantization/KTX2 report lines above — no second UV
-            // set is added (that's a priced ABI decision, not this fix).
+            // BUG-pm9m: UV sets 0 and 1 are carried through MeshVertex;
+            // report only higher authored sets, which still fall back to UV0.
             for (slot, tex_coord) in [
-                ("baseColor", base_color_info.map(|t| t.tex_coord())),
-                ("metallicRoughness", mr_info.map(|t| t.tex_coord())),
-                ("normal", m.normal_texture().map(|t| t.tex_coord())),
-                ("occlusion", m.occlusion_texture().map(|t| t.tex_coord())),
-                ("emissive", m.emissive_texture().map(|t| t.tex_coord())),
+                ("baseColor", base_color_info.as_ref().map(|_| core_tex_coords[0])),
+                ("metallicRoughness", mr_info.as_ref().map(|_| core_tex_coords[2])),
+                ("normal", m.normal_texture().map(|_| core_tex_coords[1])),
+                ("occlusion", m.occlusion_texture().map(|_| core_tex_coords[3])),
+                ("emissive", m.emissive_texture().map(|_| core_tex_coords[4])),
                 (
                     "specular",
-                    specular_ext.as_ref().and_then(|s| s.specular_texture()).map(|t| t.tex_coord()),
+                    if spec_gloss_present {
+                        None
+                    } else {
+                        specular_ext
+                            .as_ref()
+                            .and_then(|s| s.specular_texture())
+                            .map(|t| t.tex_coord())
+                    },
                 ),
                 (
                     "specularColor",
-                    specular_ext.as_ref().and_then(|s| s.specular_color_texture()).map(|t| t.tex_coord()),
+                    if spec_gloss_present {
+                        spec_gloss_color_map.map(|info| info.tex_coord)
+                    } else {
+                        specular_ext
+                            .as_ref()
+                            .and_then(|s| s.specular_color_texture())
+                            .map(|t| t.tex_coord())
+                    },
                 ),
                 (
                     "volumeThickness",
@@ -3822,13 +3938,17 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     "diffuseTransmission",
                     diffuse_transmission_ext.and_then(|v| tex_coord_idx(v, "diffuseTransmissionTexture")),
                 ),
+                (
+                    "diffuseTransmissionColor",
+                    diffuse_transmission_ext
+                        .and_then(|v| tex_coord_idx(v, "diffuseTransmissionColorTexture")),
+                ),
             ] {
                 if let Some(n) = tex_coord
-                    && n != 0
+                    && n > 1
                 {
                     geometry_report_lines.push(format!(
-                        "{label}: {slot} texture uses TEXCOORD_{n} — only UV set 0 is supported, \
-                         map will sample UV0 (likely wrong for baked AO/lightmaps)"
+                        "{label}: {slot} texture uses TEXCOORD_{n} — only UV sets 0 and 1 are supported; it falls back to UV0"
                     ));
                 }
             }
@@ -3855,12 +3975,58 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             let mr_sampler = sampler_info_for(&document, mr_texture_index);
             let occlusion_sampler = sampler_info_for(&document, occlusion_texture);
             let emissive_sampler = sampler_info_for(&document, emissive_texture);
+            let extension_maps = [
+                extension_map_info(&document, sheen_ext, "sheenColorTexture"),
+                extension_map_info(&document, sheen_ext, "sheenRoughnessTexture"),
+                extension_map_info(&document, iridescence_ext, "iridescenceTexture"),
+                extension_map_info(&document, iridescence_ext, "iridescenceThicknessTexture"),
+                extension_map_info(&document, anisotropy_ext, "anisotropyTexture"),
+                extension_map_info(&document, clearcoat_ext, "clearcoatTexture"),
+                extension_map_info(&document, clearcoat_ext, "clearcoatRoughnessTexture"),
+                extension_map_info(&document, clearcoat_ext, "clearcoatNormalTexture"),
+                if spec_gloss_present {
+                    MaterialMapInfo::default()
+                } else {
+                    extension_map_info(
+                        &document,
+                        m.extension_value("KHR_materials_specular"),
+                        "specularTexture",
+                    )
+                },
+                if spec_gloss_present {
+                    spec_gloss_color_map.unwrap_or_default()
+                } else {
+                    extension_map_info(
+                        &document,
+                        m.extension_value("KHR_materials_specular"),
+                        "specularColorTexture",
+                    )
+                },
+                extension_map_info(
+                    &document,
+                    m.extension_value("KHR_materials_transmission"),
+                    "transmissionTexture",
+                ),
+                extension_map_info(
+                    &document,
+                    m.extension_value("KHR_materials_volume"),
+                    "thicknessTexture",
+                ),
+                extension_map_info(
+                    &document,
+                    diffuse_transmission_ext,
+                    "diffuseTransmissionTexture",
+                ),
+                extension_map_info(
+                    &document,
+                    diffuse_transmission_ext,
+                    "diffuseTransmissionColorTexture",
+                ),
+            ];
 
-            // BUG-5mma: fold this material's COLOR_0 agreement state into
-            // `base_color_factor` now that it's finalized (the spec-gloss
-            // override above is its last write) — see `fold_vertex_color`.
-            let (base_color_factor, vertex_color_varies) =
-                fold_vertex_color(base_color_factor, per_material_color.get(&material_key).copied());
+            // COLOR_0 stays in MeshVertex::color; retain only the report flag.
+            let vertex_color_varies =
+                vertex_color_varies(per_material_color.get(&material_key).copied());
 
             Some(GltfMaterialInfo {
                 material_index,
@@ -3890,8 +4056,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 mr_uv_transform,
                 occlusion_uv_transform,
                 emissive_uv_transform,
-                uv_tex_coord_override,
-                transmission_factor: m
+                core_tex_coords,
+                    transmission_factor: m
                     .transmission()
                     .map(|t| t.transmission_factor())
                     .unwrap_or(0.0),
@@ -3900,9 +4066,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     .and_then(|t| t.transmission_texture())
                     .map(|t| t.texture().index() as u32),
                 diffuse_transmission_factor,
+                diffuse_transmission_color,
                 diffuse_transmission_texture,
+                diffuse_transmission_color_texture,
                 clearcoat_factor,
                 clearcoat_roughness_factor,
+                clearcoat_normal_scale,
                 clearcoat_texture,
                 clearcoat_roughness_texture,
                 clearcoat_normal_texture,
@@ -3933,6 +4102,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 mr_sampler,
                 occlusion_sampler,
                 emissive_sampler,
+                extension_maps,
                 animations,
                 skin,
                 morph,
@@ -3989,14 +4159,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 rmn.slot_nodes.len()
             ));
         }
-        // BUG-5mma: same fold as the real-material branch above, keyed by
-        // `None` (the default-material bucket).
-        let (default_base_color_factor, default_vertex_color_varies) =
-            fold_vertex_color([1.0, 1.0, 1.0, 1.0], per_material_color.get(&None).copied());
+        // COLOR_0 stays in MeshVertex::color; retain only the report flag.
+        let default_vertex_color_varies =
+            vertex_color_varies(per_material_color.get(&None).copied());
         materials.push(GltfMaterialInfo {
             material_index: DEFAULT_MATERIAL_SENTINEL,
             name: None,
-            base_color_factor: default_base_color_factor,
+            base_color_factor: [1.0, 1.0, 1.0, 1.0],
             vertex_color_varies: default_vertex_color_varies,
             metallic: 1.0,
             roughness: 1.0,
@@ -4014,9 +4183,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             transmission_factor: 0.0,
             transmission_texture: None,
             diffuse_transmission_factor: 0.0,
+            diffuse_transmission_color: [1.0, 1.0, 1.0],
             diffuse_transmission_texture: None,
+            diffuse_transmission_color_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
+            clearcoat_normal_scale: 1.0,
             clearcoat_texture: None,
             clearcoat_roughness_texture: None,
             clearcoat_normal_texture: None,
@@ -4050,7 +4222,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             mr_uv_transform: IDENTITY_UV_TRANSFORM,
             occlusion_uv_transform: IDENTITY_UV_TRANSFORM,
             emissive_uv_transform: IDENTITY_UV_TRANSFORM,
-            uv_tex_coord_override: false,
+            core_tex_coords: [0; 5],
             mr_texture_is_gloss_alpha: false,
             vertex_count: default_material_vertex_count,
             base_color_sampler: GltfSamplerInfo::default(),
@@ -4058,6 +4230,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             mr_sampler: GltfSamplerInfo::default(),
             occlusion_sampler: GltfSamplerInfo::default(),
             emissive_sampler: GltfSamplerInfo::default(),
+            extension_maps: [MaterialMapInfo::default(); 14],
             animations: default_animations,
             skin: default_skin,
             morph: default_morph,
@@ -4487,54 +4660,183 @@ mod animation_tests {
     }
 
     /// BUG-5mma core case: every vertex on the (sole) primitive sharing this
-    /// material agrees on one constant COLOR_0 — it must fold component-wise
-    /// into `base_color_factor`, and `vertex_color_varies` must stay false.
+    /// material agrees on one constant COLOR_0. The material factor remains
+    /// untouched while the authored color arrives on every loaded vertex.
     #[test]
-    fn constant_vertex_color_folds_into_base_color_factor() {
+    fn constant_vertex_color_preserves_factor_and_loads_color() {
         let base = [0.8, 0.6, 0.4, 1.0];
         let tint = [0.5, 1.0, 0.25, 0.5];
         let path = write_synthetic_color0_glb(base, [tint, tint, tint]);
         let summary = gltf_import_summary(&path).expect("parse synthetic constant-color glb");
-        std::fs::remove_file(&path).ok();
 
         assert_eq!(summary.materials.len(), 1);
         let m = &summary.materials[0];
         assert!(!m.vertex_color_varies, "every vertex agreed on one color — nothing to report");
-        for i in 0..4 {
-            assert!(
-                (m.base_color_factor[i] - base[i] * tint[i]).abs() < 1e-5,
-                "channel {i}: base_color_factor {:?} must be base*tint (expected {}), got {}",
-                m.base_color_factor,
-                base[i] * tint[i],
-                m.base_color_factor[i]
-            );
-        }
+        assert_eq!(m.base_color_factor, base, "COLOR_0 must not be folded into the material factor");
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic constant-color vertices");
+        assert_eq!(verts.len(), 3);
+        assert!(verts.iter().all(|vertex| vertex.color == tint));
+        std::fs::remove_file(&path).expect("remove synthetic constant-color glb");
     }
 
-    /// BUG-5mma varying case at the parse layer (mirrors the two
-    /// fixture-based tests above, but with control over the exact colors):
-    /// three genuinely different vertex colors on one primitive must leave
-    /// `base_color_factor` untouched and set `vertex_color_varies`.
+    /// BUG-5mma varying case: three distinct authored colors remain distinct
+    /// in the loaded vertices, while the material factor stays untouched.
     #[test]
-    fn varying_vertex_color_within_one_primitive_is_not_folded() {
+    fn varying_vertex_color_preserves_factor_and_loads_each_vertex() {
         let base = [0.8, 0.6, 0.4, 1.0];
         let path = write_synthetic_color0_glb(
             base,
             [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
         );
         let summary = gltf_import_summary(&path).expect("parse synthetic varying-color glb");
-        std::fs::remove_file(&path).ok();
 
         assert_eq!(summary.materials.len(), 1);
         let m = &summary.materials[0];
         assert!(m.vertex_color_varies, "red/green/blue vertices must be flagged as varying");
         assert_eq!(m.base_color_factor, base, "varying color must leave base_color_factor untouched");
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic varying-color vertices");
+        assert_eq!(verts.len(), 3);
+        let colors: Vec<[f32; 4]> = verts.iter().map(|vertex| vertex.color).collect();
+        assert_eq!(colors, vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]);
+        std::fs::remove_file(&path).expect("remove synthetic varying-color glb");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One self-contained triangle exercises every loader variant under test:
+    /// a reflected nonuniform node transform, authored tangent frame, UV1,
+    /// one skin joint, and one POSITION morph target.
+    fn write_synthetic_loader_proof_glb() -> std::path::PathBuf {
+        fn append_aligned(bin: &mut Vec<u8>, bytes: &[u8]) -> (usize, usize) {
+            while !bin.len().is_multiple_of(4) {
+                bin.push(0);
+            }
+            let offset = bin.len();
+            bin.extend_from_slice(bytes);
+            (offset, bytes.len())
+        }
+        fn f32_bytes<const N: usize>(rows: &[[f32; N]]) -> Vec<u8> {
+            rows.iter()
+                .flat_map(|row| row.iter().flat_map(|value| value.to_le_bytes()))
+                .collect()
+        }
+
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0]];
+        let normal = [-0.57735026, -0.57735026, 0.57735026];
+        let tangent = [0.70710677, -0.70710677, 0.0, 1.0];
+        let normals = [normal; 3];
+        let tangents = [tangent; 3];
+        let uv0 = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let uv1 = [[0.2, 0.3], [0.4, 0.7], [0.8, 0.9]];
+        let joints = [0u8; 12];
+        let weights = [[1.0, 0.0, 0.0, 0.0]; 3];
+        let indices = [0u16, 1, 2];
+        let morph_positions = [[0.1, 0.2, 0.3], [0.0, 0.1, 0.0], [-0.1, 0.0, 0.2]];
+        let inverse_bind = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+
+        let mut bin = Vec::new();
+        let (positions_offset, positions_len) = append_aligned(&mut bin, &f32_bytes(&positions));
+        let (normals_offset, normals_len) = append_aligned(&mut bin, &f32_bytes(&normals));
+        let (tangents_offset, tangents_len) = append_aligned(&mut bin, &f32_bytes(&tangents));
+        let (uv0_offset, uv0_len) = append_aligned(&mut bin, &f32_bytes(&uv0));
+        let (uv1_offset, uv1_len) = append_aligned(&mut bin, &f32_bytes(&uv1));
+        let (joints_offset, joints_len) = append_aligned(&mut bin, &joints);
+        let (weights_offset, weights_len) = append_aligned(&mut bin, &f32_bytes(&weights));
+        let index_bytes: Vec<u8> = indices.iter().flat_map(|index| index.to_le_bytes()).collect();
+        let (indices_offset, indices_len) = append_aligned(&mut bin, &index_bytes);
+        let (morph_offset, morph_len) = append_aligned(&mut bin, &f32_bytes(&morph_positions));
+        let (inverse_bind_offset, inverse_bind_len) =
+            append_aligned(&mut bin, &f32_bytes(&inverse_bind));
+
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0, 1] }],
+            "nodes": [
+                { "mesh": 0, "skin": 0, "scale": [-2.0, 3.0, 4.0] },
+                { "translation": [0.0, 0.0, 0.0] }
+            ],
+            "meshes": [{
+                "weights": [0.0],
+                "primitives": [{
+                    "attributes": {
+                        "POSITION": 0, "NORMAL": 1, "TANGENT": 2,
+                        "TEXCOORD_0": 3, "TEXCOORD_1": 4,
+                        "JOINTS_0": 5, "WEIGHTS_0": 6
+                    },
+                    "indices": 7,
+                    "material": 0,
+                    "targets": [{ "POSITION": 8 }]
+                }]
+            }],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0] },
+                { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+                { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4" },
+                { "bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC2" },
+                { "bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC2" },
+                { "bufferView": 5, "componentType": 5121, "count": 3, "type": "VEC4" },
+                { "bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC4" },
+                { "bufferView": 7, "componentType": 5123, "count": 3, "type": "SCALAR" },
+                { "bufferView": 8, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-0.1, 0.0, 0.0], "max": [0.1, 0.2, 0.3] },
+                { "bufferView": 9, "componentType": 5126, "count": 1, "type": "MAT4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": positions_offset, "byteLength": positions_len },
+                { "buffer": 0, "byteOffset": normals_offset, "byteLength": normals_len },
+                { "buffer": 0, "byteOffset": tangents_offset, "byteLength": tangents_len },
+                { "buffer": 0, "byteOffset": uv0_offset, "byteLength": uv0_len },
+                { "buffer": 0, "byteOffset": uv1_offset, "byteLength": uv1_len },
+                { "buffer": 0, "byteOffset": joints_offset, "byteLength": joints_len },
+                { "buffer": 0, "byteOffset": weights_offset, "byteLength": weights_len },
+                { "buffer": 0, "byteOffset": indices_offset, "byteLength": indices_len },
+                { "buffer": 0, "byteOffset": morph_offset, "byteLength": morph_len },
+                { "buffer": 0, "byteOffset": inverse_bind_offset, "byteLength": inverse_bind_len }
+            ],
+            "materials": [{ "name": "LoaderProofMaterial", "pbrMetallicRoughness": {} }],
+            "skins": [{ "joints": [1], "inverseBindMatrices": 9 }],
+            "buffers": [{ "byteLength": bin.len() }]
+        });
+        let mut json_bytes = serde_json::to_vec(&doc).expect("serialize loader proof JSON");
+        while !json_bytes.len().is_multiple_of(4) {
+            json_bytes.push(b' ');
+        }
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let total_len = 12 + 8 + json_bytes.len() + 8 + bin.len();
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_bytes);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin);
+
+        let path = std::env::temp_dir().join(format!(
+            "manifold_loader_proof_{}_{}.glb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after epoch")
+                .as_nanos()
+        ));
+        std::fs::write(&path, glb).expect("write loader proof GLB");
+        path
+    }
 
     /// The multi-node shared-skin merge, against the real fixture that
     /// motivated it: surveillance_cam.glb's material 0 is fed by THREE
@@ -4688,6 +4990,142 @@ mod tests {
             "authored tangent direction must be ~unit (world-transformed), got |t|={len}"
         );
     }
+
+    #[test]
+    fn texture_transform_multi_preserves_extension_map_metadata() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/TextureTransformMultiTest.glb");
+        assert!(path.exists(), "TextureTransformMultiTest.glb missing at {}", path.display());
+        let summary = gltf_import_summary(&path).expect("parse TextureTransformMultiTest");
+
+        // Materials 20 and 23 are the fixture's clearcoat transform cases;
+        // their authored maps exercise two extension families independently.
+        let clearcoat = &summary.materials[20].extension_maps[5];
+        let clearcoat_roughness = &summary.materials[23].extension_maps[6];
+        assert_ne!(clearcoat.uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_ne!(clearcoat_roughness.uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(clearcoat.tex_coord, 0);
+        assert_eq!(clearcoat_roughness.tex_coord, 0);
+        assert_eq!(clearcoat.sampler.wrap_u, manifold_gpu::GpuAddressMode::Repeat);
+        assert_eq!(clearcoat_roughness.sampler.min_filter, manifold_gpu::GpuFilterMode::Linear);
+
+        let normal = &summary.materials[9];
+        let occlusion = &summary.materials[15];
+        assert_ne!(normal.normal_uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(normal.core_tex_coords[1], 1);
+        assert_ne!(occlusion.occlusion_uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(occlusion.core_tex_coords[3], 1);
+    }
+
+    #[test]
+    fn texture_settings_preserves_sampler_wrap_and_mip_choice() {
+        let settings = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/TextureSettingsTest.glb");
+        let settings_summary = gltf_import_summary(&settings).expect("parse TextureSettingsTest");
+        assert_eq!(settings_summary.materials[0].base_color_sampler.mip_filter, Some(GltfFilterMode::Linear));
+        assert_eq!(settings_summary.materials[0].base_color_sampler.wrap_v, GltfWrapMode::MirrorRepeat);
+        assert_eq!(settings_summary.materials[1].base_color_sampler.wrap_u, GltfWrapMode::MirrorRepeat);
+
+        let nearest_mip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/MaterialsVariantsShoe.glb");
+        let nearest_summary = gltf_import_summary(&nearest_mip).expect("parse MaterialsVariantsShoe");
+        assert_eq!(nearest_summary.materials[0].mr_sampler.mip_filter, Some(GltfFilterMode::Nearest));
+
+        let no_mip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SpecularSilkPouf.glb");
+        let no_mip_summary = gltf_import_summary(&no_mip).expect("parse SpecularSilkPouf");
+        assert_eq!(no_mip_summary.materials[0].occlusion_sampler.mip_filter, None);
+    }
+
+    #[test]
+    fn reflected_nonuniform_node_transform_preserves_tangent_direction_and_handedness() {
+        let path = write_synthetic_loader_proof_glb();
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic reflected tangent fixture");
+        assert_eq!(verts.len(), 3, "synthetic triangle must produce exactly three vertices");
+
+        let local_normal = [-0.57735026, -0.57735026, 0.57735026];
+        let local_tangent = [0.70710677, -0.70710677, 0.0];
+        let world_linear = [[-2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]];
+        let normal_matrix = [[-0.5, 0.0, 0.0], [0.0, 1.0 / 3.0, 0.0], [0.0, 0.0, 0.25]];
+        let expected_tangent = normalize3(mat3_mul_vec3(world_linear, local_tangent));
+        let expected_normal = normalize3(mat3_mul_vec3(normal_matrix, local_normal));
+        for vertex in &verts {
+            let tangent = [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]];
+            let normal = vertex.normal;
+            assert!(
+                tangent
+                    .iter()
+                    .zip(expected_tangent)
+                    .map(|(actual, expected)| *actual * expected)
+                    .sum::<f32>()
+                    > 0.999,
+                "tangent direction must follow the transformed authored tangent: {tangent:?}"
+            );
+            assert!(
+                normal
+                    .iter()
+                    .zip(expected_normal)
+                    .map(|(actual, expected)| *actual * expected)
+                    .sum::<f32>()
+                    > 0.999,
+                "normal must follow the inverse-transpose transform: {normal:?}"
+            );
+            let orthogonality = normal.iter().zip(tangent).map(|(n, t)| *n * t).sum::<f32>();
+            assert!(orthogonality.abs() < 1e-5, "normal/tangent lost orthogonality: {orthogonality}");
+            assert_eq!(vertex.tangent[3], -1.0, "reflection must flip authored handedness");
+        }
+        std::fs::remove_file(&path).expect("remove synthetic tangent fixture");
+    }
+
+    #[test]
+    fn skinned_and_morph_loaders_preserve_uv1() {
+        let path = write_synthetic_loader_proof_glb();
+        let expected_uv1 = [[0.2, 0.3], [0.4, 0.7], [0.8, 0.9]];
+
+        let summary = gltf_import_summary(&path).expect("parse synthetic loader proof");
+        assert_eq!(summary.materials.len(), 1);
+        assert!(summary.materials[0].skin.is_some(), "synthetic fixture must resolve a skin");
+        assert!(summary.materials[0].morph.is_some(), "synthetic fixture must resolve morph targets");
+
+        let base = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic morph base mesh");
+        assert_eq!(base.len(), expected_uv1.len());
+        for (vertex, expected) in base.iter().zip(expected_uv1) {
+            assert_eq!(vertex._pad2, expected, "base mesh UV1 must survive static loading");
+        }
+
+        let (skinned, joints, weights) =
+            load_gltf_skinned_mesh(&path, 0).expect("load synthetic skinned mesh");
+        assert_eq!(skinned.len(), expected_uv1.len());
+        assert_eq!(joints.len(), skinned.len());
+        assert_eq!(weights.len(), skinned.len());
+        for ((vertex, joint), (weight, expected)) in skinned
+            .iter()
+            .zip(joints)
+            .zip(weights.into_iter().zip(expected_uv1))
+        {
+            assert_eq!(vertex._pad2, expected, "skinned UV1 must survive loading");
+            assert_eq!(joint, [0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(weight, [1.0, 0.0, 0.0, 0.0]);
+        }
+
+        let (deltas, target_count, vertex_count) =
+            load_gltf_morph_deltas(&path, 0, false).expect("load synthetic morph deltas");
+        assert_eq!(target_count, 1);
+        assert_eq!(vertex_count, 3);
+        assert_eq!(deltas.len(), 3);
+        assert!(
+            deltas.iter().any(|vertex| vertex.position != [0.0, 0.0, 0.0]),
+            "synthetic morph target must produce nonzero position deltas"
+        );
+        assert!(
+            deltas.iter().all(|vertex| vertex._pad2 == [0.0, 0.0]),
+            "morph deltas must leave UV1 zero for base-mesh preservation"
+        );
+        std::fs::remove_file(&path).expect("remove synthetic loader proof fixture");
+    }
+
 
     /// BUG-wfxe fallback half: a mesh WITHOUT a TANGENT accessor keeps the
     /// zero sentinel, so the shader takes the derived cotangent frame
@@ -5038,24 +5476,34 @@ mod tests {
     /// spec-gloss factors → expected metal-rough numbers. Full gloss (1.0)
     /// is a mirror — roughness 0.0 (perfectly smooth, `glossiness_factor`'s
     /// own documented meaning); full rough spec-gloss (glossiness 0.0) →
-    /// roughness 1.0. `specular_factor` folds the RGB factor to its mean
-    /// (the RGB tint itself is Deferred, section 8) and `metallic` is always the
-    /// dielectric default 0.0 — spec-gloss has no metalness channel.
+    /// roughness 1.0. The authored RGB factor is recovered as an exact
+    /// dielectric F0 tint (`specular_tint = clamp(rgb, 0, 1) / 0.04`), with
+    /// unit scalar weight; `metallic` is always the dielectric default 0.0 —
+    /// spec-gloss has no metalness channel.
     #[test]
     fn convert_spec_gloss_maps_glossiness_and_specular_factor() {
         let smooth = convert_spec_gloss(1.0, [0.5, 0.5, 0.5]);
         assert_eq!(smooth.roughness, 0.0);
         assert_eq!(smooth.metallic, 0.0);
-        assert!((smooth.specular_factor - 0.5).abs() < 1e-6);
+        assert_eq!(smooth.specular_factor, 1.0);
+        for tint in smooth.specular_tint {
+            assert!((0.04 * tint - 0.5).abs() < 1e-6);
+        }
 
         let rough = convert_spec_gloss(0.0, [1.0, 1.0, 1.0]);
         assert_eq!(rough.roughness, 1.0);
         assert!((rough.specular_factor - 1.0).abs() < 1e-6);
+        for tint in rough.specular_tint {
+            assert!((0.04 * tint - 1.0).abs() < 1e-6);
+        }
 
-        // Non-uniform RGB specular factor folds to the mean.
+        // Non-uniform RGB specular factors recover each authored F0 channel.
         let tinted = convert_spec_gloss(0.25, [0.2, 0.4, 0.6]);
         assert!((tinted.roughness - 0.75).abs() < 1e-6);
-        assert!((tinted.specular_factor - 0.4).abs() < 1e-6);
+        assert_eq!(tinted.specular_factor, 1.0);
+        for (tint, authored) in tinted.specular_tint.into_iter().zip([0.2, 0.4, 0.6]) {
+            assert!((0.04 * tint - authored).abs() < 1e-6);
+        }
 
         // Out-of-[0,1] glossiness (spec-illegal, but defensive) still
         // clamps to a valid roughness rather than producing a negative or
@@ -5063,6 +5511,125 @@ mod tests {
         let over = convert_spec_gloss(1.5, [2.0, 2.0, 2.0]);
         assert_eq!(over.roughness, 0.0);
         assert_eq!(over.specular_factor, 1.0);
+        for tint in over.specular_tint {
+            assert!((0.04 * tint - 1.0).abs() < 1e-6);
+        }
+
+        let clamped = convert_spec_gloss(0.5, [-1.0, 0.25, 2.0]);
+        for (tint, authored) in clamped.specular_tint.into_iter().zip([0.0, 0.25, 1.0]) {
+            assert!((0.04 * tint - authored).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn spec_gloss_texture_routes_rgb_to_typed_specular_color_metadata() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SpecGlossVsMetalRough.glb");
+        assert!(path.exists(), "SpecGlossVsMetalRough.glb missing at {}", path.display());
+        let summary = gltf_import_summary(&path).expect("parse SpecGlossVsMetalRough.glb");
+        let material = summary
+            .materials
+            .iter()
+            .find(|material| material.name.as_deref() == Some("BottleMat_SpecGloss"))
+            .expect("spec-gloss fixture material");
+
+        assert_eq!(material.mr_texture, Some(6));
+        assert!(material.mr_texture_is_gloss_alpha);
+        assert_eq!(material.specular_factor, 1.0);
+        assert_eq!(material.specular_color_factor, [25.0, 25.0, 25.0]);
+        assert_eq!(material.ior, 1.5);
+        assert_eq!(material.specular_texture, None);
+        assert_eq!(material.specular_color_texture, Some(6));
+        assert_eq!(material.extension_maps[9].uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(material.extension_maps[9].tex_coord, 0);
+    }
+
+    #[test]
+    fn spec_gloss_texture_preserves_authored_typed_sampler_and_transform() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SpecGlossVsMetalRough.glb");
+        assert!(source.exists(), "SpecGlossVsMetalRough.glb missing at {}", source.display());
+        let bytes = std::fs::read(&source).expect("read spec-gloss fixture");
+        let mut offset = 12usize;
+        let mut chunks = Vec::new();
+        while offset < bytes.len() {
+            let length = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            let chunk_type = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
+            let start = offset + 8;
+            let end = start + length;
+            chunks.push((chunk_type, bytes[start..end].to_vec()));
+            offset = end;
+        }
+        let json_chunk = chunks
+            .iter_mut()
+            .find(|(chunk_type, _)| *chunk_type == 0x4e4f534a)
+            .expect("fixture JSON chunk");
+        let mut document: serde_json::Value = serde_json::from_slice(&json_chunk.1)
+            .expect("parse fixture JSON chunk");
+        let texture_info = &mut document["materials"][0]["extensions"]
+            ["KHR_materials_pbrSpecularGlossiness"]["specularGlossinessTexture"];
+        texture_info["texCoord"] = serde_json::json!(1);
+        texture_info["extensions"]["KHR_texture_transform"] = serde_json::json!({
+            "offset": [0.125, -0.25],
+            "rotation": 0.0,
+            "scale": [0.5, 0.75],
+            "texCoord": 1,
+        });
+        let samplers = document
+            .as_object_mut()
+            .expect("fixture JSON object")
+            .entry("samplers")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("fixture sampler array");
+        let sampler_index = samplers.len();
+        samplers.push(serde_json::json!({
+            "magFilter": 9728,
+            "minFilter": 9984,
+            "wrapS": 33648,
+            "wrapT": 33648,
+        }));
+        document["textures"][6]["sampler"] = serde_json::json!(sampler_index);
+        json_chunk.1 = serde_json::to_vec(&document).expect("serialize mutated fixture JSON");
+        while json_chunk.1.len() % 4 != 0 {
+            json_chunk.1.push(b' ');
+        }
+
+        let total_length = 12 + chunks.iter().map(|(_, payload)| 8 + payload.len()).sum::<usize>();
+        let mut mutated = Vec::with_capacity(total_length);
+        mutated.extend_from_slice(b"glTF");
+        mutated.extend_from_slice(&2u32.to_le_bytes());
+        mutated.extend_from_slice(&(total_length as u32).to_le_bytes());
+        for (chunk_type, payload) in chunks {
+            mutated.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            mutated.extend_from_slice(&chunk_type.to_le_bytes());
+            mutated.extend_from_slice(&payload);
+        }
+        let path = std::env::temp_dir().join(format!(
+            "manifold-spec-gloss-typed-metadata-{}.glb",
+            std::process::id()
+        ));
+        std::fs::write(&path, mutated).expect("write mutated spec-gloss fixture");
+        let summary = gltf_import_summary(&path).expect("parse mutated spec-gloss fixture");
+        let material = summary
+            .materials
+            .iter()
+            .find(|material| material.name.as_deref() == Some("BottleMat_SpecGloss"))
+            .expect("mutated spec-gloss fixture material");
+        let map = &material.extension_maps[9];
+        assert_eq!(map.tex_coord, 1);
+        assert!((map.uv_transform[0] - 0.5).abs() < 1e-6);
+        assert!((map.uv_transform[1] - 0.0).abs() < 1e-6);
+        assert!((map.uv_transform[2] - 0.0).abs() < 1e-6);
+        assert!((map.uv_transform[3] - 0.75).abs() < 1e-6);
+        assert!((map.uv_transform[4] - 0.125).abs() < 1e-6);
+        assert!((map.uv_transform[5] + 0.25).abs() < 1e-6);
+        assert_eq!(map.sampler.wrap_u, manifold_gpu::GpuAddressMode::MirrorRepeat);
+        assert_eq!(map.sampler.wrap_v, manifold_gpu::GpuAddressMode::MirrorRepeat);
+        assert_eq!(map.sampler.mag_filter, manifold_gpu::GpuFilterMode::Nearest);
+        assert_eq!(map.sampler.min_filter, manifold_gpu::GpuFilterMode::Nearest);
+        assert_eq!(map.sampler.mip_filter, Some(manifold_gpu::GpuFilterMode::Nearest));
+        std::fs::remove_file(path).expect("remove mutated spec-gloss fixture");
     }
 
     /// D4 (BUG-171): the synthetic default-material entry's sentinel and
@@ -5161,6 +5728,3 @@ mod tests {
         assert!(point.world_pos[0].abs() > 1e-3 || point.world_pos[1].abs() > 1e-3);
     }
 }
-
-
-

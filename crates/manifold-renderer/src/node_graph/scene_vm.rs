@@ -322,6 +322,8 @@ const MATERIAL_TEXTURE_PORTS: &[&str] = &[
     "specular_map",
     "specular_color_map",
     "transmission_map",
+    "diffuse_transmission_map",
+    "diffuse_transmission_color_map",
     "volume_thickness_map",
 ];
 
@@ -1830,7 +1832,7 @@ mod tests {
             SceneObjectVm::Known(row) if matches!(row.material, MaterialVm::Known(_)) => {
                 let MaterialVm::Known(m) = &row.material else { unreachable!() };
                 assert!(m.is_pbr, "pbr material atom flags is_pbr — metallic/roughness rows follow");
-                assert_eq!(m.texture_slots.len(), 17);
+                assert_eq!(m.texture_slots.len(), 19);
                 assert!(m
                     .texture_slots
                     .iter()
@@ -1885,7 +1887,7 @@ mod tests {
         assert_eq!(material_rows.len(), 2);
         assert!(material_rows.iter().all(|material| material.node_doc_id == 3));
         assert!(material_rows.iter().all(|material| material.shared_object_count == Some(2)));
-        assert_eq!(material_rows[0].texture_slots.len(), 17);
+        assert_eq!(material_rows[0].texture_slots.len(), 19);
         assert!(matches!(
             &material_rows[0]
                 .texture_slots

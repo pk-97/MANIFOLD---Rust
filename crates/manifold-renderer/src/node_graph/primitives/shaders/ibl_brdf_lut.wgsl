@@ -4,7 +4,7 @@
 // pbr_importance_sample_ggx / pbr_g_schlick_ggx_k all live there) — does
 // not validate standalone, see `wgsl_validation.rs`'s composed validator.
 //
-// 128x128 rg16float: x = NdotV in [0,1], y = roughness in [0,1]. Computed
+// 128x128 rgba16float (RG = GGX scale/bias, B = Charlie albedo): x = NdotV in [0,1], y = roughness in [0,1]. Computed
 // ONCE PER DEVICE — envmap-independent (view/roughness-only) — and cached
 // forever by `render_scene.rs::ensure_brdf_lut`. 1024 samples per texel —
 // the F-P1 committed default. Specular IBL becomes
@@ -18,7 +18,7 @@ struct LutUniforms {
 }
 
 @group(0) @binding(0) var<uniform> u: LutUniforms;
-@group(0) @binding(1) var dst_lut: texture_storage_2d<rg16float, write>;
+@group(0) @binding(1) var dst_lut: texture_storage_2d<rgba16float, write>;
 
 const LUT_SAMPLES: u32 = 1024u;
 
@@ -38,11 +38,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var A = 0.0;
     var B = 0.0;
+    var sheen_energy = 0.0;
     // IBL geometry-term k (distinct from the direct-lighting k in
     // pbr_g_schlick_ggx — see pbr_brdf.wgsl's pbr_g_schlick_ggx_k doc).
     let k = (roughness * roughness) / 2.0;
     for (var i: u32 = 0u; i < LUT_SAMPLES; i = i + 1u) {
         let xi = pbr_hammersley(i, LUT_SAMPLES);
+        let sheen_l = pbr_cosine_sample_hemisphere(xi, N);
+        let sheen_h = normalize(V + sheen_l);
+        sheen_energy += PBR_PI * pbr_d_charlie(roughness, max(sheen_h.z, 0.0))
+            * pbr_v_sheen(NdotV, max(sheen_l.z, 0.0));
         let H = pbr_importance_sample_ggx(xi, roughness, N);
         let L = normalize(2.0 * dot(V, H) * H - V);
         let NdotL = max(L.z, 0.0);
@@ -59,5 +64,5 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     A = A / f32(LUT_SAMPLES);
     B = B / f32(LUT_SAMPLES);
-    textureStore(dst_lut, vec2<i32>(gid.xy), vec4<f32>(A, B, 0.0, 0.0));
+    textureStore(dst_lut, vec2<i32>(gid.xy), vec4<f32>(A, B, sheen_energy / f32(LUT_SAMPLES), 0.0));
 }

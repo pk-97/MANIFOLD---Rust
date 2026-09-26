@@ -587,6 +587,7 @@ impl GpuDevice {
             // keeps this a single code path (D7: the field default already
             // matches Metal's implicit default, so this is a no-op at 1).
             mtl_desc.setMaxAnisotropy(desc.max_anisotropy as usize);
+            mtl_desc.setLodMaxClamp(desc.lod_max_clamp);
         }
         let raw = self
             .device

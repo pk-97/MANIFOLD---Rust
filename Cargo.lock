@@ -2361,6 +2361,7 @@ dependencies = [
  "arrayvec",
  "ash",
  "block2 0.6.2",
+ "bytemuck",
  "log",
  "manifold-foundation",
  "naga",

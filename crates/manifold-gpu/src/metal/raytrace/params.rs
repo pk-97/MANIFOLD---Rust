@@ -7,6 +7,50 @@
 
 use super::RtObjectGeometry;
 use objc2_metal::MTLAccelerationStructureInstanceDescriptor;
+use bytemuck::{Pod, Zeroable};
+
+/// CPU mirror of the MSL `SubsurfaceMaterial` row.  The renderer keeps rows in
+/// canonical object order; the committed instance id selects the normal-source
+/// row whose `object_index` addresses this table.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SubsurfaceMaterial {
+    pub color_weight: [f32; 4],
+    pub radius_phase: [f32; 4],
+    /// x = transport mode (0 diffusion, 1 random walk), y = sample count.
+    pub config: [u32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<SubsurfaceMaterial>() == 48);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceMaterial, color_weight) == 0);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceMaterial, radius_phase) == 16);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceMaterial, config) == 32);
+
+/// CPU mirror of the MSL `SubsurfaceParams` per-dispatch payload.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SubsurfaceParams {
+    pub inv_view_proj: [[f32; 4]; 4],
+    pub camera_pos: [f32; 4],
+    pub render_size: [u32; 2],
+    pub frame_index: u32,
+    pub slot_row_base: u32,
+    pub light_count: u32,
+    pub material_count: u32,
+    pub query_units_per_pixel: u32,
+    pub _pad: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<SubsurfaceParams>() == 112);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, inv_view_proj) == 0);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, camera_pos) == 64);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, render_size) == 80);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, frame_index) == 88);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, slot_row_base) == 92);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, light_count) == 96);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, material_count) == 100);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, query_units_per_pixel) == 104);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, _pad) == 108);
 
 /// One shadow-casting light's ray-tracing params — the per-caster payload
 /// of [`ShadowRayParams::casters`]. Field order/packing mirrors the MSL
@@ -232,21 +276,26 @@ impl ShadowRayParams {
 #[derive(Clone, Copy, Debug)]
 pub struct GiMaterial {
     pub albedo: [f32; 3],
-    _pad0: f32,
+    /// Material kind: unlit 0, Phong 1, PBR 2, cel 3.
+    pub kind: f32,
     pub emissive: [f32; 3],
     _pad1: f32,
     /// RT-R1: x = metallic, y = roughness — read straight off
     /// `d.uniforms.pbr_metallic_roughness` (render_scene.rs:332), the SAME
-    /// resolved factors `fs_pbr` shades with. z/w reserved.
+    /// resolved factors `fs_pbr` shades with. z = anisotropy strength and
+    /// w = anisotropy rotation.
     pub metallic_roughness: [f32; 4],
     /// RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4/TL7): x = thin-surface
-    /// diffuse-transmission factor, populated from the SAME
-    /// `diffuse_transmission_params` uniform the raster forward term reads.
-    /// 0 = opaque to shadow-class rays (pre-feature behavior). yzw reserved.
+    /// diffuse-transmission factor, yzw = independent transmission colour,
+    /// populated from the SAME `diffuse_transmission_params` uniform the
+    /// raster forward term reads. 0 = opaque to shadow-class rays.
     pub translucency: [f32; 4],
+    /// Dielectric normal-incidence reflectance (RGB), grazing weight (A).
+    pub specular: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GiMaterial>() == 64);
+const _: () = assert!(std::mem::size_of::<GiMaterial>() == 80);
+const _: () = assert!(std::mem::offset_of!(GiMaterial, specular) == 64);
 
 impl GiMaterial {
     pub fn new(
@@ -257,12 +306,19 @@ impl GiMaterial {
     ) -> Self {
         Self {
             albedo,
-            _pad0: 0.0,
+            kind: 2.0,
             emissive,
             _pad1: 0.0,
             metallic_roughness,
             translucency,
+            specular: [0.04, 0.04, 0.04, 1.0],
         }
+    }
+
+    pub fn with_surface(mut self, kind: f32, specular: [f32; 4]) -> Self {
+        self.kind = kind;
+        self.specular = specular;
+        self
     }
 }
 
@@ -297,14 +353,40 @@ const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
 /// `useResource`-declared the TLAS, every BLAS, and the instance buffer.
 /// Treat that explicit declaration as the contract, not the doc claim.
 ///
-/// `normal_matrix` is the object's WORLD-space transform for normals — RT-
-/// T1-B takes the model matrix's upper-left 3x3 directly (a NAMED,
-/// documented simplification: correct for uniform scale, wrong for
-/// non-uniform scale, which needs the inverse-transpose instead — same
-/// "named, documented simplification, not invented physics" discipline as
-/// `SUN_BOUNCE_INTENSITY_SCALE` above; un-suppression trigger: a real
-/// RT-caster scene using non-uniform scale on an RT-shadowed object).
+/// `normal_matrix` is the true inverse-transpose of the object's model
+/// matrix. `model_matrix` remains the upper-left 3x3 and is used for tangent
+/// and triangle-edge directions; `model_handedness` carries its determinant
+/// sign for authored tangent-frame reconstruction.
 /// Column-major, 3 `packed_float3` columns in MSL.
+/// Optional vertex attributes and map addressing for ray hits. Sampling rows
+/// are base/normal/MR/AO/emission/anisotropy/specular-weight/specular-color:
+/// UV set, wrap U, wrap V, linear filter.
+/// Wrap codes match the renderer sidecar: clamp 0, repeat 1, mirror 2, border 3.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RtMaterialAttributes {
+    pub uv1_offset: u32,
+    pub color_offset: u32,
+    /// Sampling metadata for base, normal, metallic-roughness, occlusion,
+    /// emission, anisotropy, specular-weight, and specular-color maps.
+    pub sampling: [[u32; 4]; 8],
+    /// KHR_texture_transform folds for anisotropy, specular-weight, and
+    /// specular-color maps, in the same `(m00, m01, m10, m11, tx, ty)`
+    /// convention as the core map transforms.
+    pub extension_uv_transforms: [[f32; 6]; 3],
+}
+
+impl Default for RtMaterialAttributes {
+    fn default() -> Self {
+        Self {
+            uv1_offset: u32::MAX,
+            color_offset: u32::MAX,
+            sampling: [[0, 1, 1, 1]; 8],
+            extension_uv_transforms: [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 3],
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RtNormalSource {
@@ -337,8 +419,7 @@ pub struct RtNormalSource {
     /// MAX_RT_MATERIAL_TEXTURES` means "no texture bound" (the barycentric
     /// vertex normal stands — pre-BUG-wytp behavior). Populated from the
     /// material's normal-map wiring in `render_scene.rs`, same place/shape
-    /// as `mr_tex_index`. Secondary/extension-ray hit shading keeps vertex
-    /// normals.
+    /// as `mr_tex_index`. Applied at primary and secondary hit shading sites.
     pub normal_tex_index: u32,
     /// BUG-1gqt: emissive-map texture index for hit-sample emission
     /// (GI gather + reflection-hit shading); `>= MAX_RT_MATERIAL_TEXTURES`
@@ -400,12 +481,38 @@ pub struct RtNormalSource {
     /// (`(vertex_buffer.size - vertex_offset) / vertex_stride`) — the count
     /// the weights check above is validated against.
     pub vertex_count: u32,
-    /// Explicit tail pad: keeps the struct at 152 with every field's offset
-    /// asserted below (the MSL mirror declares the same order).
+    /// Preserves the pre-extension 16-byte tail alignment.
     pub _pad_p4b: u32,
+    /// KHR_texture_transform fold for the base-color map, in the raster's
+    /// `(m00, m01, m10, m11, tx, ty)` convention.
+    pub base_color_uv_transform: [f32; 6],
+    /// KHR_texture_transform fold for the metallic-roughness map.
+    pub mr_uv_transform: [f32; 6],
+    /// KHR_texture_transform fold for the tangent-space normal map.
+    pub normal_uv_transform: [f32; 6],
+    /// Raster normal-map scale applied to decoded tangent-space XY.
+    pub normal_scale: f32,
+    /// Base-color alpha factor used by alpha-mask candidate tests.
+    pub base_color_alpha: f32,
+    /// Byte offset of the per-vertex tangent (`float4`, xyz + authored
+    /// handedness). `u32::MAX` means the mesh has no authored tangent.
+    pub tangent_offset: u32,
+    /// Upper-left 3x3 model matrix for tangent and triangle-edge directions.
+    pub model_matrix: [[f32; 3]; 3],
+    /// Sign of the model matrix determinant (`-1` for mirrored transforms).
+    pub model_handedness: f32,
+    pub material_attributes: RtMaterialAttributes,
+    /// Shared material-texture-table indices for anisotropy, specular
+    /// weight, and specular color maps, in that order.
+    pub extra_tex_indices: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 152);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 496);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, material_attributes) == 276);
+const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 208);
+const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
+const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 136);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 484);
 // RT_INSTANCING_DESIGN.md D3: the consumed `_pad2` words become
 // object_index (108) + instance_addr (112) — asserted, not hand-counted.
 // P4b: the appended appearance/index fields — asserted the same way.
@@ -417,6 +524,14 @@ const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_gain) == 1
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, index_base_addr) == 136);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_count) == 144);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_p4b) == 148);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_uv_transform) == 152);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, mr_uv_transform) == 176);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_uv_transform) == 200);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_scale) == 224);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_alpha) == 228);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, tangent_offset) == 232);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 236);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 272);
 
 /// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
 /// `generators::mesh_common::InstanceTransform` (32 bytes,

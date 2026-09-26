@@ -653,8 +653,9 @@ mod tests {
             uv: [0.25, 0.75],
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
 
     /// An off-scale, off-center vertex set: bounding box spans
     /// x:[10,14], y:[100,102], z:[-5,-1] — center (12,101,-3), longest
