@@ -130,6 +130,9 @@ pub(crate) fn apply_update(
     if ui.last_edit_selection_sequence == Some(update.sequence) {
         return false;
     }
+    // A later command may already have removed the result. Consume that receipt
+    // too, so subsequent frames do not keep resolving a vanished object.
+    ui.last_edit_selection_sequence = Some(update.sequence);
     use manifold_ui::panels::InspectorTab;
     match &update.selection {
         EditSelection::Effects { target, ids } => {
@@ -175,7 +178,6 @@ pub(crate) fn apply_update(
             );
         }
     }
-    ui.last_edit_selection_sequence = Some(update.sequence);
     true
 }
 
@@ -262,5 +264,28 @@ mod tests {
         ));
         assert!(editing.undo(&mut project));
         assert_eq!(project.timeline.layers.len(), 1);
+    }
+
+    #[test]
+    fn receipt_for_an_already_removed_result_is_consumed() {
+        let project = Project::default();
+        let update = EditSelectionUpdate {
+            sequence: 1,
+            selection: EditSelection::Layer(LayerId::new("removed-layer")),
+        };
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = crate::app::SelectionState::new();
+        let mut active = None;
+        assert!(!apply_update(
+            &mut ui,
+            &project,
+            Some(&update),
+            &mut selection,
+            &mut active
+        ));
+        assert_eq!(ui.last_edit_selection_sequence, Some(1));
+        assert!(active.is_none());
+        assert!(selection.primary_selected_layer_id.is_none());
+        assert!(ui.pending_layer_reveal.is_none());
     }
 }
