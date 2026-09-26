@@ -550,6 +550,49 @@ mod gpu_tests {
     }
 
     #[test]
+    fn presentation_keeps_sdr_white_stable_as_headroom_crosses_one() {
+        let device = crate::test_device();
+        for headroom in [1.0, 1.001, 1.01, 1.1, 1.25, 2.0] {
+            let caps = DisplayCapabilities::new(
+                PotentialHeadroom::new(4.0).unwrap(),
+                CurrentHeadroom::new(headroom).unwrap(),
+            );
+            let input = [1.0, 0.9, 0.5, 0.75];
+            let output = run_presentation(&device, input, caps, TonemapCurve::AcesNarkowicz);
+            for channel in 0..4 {
+                assert!(
+                    (output[channel] - input[channel]).abs() < 0.001,
+                    "SDR channel {channel} changed at headroom {headroom}: {output:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn presentation_highlights_follow_headroom_without_a_reversal() {
+        let device = crate::test_device();
+        let input = [8.0, 2.0, 1.01, 0.75];
+        let mut previous = [1.0; 3];
+        for headroom in [1.0, 1.00001, 1.001, 1.01, 1.1, 1.249, 1.25, 1.251, 2.0, 4.0] {
+            let caps = DisplayCapabilities::new(
+                PotentialHeadroom::new(4.0).unwrap(),
+                CurrentHeadroom::new(headroom).unwrap(),
+            );
+            let output = run_presentation(&device, input, caps, TonemapCurve::AcesNarkowicz);
+            for channel in 0..3 {
+                assert!(
+                    output[channel].is_finite()
+                        && output[channel] >= previous[channel] - 0.001
+                        && output[channel] <= input[channel].min(headroom as f32) + 0.002,
+                    "highlight {channel} reversed or exceeded headroom {headroom}: {output:?}, previous={previous:?}"
+                );
+                previous[channel] = output[channel];
+            }
+            assert_eq!(output[3], input[3]);
+        }
+    }
+
+    #[test]
     fn presentation_preserves_distinct_low_float_values() {
         let device = crate::test_device();
         let caps = DisplayCapabilities::new(

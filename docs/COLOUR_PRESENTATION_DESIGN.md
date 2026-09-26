@@ -71,7 +71,9 @@ Rejected: changing only the drawable, which leaves clipping in the offscreen buf
 WGSL functions from TonemapPipeline. SDR preserves authored linear values in
 [0, 1] and clips out-of-range values, matching the former HDR-display SDR export.
 The September 25 correction removes the extra artistic curve after master grading;
-EDR preserves values below a soft shoulder at current headroom. Display-mapped
+EDR preserves values below a soft shoulder at current headroom. The shoulder
+knee stays at or above SDR white, so white stays unchanged as current headroom
+crosses 1.0 and highlights converge continuously to the SDR clamp. Display-mapped
 values remain linear; macOS performs display colour conversion. No unconditional
 sRGB encode in the rendering pipeline and no tone mapping of UI palette colours.
 
@@ -114,6 +116,7 @@ generic colour-framework dependency, or serialized project migration is introduc
 | GPU wrappers cannot lie about drawable storage | Native pixel-format assertion |
 | Master FX do not depend on attached displays | SceneLinear mode at the common compositor call site |
 | SDR preserves authored colour without another curve | Shared presentation shader; GPU colour-preservation proof |
+| SDR white remains stable as current headroom crosses 1.0 | Production GPU white-stability and monotonic-highlight proofs |
 | Capture RGB is sRGB and alpha remains linear | Typed encoder; numerical, channel-order and metadata tests |
 | Invalid headroom/byte lengths fail visibly | Checked constructors and native diagnostics |
 
@@ -135,7 +138,10 @@ production GPU proofs and three policy tests passed through `gpu_proofs_gate.py
 required landing gate. All 12 capture/native-adapter CPU tests passed. One inspector
 PNG was rendered and inspected. The isolated native launcher was blocked by the
 execution-budget hook even after an exact bounded permit; retries stopped.
-Native window and external-display acceptance are tracked in BUG-qdn7.
+Native window and external-display acceptance are tracked in BUG-qdn7. The September 26
+headroom correction has production GPU regressions for stable SDR white and
+monotonic, bounded highlights. These do not establish whether physical brightness
+changes drop frames; that observation remains open in BUG-7ad4.
 
 ## 6. Decided — do not reopen
 
