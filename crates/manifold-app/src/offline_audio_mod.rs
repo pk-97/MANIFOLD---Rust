@@ -953,6 +953,70 @@ mod tests {
         assert_eq!(run(30), expected, "30 FPS changed the audio analysis");
     }
 
+    #[test]
+    fn offline_control_observations_preserve_every_hop_across_frame_rates() {
+        use manifold_core::audio_mod::{AudioModContribution, ParameterAudioMod};
+        use manifold_core::params::Param;
+        use manifold_core::{Beats, PresetTypeId};
+        use manifold_playback::modulation::{audio_control_capture_error, evaluate_modulation};
+
+        let rate = 44_100u32;
+        let pre_roll = 4_413usize;
+        let mono = (0..pre_roll + rate as usize).map(|i| {
+            let gain = if i % 7_001 < 1_103 { 0.8 } else { 0.05 };
+            gain * (std::f32::consts::TAU * 180.0 * i as f32 / rate as f32).sin()
+        }).collect();
+        let audio = empty_export_audio(rate, mono, pre_roll);
+        let send = AudioSend::new("Control capture");
+        let mut fx = PresetInstance::new(PresetTypeId::new("ControlCaptureTest"));
+        fx.params.push(Param::bundled(serde_json::from_value(serde_json::json!({
+            "id": "force", "name": "Force", "min": 0.0, "max": 1.0, "defaultValue": 0.0
+        })).unwrap()));
+        let mut modulation = ParameterAudioMod::new("force".into(), send.id.clone(),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full));
+        modulation.shape.attack_ms = 70.0;
+        modulation.shape.release_ms = 180.0;
+        fx.audio_mods = Some(vec![modulation]);
+        let mut original = Project::default();
+        original.audio_setup.sends.push(send);
+        original.audio_setup.sends[0].channels = vec![0];
+        original.settings.master_effects.push(fx);
+
+        let run = |fps: u32| {
+            let mut project = original.clone();
+            let mut driver = OfflineAudioModDriver::new(&project, &audio, fps as f64, Seconds(17.25)).unwrap();
+            let mut engine = PlaybackEngine::new(Vec::new());
+            let mut trace = Vec::new();
+            let mut timing = Vec::new();
+            let mut pulses = Vec::new();
+            let mut meters = FireMeterCapture::default();
+            for frame in 0..fps {
+                driver.feed_frame(frame, &mut engine).unwrap();
+                let current = Seconds(17.25 + frame as f64 / fps as f64);
+                evaluate_modulation(&mut project, Beats(current.0 * 2.0), current,
+                    Seconds(1.0 / fps as f64), engine.audio_snapshot(),
+                    &mut timing, &mut pulses, &[], &mut meters);
+                assert!(audio_control_capture_error(&project).is_none());
+                let m = &project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0];
+                assert_eq!(m.audio_observations.hops().len(), engine.audio_snapshot().hop_batches[0].hops().len());
+                for observation in m.audio_observations.hops() {
+                    assert_eq!(observation.evaluation_time, Some(current));
+                    assert!(!observation.clip_edge);
+                    trace.push((observation.stamp.end_sample, observation.stamp.timeline_time.unwrap(),
+                        observation.dt, observation.contribution));
+                }
+            }
+            trace
+        };
+        let expected = run(60);
+        assert!(expected.len() > 60, "more control updates than display frames");
+        assert!(expected.iter().all(|sample| matches!(sample.3, AudioModContribution::Continuous(_))));
+        assert!(expected.windows(2).any(|pair| pair[0].3 != pair[1].3));
+        for fps in [24, 30, 1] {
+            assert_eq!(run(fps), expected, "{fps} FPS changed retained controls");
+        }
+    }
+
     // ─── D2 source mapping ───
 
     #[test]

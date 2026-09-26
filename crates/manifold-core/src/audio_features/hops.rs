@@ -35,6 +35,27 @@ pub struct AudioFeatureHop {
     pub features: SendFeatures,
 }
 
+/// A completed analysis sample retained in an [`AudioHopBatch`].
+pub trait AudioHopSample {
+    fn stamp(&self) -> AudioHopStamp;
+    fn duration(&self) -> Seconds;
+    fn is_finite(&self) -> bool;
+}
+
+impl AudioHopSample for AudioFeatureHop {
+    fn stamp(&self) -> AudioHopStamp {
+        self.stamp
+    }
+
+    fn duration(&self) -> Seconds {
+        self.dt
+    }
+
+    fn is_finite(&self) -> bool {
+        features_are_finite(&self.features)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioHopError {
     InvalidInput,
@@ -56,23 +77,38 @@ impl std::error::Error for AudioHopError {}
 
 /// This update's per-send hops. Exhaustion/invalid input latches for the
 /// analyzer epoch; no valid-looking partial batch is exposed after a failure.
-#[derive(Clone, Debug)]
-pub struct AudioHopBatch {
+#[derive(Debug, PartialEq)]
+pub struct AudioHopBatch<T: AudioHopSample = AudioFeatureHop> {
     epoch: u64,
-    hops: Vec<AudioFeatureHop>,
+    hops: Vec<T>,
     limit: usize,
     last_end: Option<u64>,
     sample_rate: Option<u32>,
     failure: Option<AudioHopError>,
 }
 
-impl Default for AudioHopBatch {
+impl<T: AudioHopSample + Clone> Clone for AudioHopBatch<T> {
+    fn clone(&self) -> Self {
+        let mut hops = Vec::with_capacity(self.limit);
+        hops.extend(self.hops.iter().cloned());
+        Self {
+            epoch: self.epoch,
+            hops,
+            limit: self.limit,
+            last_end: self.last_end,
+            sample_rate: self.sample_rate,
+            failure: self.failure,
+        }
+    }
+}
+
+impl<T: AudioHopSample> Default for AudioHopBatch<T> {
     fn default() -> Self {
         Self::with_capacity(512)
     }
 }
 
-impl AudioHopBatch {
+impl<T: AudioHopSample> AudioHopBatch<T> {
     pub fn with_capacity(limit: usize) -> Self {
         assert!(limit > 0);
         Self {
@@ -88,17 +124,25 @@ impl AudioHopBatch {
     pub fn begin(&mut self, epoch: u64) {
         self.hops.clear();
         if epoch != self.epoch {
-            self.epoch = epoch;
-            self.last_end = None;
-            self.sample_rate = None;
-            self.failure = None;
+            self.reset(epoch);
         }
+    }
+
+    /// Clear all stream validation state while retaining the backing storage.
+    /// This is used when the selected source changes without a new analyzer
+    /// epoch.
+    pub fn reset(&mut self, epoch: u64) {
+        self.epoch = epoch;
+        self.hops.clear();
+        self.last_end = None;
+        self.sample_rate = None;
+        self.failure = None;
     }
 
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
-    pub fn hops(&self) -> &[AudioFeatureHop] {
+    pub fn hops(&self) -> &[T] {
         &self.hops
     }
     pub fn failure(&self) -> Option<AudioHopError> {
@@ -112,25 +156,23 @@ impl AudioHopBatch {
         self.failure.get_or_insert(error);
     }
 
-    pub fn push(&mut self, hop: AudioFeatureHop) -> Result<(), AudioHopError> {
+    pub fn push(&mut self, hop: T) -> Result<(), AudioHopError> {
         if let Some(error) = self.failure {
             return Err(error);
         }
+        let stamp = hop.stamp();
         let error = if self.epoch == 0
-            || hop.stamp.epoch != self.epoch
-            || hop.stamp.end_sample == 0
-            || hop.stamp.sample_rate == 0
+            || stamp.epoch != self.epoch
+            || stamp.end_sample == 0
+            || stamp.sample_rate == 0
             || self
                 .sample_rate
-                .is_some_and(|rate| rate != hop.stamp.sample_rate)
-            || !hop.dt.0.is_finite()
-            || hop.dt.0 <= 0.0
-            || hop
-                .stamp
-                .timeline_time
-                .is_some_and(|time| !time.0.is_finite())
-            || !features_are_finite(&hop.features)
-            || self.last_end.is_some_and(|end| hop.stamp.end_sample <= end)
+                .is_some_and(|rate| rate != stamp.sample_rate)
+            || !hop.duration().0.is_finite()
+            || hop.duration().0 <= 0.0
+            || stamp.timeline_time.is_some_and(|time| !time.0.is_finite())
+            || !hop.is_finite()
+            || self.last_end.is_some_and(|end| stamp.end_sample <= end)
         {
             Some(AudioHopError::InvalidInput)
         } else if self.hops.len() == self.limit {
@@ -142,8 +184,8 @@ impl AudioHopBatch {
             self.invalidate(error);
             return Err(error);
         }
-        self.last_end = Some(hop.stamp.end_sample);
-        self.sample_rate = Some(hop.stamp.sample_rate);
+        self.last_end = Some(stamp.end_sample);
+        self.sample_rate = Some(stamp.sample_rate);
         self.hops.push(hop);
         Ok(())
     }
@@ -294,6 +336,88 @@ mod tests {
         assert_eq!(batch.push(invalid), Err(AudioHopError::InvalidInput));
         batch.begin(3);
         batch.push(hop(3, 512)).unwrap();
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct GenericHop {
+        stamp: AudioHopStamp,
+        dt: Seconds,
+        finite: bool,
+    }
+
+    impl AudioHopSample for GenericHop {
+        fn stamp(&self) -> AudioHopStamp {
+            self.stamp
+        }
+
+        fn duration(&self) -> Seconds {
+            self.dt
+        }
+
+        fn is_finite(&self) -> bool {
+            self.finite
+        }
+    }
+
+    fn generic_hop(epoch: u64, end_sample: u64, finite: bool) -> GenericHop {
+        GenericHop {
+            stamp: AudioHopStamp {
+                epoch,
+                end_sample,
+                sample_rate: 48_000,
+                timeline_time: None,
+            },
+            dt: Seconds(512. / 48_000.),
+            finite,
+        }
+    }
+
+    #[test]
+    fn generic_samples_apply_finite_payload_validation() {
+        let mut batch = AudioHopBatch::<GenericHop>::with_capacity(2);
+        batch.begin(1);
+        assert_eq!(
+            batch.push(generic_hop(1, 512, false)),
+            Err(AudioHopError::InvalidInput)
+        );
+        assert!(batch.hops().is_empty());
+    }
+
+    #[test]
+    fn reset_clears_sticky_state_and_preserves_capacity() {
+        let mut batch = AudioHopBatch::with_capacity(2);
+        batch.begin(1);
+        batch.push(hop(1, 512)).unwrap();
+        let capacity = batch.hops.capacity();
+        assert_eq!(
+            batch.push(hop(1, 1024)),
+            Ok(()),
+            "capacity two accepts the second hop"
+        );
+        batch.invalidate(AudioHopError::CapacityExceeded);
+        batch.reset(1);
+        assert_eq!(batch.failure(), None);
+        assert_eq!(batch.hops.capacity(), capacity);
+        batch.push(hop(1, 512)).unwrap();
+    }
+
+    #[test]
+    fn clone_preserves_bound_order_and_capacity_for_future_appends() {
+        let mut batch = AudioHopBatch::with_capacity(2);
+        batch.begin(1);
+        batch.push(hop(1, 512)).unwrap();
+        let mut cloned = batch.clone();
+        assert_eq!(cloned.hops(), batch.hops());
+        assert_eq!(cloned.hops.capacity(), batch.hops.capacity());
+
+        cloned.push(hop(1, 1024)).unwrap();
+        assert_eq!(cloned.hops.capacity(), 2);
+        assert_eq!(
+            cloned.push(hop(1, 1536)),
+            Err(AudioHopError::CapacityExceeded)
+        );
+        assert_eq!(cloned.hops.capacity(), 2);
+        assert!(cloned.hops().is_empty());
     }
 
     #[test]

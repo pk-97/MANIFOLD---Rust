@@ -12,10 +12,52 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio_features::SendFeatures;
+use crate::audio_features::{AudioHopBatch, AudioHopSample, AudioHopStamp, SendFeatures};
 use crate::effects::ParamId;
 use crate::id::AudioSendId;
 use crate::macro_bank::MacroCurve;
+
+/// The contribution an audio modulation made during one completed hop. This
+/// is the audio stage result, before drivers, envelopes, and other sources are
+/// combined into a final parameter value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AudioModContribution {
+    Continuous(f32),
+    Stepped(Option<f32>),
+    TriggerCounter { count: u32, value: f32 },
+}
+
+/// Runtime-only audio modulation output retained alongside the source hop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioModObservation {
+    pub stamp: AudioHopStamp,
+    pub dt: crate::Seconds,
+    pub contribution: AudioModContribution,
+    /// Logical transport time of the outer evaluator, when one was supplied.
+    pub evaluation_time: Option<crate::Seconds>,
+    /// True when the existing evaluator coalesced a clip edge with this hop.
+    pub clip_edge: bool,
+}
+
+impl AudioHopSample for AudioModObservation {
+    fn stamp(&self) -> AudioHopStamp {
+        self.stamp
+    }
+
+    fn duration(&self) -> crate::Seconds {
+        self.dt
+    }
+
+    fn is_finite(&self) -> bool {
+        self.evaluation_time
+            .is_none_or(|time| time.0.is_finite())
+            && match self.contribution {
+                AudioModContribution::Continuous(value)
+                | AudioModContribution::TriggerCounter { value, .. } => value.is_finite(),
+                AudioModContribution::Stepped(value) => value.is_none_or(f32::is_finite),
+            }
+    }
+}
 
 /// A frequency band a feature is measured over. `Full` is the whole spectrum;
 /// `Low`/`Mid`/`High` restrict the reduction to a sub-range, so any feature can
@@ -513,6 +555,10 @@ pub struct ParameterAudioMod {
     pub audio_hop_cursor: crate::audio_features::AudioHopCursor,
     #[serde(skip)]
     pub audio_hop_source: Option<AudioModSource>,
+    /// Runtime-only stage contributions retained for inspection and downstream
+    /// consumers. The batch reuses the same bounded hop storage contract.
+    #[serde(skip)]
+    pub audio_observations: AudioHopBatch<AudioModObservation>,
     /// Last effective audio output and normalized meter level, held between hops.
     #[serde(skip)]
     pub audio_held_output: Option<f32>,
@@ -582,6 +628,7 @@ impl ParameterAudioMod {
             prev_raw: 0.0,
             audio_hop_cursor: crate::audio_features::AudioHopCursor::default(),
             audio_hop_source: None,
+            audio_observations: AudioHopBatch::default(),
             audio_held_output: None,
             audio_held_meter: 0.0,
             trigger_edge: crate::audio_trigger::TransientEdge::default(),
@@ -853,6 +900,34 @@ mod tests {
         // section 9 U3: `trigger_mode` is `None` on an ordinary (non-gate) mod and
         // must not appear on the wire — old projects stay byte-identical.
         assert!(!json.contains("triggerMode"));
+    }
+
+    #[test]
+    fn audio_observations_are_runtime_only_and_reload_empty() {
+        let mut m = ParameterAudioMod::new(
+            "amount".into(),
+            AudioSendId::new("send-1"),
+            AudioFeature::default(),
+        );
+        m.audio_observations.begin(7);
+        m.audio_observations
+            .push(AudioModObservation {
+                stamp: AudioHopStamp {
+                    epoch: 7,
+                    end_sample: 512,
+                    sample_rate: 48_000,
+                    timeline_time: Some(crate::Seconds(512. / 48_000.)),
+                },
+                dt: crate::Seconds(512. / 48_000.),
+                contribution: AudioModContribution::Continuous(0.5),
+                evaluation_time: Some(crate::Seconds(1.25)),
+                clip_edge: true,
+            })
+            .unwrap();
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("audioObservations"));
+        let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
+        assert!(back.audio_observations.hops().is_empty());
     }
 
     #[test]

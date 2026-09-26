@@ -12,7 +12,7 @@
 
 mod hops;
 pub use hops::{
-    AudioFeatureHop, AudioHopBatch, AudioHopCursor, AudioHopError, AudioHopStamp,
+    AudioFeatureHop, AudioHopBatch, AudioHopCursor, AudioHopError, AudioHopSample, AudioHopStamp,
     new_audio_analysis_epoch,
 };
 

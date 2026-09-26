@@ -981,6 +981,11 @@ impl ContentThread {
             });
         }
         let tick_result = self.engine.tick(ctx);
+        if let Some(message) = self.engine.project()
+            .and_then(manifold_playback::modulation::audio_control_capture_error)
+        {
+            return Some(ExportFrameFailure { message, gpu: false });
+        }
 
         // Wait for any in-flight video decodes to complete before rendering.
         // At GPU speed the export outruns the async decoder — without this,

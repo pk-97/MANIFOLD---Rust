@@ -18,7 +18,10 @@
 use manifold_core::audio_features::{
     AudioFeatureSnapshot, AudioHopStamp, SendFeatures,
 };
-use manifold_core::audio_mod::{AudioFeatureKind, TriggerAction, WrapMode, random_step_value};
+use manifold_core::audio_mod::{
+    AudioFeatureKind, AudioModContribution, AudioModObservation, TriggerAction, WrapMode,
+    random_step_value,
+};
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
 use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
@@ -435,7 +438,7 @@ pub fn evaluate_modulation(
     // precedence. An empty hop_batches vector is the legacy snapshot contract.
     let retained_hops = !audio.hop_batches.is_empty();
     if retained_hops {
-        advance_audio_hops(project, audio, trigger_pulses, clip_edge_layers);
+        advance_audio_hops(project, audio, trigger_pulses, clip_edge_layers, Some(current_time));
     }
 
     // Phase 1: Reset all effective values to base
@@ -554,11 +557,12 @@ fn advance_audio_hops(
     snapshot: &AudioFeatureSnapshot,
     pulses: &mut Vec<TriggerPulse>,
     clip_edge_layers: &[i32],
+    evaluation_time: Option<Seconds>,
 ) {
     pulses.clear();
     let sends = &project.audio_setup.sends;
     for fx in project.settings.master_effects.iter_mut() {
-        advance_instance_audio_hops(fx, sends, snapshot, None, false, pulses);
+        advance_instance_audio_hops(fx, sends, snapshot, None, false, pulses, evaluation_time);
     }
     for (layer_index, layer) in project.timeline.layers.iter_mut().enumerate() {
         let layer_id = layer.layer_id.clone();
@@ -566,13 +570,13 @@ fn advance_audio_hops(
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
                 advance_instance_audio_hops(
-                    fx, sends, snapshot, Some(&layer_id), clip_edge, pulses,
+                    fx, sends, snapshot, Some(&layer_id), clip_edge, pulses, evaluation_time,
                 );
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
             advance_instance_audio_hops(
-                gp, sends, snapshot, Some(&layer_id), clip_edge, pulses,
+                gp, sends, snapshot, Some(&layer_id), clip_edge, pulses, evaluation_time,
             );
         }
     }
@@ -585,26 +589,35 @@ fn advance_instance_audio_hops(
     layer_id: Option<&manifold_core::id::LayerId>,
     clip_edge: bool,
     pulses: &mut Vec<TriggerPulse>,
+    evaluation_time: Option<Seconds>,
 ) {
-    if !fx.enabled {
-        return;
-    }
     let Some(mods) = fx.audio_mods.as_mut().filter(|mods| !mods.is_empty()) else {
         return;
     };
     let params = &mut fx.params;
-    for m in mods.iter_mut().filter(|m| m.enabled) {
+    for m in mods.iter_mut() {
+        // Observations belong to one producer update. Replaying the same
+        // feature batch publishes no new controls; the cursor still owns
+        // conditioning progress and held outputs between updates.
+        m.audio_observations.begin(m.audio_hop_cursor.epoch());
+        if !fx.enabled || !m.enabled {
+            m.audio_observations.begin(0);
+            continue;
+        }
         let source_changed = m.audio_hop_source.as_ref() != Some(&m.source);
         if source_changed {
             m.audio_hop_source = Some(m.source.clone());
             m.audio_hop_cursor = Default::default();
+            m.audio_observations.reset(0);
             reset_audio_conditioning(m);
         }
         let Some(send_index) = sends.iter().position(|send| send.id == m.source.send_id) else {
+            m.audio_observations.begin(0);
             reset_audio_conditioning(m);
             continue;
         };
         let Some(batch) = snapshot.hop_batches.get(send_index) else {
+            m.audio_observations.begin(0);
             reset_audio_conditioning(m);
             continue;
         };
@@ -612,16 +625,21 @@ fn advance_instance_audio_hops(
             // A delayed stale/faulted batch must not erase a newer held value.
             continue;
         }
+        m.audio_observations.begin(batch.epoch());
         if m.audio_hop_cursor.begin_epoch(batch.epoch()) {
             // A producer can publish a new epoch with no completed hop yet.
             // Clear the old signal immediately and reject late older batches.
             reset_audio_conditioning(m);
         }
         if batch.epoch() == 0 || batch.failure().is_some() {
+            if let Some(error) = batch.failure() {
+                m.audio_observations.invalidate(error);
+            }
             reset_audio_conditioning(m);
             continue;
         }
         let Some(p) = params.get(m.param_id.as_ref()) else {
+            m.audio_observations.begin(0);
             continue;
         };
         let info = AudioParamInfo {
@@ -647,6 +665,36 @@ fn advance_instance_audio_hops(
             );
             if let Some(output) = output {
                 m.audio_held_output = Some(output);
+            }
+            // Gate fires already carry their source stamps in TriggerPulse.
+            // Keep the audio-stage contribution, not a falsely resolved final
+            // parameter: drivers and envelopes compose after this phase.
+            let contribution = if info.is_trigger_gate {
+                None
+            } else if info.is_trigger {
+                Some(AudioModContribution::TriggerCounter {
+                    count: m.fire_count,
+                    value: info.base + m.fire_count as f32,
+                })
+            } else {
+                match m.action {
+                    TriggerAction::Continuous => output.map(AudioModContribution::Continuous),
+                    TriggerAction::Step { .. } | TriggerAction::Random =>
+                        Some(AudioModContribution::Stepped(m.step_value)),
+                }
+            };
+            if let Some(contribution) = contribution {
+                let already_failed = m.audio_observations.failure().is_some();
+                let clip_edge = on_last_hop
+                    && matches!(contribution, AudioModContribution::Stepped(_))
+                    && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_clip_edge();
+                if let Err(error) = m.audio_observations.push(AudioModObservation {
+                    stamp: hop.stamp, dt: hop.dt, evaluation_time,
+                    clip_edge,
+                    contribution,
+                }) && !already_failed {
+                    log::error!("Audio control history failed for {}.{}: {error}", fx.id, m.param_id);
+                }
             }
         }
         if clip_edge && !accepted_any && !info.is_trigger && !info.is_trigger_gate
@@ -867,9 +915,10 @@ pub fn evaluate_all_audio_mods(
 ) -> bool {
     pulses.clear();
     if !snapshot.hop_batches.is_empty() {
-        advance_audio_hops(project, snapshot, pulses, clip_edge_layers);
+        advance_audio_hops(project, snapshot, pulses, clip_edge_layers, None);
         return apply_retained_audio_mods(project, fire_meters);
     }
+    clear_audio_observations(project);
     if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
         return false;
     }
@@ -922,6 +971,36 @@ pub fn evaluate_all_audio_mods(
     }
 
     any
+}
+
+/// An export/take consumer must stop on an incomplete control batch, even if
+/// the visual parameter can still display its last effective value. Allocate
+/// the diagnostic only on failure; normal updates merely inspect the batches.
+pub fn audio_control_capture_error(project: &Project) -> Option<String> {
+    project.settings.master_effects.iter().chain(
+        project.timeline.layers.iter().flat_map(|layer| {
+            layer.effects.iter().flatten().chain(layer.gen_params())
+        }),
+    ).filter(|fx| fx.enabled).find_map(|fx| {
+        fx.audio_mods.iter().flatten().filter(|m| m.enabled).find_map(|m| {
+            m.audio_observations.failure().map(|error| {
+                format!("Audio control history for {}.{}: {error}", fx.id, m.param_id)
+            })
+        })
+    })
+}
+
+fn clear_audio_observations(project: &mut Project) {
+    fn clear(fx: &mut PresetInstance) {
+        for m in fx.audio_mods.iter_mut().flatten() {
+            m.audio_observations.begin(0);
+        }
+    }
+    for fx in &mut project.settings.master_effects { clear(fx); }
+    for layer in &mut project.timeline.layers {
+        for fx in layer.effects.iter_mut().flatten() { clear(fx); }
+        if let Some(fx) = layer.gen_params_mut() { clear(fx); }
+    }
 }
 
 /// Evaluate every audio modulation on a single instance. Returns true if any
@@ -1010,6 +1089,7 @@ pub fn clear_all_trigger_edges(project: &mut Project) {
         if let Some(mods) = fx.audio_mods.as_mut() {
             for m in mods.iter_mut() {
                 m.trigger_edge.clear();
+                m.audio_observations.begin(0);
                 m.step_value = None;
                 m.step_dir = 1.0;
             }
@@ -1622,6 +1702,7 @@ mod tests {
                 if mode == 3 { m.action = TriggerAction::Step { amount: 0.2, wrap: WrapMode::Clamp }; }
                 if mode == 4 { m.action = TriggerAction::Random; }
                 let mut fired = Vec::new();
+                let mut observations = Vec::new();
                 let levels = [0.0, 1.0, 0.0, 1.0, 0.0, 0.8, 0.0];
                 for (chunk, samples) in levels.chunks(chunk_size).enumerate() {
                     let snapshot = low_hop_batch(samples, 1, chunk * chunk_size);
@@ -1629,6 +1710,7 @@ mod tests {
                     fired.extend(pulses.into_iter().map(|pulse| pulse.audio_stamp.unwrap().end_sample));
                     let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
                     let m = &fx.audio_mods.as_ref().unwrap()[0];
+                    observations.extend_from_slice(m.audio_observations.hops());
                     let state = (m.smoothed, m.prev_raw, m.fire_count, m.step_value, fx.params.get("amount").unwrap().value);
                     let meter = meters.get(fire_meter_key_for_param(fx.id.as_str(), "amount"));
                     assert_eq!(meter, Some(m.audio_held_meter));
@@ -1636,18 +1718,68 @@ mod tests {
                     assert!(replayed.is_empty());
                     let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
                     let m = &fx.audio_mods.as_ref().unwrap()[0];
+                    assert!(m.audio_observations.hops().is_empty(), "redraw cannot publish controls twice");
                     assert_eq!((m.smoothed, m.prev_raw, m.fire_count, m.step_value, fx.params.get("amount").unwrap().value), state);
                     assert_eq!(held_meters.get(fire_meter_key_for_param(fx.id.as_str(), "amount")), meter);
                 }
                 let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
                 let m = &fx.audio_mods.as_ref().unwrap()[0];
                 if mode == 2 { assert_eq!(fired, [1024, 2048, 3072]); }
-                (fx.params.get("amount").unwrap().value, m.smoothed, m.fire_count, m.step_value, fired)
+                assert_eq!(observations.len(), if mode == 2 { 0 } else { levels.len() });
+                (fx.params.get("amount").unwrap().value, m.smoothed, m.fire_count, m.step_value, fired, observations)
             };
             let baseline = run(1, Seconds(1.0 / 60.0));
             assert_eq!(run(4, Seconds(1.0 / 24.0)), baseline);
             assert_eq!(run(7, Seconds(0.75)), baseline);
         }
+    }
+
+    #[test]
+    fn retained_audio_control_capture_preserves_source_and_evaluation_times() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        let m = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0].audio_mods.as_mut().unwrap()[0];
+        m.action = TriggerAction::Step { amount: 0.2, wrap: WrapMode::Clamp };
+        m.trigger_mode = Some(TriggerFireMode::ClipEdge);
+        let mut snapshot = snapshot_low_hop(0.25, 9, 512);
+        let mut hop = snapshot.hop_batches[0].hops()[0];
+        hop.stamp.timeline_time = Some(Seconds(12.0));
+        snapshot.hop_batches[0].reset(9);
+        snapshot.hop_batches[0].push(hop).unwrap();
+        evaluate_modulation(&mut project, Beats(20.0), Seconds(10.0), Seconds(0.1),
+            &snapshot, &mut Vec::new(), &mut Vec::new(), &[0], &mut FireMeterCapture::default());
+        let m = &project.timeline.layers[0].effects.as_ref().unwrap()[0].audio_mods.as_ref().unwrap()[0];
+        assert_eq!(m.audio_observations.hops(), &[AudioModObservation {
+            stamp: hop.stamp, dt: hop.dt, evaluation_time: Some(Seconds(10.0)),
+            clip_edge: true, contribution: AudioModContribution::Stepped(Some(0.2)),
+        }]);
+        assert!(audio_control_capture_error(&project).is_none());
+    }
+
+    #[test]
+    fn retained_audio_control_capture_reports_incomplete_batches_and_clears_stale_output() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].audio_mods.as_mut().unwrap()[0]
+            .audio_observations = AudioHopBatch::with_capacity(1);
+        retained_tick(&mut project, &low_hop_batch(&[0.1, 0.7], 1, 0), Seconds(0.1), &[]);
+        let error = audio_control_capture_error(&project).expect("consumer must stop on incomplete controls");
+        assert!(error.contains("amount"));
+        let m = &project.timeline.layers[0].effects.as_ref().unwrap()[0].audio_mods.as_ref().unwrap()[0];
+        assert!(m.audio_observations.hops().is_empty(), "never expose a plausible partial trajectory");
+        retained_tick(&mut project, &snapshot_low_hop(0.2, 1, 1536), Seconds(0.1), &[]);
+        assert!(audio_control_capture_error(&project).is_some(), "failure latches until a source reset");
+        retained_tick(&mut project, &snapshot_low_hop(0.3, 2, 512), Seconds(0.1), &[]);
+        assert!(audio_control_capture_error(&project).is_none());
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].enabled = false;
+        retained_tick(&mut project, &snapshot_low_hop(0.4, 2, 1024), Seconds(0.1), &[]);
+        let m = &project.timeline.layers[0].effects.as_ref().unwrap()[0].audio_mods.as_ref().unwrap()[0];
+        assert!(m.audio_observations.hops().is_empty());
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].enabled = true;
+        retained_tick(&mut project, &snapshot_low_hop(0.4, 2, 1024), Seconds(0.1), &[]);
+        retained_tick(&mut project, &snapshot_low(0.6), Seconds(0.1), &[]);
+        let m = &project.timeline.layers[0].effects.as_ref().unwrap()[0].audio_mods.as_ref().unwrap()[0];
+        assert!(m.audio_observations.hops().is_empty(), "legacy snapshots cannot carry old stamped data");
     }
 
     #[test]
