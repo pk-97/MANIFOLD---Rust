@@ -16,6 +16,7 @@ mod material_looks;
 mod material_colour;
 mod project;
 mod projection;
+pub use projection::timeline::sync_automation_lane_order;
 // `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor
 // mapping drags, graph-canvas node-param drags) can name `ResolvedScrub`
 // directly — they open the one `ScrubState.active` slot without going through

@@ -6,6 +6,7 @@
 use manifold_ui::{AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use manifold_ui::panels::actions::AutomationShape;
 use super::*;
+use manifold_core::LayerId;
 
 /// One preset menu vocabulary for all card families; addressing is captured by
 /// the caller, independently of the current editor or later selection changes.
@@ -43,10 +44,37 @@ fn preset_menu_items(
 fn automation_lane_context_items(
     target: &manifold_ui::view::UiGraphTarget,
     param_id: &manifold_core::effects::ParamId,
+    layer_id: Option<LayerId>,
     beat: Option<manifold_core::Beats>,
-    point_value_norm: Option<f32>,
+    point_context: Option<(manifold_core::Beats, f32)>,
+    pinned: bool,
+    whole_numbers: bool,
 ) -> Vec<DropdownItem> {
     let mut items = Vec::new();
+    items.push(DropdownItem::new(if pinned { "Unpin lane" } else { "Pin lane" })
+        .with_action(PanelAction::Editing(EditingAction::AutomationLanePinToggle(
+            target.clone(), param_id.clone(),
+        ))));
+    let hide_label = if pinned { "Hide lane (unpin first)" } else { "Hide lane" };
+    items.push(if pinned {
+        DropdownItem::disabled(hide_label)
+    } else {
+        DropdownItem::new(hide_label).with_action(PanelAction::Editing(
+            EditingAction::AutomationLaneHide(target.clone(), param_id.clone()),
+        ))
+    });
+    items.push(DropdownItem::new("Move lane up").with_action(PanelAction::Editing(
+        EditingAction::AutomationLaneMove(target.clone(), param_id.clone(), -1),
+    )));
+    items.push(DropdownItem::new("Move lane down").with_action(PanelAction::Editing(
+        EditingAction::AutomationLaneMove(target.clone(), param_id.clone(), 1),
+    )));
+    items.push(DropdownItem::new("Show all automated lanes").with_separator().with_action(
+        PanelAction::Editing(EditingAction::ShowAllAutomationLanes),
+    ));
+    items.push(DropdownItem::new("Choose parameter…").with_action(
+        PanelAction::Params(ParamsAction::OpenAutomationChooser(layer_id)),
+    ));
     if let Some(beat) = beat {
         items.push(DropdownItem::new("Cut").with_action(PanelAction::Editing(
             EditingAction::ContextAutomationCut(target.clone(), param_id.clone(), beat),
@@ -72,8 +100,22 @@ fn automation_lane_context_items(
             EditingAction::ContextOpenAutomationShapePicker(target.clone(), param_id.clone(), beat),
         )));
     }
-    if let Some(value_norm) = point_value_norm {
-        let beat = beat.expect("point context menu always carries its beat");
+    if let Some((beat, value_norm)) = point_context {
+        for (label, shape) in [
+            ("Straighten", manifold_ui::view::UiSegmentShape::Linear),
+            ("Hold", manifold_ui::view::UiSegmentShape::Hold),
+            ("Ease in", manifold_ui::view::UiSegmentShape::Curved(0.7)),
+            ("Ease out", manifold_ui::view::UiSegmentShape::Curved(-0.7)),
+        ] {
+            if whole_numbers && shape != manifold_ui::view::UiSegmentShape::Hold {
+                continue;
+            }
+            items.push(DropdownItem::new(label).with_action(PanelAction::Editing(
+                EditingAction::ContextAutomationSetShape(
+                    target.clone(), param_id.clone(), beat, value_norm, shape,
+                ),
+            )));
+        }
         items.push(DropdownItem::new("Edit point value…").with_action(PanelAction::Editing(
             EditingAction::AutomationPointEditValue(target.clone(), param_id.clone(), beat, value_norm),
         )));
@@ -226,7 +268,15 @@ mod tests {
     #[test]
     fn automation_numeric_menu_captures_the_clicked_point_value() {
         let target = manifold_ui::view::UiGraphTarget::Generator(LayerId::new("layer"));
-        let items = super::automation_lane_context_items(&target, &"amount".into(), Some(manifold_core::Beats(4.0)), Some(0.8));
+        let items = super::automation_lane_context_items(
+            &target,
+            &"amount".into(),
+            None,
+            Some(manifold_core::Beats(6.0)),
+            Some((manifold_core::Beats(4.0), 0.8)),
+            false,
+            false,
+        );
         for (label, is_value) in [("Edit point value…", true), ("Edit point time…", false)] {
             let action = items.iter().find(|item| item.label == label).unwrap().action.as_ref().unwrap();
             let (actual_target, param, beat, value) = match action {
@@ -239,6 +289,14 @@ mod tests {
             assert_eq!(*beat, manifold_core::Beats(4.0));
             assert_eq!(*value, 0.8);
         }
+        for label in ["Straighten", "Hold", "Ease in", "Ease out"] {
+            assert!(items.iter().any(|item| item.label == label), "missing segment action: {label}");
+        }
+        assert!(matches!(
+            items.iter().find(|item| item.label == "Paste here").unwrap().action.as_ref(),
+            Some(PanelAction::Editing(manifold_ui::EditingAction::ContextAutomationPaste(_, _, beat)))
+                if *beat == manifold_core::Beats(6.0)
+        ), "pasting on a segment uses the clicked beat, independently of its left handle");
     }
 
     /// LED presets (`layer_types: [Dmx]`) must be unreachable from a video /
@@ -775,6 +833,43 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
+            PanelAction::Params(ParamsAction::OpenAutomationChooser(layer_id)) => {
+                use manifold_ui::panels::browser_popup::*;
+
+                // The projection has already walked the selected layer's
+                // manifests. Clone the bounded picker payload once at open;
+                // the popup itself only filters its shared PickerCore and
+                // dispatches the typed action captured beside each item.
+                let candidates = self
+                    .automation_chooser_candidates
+                    .iter()
+                    .filter(|candidate| layer_id.as_ref().is_none_or(|id| id == &candidate.layer_id));
+                let mut items = Vec::new();
+                let mut actions = Vec::new();
+                let mut categories = Vec::new();
+                for candidate in candidates {
+                    if let Some(category) = candidate.item.category.as_deref()
+                        && !categories.iter().any(|name| name == category)
+                    {
+                        categories.push(category.to_string());
+                    }
+                    items.push(candidate.item.clone());
+                    actions.push(candidate.action.clone());
+                }
+                self.browser_popup
+                    .set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup.open_actions(BrowserPopupRequest {
+                    mode: BrowserPopupMode::Actions,
+                    tab: self.inspector.last_effect_tab(),
+                    layer_id: layer_id.clone(),
+                    items,
+                    category_names: categories,
+                    spawn_graph_pos: None,
+                    paste_count: 0,
+                    screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+                }, actions);
+                true
+            }
             PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
@@ -1188,13 +1283,26 @@ impl UIRoot {
             PanelAction::Editing(EditingAction::AutomationLaneRightClicked(target, param_id)) => {
                 use manifold_ui::automation_hit_tester::{AutomationHit, hit_test_automation};
                 let lanes = self.viewport.automation_lane_screens(&[]);
-                let point = match hit_test_automation(right_click_pos, &lanes) {
+                let hit = hit_test_automation(right_click_pos, &lanes);
+                let point = match hit {
                     Some(AutomationHit::Dot { lane_index, dot_index }) => Some(lanes[lane_index].dots[dot_index]),
+                    Some(AutomationHit::Segment { lane_index, left_dot_index }) => Some(lanes[lane_index].dots[left_dot_index]),
                     _ => None,
                 };
-                let beat = point.map(|dot| dot.beat).unwrap_or_else(|| self.viewport.snap_to_grid(
-                    self.viewport.pixel_to_beat(right_click_pos.x)).max(manifold_core::Beats::ZERO));
-                let items = automation_lane_context_items(target, param_id, Some(beat), point.map(|dot| dot.value_norm));
+                let beat = match hit {
+                    Some(AutomationHit::Dot { lane_index, dot_index }) => lanes[lane_index].dots[dot_index].beat,
+                    _ => self.viewport.snap_to_grid(self.viewport.pixel_to_beat(right_click_pos.x))
+                        .max(manifold_core::Beats::ZERO),
+                };
+                let layer_id = self.automation_chooser_candidates.iter().find_map(|candidate| {
+                    let PanelAction::Params(ParamsAction::ShowAutomationAddress(candidate_target, _)) = &candidate.action else {
+                        return None;
+                    };
+                    (candidate_target == target).then(|| candidate.layer_id.clone())
+                });
+                let pinned = self.pinned_automation_lanes.iter().any(|key| key.0 == *target && key.1 == *param_id);
+                let whole_numbers = lanes.iter().any(|lane| lane.target == *target && lane.param_id == *param_id && lane.whole_numbers);
+                let items = automation_lane_context_items(target, param_id, layer_id, Some(beat), point.map(|dot| (dot.beat, dot.value_norm)), pinned, whole_numbers);
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
@@ -1235,6 +1343,10 @@ impl UIRoot {
                 let mut items = vec![
                     DropdownItem::new("Paste")
                         .with_action(PanelAction::Editing(EditingAction::ContextPasteAtLayer(layer_id.clone()))),
+                    DropdownItem::new("Add/show automation lane…")
+                        .with_action(PanelAction::Params(ParamsAction::OpenAutomationChooser(
+                            Some(layer_id.clone()),
+                        ))),
                 ];
                 if !is_group {
                     items.push(

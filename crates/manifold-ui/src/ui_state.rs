@@ -10,6 +10,19 @@ use crate::automation_hit_tester::AutomationFeedback;
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId, ParamId};
 use std::collections::{HashMap, HashSet};
 
+/// Stable identity for an automation strip. The target and parameter id are
+/// the same address used by automation commands; lane position is never part
+/// of the identity.
+pub type AutomationLaneKey = (UiGraphTarget, ParamId);
+
+/// A time range selected across one or more automation lanes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomationTimeSelection {
+    pub start: Beats,
+    pub end: Beats,
+    pub lanes: Vec<AutomationLaneKey>,
+}
+
 /// D1 (`docs/TIMELINE_INTERACTION_P1_SPEC.md`): the single timeline-selection
 /// authority. Exactly one kind is active at any moment — the enum makes the
 /// old "clip-id set AND an `is_active` region flag simultaneously" state
@@ -146,6 +159,14 @@ pub struct UIState {
     /// serialized.
     pub selected_automation_points: Vec<UiAutomationPointRef>,
 
+    /// Session-only automation time selection, including lanes selected by a
+    /// background drag. This can cover a phrase with no authored interior dots.
+    pub automation_time_selection: Option<AutomationTimeSelection>,
+
+    /// Session-only automation paste insertion beat, used before the generic
+    /// clip/playhead insert cursor when an automation context is active.
+    pub automation_insert_beat: Option<Beats>,
+
     /// Pencil/draw mode toggle (Live's `B`) — while on, dragging inside an
     /// automation lane strip draws a point at each grid step instead of
     /// grabbing a dot/segment (P4 Unit B, section 7's "Draw mode"). Only meaningful
@@ -167,6 +188,16 @@ pub struct UIState {
     /// Never serialized — pure view state, same tier as
     /// `automation_mode_visible`.
     pub chosen_automation_params: HashMap<LayerId, (UiGraphTarget, ParamId)>,
+
+    /// Session-only ordering for automation strips. New keys are appended by
+    /// the projection; an existing placeholder keeps its rank when its first
+    /// point materializes a real lane.
+    pub automation_lane_order: Vec<AutomationLaneKey>,
+
+    /// Session-only lane visibility and pin state. Pinned lanes survive
+    /// touch-to-select replacement and cannot be hidden accidentally.
+    pub hidden_automation_lanes: HashSet<AutomationLaneKey>,
+    pub pinned_automation_lanes: Vec<AutomationLaneKey>,
 
     /// Session-only lane strip heights, keyed by the lane address. Values are
     /// clamped by `set_automation_lane_height` and never serialized.
@@ -197,6 +228,8 @@ impl UIState {
     pub fn clear_automation_selection(&mut self) {
         self.selected_automation_point = None;
         self.selected_automation_points.clear();
+        self.automation_time_selection = None;
+        self.automation_insert_beat = None;
         self.automation_paste_context = None;
     }
 
@@ -230,8 +263,13 @@ impl UIState {
             automation_mode_visible: false,
             selected_automation_point: None,
             selected_automation_points: Vec::new(),
+            automation_time_selection: None,
+            automation_insert_beat: None,
             automation_draw_mode: false,
             chosen_automation_params: HashMap::new(),
+            automation_lane_order: Vec::new(),
+            hidden_automation_lanes: HashSet::new(),
+            pinned_automation_lanes: Vec::new(),
             automation_lane_heights: HashMap::new(),
             automation_clipboard: None,
             automation_paste_context: None,
@@ -266,6 +304,83 @@ impl UIState {
     ) {
         self.chosen_automation_params
             .insert(layer_id, (target, param_id));
+    }
+
+    pub fn automation_lane_is_hidden(&self, target: &UiGraphTarget, param_id: &ParamId) -> bool {
+        self.hidden_automation_lanes.contains(&(target.clone(), param_id.clone()))
+            && !self.pinned_automation_lanes.contains(&(target.clone(), param_id.clone()))
+    }
+
+    pub fn automation_lane_is_pinned(&self, target: &UiGraphTarget, param_id: &ParamId) -> bool {
+        self.pinned_automation_lanes.contains(&(target.clone(), param_id.clone()))
+    }
+
+    pub fn hide_automation_lane(&mut self, target: UiGraphTarget, param_id: ParamId) {
+        let key = (target, param_id);
+        if !self.pinned_automation_lanes.contains(&key) {
+            self.hidden_automation_lanes.insert(key.clone());
+            self.selected_automation_points.retain(|point| {
+                (point.target.clone(), point.param_id.clone()) != key
+            });
+            if self.selected_automation_point.as_ref().is_some_and(|point| {
+                (point.target.clone(), point.param_id.clone()) == key
+            }) {
+                self.selected_automation_point = None;
+            }
+            if self.automation_paste_context.as_ref() == Some(&key) {
+                self.automation_paste_context = None;
+            }
+            if let Some(selection) = self.automation_time_selection.as_mut() {
+                selection.lanes.retain(|candidate| candidate != &key);
+                if selection.lanes.is_empty() {
+                    self.automation_time_selection = None;
+                    self.automation_insert_beat = None;
+                }
+            }
+        }
+    }
+
+    pub fn toggle_automation_lane_pin(&mut self, target: UiGraphTarget, param_id: ParamId) -> bool {
+        let key = (target, param_id);
+        if let Some(index) = self.pinned_automation_lanes.iter().position(|candidate| candidate == &key) {
+            self.pinned_automation_lanes.remove(index);
+            false
+        } else {
+            self.pinned_automation_lanes.push(key.clone());
+            self.hidden_automation_lanes.remove(&key);
+            true
+        }
+    }
+
+    pub fn show_all_automation_lanes(&mut self) {
+        self.hidden_automation_lanes.clear();
+    }
+
+    /// Move a lane by one slot in the stable order.
+    pub fn move_automation_lane(&mut self, target: UiGraphTarget, param_id: ParamId, direction: i32) -> bool {
+        let key = (target, param_id);
+        if !self.automation_lane_order.contains(&key) {
+            self.automation_lane_order.push(key.clone());
+        }
+        let Some(index) = self.automation_lane_order.iter().position(|candidate| candidate == &key) else {
+            return false;
+        };
+        let step = direction.signum();
+        if step == 0 {
+            return false;
+        }
+        let other = index as isize + step as isize;
+        if other < 0 || (other as usize) >= self.automation_lane_order.len() {
+            return false;
+        }
+        self.automation_lane_order.swap(index, other as usize);
+        true
+    }
+
+    pub fn prune_automation_lane_view(&mut self, live: &HashSet<AutomationLaneKey>) {
+        self.hidden_automation_lanes.retain(|key| live.contains(key));
+        self.pinned_automation_lanes.retain(|key| live.contains(key));
+        self.automation_lane_order.retain(|key| live.contains(key));
     }
 
     // ── Inspector scope ─────────────────────────────────────────────
@@ -941,5 +1056,24 @@ mod tests {
         s.pin_scope(InspectorTab::Master); // already pinned — no extra churn
         assert_eq!(s.selection_version, v);
         assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
+    }
+
+    #[test]
+    fn automation_lane_view_keeps_pin_and_order_without_project_writes() {
+        let mut s = UIState::new();
+        let a = UiGraphTarget::Effect(manifold_foundation::EffectId::from("fx-a"));
+        let b = UiGraphTarget::Effect(manifold_foundation::EffectId::from("fx-b"));
+        let pa = ParamId::from("amount");
+        let pb = ParamId::from("mix");
+
+        s.move_automation_lane(b.clone(), pb.clone(), 1);
+        s.move_automation_lane(a.clone(), pa.clone(), 1);
+        assert_eq!(s.automation_lane_order.len(), 2);
+        s.toggle_automation_lane_pin(a.clone(), pa.clone());
+        s.hide_automation_lane(a.clone(), pa.clone());
+        assert!(!s.automation_lane_is_hidden(&a, &pa));
+        assert!(s.automation_lane_is_pinned(&a, &pa));
+        s.show_all_automation_lanes();
+        assert!(s.automation_lane_is_pinned(&a, &pa));
     }
 }

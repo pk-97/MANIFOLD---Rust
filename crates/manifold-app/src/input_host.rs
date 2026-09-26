@@ -1331,7 +1331,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn insert_cursor_beat(&self) -> Option<f32> {
-        self.selection.insert_cursor_beat.map(|b| b.as_f32())
+        self.selection.insert_cursor_beat.map(|beat| beat.as_f32())
     }
 
     fn insert_cursor_layer_index(&self) -> Option<usize> {
@@ -1553,11 +1553,21 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn has_selected_automation_points(&self) -> bool {
         !self.selection.selected_automation_points.is_empty()
+            || self.selection.automation_time_selection.is_some()
     }
 
     fn has_automation_selection(&self) -> bool {
         self.selection.selected_automation_point.is_some()
             || !self.selection.selected_automation_points.is_empty()
+            || self.selection.automation_time_selection.is_some()
+    }
+
+    fn select_all_automation(&mut self) -> bool {
+        if !self.selection.automation_mode_visible { return false; }
+        let Some((target, param_id)) = self.selection.automation_paste_context.clone() else { return false; };
+        automation::select_all_in_lane(self.project, self.selection, &target, &param_id);
+        *self.needs_rebuild = true;
+        true
     }
 
     fn copy_selected_automation(&mut self) {
@@ -1577,15 +1587,20 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.selection.automation_clipboard.is_some()
             && (self.selection.selected_automation_point.is_some()
                 || !self.selection.selected_automation_points.is_empty()
+                || self.selection.automation_time_selection.is_some()
                 || self.selection.automation_paste_context.is_some())
     }
 
     fn paste_automation(&mut self, target_beat: f32) {
+        let target_beat = self.selection.automation_time_selection.as_ref()
+            .map(|range| range.start)
+            .or(self.selection.automation_insert_beat)
+            .unwrap_or_else(|| Beats::from_f32(target_beat));
         automation::paste(
             self.project,
             self.selection,
             self.content_tx,
-            Beats::from_f32(target_beat),
+            target_beat,
             self.needs_rebuild,
         );
     }
@@ -1863,7 +1878,8 @@ mod automation_clipboard_host_tests {
     use manifold_core::{EffectId, GraphTarget, LayerId, PresetTypeId};
     use manifold_core::layer::Layer;
     use manifold_editing::service::EditingService;
-    use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget};
+    use manifold_ui::ui_state::AutomationTimeSelection;
+    use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 
     struct Harness {
         project: manifold_core::project::Project,
@@ -2387,8 +2403,14 @@ mod automation_clipboard_host_tests {
         h.select(&[("amount", 2.0), ("amount", 6.0), ("steps", 4.0), ("steps", 8.0)]);
         let before = h.project.clone();
         { let mut host = h.host(); host.copy_selected_automation(); host.paste_automation(10.0); }
-        assert_eq!(points(&h.project, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8), (10.0, 0.2), (14.0, 0.6)]);
-        assert_eq!(points(&h.project, "steps"), vec![(4.0, 2.0), (8.0, 8.0), (12.0, 2.0), (16.0, 8.0)]);
+        let amount = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
+            .iter().find(|lane| lane.param_id.as_ref() == "amount").unwrap();
+        let steps = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
+            .iter().find(|lane| lane.param_id.as_ref() == "steps").unwrap();
+        assert_eq!(amount.value_at(Beats(10.0)), 0.2);
+        assert_eq!(amount.value_at(Beats(14.0)), 0.6);
+        assert_eq!(steps.value_at(Beats(12.0)), 2.0);
+        assert_eq!(steps.value_at(Beats(16.0)), 8.0);
         let mut authoritative = before.clone();
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);
@@ -2422,12 +2444,73 @@ mod automation_clipboard_host_tests {
     }
 
     #[test]
+    fn time_range_copy_carries_empty_interior_and_curved_boundaries() {
+        let mut h = Harness::new();
+        h.project.settings.master_effects[0]
+            .automation_lanes.as_mut().unwrap()[0].points[0].shape = SegmentShape::Curved(0.6);
+        let target = UiGraphTarget::Effect(h.effect_id());
+        h.selection.automation_time_selection = Some(AutomationTimeSelection {
+            start: Beats(3.0),
+            end: Beats(5.0),
+            lanes: vec![(target.clone(), "amount".into())],
+        });
+        { let mut host = h.host(); host.copy_selected_automation(); }
+        let clipboard = h.selection.automation_clipboard.as_ref().unwrap();
+        assert_eq!(clipboard.span, Beats(2.0));
+        assert_eq!(clipboard.points.len(), 2, "no authored point lies inside the range");
+        assert_eq!(clipboard.points[0].beat_offset, Beats::ZERO);
+        assert_eq!(clipboard.points[1].beat_offset, Beats(2.0));
+        assert_eq!(
+            clipboard.points[0].shape,
+            UiSegmentShape::CurvedRange { bend: 0.6, start: 0.25, end: 0.75 }
+        );
+        let copied_values = (clipboard.points[0].value, clipboard.points[1].value);
+        h.selection.clear_automation_selection();
+        h.selection.automation_time_selection = Some(AutomationTimeSelection {
+            start: Beats(12.0), end: Beats(14.0), lanes: vec![(target, "amount".into())],
+        });
+        { let mut host = h.host(); host.paste_automation(100.0); }
+        let lane = &h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0];
+        assert_eq!(lane.value_at(Beats(12.0)), copied_values.0);
+        assert_eq!(lane.value_at(Beats(14.0)), copied_values.1);
+        assert!(lane.points.iter().all(|point| point.beat < Beats(100.0)),
+            "an empty selected range supplies both the lane and insertion beat");
+    }
+
+    #[test]
+    fn time_range_cut_flattens_and_undo_restores_exact_curve() {
+        let mut h = Harness::new();
+        let target = UiGraphTarget::Effect(h.effect_id());
+        h.selection.automation_time_selection = Some(AutomationTimeSelection {
+            start: Beats(3.0),
+            end: Beats(5.0),
+            lanes: vec![(target, "amount".into())],
+        });
+        let before = h.project.clone();
+        { let mut host = h.host(); host.cut_selected_automation(); }
+        let lane = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
+            .iter().find(|lane| lane.param_id.as_ref() == "amount").unwrap();
+        assert_eq!(lane.value_at(Beats(4.0)), lane.value_at(Beats(3.0)));
+        let mut authoritative = before.clone();
+        let mut service = EditingService::new();
+        drain_batch(&h, &mut authoritative, &mut service);
+        assert!(service.undo(&mut authoritative));
+        assert_eq!(
+            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes).unwrap(),
+            serde_json::to_value(&before.settings.master_effects[0].automation_lanes).unwrap()
+        );
+    }
+
+    #[test]
     fn duplicate_preserves_originals_and_empty_clipboard_emits_nothing() {
         let mut h = Harness::new();
         h.select(&[("amount", 2.0), ("amount", 6.0)]);
         let before = h.project.clone();
         { let mut host = h.host(); host.duplicate_selected_automation(); }
-        assert_eq!(points(&h.project, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (6.25, 0.2), (10.0, 0.8), (10.25, 0.6)]);
+        let amount = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
+            .iter().find(|lane| lane.param_id.as_ref() == "amount").unwrap();
+        assert_eq!(amount.value_at(Beats(6.0)), 0.2);
+        assert_eq!(amount.value_at(Beats(10.0)), 0.6);
         let mut authoritative = before;
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);
@@ -2485,7 +2568,8 @@ mod automation_clipboard_host_tests {
             assert!(host.has_automation_paste_target());
             host.paste_automation(12.0);
         }
-        assert!(points(&h.project, "amount").contains(&(12.0, 0.2)));
+        assert_eq!(points(&h.project, "amount"), vec![(6.0, 0.6), (10.0, 0.8), (12.0, 0.2)],
+            "a single-point paste creates a breakpoint, without zero-duration punch guards");
         let mut authoritative = before;
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);

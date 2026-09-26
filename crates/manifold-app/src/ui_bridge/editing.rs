@@ -3,6 +3,9 @@ use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
+use manifold_core::effects::{AutomationPoint, SegmentShape};
+use manifold_editing::commands::automation::MoveAutomationPointCommand;
+use manifold_editing::command::Command;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_ui::EditingAction;
@@ -406,10 +409,85 @@ pub(super) fn dispatch_editing(
             );
             DispatchResult::structural()
         }
+        EditingAction::ContextAutomationSetShape(target, param_id, beat, value_norm, shape) => {
+            let graph_target = crate::editing_host::to_graph_target(target);
+            let Some(instance) = project.preset_instance(&graph_target) else {
+                return DispatchResult::handled();
+            };
+            let Some(param) = instance.params.get(param_id.as_ref()) else {
+                return DispatchResult::handled();
+            };
+            if param.whole_numbers() && *shape != manifold_ui::view::UiSegmentShape::Hold {
+                return DispatchResult::handled();
+            }
+            let Some(old_point) = instance.automation_lanes.as_ref().and_then(|lanes| {
+                lanes.iter().find(|lane| lane.param_id.as_ref() == param_id.as_ref())
+                    .and_then(|lane| lane.points.iter().find(|point| {
+                        point.beat == *beat && manifold_ui::slider::BitmapSlider::value_to_normalized(
+                            point.value, param.spec.min, param.spec.max,
+                        ) == *value_norm
+                    }))
+                    .copied()
+            }) else {
+                return DispatchResult::handled();
+            };
+            let new_shape = match *shape {
+                manifold_ui::view::UiSegmentShape::Linear => SegmentShape::Linear,
+                manifold_ui::view::UiSegmentShape::Hold => SegmentShape::Hold,
+                manifold_ui::view::UiSegmentShape::Curved(bend) => SegmentShape::Curved(bend),
+                manifold_ui::view::UiSegmentShape::CurvedRange { bend, start, end } => {
+                    SegmentShape::CurvedRange { bend, start, end }
+                }
+            };
+            let new_point = AutomationPoint { shape: new_shape, ..old_point };
+            let mut local = MoveAutomationPointCommand::new(
+                graph_target.clone(), param_id.as_ref(), old_point, new_point,
+            );
+            local.execute(project);
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::Execute(Box::new(local)),
+            );
+            DispatchResult::structural()
+        }
         EditingAction::AutomationPointEditValue(_, _, _, _)
         | EditingAction::AutomationPointEditTime(_, _, _, _) => {
             // The app text-input owner intercepts these exact typed actions.
             DispatchResult::handled()
+        }
+
+        EditingAction::AutomationLaneHide(target, param_id) => {
+            selection.hide_automation_lane(target.clone(), param_id.clone());
+            DispatchResult::structural()
+        }
+        EditingAction::AutomationLanePinToggle(target, param_id) => {
+            selection.toggle_automation_lane_pin(target.clone(), param_id.clone());
+            DispatchResult::structural()
+        }
+        EditingAction::AutomationLaneMove(target, param_id, direction) => {
+            super::sync_automation_lane_order(project, selection);
+            for layer in &project.timeline.layers {
+                let lanes = crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+                    layer,
+                    selection.chosen_automation_params.get(&layer.layer_id),
+                    &selection.automation_lane_order,
+                    &selection.hidden_automation_lanes,
+                    &selection.pinned_automation_lanes,
+                );
+                let Some(index) = lanes.iter().position(|lane| lane.target == *target && lane.param_id == *param_id) else { continue; };
+                let other = index as isize + direction.signum() as isize;
+                if *direction != 0 && other >= 0 && let Some(neighbor) = lanes.get(other as usize) {
+                    let a = selection.automation_lane_order.iter().position(|key| key.0 == *target && key.1 == *param_id);
+                    let b = selection.automation_lane_order.iter().position(|key| key.0 == neighbor.target && key.1 == neighbor.param_id);
+                    if let (Some(a), Some(b)) = (a, b) { selection.automation_lane_order.swap(a, b); }
+                }
+                break;
+            }
+            DispatchResult::structural()
+        }
+        EditingAction::ShowAllAutomationLanes => {
+            selection.show_all_automation_lanes();
+            DispatchResult::structural()
         }
 
         EditingAction::LayerHeaderRightClicked(_) => {

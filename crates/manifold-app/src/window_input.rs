@@ -2329,6 +2329,13 @@ impl Application {
     ) {
         use manifold_ui::panels::PanelAction;
         use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
+        let action = match action {
+            BrowserPopupAction::ActionSelected(action) => {
+                self.ws.ui_root.pending_keyboard_actions.push(action);
+                return;
+            }
+            action => action,
+        };
         if let BrowserPopupAction::Selected {
             type_id,
             mode,
@@ -2352,7 +2359,7 @@ impl Application {
                     layer_id,
                     manifold_ui::types::PresetTypeId::from_string(type_id),
                 )),
-                BrowserPopupMode::Node => return,
+                BrowserPopupMode::Node | BrowserPopupMode::Actions => return,
             };
             self.ws.ui_root.pending_keyboard_actions.push(panel_action);
         }
@@ -2406,7 +2413,7 @@ impl Application {
             // "restore and close batch", never commit-then-undo) that must
             // be rolled back before anything else touches the project.
             if matches!(logical_key, Key::Named(NamedKey::Escape))
-                && matches!(
+                && (self.overlay.has_pending_automation_press() || matches!(
                     self.overlay.drag_mode(),
                     DragMode::Move
                         | DragMode::TrimLeft
@@ -2414,16 +2421,18 @@ impl Application {
                         | DragMode::AutomationPoint
                         | DragMode::AutomationSegmentBend
                         | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationMarquee
                         | DragMode::AutomationGroupMove
                         | DragMode::AutomationDraw
-                )
+                ))
                 && let Some(content_tx) = self.content_tx.as_ref()
             {
-                let automation_cancel = matches!(
+                let automation_cancel = self.overlay.has_pending_automation_press() || matches!(
                     self.overlay.drag_mode(),
                     DragMode::AutomationPoint
                         | DragMode::AutomationSegmentBend
                         | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationMarquee
                         | DragMode::AutomationGroupMove
                         | DragMode::AutomationDraw
                 );

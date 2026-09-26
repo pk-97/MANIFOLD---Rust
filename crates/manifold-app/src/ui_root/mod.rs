@@ -136,6 +136,15 @@ pub struct EmbeddedPresetItem {
     pub origin: manifold_core::project::EmbeddedOrigin,
 }
 
+/// Manifest-backed parameter choice for the automation chooser. The action is
+/// stored with the candidate at projection time, retaining the exact target
+/// and parameter identity through filtering and popup navigation.
+pub(crate) struct AutomationChooserCandidate {
+    pub layer_id: manifold_core::LayerId,
+    pub item: manifold_ui::panels::picker_core::PickerItem,
+    pub action: PanelAction,
+}
+
 /// Owns all UI state for one window.
 pub struct UIRoot {
     // Core
@@ -309,6 +318,8 @@ pub struct UIRoot {
     last_right_click_pos: Vec2,
     /// One-shot view request, consumed after lane geometry is projected.
     pub(crate) pending_automation_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    pub(crate) automation_chooser_candidates: Vec<AutomationChooserCandidate>,
+    pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.
     pub macro_labels: [String; manifold_core::MACRO_COUNT],
@@ -340,6 +351,8 @@ pub struct UIRoot {
     /// drag-active latch + `is_event_in_tracks_area`'s positional gate for
     /// Drag/DragEnd.
     drag_owner: Option<DragOwner>,
+    /// A press forwarded to the tracks needs its release even before a drag starts.
+    tracks_press_active: bool,
 
     /// Cached Ableton session for the picker popup.
     pub ableton_session: Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
@@ -497,6 +510,8 @@ impl UIRoot {
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             pending_automation_reveal: None,
+            automation_chooser_candidates: Vec::new(),
+            pinned_automation_lanes: Vec::new(),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
@@ -506,6 +521,7 @@ impl UIRoot {
             scene_setup_handle_id: None,
             layout_tick_last: std::time::Instant::now(),
             drag_owner: None,
+            tracks_press_active: false,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
             ableton_picker_context: None,

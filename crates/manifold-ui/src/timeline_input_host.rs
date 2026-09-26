@@ -316,6 +316,9 @@ pub trait TimelineInputHost {
     /// Whether automation breakpoints are the active timeline selection.
     fn has_automation_selection(&self) -> bool;
 
+    /// Select the active automation lane, consuming Cmd+A when it owns focus.
+    fn select_all_automation(&mut self) -> bool { false }
+
     /// Copy the selected automation breakpoints into the UI clipboard.
     fn copy_selected_automation(&mut self);
 
@@ -331,7 +334,7 @@ pub trait TimelineInputHost {
     /// selecting the inserted breakpoints.
     fn paste_automation(&mut self, target_beat: f32);
 
-    /// Duplicate the selected automation phrase after its end plus one grid
-    /// interval, as one undoable operation.
+    /// Duplicate the selected automation phrase immediately after its end,
+    /// using one grid interval for a single point, as one undoable operation.
     fn duplicate_selected_automation(&mut self);
 }

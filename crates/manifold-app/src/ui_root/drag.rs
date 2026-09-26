@@ -120,6 +120,7 @@ impl UIRoot {
         self.scene_setup_panel.cancel_object_modifier_drag(&mut self.tree);
         self.fire_gesture_end_hooks();
         self.drag_owner = None;
+        self.tracks_press_active = false;
     }
 
     /// D6/section 3.4 (`docs/DRAG_CAPTURE_DESIGN.md`) — after a `PointerDown` is
@@ -155,6 +156,9 @@ impl UIRoot {
     pub(crate) fn should_stash_for_tracks(&self, event: &manifold_ui::input::UIEvent) -> bool {
         use manifold_ui::input::UIEvent;
         match event {
+            // A forwarded press owns its release, including outside tracks.
+            // A popup-owned press must never enter the timeline event stream.
+            UIEvent::PointerUp { .. } => self.tracks_press_active,
             UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. } => {
                 self.drag_owner == Some(DragOwner::TimelineTracks)
             }
@@ -269,6 +273,19 @@ mod drag_capture_tests {
     /// `InteractionOverlay::on_end_drag` — ownership decides, not position.
     /// The old `is_event_in_tracks_area` positional gate would have dropped
     /// this exact case (BUG-058's leak-adjacent failure mode).
+    #[test]
+    fn pointer_release_reaches_provisional_automation_outside_tracks() {
+        let mut ui = new_root();
+        let press = center(ui.viewport.tracks_rect());
+        ui.pointer_event(press, PointerAction::Down, 0.0);
+        let _ = ui.process_events();
+        let _ = ui.drain_viewport_events();
+        ui.pointer_event(Vec2::new(-100.0, -100.0), PointerAction::Up, 0.05);
+        let _ = ui.process_events();
+        assert!(ui.drain_viewport_events().iter().any(|event| matches!(event, UIEvent::PointerUp { .. })));
+        assert!(!ui.tracks_press_active);
+    }
+
     #[test]
     fn drag_end_stashes_by_ownership_regardless_of_release_position() {
         let mut ui = new_root();
