@@ -75,6 +75,21 @@
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F2"
+      },
+      {
+        "id": "aperture",
+        "name": "Aperture",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Circle",
+          "Hexagon",
+          "Octagon"
+        ]
       }
     ],
     "bindings": [
@@ -154,6 +169,19 @@
         },
         "convert": {
           "type": "Float"
+        }
+      },
+      {
+        "id": "aperture",
+        "label": "Aperture",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "dof/bokeh",
+          "param": "aperture"
+        },
+        "convert": {
+          "type": "EnumRound"
         }
       }
     ]
@@ -587,12 +615,6 @@
             "title": "CoC From Depth"
           },
           {
-            "id": 2,
-            "typeId": "node.coc_dilate",
-            "handle": "coc_dilate",
-            "title": "CoC Dilate"
-          },
-          {
             "id": 3,
             "typeId": "node.bokeh_gather",
             "handle": "bokeh",
@@ -600,6 +622,10 @@
               "max_radius": {
                 "type": "Float",
                 "value": 24.0
+              },
+              "blur_alpha": {
+                "type": "Bool",
+                "value": true
               }
             },
             "title": "Bokeh Gather"
@@ -624,12 +650,6 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "out",
-            "toNode": 2,
-            "toPort": "in"
-          },
-          {
-            "fromNode": 2,
             "fromPort": "out",
             "toNode": 3,
             "toPort": "width"

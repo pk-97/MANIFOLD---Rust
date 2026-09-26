@@ -1,6 +1,7 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
 **Status:** SHIPPED (closed 2026-07-16) — P0–P6 all landed; as-built record in section 7. Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down (VD-020-CINEMATIC closed); any look issue from here is filed as a new BUG_BACKLOG entry, never reopened as a gate. OPEN: BUG-136 (cinematic-motion-blur-no-visible-effect) — see section 7's escalation note. · 2026-07-12**
+**D10 upgrade:** Implemented and checked on tiger-lily and satsuki-azalea photoscans with 3D camera DoF (2026-09-26): layered half-resolution gathers, transparent silhouette coverage, aperture/quality controls and Smooth broad blur. Contracts and validation are in D10 below.
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -311,11 +312,78 @@ executor improvising a different algorithm (that's the plausible-wrong
 move here: swapping in a fancier technique from training memory mid-phase;
 the committed math is the contract, upgrades are new decisions).
 
+**D10 — Layered half-resolution DoF and broad blur upgrade (2026-09-26).**
+Peter: "Please upgrade in full end to end." This amendment supersedes D5's
+single full-resolution gather and the archived layered-gather implementation.
+Extend the existing `node.bokeh_gather` and `node.blur`; no new public nodes.
+
+`bokeh_gather.rs` owns cached textures and pipelines. Its production `encode`
+seam accepts source, signed CoC, output and `BokehSettings` (source-pixel radius,
+aperture, quality). Ports, `max_radius`, `enabled`, and default circular aperture
+remain compatible. Low/Medium/High use 16/32/64 fixed aperture samples. Aperture
+and quality use the shared parameter surface, including existing scene exposure
+migration; radius stays paired with the CoC producer, not a separate camera knob.
+
+The full-resolution source is classified into premultiplied near/far RGB and
+coverage **before** the exact 2×2 reduction. Separate color pyramids use area
+reduction so odd dimensions cannot discard an interior texel. Half-resolution
+8×8 tiles supply conservative foreground/transparent-region search bounds;
+opaque far gathers use the receiving surface radius so neighboring tile maxima
+cannot select overly coarse color mips; bounds never replace source CoC
+in acceptance weights. A separate max-CoC pyramid matches the color sampling
+footprint, so coarse color mips cannot erase thin foreground coverage. Canonical
+saved graphs and fresh imports feed original CoC directly; external dilation is
+removed from this path. Separate aperture gathers feed depth-aware full-resolution
+reconstruction. Foreground coverage can cross a depth edge; background color
+cannot blur a focused foreground surface. Zero-CoC detail is preserved. Camera DoF enables `blur_alpha`: source
+color is premultiplied by opacity before reduction, blurred coverage expands
+beyond transparent silhouettes, and reconstruction returns straight RGBA.
+General texture use keeps the legacy alpha-preserving default. Saved camera
+graphs gain this setting unless it was explicitly authored. No frame-dependent random rotation or temporal history is introduced. The focus
+blend begins at a one-source-pixel radius, matching the gather support.
+Aperture-area normalization preserves opacity through small-radius transitions.
+Resource allocation occurs on creation/resize; radius changes reuse resources.
+Helper pipelines participate in startup prewarming. Dependent reduction passes
+retain the existing `BarrieredReduction` exemption and generated gather kernel.
+
+`node.blur` appends Smooth as mode 3, preserving Gaussian/Box/Radial numbers.
+Smooth uses a Dual Kawase pyramid, exact area downsampling, normalized eight-tap
+upsampling, and interpolation between adjacent reconstructed levels. At even
+dimensions per-axis variance is `v(d)=6+4v(d−1)`; the target is `(radius/2)²`.
+Only needed levels dispatch. SoftFocus and Bloom select Smooth; Bloom retains its
+bright-pass/downsample/mix composition. The artistic DepthOfField preset reuses
+the layered gather with unsigned CoC from `pack_rgba`, preserving its existing
+quality control and adding aperture. Its former HDR clamp is removed.
+
+Rejected: Dual Kawase for physical DoF; it does not encode aperture coverage or
+occlusion. Rejected: a shared near/far pyramid, which mixes hidden colors before
+the gather can reject them. Rejected: temporal accumulation without reliable
+reprojection and disocclusion data for every effect input.
+
+Costs and limits: near/far separation adds intermediate storage and several small
+dispatches. This remains a single-layer screen-space approximation: hidden
+background geometry cannot be recovered exactly, and extreme blur of complex
+silhouettes can still expose sampling artifacts. Timings are measured, not a
+portable performance guarantee; this amendment makes no claim of SOTA parity.
+
+Enforcement: production-path `bokeh_gather::gpu_tests` cover focused identity,
+HDR/alpha, thin foreground coverage, far-spill rejection, aperture shapes, odd
+dimensions, resizing, motion/focus continuity and an independent numeric oracle.
+`filter::gpu_tests` cover Smooth's identity, HDR, impulse mass/moment and odd
+sizes. `render-import --benchmark-frames N` measures 1–120 static warm frames
+after IO and image convergence, with five extra warm frames and no timed
+readback; it reports whole-frame GPU and CPU-plus-GPU medians/p95. Matched
+old/new photoscan comparisons use the same harness at the base and upgraded
+revision. Preset/ABI/freeze checks remain required; before/after renders and bounded
+1080p/4K measurements supplement these numeric checks. Full-scene imported-tail
+proofs remain part of GPU landing validation. Traced DoF and temporal accumulation
+remain deferred until their input/budget contracts exist.
+
 ## 3. Invariants & enforcement
 
 | Invariant | Machine check |
 |---|---|
-| I1 — Every atom matches its CPU reference on synthetic inputs, pixel-exact within 1e-4 | per-atom `gpu_tests` CPU-reference parity (P1: coc; P2: ssao; P3: motion_blur; P4: bokeh) — synthetic depth/velocity ramps uploaded, both implementations run, full-buffer compare |
+| I1 — Every atom matches its independent CPU reference within its documented precision tolerance | per-atom `gpu_tests` CPU-reference parity: CoC/SSAO/motion blur retain their existing tolerances; D10 bokeh compares full buffers including half-float area reductions and trilinear gathers within 0.02 HDR units. Sharp identity remains bit-exact. |
 | I2 — Pinhole/zero-shutter lens is a bit-clean pass-through through the whole chain | gpu_test: uniform-lens chain on a noise texture, in == out byte-compare (f_stop=∞ → CoC buffer all-zero asserted; shutter=0 → motion_blur identity asserted) |
 | I3 — CoC math agrees with hand-computed values | unit test (CPU, no GPU): 5 (depth, focus, f_stop) triples → coc_px vs values computed by hand in the test source with the D1 formula |
 | I4 — All four atoms are codegen-path | existing meta-test that every `primitive!` with `wgsl_body` proves generated-vs-hand parity; plus negative gate `rg 'create_compute_pipeline\(include_str' <the four new files>` = 0 hits |

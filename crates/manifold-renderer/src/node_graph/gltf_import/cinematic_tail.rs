@@ -1,6 +1,6 @@
 //! Cinematic tail for imported scenes (CINEMATIC_SCENE_TAIL_DESIGN.md D1 /
-//! section 3 (chain topology)): the polished DoF chain (`coc_from_depth →
-//! `coc_dilate` → `bokeh_gather`) plus the velocity-directed `motion_blur`,
+//! section 3 (chain topology)): the DoF chain (`coc_from_depth` →
+//! `bokeh_gather`) plus the velocity-directed `motion_blur`,
 //! templated node-for-node on the CinematicScene reference preset.
 //! Reinstated after the 2026-07-12 SSAO-only carve-out once BUG-136 (motion
 //! blur no visible effect) was root-caused in P0 of that design: never a
@@ -14,7 +14,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::NodeId;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
-use super::assembly::{float, plain_node, wire};
+use super::assembly::{enum_val, float, plain_node, wire};
 use crate::node_graph::scene_exposure::metadata_for_node_type;
 
 /// The tail's products: the assembled `dof` group node and the top-level
@@ -63,25 +63,20 @@ pub(super) fn build_cinematic_tail(
         .params
         .insert("world_to_mm".to_string(), float((1000.0 / scene_radius).min(100_000.0)));
     dof_nodes.push(coc_node);
-    let coc_dilate_id = fresh_id();
-    dof_nodes.push(plain_node(
-        coc_dilate_id,
-        "coc_dilate",
-        "node.coc_dilate",
-        "coc_dilate",
-    ));
     let bokeh_id = fresh_id();
     let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
     bokeh_node.params.insert("max_radius".to_string(), float(24.0));
     bokeh_node.params.insert("enabled".to_string(), super::assembly::bool_val(true));
+    bokeh_node.params.insert("aperture".to_string(), enum_val(0));
+    bokeh_node.params.insert("quality".to_string(), enum_val(1));
+    bokeh_node.params.insert("blur_alpha".to_string(), super::assembly::bool_val(true));
     let bokeh_params = bokeh_node.params.clone();
     dof_nodes.push(bokeh_node);
     let dof_out_id = fresh_id();
     dof_nodes.push(plain_node(dof_out_id, "dof_out", GROUP_OUTPUT_TYPE_ID, "output"));
     dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
     dof_wires.push(wire(dof_in_id, "camera", coc_id, "camera"));
-    dof_wires.push(wire(coc_id, "out", coc_dilate_id, "in"));
-    dof_wires.push(wire(coc_dilate_id, "out", bokeh_id, "width"));
+    dof_wires.push(wire(coc_id, "out", bokeh_id, "width"));
     dof_wires.push(wire(dof_in_id, "color", bokeh_id, "in"));
     dof_wires.push(wire(bokeh_id, "out", dof_out_id, "out"));
 
@@ -128,7 +123,7 @@ pub(super) fn build_cinematic_tail(
 /// verbatim (flatten.rs prefixes HANDLES only — "dof/bokeh" is the
 /// handle; the nodeId safety invariant keeps the id), and both binding
 /// resolution paths (build.rs's instance_by_node_id, bindings.rs's
-/// identity match) key on the id. Only `enabled` is stamped for bokeh:
+/// identity match) key on the id. The bokeh toggle, aperture and quality are stamped:
 /// the radius slider stays deferred (f-stop is the photographic DoF
 /// control).
 pub(super) fn stamp_tail_camera_sections(
@@ -151,7 +146,7 @@ pub(super) fn stamp_tail_camera_sections(
     );
     let bokeh_enabled_meta: Vec<_> = metadata_for_node_type("node.bokeh_gather")
         .into_iter()
-        .filter(|m| m.name == "enabled")
+        .filter(|m| matches!(m.name.as_str(), "enabled" | "aperture" | "quality"))
         .collect();
     stamp_scene_node_exposures_into(
         card_params,
