@@ -11,7 +11,7 @@ use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use manifold_fluids::{SurfaceOptions, WhitewaterOptions};
+use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 
 crate::primitive! {
     name: FluidSurface,
@@ -20,6 +20,7 @@ crate::primitive! {
     inputs: {
         emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
         resolution: ScalarF32 optional, domain_size: ScalarF32 optional, fill_height: ScalarF32 optional,
+        viscosity: ScalarF32 optional, surface_tension: ScalarF32 optional,
         gravity: ScalarF32 optional, emission: ScalarF32 optional, inflow_speed: ScalarF32 optional,
         speed: ScalarF32 optional, reset: ScalarF32 optional, surface_subdivisions: ScalarF32 optional,
         surface_particle_scale: ScalarF32 optional, surface_smoothing: ScalarF32 optional,
@@ -38,6 +39,8 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(24.0), range: Some((8.0, 96.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("viscosity"), label: "Viscosity", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("surface_tension"), label: "Surface Tension", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("emission"), label: "Pour", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &["Off", "On"] },
         ParamDef { name: Cow::Borrowed("inflow_speed"), label: "Flow Speed", ty: ParamType::Float, default: ParamValue::Float(1.5), range: Some((0.0, 5.0)), enum_values: &[] },
@@ -59,8 +62,8 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Surface/whitewater settings restart the world. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
-    examples: ["WaterBasin", "WaterDamBreak"],
+    composition_notes: "CPU reference engine, not a real-time guarantee. Domain is a cube centered in X/Z, with its floor at Y=0, in metres. Emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface tension is experimental (BUG-y5g1); the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
+    examples: ["WaterBasin", "WaterDamBreak", "HoneyDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid, a pouring source and a moving box, and generate a surface for scene rendering.",
     category: Geometry3D, role: Source,
@@ -119,6 +122,8 @@ impl Primitive for FluidSurface {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         for (name, fallback) in [
             ("resolution", 24.0),
+            ("viscosity", 0.0),
+            ("surface_tension", 0.0),
             ("surface_subdivisions", 0.0),
             ("emission", 1.0),
             ("surface_smoothing_iterations", 2.0),
@@ -149,6 +154,10 @@ impl Primitive for FluidSurface {
             fill_height: ctx.scalar_or_param("fill_height", 0.4),
             initial_volume: ctx.inputs.transform("initial_volume"),
             surface_subdivisions: ctx.scalar_or_param("surface_subdivisions", 0.0).round() as u32,
+            liquid: LiquidOptions {
+                viscosity: f64::from(ctx.scalar_or_param("viscosity", 0.0)),
+                surface_tension: f64::from(ctx.scalar_or_param("surface_tension", 0.0)),
+            },
             surface: SurfaceOptions {
                 particle_scale: f64::from(ctx.scalar_or_param("surface_particle_scale", 3.0)),
                 smoothing: f64::from(ctx.scalar_or_param("surface_smoothing", 0.5)),

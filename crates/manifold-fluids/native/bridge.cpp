@@ -147,6 +147,7 @@ struct NativeWorld {
     bool emitter_has_enabled = false;
     bool emitter_enabled = false;
     bool whitewater_enabled = false;
+    bool viscosity_configured = false;
     Bounds emitter_bounds{};
     vmath::vec3 emitter_velocity{0.0f, 0.0f, 0.0f};
     bool obstacle_added = false;
@@ -297,6 +298,23 @@ extern "C" int manifold_fluids_world_set_surface_options(void *world,
     });
 }
 
+extern "C" int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
+                                                           double surface_tension) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        validate_nonnegative(viscosity, "liquid viscosity");
+        validate_nonnegative(surface_tension, "liquid surface tension");
+        auto *native = static_cast<NativeWorld *>(world);
+        if (viscosity > 0.0 || native->viscosity_configured) {
+            native->simulation->setViscosity(viscosity);
+            native->viscosity_configured = true;
+        }
+        native->simulation->setSurfaceTension(surface_tension);
+    });
+}
+
 extern "C" int manifold_fluids_world_set_whitewater_options(
     void *world, int enabled, uint32_t max_particles, double wavecrest_rate,
     double turbulence_rate, double min_energy, double max_energy) {
@@ -409,7 +427,16 @@ extern "C" int manifold_fluids_world_step(void *world, double dt,
         native->simulation->update(dt);
         const FluidSimulationFrameStats stats = native->simulation->getFrameStatsData();
         if (stats.pressureSolverEnabled != 0 && stats.pressureSolverSuccess == 0) {
-            throw std::runtime_error("FLIP pressure solver failed");
+            throw std::runtime_error("FLIP pressure solver failed: iterations=" +
+                std::to_string(stats.pressureSolverIterations) + "/" +
+                std::to_string(stats.pressureSolverMaxIterations) + " error=" +
+                std::to_string(stats.pressureSolverError));
+        }
+        if (stats.viscositySolverEnabled != 0 && stats.viscositySolverSuccess == 0) {
+            throw std::runtime_error("FLIP viscosity solver failed: iterations=" +
+                std::to_string(stats.viscositySolverIterations) + "/" +
+                std::to_string(stats.viscositySolverMaxIterations) + " error=" +
+                std::to_string(stats.viscositySolverError));
         }
         write_stats(stats, stats_out);
     });

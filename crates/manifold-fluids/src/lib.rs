@@ -63,6 +63,30 @@ impl SurfaceOptions {
     }
 }
 
+/// Native FLIP coefficients; these are not calibrated physical material units.
+/// Their visible effect depends on domain scale and simulation accuracy.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LiquidOptions {
+    pub viscosity: f64,
+    pub surface_tension: f64,
+}
+
+impl LiquidOptions {
+    pub fn validate(self) -> Result<(), FluidError> {
+        for (value, name) in [
+            (self.viscosity, "liquid viscosity"),
+            (self.surface_tension, "liquid surface_tension"),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(FluidError::input(format!(
+                    "{name} must be finite and non-negative"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhitewaterOptions {
     pub enabled: bool,
@@ -223,6 +247,11 @@ unsafe extern "C" {
         smoothing: f64,
         smoothing_iterations: u32,
     ) -> i32;
+    fn manifold_fluids_world_set_liquid_options(
+        world: *mut std::ffi::c_void,
+        viscosity: f64,
+        surface_tension: f64,
+    ) -> i32;
     fn manifold_fluids_world_set_whitewater_options(
         world: *mut std::ffi::c_void,
         enabled: i32,
@@ -326,6 +355,18 @@ impl FluidWorld {
             )
         };
         native_result(ok, "setting surface options")
+    }
+
+    pub fn set_liquid_options(&mut self, options: LiquidOptions) -> Result<(), FluidError> {
+        options.validate()?;
+        let ok = unsafe {
+            manifold_fluids_world_set_liquid_options(
+                self.native,
+                options.viscosity,
+                options.surface_tension,
+            )
+        };
+        native_result(ok, "setting liquid options")
     }
 
     pub fn set_whitewater_options(&mut self, options: WhitewaterOptions) -> Result<(), FluidError> {
@@ -712,8 +753,8 @@ fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, Config, Seconds, SurfaceOptions, SurfaceVertex, WhitewaterKind, WhitewaterOptions,
-        decode_surface,
+        Bounds, Config, LiquidOptions, Seconds, SurfaceOptions, SurfaceVertex, WhitewaterKind,
+        WhitewaterOptions, decode_surface,
     };
 
     fn bobj(vertices: &[[f32; 3]], triangles: &[[i32; 3]]) -> Vec<u8> {
@@ -876,6 +917,116 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_liquid_options() {
+        assert_eq!(
+            LiquidOptions::default(),
+            LiquidOptions {
+                viscosity: 0.0,
+                surface_tension: 0.0,
+            }
+        );
+        assert!(
+            LiquidOptions {
+                viscosity: f64::NAN,
+                ..LiquidOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LiquidOptions {
+                surface_tension: f64::INFINITY,
+                ..LiquidOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LiquidOptions {
+                viscosity: -1.0,
+                ..LiquidOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LiquidOptions {
+                surface_tension: -1.0,
+                ..LiquidOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn native_liquid_options_support_surface_tension_and_viscosity_reset() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [8, 8, 8],
+            cell_size: 0.5,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native world");
+        world
+            .set_liquid_options(LiquidOptions {
+                viscosity: 0.25,
+                surface_tension: 0.1,
+            })
+            .expect("liquid options");
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.5, 0.5, 0.5],
+                    max: [2.5, 2.0, 2.5],
+                },
+                [0.0, 0.0, 0.0],
+            )
+            .expect("fluid box");
+        let stats = world.step(Seconds(1.0 / 60.0)).expect("viscous step");
+        assert!(
+            stats.particles > 0,
+            "native liquid scene emitted no particles"
+        );
+        let mut surface = Vec::new();
+        world.surface(&mut surface).expect("viscous surface");
+        assert!(
+            !surface.is_empty(),
+            "native liquid scene produced no surface"
+        );
+        assert!(surface.iter().all(|vertex| {
+            vertex
+                .position
+                .iter()
+                .chain(vertex.normal.iter())
+                .all(|value| value.is_finite())
+        }));
+        world
+            .set_liquid_options(LiquidOptions::default())
+            .expect("clear liquid options");
+        world.step(Seconds(1.0 / 60.0)).expect("inviscid step");
+    }
+
+    #[test]
+    fn native_viscous_empty_world_does_not_report_solver_failure() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [8, 8, 8],
+            cell_size: 0.5,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native world");
+        world
+            .set_liquid_options(LiquidOptions {
+                viscosity: 2.0,
+                surface_tension: 0.025,
+            })
+            .unwrap();
+        let stats = world.step(Seconds(1.0 / 60.0)).expect("empty step");
+        assert_eq!(stats.particles, 0);
     }
 
     #[test]

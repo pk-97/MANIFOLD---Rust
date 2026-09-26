@@ -7,8 +7,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use manifold_core::Seconds;
 use manifold_fluids::{
-    Bounds, Config, FluidWorld, FrameStats, SurfaceOptions, SurfaceVertex, WhitewaterKind,
-    WhitewaterOptions, WhitewaterParticle,
+    Bounds, Config, FluidWorld, FrameStats, LiquidOptions, SurfaceOptions, SurfaceVertex,
+    WhitewaterKind, WhitewaterOptions, WhitewaterParticle,
 };
 
 use super::fluid_cache::{CacheMode, CacheReader, CacheWriter};
@@ -26,6 +26,7 @@ pub struct FluidSettings {
     pub fill_height: f32,
     pub initial_volume: Option<Transform>,
     pub surface_subdivisions: u32,
+    pub liquid: LiquidOptions,
     pub surface: SurfaceOptions,
     pub whitewater: WhitewaterOptions,
     pub apic: bool,
@@ -40,6 +41,7 @@ impl Default for FluidSettings {
             fill_height: 0.4,
             initial_volume: None,
             surface_subdivisions: 0,
+            liquid: LiquidOptions::default(),
             surface: SurfaceOptions::default(),
             whitewater: WhitewaterOptions {
                 max_particles: 100_000,
@@ -53,6 +55,7 @@ impl Default for FluidSettings {
 
 impl FluidSettings {
     pub fn validate(self) -> Result<(), String> {
+        self.liquid.validate().map_err(|error| error.to_string())?;
         self.surface.validate().map_err(|error| error.to_string())?;
         self.whitewater
             .validate()
@@ -337,6 +340,7 @@ impl Worker {
                         // it off the content thread along with all native work.
                         world = None;
                         let mut new = FluidWorld::new(request.settings.config()).map_err(|e| e.to_string())?;
+                        new.set_liquid_options(request.settings.liquid).map_err(|e| e.to_string())?;
                         new.set_surface_options(request.settings.surface).map_err(|e| e.to_string())?;
                         new.set_whitewater_options(request.settings.whitewater).map_err(|e| e.to_string())?;
                         let size = request.settings.domain_size;
@@ -944,6 +948,30 @@ mod tests {
             .unwrap();
         assert_ne!(runtime.epoch, epoch);
         assert!((runtime.target_time - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fluid_liquid_settings_change_restarts_the_worker_epoch() {
+        let mut runtime = FluidRuntime::default();
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        runtime
+            .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        let epoch = runtime.epoch;
+
+        let changed = FluidSettings {
+            liquid: LiquidOptions {
+                viscosity: 0.25,
+                surface_tension: 0.1,
+            },
+            ..settings
+        };
+        runtime
+            .observe(changed, controls, Seconds(TICK), 1.0, 0.0)
+            .unwrap();
+        assert_ne!(runtime.epoch, epoch);
+        assert_eq!(runtime.completed_tick, 0);
     }
 
     #[test]

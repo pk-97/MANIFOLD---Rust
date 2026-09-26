@@ -31,6 +31,8 @@ int manifold_fluids_world_add_fluid_box(void *world, const float *min, const flo
 int manifold_fluids_world_set_gravity(void *world, const float *gravity);
 int manifold_fluids_world_set_surface_options(void *world, double marker_particle_scale,
                                                double smoothing, uint32_t smoothing_iterations);
+int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
+                                              double surface_tension);
 int manifold_fluids_world_set_whitewater_options(void *world, int enabled,
                                                  uint32_t max_particles, double wavecrest_rate,
                                                  double turbulence_rate, double min_energy,

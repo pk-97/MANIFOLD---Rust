@@ -1,12 +1,12 @@
 {
   "version": 2,
-  "name": "Water — Dam Break",
-  "description": "CPU FLIP dam break with native whitewater, geometric depth absorption and localized bubble scattering. Live, Record and Playback share the same baked physics. Offline cinematic capture adds temporal and spatial sampling.",
+  "name": "Honey — Dam Break",
+  "description": "Viscous CPU FLIP liquid in the water reference scene, with amber depth absorption. Viscosity and surface tension control motion independently of the PBR material. Coefficients are art-directed for this four-unit domain, not calibrated honey measurements. Changing physical settings restarts simulation; cached geometry can be relit without resimulation.",
   "presetMetadata": {
-    "id": "WaterDamBreak",
-    "displayName": "Water — Dam Break",
+    "id": "HoneyDamBreak",
+    "displayName": "Honey — Dam Break",
     "category": "Sim",
-    "oscPrefix": "waterdambreak",
+    "oscPrefix": "honeydambreak",
     "available": true,
     "isLineBased": false,
     "params": [
@@ -80,19 +80,6 @@
         ]
       },
       {
-        "id": "whitewater",
-        "name": "Whitewater",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 1.0,
-        "wholeNumbers": true,
-        "isToggle": true,
-        "isTrigger": false,
-        "formatString": "F3",
-        "section": "Water Detail",
-        "cardVisible": true
-      },
-      {
         "id": "surface_particle_scale",
         "name": "Surface Particle Scale",
         "min": 1.0,
@@ -102,33 +89,7 @@
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F3",
-        "section": "Water Detail",
-        "cardVisible": true
-      },
-      {
-        "id": "foam_radius",
-        "name": "Foam Size",
-        "min": 0.001,
-        "max": 0.03,
-        "defaultValue": 0.005,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F3",
-        "section": "Water Detail",
-        "cardVisible": true
-      },
-      {
-        "id": "spray_radius",
-        "name": "Spray Size",
-        "min": 0.001,
-        "max": 0.02,
-        "defaultValue": 0.003,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F3",
-        "section": "Water Detail",
+        "section": "Honey Detail",
         "cardVisible": true
       },
       {
@@ -146,41 +107,28 @@
       },
       {
         "id": "water_attenuation",
-        "name": "Water Absorption Distance",
+        "name": "Honey Absorption Distance",
         "min": 0.1,
         "max": 20,
-        "defaultValue": 3,
+        "defaultValue": 1.2,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F2",
-        "section": "Water",
+        "section": "Honey",
         "cardVisible": true
       },
       {
         "id": "water_scattering",
-        "name": "Water Scattering",
+        "name": "Honey Scattering",
         "min": 0,
         "max": 2,
-        "defaultValue": 0.055,
+        "defaultValue": 0.025,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F2",
-        "section": "Water",
-        "cardVisible": true
-      },
-      {
-        "id": "bubble_density",
-        "name": "Bubble Scattering",
-        "min": 0,
-        "max": 200,
-        "defaultValue": 70,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F2",
-        "section": "Water",
+        "section": "Honey",
         "cardVisible": true
       },
       {
@@ -188,7 +136,7 @@
         "name": "Viscosity",
         "min": 0.0,
         "max": 10.0,
-        "defaultValue": 0.0,
+        "defaultValue": 2.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -277,19 +225,6 @@
         }
       },
       {
-        "id": "whitewater",
-        "label": "Whitewater",
-        "defaultValue": 1.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "fluid_surface",
-          "param": "whitewater"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "defaultValue": 2.2,
@@ -297,32 +232,6 @@
           "kind": "node",
           "nodeId": "fluid_surface",
           "param": "surface_particle_scale"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "foam_radius",
-        "label": "Foam Size",
-        "defaultValue": 0.005,
-        "target": {
-          "kind": "node",
-          "nodeId": "foam_mesh",
-          "param": "radius"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "spray_radius",
-        "label": "Spray Size",
-        "defaultValue": 0.003,
-        "target": {
-          "kind": "node",
-          "nodeId": "spray_mesh",
-          "param": "radius"
         },
         "convert": {
           "type": "Float"
@@ -343,8 +252,8 @@
       },
       {
         "id": "water_attenuation",
-        "label": "Water Absorption Distance",
-        "defaultValue": 3,
+        "label": "Honey Absorption Distance",
+        "defaultValue": 1.2,
         "target": {
           "kind": "node",
           "nodeId": "water_material",
@@ -356,8 +265,8 @@
       },
       {
         "id": "water_scattering",
-        "label": "Water Scattering",
-        "defaultValue": 0.055,
+        "label": "Honey Scattering",
+        "defaultValue": 0.025,
         "target": {
           "kind": "node",
           "nodeId": "water_material",
@@ -368,22 +277,9 @@
         }
       },
       {
-        "id": "bubble_density",
-        "label": "Bubble Scattering",
-        "defaultValue": 70,
-        "target": {
-          "kind": "node",
-          "nodeId": "bubble_material",
-          "param": "volume_particle_density"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
         "id": "viscosity",
         "label": "Viscosity",
-        "defaultValue": 0.0,
+        "defaultValue": 2.0,
         "target": {
           "kind": "node",
           "nodeId": "fluid_surface",
@@ -659,7 +555,7 @@
         },
         "whitewater": {
           "type": "Float",
-          "value": 1.0
+          "value": 0.0
         },
         "whitewater_capacity": {
           "type": "Int",
@@ -683,7 +579,7 @@
         },
         "viscosity": {
           "type": "Float",
-          "value": 0.0
+          "value": 2.0
         },
         "surface_tension": {
           "type": "Float",
@@ -727,19 +623,19 @@
       "id": 8,
       "nodeId": "water_material",
       "typeId": "node.pbr_material",
-      "handle": "Water Material",
+      "handle": "Honey Material",
       "params": {
         "color_r": {
           "type": "Float",
-          "value": 0.98
+          "value": 1.0
         },
         "color_g": {
           "type": "Float",
-          "value": 0.99
+          "value": 0.96
         },
         "color_b": {
           "type": "Float",
-          "value": 1.0
+          "value": 0.85
         },
         "metallic": {
           "type": "Float",
@@ -747,7 +643,7 @@
         },
         "roughness": {
           "type": "Float",
-          "value": 0.018
+          "value": 0.025
         },
         "transmission": {
           "type": "Float",
@@ -755,7 +651,7 @@
         },
         "ior": {
           "type": "Float",
-          "value": 1.333
+          "value": 1.47
         },
         "volume_thickness": {
           "type": "Float",
@@ -767,19 +663,19 @@
         },
         "volume_attenuation_distance": {
           "type": "Float",
-          "value": 3.0
+          "value": 1.2
         },
         "volume_attenuation_color_r": {
           "type": "Float",
-          "value": 0.35
+          "value": 0.82
         },
         "volume_attenuation_color_g": {
           "type": "Float",
-          "value": 0.72
+          "value": 0.32
         },
         "volume_attenuation_color_b": {
           "type": "Float",
-          "value": 0.8
+          "value": 0.035
         },
         "volume_geometry": {
           "type": "Float",
@@ -787,19 +683,19 @@
         },
         "volume_scattering_density": {
           "type": "Float",
-          "value": 0.055
+          "value": 0.025
         },
         "volume_scattering_color_r": {
           "type": "Float",
-          "value": 0.68
+          "value": 1.0
         },
         "volume_scattering_color_g": {
           "type": "Float",
-          "value": 0.86
+          "value": 0.62
         },
         "volume_scattering_color_b": {
           "type": "Float",
-          "value": 0.92
+          "value": 0.18
         }
       }
     },
@@ -807,7 +703,7 @@
       "id": 9,
       "nodeId": "water_object",
       "typeId": "node.scene_object",
-      "handle": "Water"
+      "handle": "Honey"
     },
     {
       "id": 10,

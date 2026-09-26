@@ -88,6 +88,8 @@ struct PresetSettings {
     resolution: u32,
     domain_size: f64,
     surface_detail: u32,
+    viscosity: f64,
+    surface_tension: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,6 +179,8 @@ struct Metadata {
     grid: [u32; 3],
     cell_size: f64,
     surface_detail: u32,
+    viscosity: f64,
+    surface_tension: f64,
     native_fixed_hz: f64,
     capture_fps: u32,
     display_transform: &'static str,
@@ -225,6 +229,16 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let resolution = preset_number(fluid, "resolution")?;
     let domain_size = preset_number(fluid, "domain_size")?;
     let surface_detail = preset_number(fluid, "surface_subdivisions")?;
+    let optional_coefficient = |name: &str| -> CaptureResult<f64> {
+        if fluid["params"].get(name).is_none() {
+            return Ok(0.0);
+        }
+        let value = preset_number(fluid, name)?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(io::Error::other(format!("invalid liquid coefficient {name}")).into());
+        }
+        Ok(value)
+    };
     if !resolution.is_finite()
         || !domain_size.is_finite()
         || !surface_detail.is_finite()
@@ -238,6 +252,8 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
         resolution: resolution.round() as u32,
         domain_size,
         surface_detail: surface_detail.round() as u32,
+        viscosity: optional_coefficient("viscosity")?,
+        surface_tension: optional_coefficient("surface_tension")?,
     })
 }
 
@@ -1136,6 +1152,8 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         grid: [preset.resolution; 3],
         cell_size: preset.domain_size / f64::from(preset.resolution),
         surface_detail: preset.surface_detail,
+        viscosity: preset.viscosity,
+        surface_tension: preset.surface_tension,
         native_fixed_hz: FIXED_HZ,
         capture_fps: options.fps,
         display_transform: if options.linear {
@@ -1185,6 +1203,20 @@ fn main() -> CaptureResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_distinguishes_honey_from_legacy_water() {
+        let honey = preset_settings(include_str!(
+            "../assets/generator-presets/HoneyDamBreak.json"
+        ))
+        .unwrap();
+        assert!(honey.viscosity > 0.0);
+        assert_eq!(honey.surface_tension, 0.0);
+        let water =
+            preset_settings(include_str!("../assets/generator-presets/WaterBasin.json")).unwrap();
+        assert_eq!(water.viscosity, 0.0);
+        assert_eq!(water.surface_tension, 0.0);
+    }
 
     #[test]
     fn temporal_samples_cover_two_fixed_ticks() {

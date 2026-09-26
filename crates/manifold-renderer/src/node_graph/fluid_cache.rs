@@ -12,7 +12,8 @@ use crate::node_graph::fluid::WhitewaterFrame;
 use manifold_fluids::FrameStats;
 
 const MAGIC: &[u8; 8] = b"MFLUIDC1";
-const FORMAT_VERSION: u32 = 3;
+const LEGACY_FORMAT_VERSION: u32 = 3;
+const FORMAT_VERSION: u32 = 4;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
 const MAX_WHITEWATER: usize = 250_000;
@@ -210,7 +211,8 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
     if &magic != MAGIC {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid magic"));
     }
-    if read_u32(reader)? != FORMAT_VERSION {
+    let version = read_u32(reader)?;
+    if !matches!(version, LEGACY_FORMAT_VERSION | FORMAT_VERSION) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unsupported format version",
@@ -230,7 +232,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             "fixed tick does not match 60 Hz",
         ));
     }
-    if read_settings(reader)? != settings {
+    if read_settings(reader, version == FORMAT_VERSION)? != settings {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "physical settings do not match",
@@ -255,11 +257,13 @@ fn write_settings(writer: &mut impl Write, settings: FluidSettings) -> io::Resul
     write_f64(writer, settings.whitewater.min_energy)?;
     write_f64(writer, settings.whitewater.max_energy)?;
     write_bool(writer, settings.apic)?;
-    write_u64(writer, settings.max_vertices as u64)
+    write_u64(writer, settings.max_vertices as u64)?;
+    write_f64(writer, settings.liquid.viscosity)?;
+    write_f64(writer, settings.liquid.surface_tension)
 }
 
-fn read_settings(reader: &mut impl Read) -> io::Result<FluidSettings> {
-    Ok(FluidSettings {
+fn read_settings(reader: &mut impl Read, includes_liquid: bool) -> io::Result<FluidSettings> {
+    let settings = FluidSettings {
         resolution: read_u32(reader)?,
         domain_size: read_f32(reader)?,
         fill_height: read_f32(reader)?,
@@ -280,7 +284,16 @@ fn read_settings(reader: &mut impl Read) -> io::Result<FluidSettings> {
         },
         apic: read_bool(reader)?,
         max_vertices: read_u64(reader)? as usize,
-    })
+        liquid: if includes_liquid {
+            manifold_fluids::LiquidOptions {
+                viscosity: read_f64(reader)?,
+                surface_tension: read_f64(reader)?,
+            }
+        } else {
+            manifold_fluids::LiquidOptions::default()
+        },
+    };
+    Ok(settings)
 }
 
 fn write_frame(
@@ -559,11 +572,37 @@ mod tests {
         )
     }
 
+    // Fixed bytes from the pre-LiquidOptions v3 manifest layout at 72e5d2cf6;
+    // this fixture must stay independent of the current v4 writer.
+    const LEGACY_V3_DEFAULT_MANIFEST: &[u8] = &[
+        0x4d, 0x46, 0x4c, 0x55, 0x49, 0x44, 0x43, 0x31, 0x03, 0x00, 0x00, 0x00, 0x37, 0x30, 0x61,
+        0x30, 0x65, 0x39, 0x35, 0x34, 0x30, 0x31, 0x38, 0x66, 0x65, 0x33, 0x39, 0x65, 0x31, 0x66,
+        0x39, 0x63, 0x33, 0x36, 0x33, 0x31, 0x32, 0x36, 0x34, 0x39, 0x38, 0x39, 0x35, 0x36, 0x39,
+        0x37, 0x35, 0x32, 0x62, 0x62, 0x37, 0x61, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x91, 0x3f,
+        0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x40, 0xcd, 0xcc, 0xcc, 0x3e, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xe0, 0x3f, 0x02, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xe0, 0x65, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x65, 0x40, 0x9a, 0x99,
+        0x99, 0x99, 0x99, 0x99, 0xb9, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e, 0x40, 0x00,
+        0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    fn write_v3_manifest(directory: &Path) {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(directory.join(MANIFEST), LEGACY_V3_DEFAULT_MANIFEST).unwrap();
+    }
+
     #[test]
     fn cache_round_trip_preserves_all_public_frame_state_and_seeks() {
         let root =
             std::env::temp_dir().join(format!("manifold-fluid-cache-{}", std::process::id()));
-        let settings = FluidSettings::default();
+        let settings = FluidSettings {
+            liquid: manifold_fluids::LiquidOptions {
+                viscosity: 0.25,
+                surface_tension: 0.1,
+            },
+            ..FluidSettings::default()
+        };
         let (vertices, whitewater, obstacle, stats) = frame();
         let directory = Arc::new(root.join("frames"));
         let writer = CacheWriter::create(directory.clone(), settings).unwrap();
@@ -626,6 +665,56 @@ mod tests {
         assert!(CacheReader::open(directory, changed).is_err());
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn cache_v4_rejects_each_liquid_coefficient_mismatch() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-liquid-mismatch-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.join("frames"));
+        let settings = FluidSettings {
+            liquid: manifold_fluids::LiquidOptions {
+                viscosity: 0.25,
+                surface_tension: 0.1,
+            },
+            ..FluidSettings::default()
+        };
+        let _writer = CacheWriter::create(directory.clone(), settings).unwrap();
+        assert!(CacheReader::open(directory.clone(), settings).is_ok());
+
+        let mut changed_viscosity = settings;
+        changed_viscosity.liquid.viscosity = 0.5;
+        assert!(CacheReader::open(directory.clone(), changed_viscosity).is_err());
+
+        let mut changed_surface_tension = settings;
+        changed_surface_tension.liquid.surface_tension = 0.2;
+        assert!(CacheReader::open(directory, changed_surface_tension).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v3_defaults_liquid_options_and_rejects_nonzero_requests() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v3-liquid-{}",
+            std::process::id()
+        ));
+        let directory = root.join("frames");
+        let settings = FluidSettings::default();
+        write_v3_manifest(&directory);
+        assert!(CacheReader::open(Arc::new(directory.clone()), settings).is_ok());
+
+        let mut changed = settings;
+        changed.liquid.viscosity = 0.25;
+        assert!(CacheReader::open(Arc::new(directory.clone()), changed).is_err());
+        changed.liquid = manifold_fluids::LiquidOptions {
+            viscosity: 0.0,
+            surface_tension: 0.1,
+        };
+        assert!(CacheReader::open(Arc::new(directory), changed).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn cache_rejects_corrupt_truncated_oversized_frames_and_directory_reuse() {
         let root = std::env::temp_dir().join(format!(

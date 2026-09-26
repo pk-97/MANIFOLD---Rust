@@ -16,6 +16,43 @@ use manifold_renderer::preset_runtime::PresetRuntime;
 
 const WATER_BASIN_JSON: &str = include_str!("../assets/generator-presets/WaterBasin.json");
 const WATER_DAM_BREAK_JSON: &str = include_str!("../assets/generator-presets/WaterDamBreak.json");
+const HONEY_DAM_BREAK_JSON: &str = include_str!("../assets/generator-presets/HoneyDamBreak.json");
+
+#[test]
+fn honey_dam_break_compiles_with_independent_liquid_and_material_controls() {
+    let registry = PrimitiveRegistry::with_builtin();
+    PresetRuntime::from_json_str(HONEY_DAM_BREAK_JSON, &registry)
+        .expect("HoneyDamBreak must compile through the production loader");
+    let def: EffectGraphDef = serde_json::from_str(HONEY_DAM_BREAK_JSON).unwrap();
+    let nodes = nodes_by_id(&def);
+    assert!(float_param(nodes["fluid_surface"], "viscosity") > 0.0);
+    assert_eq!(float_param(nodes["fluid_surface"], "surface_tension"), 0.0);
+    assert_eq!(float_param(nodes["fluid_surface"], "whitewater"), 0.0);
+    assert_eq!(float_param(nodes["fluid_surface"], "speed"), 1.0);
+    assert_eq!(float_param(nodes["water_material"], "volume_geometry"), 1.0);
+    let metadata = def.preset_metadata.as_ref().unwrap();
+    assert_eq!(metadata.id.as_str(), "HoneyDamBreak");
+    for (id, expected_node, expected_param) in [
+        ("viscosity", "fluid_surface", "viscosity"),
+        ("surface_tension", "fluid_surface", "surface_tension"),
+        (
+            "water_attenuation",
+            "water_material",
+            "volume_attenuation_distance",
+        ),
+    ] {
+        let binding = metadata.bindings.iter().find(|b| b.id == id).unwrap();
+        let BindingTarget::Node { node_id, param } = &binding.target else {
+            panic!("{id} must bind a node");
+        };
+        assert_eq!(node_id.as_str(), expected_node);
+        assert_eq!(param, expected_param);
+        assert_eq!(binding.convert, ParamConvert::Float);
+    }
+    let roundtrip: EffectGraphDef =
+        serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+    assert_eq!(roundtrip, def);
+}
 
 #[test]
 fn water_dam_break_compiles_with_separate_whitewater_populations() {
@@ -25,6 +62,8 @@ fn water_dam_break_compiles_with_separate_whitewater_populations() {
     let def: EffectGraphDef = serde_json::from_str(WATER_DAM_BREAK_JSON).unwrap();
     let nodes = nodes_by_id(&def);
     let fluid = nodes["fluid_surface"];
+    assert_eq!(float_param(fluid, "viscosity"), 0.0);
+    assert_eq!(float_param(fluid, "surface_tension"), 0.0);
     assert_eq!(float_param(fluid, "whitewater"), 1.0);
     for (population, count, object) in [
         ("foam", "foam_count", "foam_object"),
