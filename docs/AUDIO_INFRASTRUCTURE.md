@@ -68,6 +68,8 @@ capture ring (f32, interleaved) ─drain→ AudioFeatureWorker ─mono→ conten
 
 The content thread's per-tick audio work is bounded by the consumed set, not by `sends.len()`: a project with 16 sends and one bound param analyzes **one** send per tick, not sixteen. `AudioModRuntime::update()` feeds the engine's `SendFeatures` snapshot directly (no separate ring-read step now that analysis itself lives here) — a tick with no new capture data still reports the analyzer's last value (modulation holds, doesn't drop to zero).
 
+The streaming analyzer processes each complete hop on a fixed sample grid, regardless of input block size. It retains one preallocated FFT window and processes all supplied samples, including zero-padded startup hops; a large block no longer discards older hops or shifts columns to the end of a display frame. `push_with_hops` supplies `AnalyzedHop { end_sample, features }` after reduction/tracking with the matching borrowed spectrum column. `end_sample` is the exclusive count of received mono samples since construction. It is not yet a device/transport timestamp and does not reveal upstream ring loss. The existing `push` and spectrum callback APIs delegate to this path. Playback modulation still consumes the latest per-tick snapshot; physics input retention and source discontinuities remain P5 work in `FLUID_ENGINE_INTEGRATION_PLAN.md`.
+
 ## 4. The metadata path — `AudioDeviceDirectory` (planned)
 
 The new abstraction. cpal can't express channel names, stable identity, or liveness, so the metadata path drops to the native HAL behind a trait — leaving the sample path on cpal and keeping OS-specific code quarantined for future Linux/Windows backends (the same backend-neutral discipline as `manifold-gpu`).

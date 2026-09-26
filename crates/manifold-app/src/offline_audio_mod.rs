@@ -609,6 +609,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn offline_features_match_at_shared_sample_boundaries_across_frame_rates() {
+        // Exercise the actual export driver, including non-hop-aligned pre-roll.
+        // The latest snapshot is compared at matching AUDIO window ends, not at
+        // frame starts: feed_frame intentionally analyzes that frame's interval.
+        // This proves source analysis only; modulation still evaluates per tick.
+        let rate = 44_100u32;
+        let pre_roll = 4_413usize;
+        let mono: Vec<_> = (0..pre_roll + rate as usize)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                let burst = if i % 7_001 < 1_103 { 0.8 } else { 0.05 };
+                burst * ((std::f32::consts::TAU * 180.0 * t).sin()
+                    + 0.25 * (std::f32::consts::TAU * 1_800.0 * t).sin())
+            })
+            .collect();
+        let audio = empty_export_audio(rate, mono, pre_roll);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Physics control source").channels = vec![0];
+
+        let run = |fps: u32| {
+            let mut driver = OfflineAudioModDriver::new(&project, &audio, fps as f64).unwrap();
+            let mut engine = PlaybackEngine::new(Vec::new());
+            let mut shared = Vec::new();
+            for frame in 0..fps {
+                driver.feed_frame(frame, &mut engine);
+                if (frame + 1) % (fps / 6) == 0 {
+                    shared.push(engine.audio_snapshot().sends[0]);
+                }
+            }
+            shared
+        };
+        let expected = run(60);
+        assert!(expected.iter().any(|f| f.bands[0].amplitude > 0.1));
+        assert!(expected.windows(2).any(|pair| pair[0] != pair[1]));
+        assert_eq!(run(24), expected, "24 FPS changed the audio analysis");
+        assert_eq!(run(30), expected, "30 FPS changed the audio analysis");
+    }
+
     // ─── D2 source mapping ───
 
     #[test]
