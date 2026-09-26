@@ -1046,7 +1046,7 @@ impl ScenePanel {
             }
             next_cy += ROW_H;
         }
-        next_cy + ROW_GAP
+        self.build_fluid_role_action(tree, inner_x, inner_w, next_cy + ROW_GAP, row)
     }
 
     /// Object properties body: transform/material rows followed by the

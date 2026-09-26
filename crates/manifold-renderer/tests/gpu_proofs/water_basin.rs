@@ -352,3 +352,99 @@ fn scene_physics_mesh_role_renders_after_graph_round_trip() {
     std::fs::write("/tmp/manifold_fluid_mesh_role.png",
         readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
 }
+
+#[test]
+fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
+    use manifold_core::{GraphTarget, PresetTypeId, layer::Layer, project::Project};
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::scene_modifier_preset::SceneNodeRef;
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::{AddSceneFluidCommand, AddSceneObjectCommand, AssignSceneFluidRoleCommand};
+    use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
+    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+    let mut project = Project::default();
+    let preset = PresetTypeId::new("SceneStarter");
+    let baseline = bundled_preset_def(&preset).unwrap();
+    let render_id = baseline.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
+    let layer = Layer::new_generator("Assigned Mesh Fill".into(), preset, 0);
+    let target_graph = GraphTarget::Generator(layer.layer_id.clone());
+    project.timeline.layers.push(layer);
+    let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
+        metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
+        metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"), baseline.clone());
+    add_fluid.execute(&mut project);
+    assert!(add_fluid.was_applied());
+    let mut add_object = AddSceneObjectCommand::new(target_graph.clone(), vec![], render_id, 0,
+        (0.0, 0.0), vec![], vec![], vec![], baseline.clone());
+    add_object.execute(&mut project);
+    assert!(add_object.was_applied());
+    let def = project.graph_for_target(&target_graph, None).unwrap();
+    let vm = SceneVm::from_def(def).unwrap();
+    let object = vm.objects.iter().filter_map(|object| match object {
+        SceneObjectVm::Known(row) if row.group_node_id.is_some() && row.fluid_node_ids.is_empty() => Some(row),
+        _ => None,
+    }).max_by_key(|row| row.index).unwrap();
+    let object_index = object.index as u32;
+    let object_group_id = object.group_node_id.unwrap();
+    let fluid_group = def.nodes.iter().find(|node| node.group.as_ref().is_some_and(|group|
+        group.nodes.iter().any(|node| node.type_id == "node.fluid_surface"))).unwrap();
+    let fluid = fluid_group.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
+    let domain = SceneNodeRef { scope: vec![fluid_group.node_id.clone()], node: fluid.node_id.clone() };
+    let mut assign = AssignSceneFluidRoleCommand::new(target_graph.clone(), render_id, object_index,
+        domain, 0, vec![], baseline.clone());
+    assign.execute(&mut project);
+    assert!(assign.was_applied(), "{:?}", assign.rejection_reason());
+    let mut def = project.graph_for_target(&target_graph, None).unwrap().clone();
+    for group in &mut def.nodes {
+        let is_source = group.id == object_group_id;
+        let Some(body) = &mut group.group else { continue; };
+        for node in &mut body.nodes {
+            match node.type_id.as_str() {
+                "node.fluid_surface" => {
+                    for (name, value) in [("resolution", 12.0), ("fill_height", 0.0), ("emission", 0.0), ("gravity", 0.0)] {
+                        node.params.insert(name.into(), SerializedParamValue::Float { value });
+                    }
+                }
+                "node.fluid_role_source" if !is_source => {
+                    node.params.insert("enabled".into(), SerializedParamValue::Bool { value: false });
+                }
+                "node.scene_object" if is_source => {
+                    node.params.insert("visible".into(), SerializedParamValue::Float { value: 0.0 });
+                }
+                "node.transform_3d" if is_source => {
+                    node.params.insert("pos_y".into(), SerializedParamValue::Float { value: 1.3 });
+                }
+                _ => {}
+            }
+        }
+    }
+    let saved = serde_json::to_string(&def).unwrap();
+    let harness = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let build = |json: &str| PresetRuntime::from_json_str_with_device(json, &registry,
+        Arc::clone(&harness.device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
+    let mut fluid_runtime = build(&saved);
+    let object_group = def.nodes.iter_mut().find(|node| node.id == object_group_id).unwrap().group.as_mut().unwrap();
+    let role = object_group.nodes.iter_mut().find(|node| node.type_id == "node.fluid_role_source").unwrap();
+    role.params.insert("enabled".into(), SerializedParamValue::Bool { value: false });
+    let mut empty_runtime = build(&serde_json::to_string(&def).unwrap());
+    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "assigned-fluid-role");
+    let _offline = PhysicsStepScope::for_render(true);
+    for runtime in [&mut fluid_runtime, &mut empty_runtime] {
+        warmup_mesh_roles(runtime, &target, &harness.device);
+    }
+    let empty = render_frame(&mut empty_runtime, &target, &harness.device, 1);
+    let liquid = render_frame(&mut fluid_runtime, &target, &harness.device, 1);
+    assert_finite_and_nonempty(&liquid, 1);
+    let changed = empty.chunks_exact(8).zip(liquid.chunks_exact(8)).filter(|(a, b)| {
+        (0..3).any(|axis| {
+            let i = axis * 2;
+            (f16::from_le_bytes([a[i], a[i + 1]]).to_f32()
+                - f16::from_le_bytes([b[i], b[i + 1]]).to_f32()).abs() > 0.01
+        })
+    }).count();
+    assert!(changed > 100, "assigned fill must produce visible liquid: {changed} pixels");
+    std::fs::write("/tmp/manifold_assigned_fluid.png",
+        readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+}

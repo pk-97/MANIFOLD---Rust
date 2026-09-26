@@ -562,3 +562,6 @@ fn empty_scene_metadata() -> PresetMetadata {
 
 #[cfg(test)]
 mod tests;
+
+mod roles;
+pub use roles::{AssignSceneFluidRoleCommand, scene_fluid_role_eligibility};

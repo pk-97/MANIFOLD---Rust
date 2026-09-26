@@ -547,6 +547,28 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupAssignFluidRole {
+            layer_id, render_scene_node_id, object_index, domain_node_id, role,
+        } => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let domain = project.graph_for_target(&target, Some(&default))
+                    .and_then(|def| super::projection::scene::scene_node_ref_for_doc_id(def, *domain_node_id));
+                if let Some(domain) = domain {
+                    let command = manifold_editing::commands::graph::AssignSceneFluidRoleCommand::new(
+                        target, *render_scene_node_id, *object_index, domain, *role,
+                        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"),
+                        default,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+                } else {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(
+                        "The selected fluid domain is no longer available".into(),
+                    ));
+                }
+            }
+            DispatchResult::structural()
+        }
         ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
@@ -1842,6 +1864,84 @@ mod tests {
         assert_eq!(effective_def(&project, &layer_id), original);
         command.execute(&mut project);
         assert_eq!(effective_def(&project, &layer_id), added, "redo keeps stable graph identities");
+    }
+
+    #[test]
+    fn scene_physics_assign_fluid_role_is_content_owned_and_reloadable() {
+        use crate::content_command::ContentCommand;
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut insertions = Vec::new();
+        for action in [
+            ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
+        ] {
+            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                &mut selection, &mut active, &mut prefs);
+            let ContentCommand::ExecuteSelecting(mut command, _) = rx.try_recv().unwrap()
+            else { panic!("insertion must execute on content"); };
+            command.execute(&mut project);
+            assert!(command.was_applied(), "{:?}", command.rejection_reason());
+            insertions.push(command);
+        }
+        let before = effective_def(&project, &layer_id);
+        let vm = SceneVm::from_def(&before).unwrap();
+        let domains = super::super::projection::scene::fluid_domains(&before, &vm);
+        assert_eq!(domains.len(), 1);
+        let object = vm.objects.iter().filter_map(|object| match object {
+            SceneObjectVm::Known(row) if row.group_node_id.is_some()
+                && row.fluid_node_ids.is_empty() => Some(row),
+            _ => None,
+        }).max_by_key(|row| row.index).unwrap();
+        let group_id = object.group_node_id;
+        dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
+            layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
+            object_index: object.index as u32, domain_node_id: domains[0].node_doc_id, role: 1,
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
+        let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
+        else { panic!("role assignment must execute on content"); };
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
+        let after = effective_def(&project, &layer_id);
+        let role_ids = super::super::projection::scene::group_fluid_role_ids(&after, group_id);
+        assert_eq!(role_ids.len(), 1);
+        let group = after.nodes.iter().find(|node| Some(node.id) == group_id)
+            .unwrap().group.as_ref().unwrap();
+        let role = group.nodes.iter().find(|node| node.id == role_ids[0]).unwrap();
+        let sections = super::super::projection::scene::sections_for_doc_ids(Some(&after), &role_ids);
+        let metadata = after.preset_metadata.as_ref().unwrap();
+        for param in ["enabled", "role", "velocity_y", "friction"] {
+            let binding = metadata.bindings.iter().find(|binding| matches!(&binding.target,
+                BindingTarget::Node { node_id, param: name } if node_id == &role.node_id && name == param
+            )).expect("role controls bind the actual source node");
+            let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
+            assert!(sections.contains(spec.section.as_ref().unwrap()), "control appears in object inspector");
+        }
+        let mut tuned = project.clone();
+        let velocity_binding = metadata.bindings.iter().find(|binding| matches!(&binding.target,
+            BindingTarget::Node { node_id, param } if node_id == &role.node_id && param == "velocity_y"
+        )).unwrap();
+        apply_scene_param_write(&mut tuned, &layer_id, vec![group_id.unwrap()], role.id, "velocity_y", 2.5).unwrap();
+        let tuned_reload: Project = serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
+        assert_eq!(tuned_reload.timeline.layers[0].gen_params().unwrap().get_base_param(&velocity_binding.id), 2.5,
+            "edited role values must survive save/reload");
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(effective_def(&reloaded, &layer_id), after);
+        command.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), before);
+        command.execute(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), after);
+        command.undo(&mut project);
+        for insertion in insertions.iter_mut().rev() { insertion.undo(&mut project); }
+        for insertion in &mut insertions { insertion.execute(&mut project); }
+        command.execute(&mut project);
+        assert!(command.was_applied(), "role redo after recreating its object: {:?}", command.rejection_reason());
+        assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
     }
 
     #[test]

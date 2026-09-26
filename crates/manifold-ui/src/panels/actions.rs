@@ -253,6 +253,15 @@ pub enum ProjectAction {
     SceneSetupAddObject(LayerId, u32, u32),
     /// Add a liquid domain to the existing scene, with a source and material.
     SceneSetupAddFluid(LayerId, u32),
+    /// Assign a selected model to an explicit fluid domain. The app resolves
+    /// the domain snapshot id to a stable scoped graph reference before queuing.
+    SceneSetupAssignFluidRole {
+        layer_id: LayerId,
+        render_scene_node_id: u32,
+        object_index: u32,
+        domain_node_id: u32,
+        role: u32,
+    },
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),
@@ -929,6 +938,21 @@ pub enum RootAction {
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
     SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
+    SceneSetupFluidRoleClicked {
+        layer_id: LayerId,
+        render_scene_node_id: u32,
+        object_index: u32,
+        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
+        button_node_id: crate::node::NodeId,
+    },
+    SceneSetupFluidDomainClicked {
+        layer_id: LayerId,
+        render_scene_node_id: u32,
+        object_index: u32,
+        role: u32,
+        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
+        anchor: Rect,
+    },
     /// Open the object-target and preview menu for a scene modifier card.
     SceneModifierObjectsClicked(LayerId, NodeId),
     /// Open the shared preset menu for one exact scene modifier card.

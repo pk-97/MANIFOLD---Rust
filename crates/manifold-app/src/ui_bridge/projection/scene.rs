@@ -5,6 +5,69 @@
 use crate::ui_root::UIRoot;
 use manifold_core::project::Project;
 
+/// Resolve a UI snapshot's document id into the stable graph address used by
+/// content commands. Node ids are globally unique, including group bodies.
+pub(crate) fn scene_node_ref_for_doc_id(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    wanted: u32,
+) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
+    fn visit(
+        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+        wanted: u32,
+        scope: &mut Vec<manifold_core::NodeId>,
+    ) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
+        for node in nodes {
+            if node.id == wanted && !node.node_id.is_empty() {
+                return Some(manifold_core::scene_modifier_preset::SceneNodeRef {
+                    scope: scope.clone(), node: node.node_id.clone(),
+                });
+            }
+            if let Some(group) = &node.group && !node.node_id.is_empty() {
+                scope.push(node.node_id.clone());
+                let found = visit(&group.nodes, wanted, scope);
+                scope.pop();
+                if found.is_some() { return found; }
+            }
+        }
+        None
+    }
+    visit(&def.nodes, wanted, &mut Vec::new())
+}
+
+pub(crate) fn fluid_domains(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &manifold_renderer::node_graph::scene_vm::SceneVm,
+) -> Vec<manifold_ui::panels::scene_setup_panel::FluidDomainOption> {
+    fn is_domain(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], id: u32) -> bool {
+        nodes.iter().any(|node| (node.id == id && node.type_id == "node.fluid_surface")
+            || node.group.as_ref().is_some_and(|group| is_domain(&group.nodes, id)))
+    }
+    let mut result = Vec::new();
+    for object in &scene.objects {
+        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
+        for &id in &row.fluid_node_ids {
+            if is_domain(&def.nodes, id)
+                && !result.iter().any(|option: &manifold_ui::panels::scene_setup_panel::FluidDomainOption| option.node_doc_id == id)
+            {
+                result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
+                    node_doc_id: id, name: row.name.clone(),
+                });
+            }
+        }
+    }
+    result
+}
+
+pub(crate) fn group_fluid_role_ids(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    group_id: Option<u32>,
+) -> Vec<u32> {
+    let Some(group) = group_id.and_then(|id| def.nodes.iter().find(|node| node.id == id))
+        .and_then(|node| node.group.as_ref()) else { return Vec::new(); };
+    group.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source")
+        .map(|node| node.id).collect()
+}
+
 /// Resolve a modifier's controls through its scoped stable node identity.
 /// The first binding owns a macro; secondary fan-out targets do not acquire
 /// another copy of its UI. Custom exposed names need no numeric prefix.

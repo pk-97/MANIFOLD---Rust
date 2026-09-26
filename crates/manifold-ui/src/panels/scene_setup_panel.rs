@@ -30,6 +30,8 @@ mod row_gesture_tests;
 mod material_inspector;
 #[path = "scene_setup_panel/object_modifiers.rs"]
 mod object_modifiers;
+#[path = "scene_setup_panel/fluid_roles.rs"]
+mod fluid_roles;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -78,6 +80,7 @@ const OBJ_OFF_FRAME: u64 = 33;
 const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
 const OBJ_OFF_PHYSICS: u64 = 36;
+const OBJ_OFF_FLUID_ROLE: u64 = 37;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -435,6 +438,7 @@ pub struct ObjectKnownRow {
     pub physics_enabled: bool,
     pub physics_available: bool,
     pub physics_imported: bool,
+    pub fluid_role_available: bool,
 }
 
 /// One Objects-section row (D3/D4).
@@ -568,6 +572,12 @@ pub enum CameraRowVm {
     Custom,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct FluidDomainOption {
+    pub node_doc_id: u32,
+    pub name: String,
+}
+
 /// Full live-panel view model for one selected generator layer's scene —
 /// translated 1:1 from `manifold_renderer::node_graph::scene_vm::SceneVm`'s
 /// Header/Environment/Atmosphere sections by `state_sync` (this crate can't
@@ -588,6 +598,7 @@ pub struct SceneSetupVm {
     pub atmosphere: AtmosphereRowVm,
     /// P2: the Objects section's rows, in `mesh_k` order.
     pub objects: Vec<ObjectRowVm>,
+    pub fluid_domains: Vec<FluidDomainOption>,
     /// P3: the Lights section's rows, in `light_k` order. Never capped —
     /// REALTIME_3D D4's shadow-caster limit (K=4) is the renderer's job; the
     /// panel reports the true count and renders every row regardless.
@@ -990,6 +1001,7 @@ pub struct ScenePanel {
     object_frame_ids: Vec<(NodeId, u32)>,
     object_enable_physics_ids: Vec<(NodeId, usize)>,
     object_disable_physics_ids: Vec<(NodeId, usize)>,
+    object_fluid_role_ids: Vec<(NodeId, usize)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -1093,6 +1105,7 @@ impl Default for ScenePanel {
             object_frame_ids: Vec::new(),
             object_enable_physics_ids: Vec::new(),
             object_disable_physics_ids: Vec::new(),
+            object_fluid_role_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
             expanded_groups: std::collections::HashMap::new(),
@@ -1375,6 +1388,7 @@ impl ScenePanel {
         self.submesh_duplicate_ids.clear();
         self.object_enable_physics_ids.clear();
         self.object_disable_physics_ids.clear();
+        self.object_fluid_role_ids.clear();
         self.add_modifier_button_id = None;
         self.skin_source_ids.clear();
         self.skin_target_ids.clear();
@@ -2638,6 +2652,14 @@ impl ScenePanel {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
                             vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
                         )));
+                    } else if let Some((_, index)) = self.object_fluid_role_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
+                            layer_id: vm.layer_id.clone(),
+                            render_scene_node_id: vm.scene_root_node_id,
+                            object_index: *index as u32,
+                            domains: vm.fluid_domains.clone(),
+                            button_node_id: *node_id,
+                        }));
                     } else if let Some((_, index)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
                             vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
@@ -3111,6 +3133,7 @@ mod tests {
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
             objects: Vec::new(),
+            fluid_domains: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
             camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
@@ -3174,9 +3197,11 @@ mod tests {
                     physics_enabled: false,
                     physics_available: false,
                     physics_imported: false,
+                    fluid_role_available: false,
                 })),
                 ObjectRowVm::Custom { index: 1 },
             ],
+            fluid_domains: Vec::new(),
             lights: vec![
                 LightRowVm::Known(Box::new(LightKnownRow {
                     index: 0,
@@ -3419,6 +3444,36 @@ mod tests {
         let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
         assert!(texts.contains(&"Physics"), "imported object should expose the Physics property");
         assert!(!texts.iter().any(|text| text.contains("Split into 8")), "legacy split action must stay out of the Physics property");
+    }
+
+    #[test]
+    fn scene_physics_fluid_role_click_carries_selected_object_and_domains() {
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.fluid_role_available = true;
+        let expected_index = row.index as u32;
+        let expected_scene = vm.scene_root_node_id;
+        let domains = vec![FluidDomainOption { node_doc_id: 99, name: "Liquid B".into() }];
+        vm.fluid_domains = domains.clone();
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm.clone())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let button = panel.object_fluid_role_ids[0].0;
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: button, pos: Vec2::ZERO, modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
+            layer_id, render_scene_node_id, object_index, domains: choices, ..
+        })] if layer_id == &vm.layer_id && *render_scene_node_id == expected_scene
+            && *object_index == expected_index && choices == &domains));
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.fluid_role_available = false;
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert!(panel.object_fluid_role_ids.is_empty());
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary

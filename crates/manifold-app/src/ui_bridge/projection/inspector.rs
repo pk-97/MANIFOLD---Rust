@@ -287,6 +287,8 @@ pub fn sync_inspector_data(
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
+                            let fluid_domains = def.as_ref()
+                                .map(|def| super::scene::fluid_domains(def, &vm)).unwrap_or_default();
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
                             // intensity [0,4] / fill [0,2]; `atmosphere`'s
@@ -590,6 +592,9 @@ pub fn sync_inspector_data(
                                         // node kind).
                                         let mut object_doc_ids = vec![*object_node_id];
                                         object_doc_ids.extend_from_slice(&known.fluid_node_ids);
+                                        if parent_group_id.is_none() && let Some(def) = def.as_ref() {
+                                            object_doc_ids.extend(super::scene::group_fluid_role_ids(def, *group_node_id));
+                                        }
                                         if let Some(physics) = physics {
                                             if physics.enabled { object_doc_ids.push(physics.body_node_id); }
                                         } else if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
@@ -681,6 +686,11 @@ pub fn sync_inspector_data(
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available: *physics_imported || physics.is_some(),
                                                 physics_imported: *physics_imported,
+                                                fluid_role_available: parent_group_id.is_none() && def.as_ref().is_some_and(|def| {
+                                                    manifold_editing::commands::graph::scene_fluid_role_eligibility(
+                                                        def, vm.scene_root_node_id, *index as u32,
+                                                    ).is_ok()
+                                                }),
                                             },
                                         ))
                                     }
@@ -1104,6 +1114,7 @@ pub fn sync_inspector_data(
                                 environment,
                                 atmosphere,
                                 objects,
+                                fluid_domains,
                                 lights,
                                 camera,
                                 camera_sections,

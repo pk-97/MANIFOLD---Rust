@@ -2,7 +2,7 @@
 
 <!-- index: FLIP integration through shared manifold-physics forces, scene authoring, timed controls, rigid-body interaction, baking and export. -->
 
-**Status:** IN PROGRESS · 2026-09-26 · Codex. Shared native force adapters, Add Fluid authoring, and the P3 mesh bridge are implemented locally. Typed mesh roles now reach the fluid worker and renderer; P4 scene assignment, timed routing and remaining acceptance are in progress.
+**Status:** IN PROGRESS · 2026-09-26 · Codex. Shared native force adapters, Add Fluid authoring, and the P3 mesh bridge are implemented locally. Typed mesh roles reach the fluid worker and renderer, and grouped scene objects can receive fluid roles. P4 lifecycle completion, timed routing and remaining acceptance are in progress.
 **Prerequisites:** existing CPU FLIP work at `3683a086d66bd5edf68328a7fdb427515258292b` on `codex/flip-fluids-engine`; main through `209b99d90` and collision work through `d2bc03f50` are integrated locally. Collision UI gaps are tracked in BUG-vglg.4 (preparation controls) and BUG-vglg.5 (compound-child modifier addressing).
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6. Keep work in the existing worktree; Peter has deferred landing. No public push is authorised by this plan.
 
@@ -261,6 +261,10 @@ Implemented locally at `80765ba81`: eight focused mesh tests, the strengthened i
 - **Forbidden:** a new convex-decomposition pipeline, retained dangling native field/source pointers, box-only fallbacks for rejected meshes.
 
 ### P4 — Arbitrary scene role authoring
+
+Local checkpoint: the Scene Panel can assign Initial Fill, Inflow, Drain or Collider to whole grouped cubes and static imported glTF objects, choosing among the scene's fluid domains. The undoable command uses a stable domain reference, ordinary typed group boundaries and the imported source's shared file binding. Imported material parts assemble with their local transforms before closed-volume validation; the parent pose applies once and moves without recooking. Multiple roles and domains, edited-value reload, and undo/redo across creation are covered by focused tests. A Metal proof confirms an assigned object's fill produces visible liquid; the existing imported rigid-body proof still passes.
+
+Role removal/retargeting, duplication, source-selector edit propagation, domain bounds/proxy presentation and the full imported-container UI acceptance remain open. Bare/custom objects, GPU deformation and Box3D-driven poses remain rejected. The command can address a domain anywhere in the same graph; the Scene Panel offers only domains discovered in its scene. P4 is not complete.
 
 - **Entry/read-back:** P3; §4; current scene-reference/mesh asset/proxy APIs from the collision work. Verify old preset migration seam.
 - **Graph boundary:** a CPU-only `FluidRole` wire carries immutable prepared shared triangle meshes, a role (Initial Fill/Inflow/Outflow/Collider), transform and live controls. It carries no native handle. Follow the existing `RigidBody` wire's backend storage, pending-state and snapshot rules. Preparation reuses `MeshSelection`, `transform_vertices` and `prepare_colliders`; closed indexed source meshes preserve concavity, while explicit proxy choice uses the existing cooked hulls. Scene role commands connect these descriptions to the chosen fluid domain using existing document node references. No new scene-object identity database or GPU mesh readback is introduced for asset-backed roles.

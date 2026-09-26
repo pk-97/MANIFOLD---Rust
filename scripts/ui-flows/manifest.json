@@ -22,19 +22,22 @@
       "scene-card",
       "scene-panel",
       "scene-skin",
-      "material-inspector"
+      "material-inspector",
+      "scene-fluid-role-assignment"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
       "scene-skin",
-      "material-inspector"
+      "material-inspector",
+      "scene-fluid-role-assignment"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
       "scene-card",
-      "scene-panel"
+      "scene-panel",
+      "scene-fluid-role-assignment"
     ],
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
       "scene-setup",
@@ -51,7 +54,8 @@
       "select-and-inspect",
       "set-param",
       "calibrated-param",
-      "scene-skin"
+      "scene-skin",
+      "scene-fluid-role-assignment"
     ],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "scene-setup",
@@ -122,6 +126,7 @@
   },
   "flows": {
     "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-role-assignment": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",
     "scene-imported-physics": "gltfscene",

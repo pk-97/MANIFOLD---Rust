@@ -1749,6 +1749,49 @@ impl UIRoot {
             // SAME `SceneSetupAddModifier` action the chips fired directly.
             // `button_node_id` resolves the anchor directly, same
             // resolve-at-open convention as `SceneSetupEnumClicked` above.
+            PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
+                layer_id, render_scene_node_id, object_index, domains, button_node_id,
+            }) => {
+                let anchor = self.tree.get_bounds(*button_node_id);
+                let mut items = Vec::new();
+                if domains.is_empty() {
+                    items.push(DropdownItem::disabled("Add a Fluid to this scene first"));
+                } else {
+                    if domains.len() == 1 {
+                        items.push(DropdownItem::disabled(&domains[0].name));
+                    }
+                    for (role, label) in [(0, "Initial Fill"), (1, "Inflow"), (2, "Drain"), (3, "Collider")] {
+                        let action = if domains.len() == 1 {
+                            PanelAction::Project(ProjectAction::SceneSetupAssignFluidRole {
+                                layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
+                                object_index: *object_index, domain_node_id: domains[0].node_doc_id, role,
+                            })
+                        } else {
+                            PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
+                                layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
+                                object_index: *object_index, role, domains: domains.clone(), anchor,
+                            })
+                        };
+                        items.push(DropdownItem::new(label).with_action(action));
+                    }
+                }
+                self.open_dropdown_typed(items, anchor);
+                true
+            }
+            PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
+                layer_id, render_scene_node_id, object_index, role, domains, anchor,
+            }) => {
+                let items = domains.iter().map(|domain| {
+                    DropdownItem::new(&domain.name).with_action(PanelAction::Project(
+                        ProjectAction::SceneSetupAssignFluidRole {
+                            layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
+                            object_index: *object_index, domain_node_id: domain.node_doc_id, role: *role,
+                        },
+                    ))
+                }).collect();
+                self.open_dropdown_typed(items, *anchor);
+                true
+            }
             PanelAction::Root(RootAction::SceneSetupAddModifierClicked(layer_id, group_node_id, button_node_id)) => {
                 let trigger = self.tree.get_bounds(*button_node_id);
                 let items: Vec<DropdownItem> = manifold_ui::panels::scene_setup_panel::MESH_MODIFIER_CHOICES
