@@ -1307,57 +1307,12 @@ impl Application {
                     continue;
                 }
                 PanelAction::Params(ParamsAction::PasteEffects) => {
-                    // Browser popup paste button → route through same logic as Cmd+V
-                    let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    let target = match tab {
-                        manifold_ui::InspectorTab::Master => {
-                            manifold_editing::commands::effect_target::EffectTarget::Master
-                        }
-                        manifold_ui::InspectorTab::Layer
-                        | manifold_ui::InspectorTab::Group
-                        | manifold_ui::InspectorTab::Clip => {
-                            let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                            manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                layer_id,
-                            }
-                        }
-                    };
-                    let effects_len = match tab {
-                        manifold_ui::InspectorTab::Master => {
-                            self.local_project.settings.master_effects.len()
-                        }
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
-                            .active_layer_id
-                            .as_ref()
-                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                            .and_then(|(_, l)| l.effects.as_ref())
-                            .map(|e| e.len())
-                            .unwrap_or(0),
-                        manifold_ui::InspectorTab::Clip => self
-                            .selection
-                            .primary_selected_clip_id
-                            .as_ref()
-                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                            .map(|c| c.effects.len())
-                            .unwrap_or(0),
-                    };
-                    let clones = self.ws.ui_root.effect_clipboard.get_paste_clones();
-                    for (offset, fx) in clones.into_iter().enumerate() {
-                        // Fresh, independent copy: new EffectId + dropped hardware
-                        // bindings. Drop group membership too — cross-chain paste,
-                        // the source's group isn't in the destination chain.
-                        let mut fx = fx.duplicated();
-                        fx.group_id = None;
-                        let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
-                            target.clone(),
-                            fx,
-                            effects_len + offset,
-                        );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
+                    self.edit_inspector_cards(manifold_ui::panels::actions::CardEditAction::Paste);
+                    needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::Params(ParamsAction::EditCards(action)) => {
+                    self.edit_inspector_cards(*action);
                     needs_structural_sync = true;
                     continue;
                 }
@@ -3277,7 +3232,9 @@ impl Application {
         // forced rebuild's own invalidate_all repaints the inspector, so no
         // separate invalidate is needed here. Reduced motion settles instantly, so
         // this is false at once — no per-frame rebuild churn.
-        if self.ws.ui_root.inspector.drawer_anim_active() {
+        if self.ws.ui_root.inspector.drawer_anim_active()
+            || self.ws.ui_root.scene_setup_panel.object_cards_animating()
+        {
             self.needs_rebuild = true;
         }
 

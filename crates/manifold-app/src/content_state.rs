@@ -7,7 +7,7 @@
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType, OscSyncMode};
-use manifold_core::{Beats, EffectId, Seconds};
+use manifold_core::{Beats, EffectId, LayerId, Seconds};
 use std::sync::Arc;
 
 /// Live state of the editor's node-output preview, pushed each frame so the
@@ -85,6 +85,24 @@ pub struct UndoRedoEvent {
 pub struct GraphEditDiagnostic {
     pub sequence: u64,
     pub message: String,
+}
+
+/// Authoritative selection of scene-modifier cards created by one content edit.
+/// IDs are minted on the content thread, so the UI must consume this update
+/// instead of predicting them from a pre-edit snapshot.
+#[derive(Clone, Debug)]
+pub struct ModifierSelectionUpdate {
+    pub sequence: u64,
+    pub layer_id: manifold_core::LayerId,
+    pub ids: Vec<manifold_core::NodeId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObjectModifierSelectionUpdate {
+    pub sequence: u64,
+    pub layer_id: LayerId,
+    pub owner_id: u32,
+    pub node_doc_id: u32,
 }
 
 /// State snapshot sent from the content thread to the UI thread.
@@ -241,6 +259,10 @@ pub struct ContentState {
     /// Most recent rejected graph-edit diagnostic. Persistent across snapshots
     /// so the UI can observe it once without relying on `data_version`.
     pub graph_edit_diagnostic: Option<GraphEditDiagnostic>,
+    /// Most recent authoritative selection update for newly created scene
+    /// modifier cards. Persistent across snapshots for sequence-gated UI use.
+    pub modifier_selection_update: Option<ModifierSelectionUpdate>,
+    pub object_modifier_selection_update: Option<ObjectModifierSelectionUpdate>,
 
     // ── Ableton bridge ──────────────────────────────────────────
     /// Ableton session data for UI dropdown population.
@@ -553,6 +575,8 @@ impl Default for ContentState {
             warmup: None,
             undo_redo_event: None,
             graph_edit_diagnostic: None,
+            modifier_selection_update: None,
+            object_modifier_selection_update: None,
             ableton_session: None,
             ableton_connected: false,
             ableton_transport_enabled: false,

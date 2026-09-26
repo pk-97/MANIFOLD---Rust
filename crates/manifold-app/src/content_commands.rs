@@ -3,7 +3,7 @@
 //! to the appropriate subsystem on the content thread.
 
 use manifold_core::types::ClockAuthority;
-use manifold_core::{Beats, Seconds};
+use manifold_core::{Beats, LayerId, NodeId, Seconds};
 use manifold_playback::transport_controller::TransportController;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_playback::renderer::ClipRenderer;
@@ -80,6 +80,37 @@ fn prepare_project_save(
     engine.clear_automation_previews();
     commit_recording(engine, editing, true);
     engine.project().map(|p| (p.clone(), editing.data_version()))
+}
+
+fn scene_modifier_ids(
+    project: &manifold_core::project::Project,
+    layer_id: &LayerId,
+) -> Option<Vec<NodeId>> {
+    crate::graph_target::resolve(
+        project, &manifold_core::GraphTarget::Generator(layer_id.clone()),
+    )
+        .map(|graph| {
+            graph
+                .scene_modifiers
+                .iter()
+                .map(|modifier| modifier.id.clone())
+                .collect()
+        })
+}
+
+fn newly_added_modifier_ids(previous: &[NodeId], current: &[NodeId]) -> Vec<NodeId> {
+    current
+        .iter()
+        .filter(|id| !previous.iter().any(|previous_id| previous_id == *id))
+        .cloned()
+        .collect()
+}
+
+fn newly_added_object_modifier_id(previous: &[u32], current: &[u32]) -> Option<u32> {
+    current
+        .iter()
+        .copied()
+        .find(|id| !previous.iter().any(|previous_id| previous_id == id))
 }
 
 /// Look up the existing Ableton mapping for a target (for undo snapshot).
@@ -728,6 +759,40 @@ impl ContentThread {
         self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
     }
 
+    fn publish_modifier_selection(&mut self, layer_id: LayerId, ids: Vec<NodeId>) {
+        let sequence = self
+            .modifier_selection_update
+            .as_ref()
+            .map_or(1, |event| event.sequence.wrapping_add(1));
+        self.modifier_selection_update = Some(
+            crate::content_state::ModifierSelectionUpdate {
+                sequence,
+                layer_id,
+                ids,
+            },
+        );
+    }
+
+    fn publish_object_modifier_selection(
+        &mut self,
+        layer_id: LayerId,
+        owner_id: u32,
+        node_doc_id: u32,
+    ) {
+        let sequence = self
+            .object_modifier_selection_update
+            .as_ref()
+            .map_or(1, |event| event.sequence.wrapping_add(1));
+        self.object_modifier_selection_update = Some(
+            crate::content_state::ObjectModifierSelectionUpdate {
+                sequence,
+                layer_id,
+                owner_id,
+                node_doc_id,
+            },
+        );
+    }
+
     /// Apply finished recording takes through the same undo service as edits.
     pub(crate) fn commit_automation_recording(&mut self, finish_active: bool) {
         commit_recording(&mut self.engine, &mut self.editing_service, finish_active);
@@ -953,10 +1018,81 @@ impl ContentThread {
                 }
             }
             ContentCommand::SceneModifier(action) => {
+                let selection_layer = match &action {
+                    crate::scene_modifier_edit::SceneModifierAction::Add(layer_id, _)
+                    | crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer_id, _)
+                    | crate::scene_modifier_edit::SceneModifierAction::Paste(layer_id, _) => {
+                        Some(layer_id.clone())
+                    }
+                    _ => None,
+                };
+                let previous_ids = selection_layer.as_ref().and_then(|layer_id| {
+                    self.engine
+                        .project()
+                        .and_then(|project| scene_modifier_ids(project, layer_id))
+                });
                 let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
                     .and_then(|project| crate::scene_modifier_edit::build_action(project, action));
                 match result {
-                    Ok(command) => { self.handle_command(ContentCommand::Execute(command)); },
+                    Ok(command) => {
+                        self.handle_command(ContentCommand::Execute(command));
+                        if let (Some(layer_id), Some(previous_ids)) =
+                            (selection_layer, previous_ids)
+                            && let Some(project) = self.engine.project()
+                            && let Some(current_ids) = scene_modifier_ids(project, &layer_id)
+                        {
+                            let inserted = newly_added_modifier_ids(&previous_ids, &current_ids);
+                            if !inserted.is_empty() {
+                                self.publish_modifier_selection(layer_id, inserted);
+                            }
+                        }
+                    }
+                    Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
+            ContentCommand::ObjectModifier(action) => {
+                let (layer_id, owner_id) = match &action {
+                    crate::object_modifier_transfer::ObjectModifierAction::Add {
+                        layer_id, owner_id, ..
+                    }
+                    | crate::object_modifier_transfer::ObjectModifierAction::Paste {
+                        layer_id, owner_id, ..
+                    }
+                    | crate::object_modifier_transfer::ObjectModifierAction::Duplicate {
+                        layer_id, owner_id, ..
+                    } => (layer_id.clone(), *owner_id),
+                };
+                let previous_ids = self
+                    .engine
+                    .project()
+                    .and_then(|project| {
+                        crate::object_modifier_transfer::modifier_node_ids(
+                            project, &layer_id, owner_id,
+                        )
+                        .ok()
+                    });
+                let result = self
+                    .engine
+                    .project()
+                    .ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| {
+                        crate::object_modifier_transfer::build_action(project, action)
+                    });
+                match result {
+                    Ok(command) => {
+                        self.handle_command(ContentCommand::Execute(command));
+                        if let Some(previous_ids) = previous_ids
+                            && let Some(project) = self.engine.project()
+                            && let Ok(current_ids) =
+                                crate::object_modifier_transfer::modifier_node_ids(
+                                    project, &layer_id, owner_id,
+                                )
+                            && let Some(node_doc_id) =
+                                newly_added_object_modifier_id(&previous_ids, &current_ids)
+                        {
+                            self.publish_object_modifier_selection(layer_id, owner_id, node_doc_id);
+                        }
+                    }
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
@@ -1238,6 +1374,8 @@ impl ContentThread {
             // ── Project lifecycle ──────────────────────────────────
             ContentCommand::LoadProject(project) => {
                 self.commit_automation_recording(true);
+                self.modifier_selection_update = None;
+                self.object_modifier_selection_update = None;
                 if let Some(ref mut alp) = self.audio_layer_playback {
                     alp.reset();
                 }
@@ -2045,5 +2183,48 @@ mod recording_save_tests {
         assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().is_none_or(Vec::is_empty));
         assert!(editing.redo(engine.project_mut().unwrap()));
         assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, lane.points);
+    }
+}
+
+#[cfg(test)]
+mod modifier_selection_tests {
+    use super::{newly_added_modifier_ids, newly_added_object_modifier_id, scene_modifier_ids};
+    use manifold_core::NodeId;
+
+    #[test]
+    fn first_modifier_selection_can_compare_against_the_catalog_graph() {
+        let mut project = manifold_core::project::Project::default();
+        let layer = manifold_core::layer::Layer::new_generator(
+            "Scene".into(), manifold_core::PresetTypeId::new("SceneStarter"), 0,
+        );
+        let layer_id = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+        assert!(scene_modifier_ids(&project, &layer_id).is_some());
+    }
+
+    #[test]
+    fn selection_update_contains_only_ids_created_by_the_edit() {
+        let existing = vec![NodeId::new("existing")];
+        let current = vec![existing[0].clone(), NodeId::new("new-a"), NodeId::new("new-b")];
+        assert_eq!(
+            newly_added_modifier_ids(&existing, &current),
+            vec![NodeId::new("new-a"), NodeId::new("new-b")]
+        );
+    }
+
+    #[test]
+    fn rejected_or_noop_edits_have_no_created_ids() {
+        let existing = vec![NodeId::new("existing")];
+        assert!(newly_added_modifier_ids(&existing, &existing).is_empty());
+        assert!(newly_added_modifier_ids(&existing, &[]).is_empty());
+    }
+
+    #[test]
+    fn object_selection_update_contains_the_new_document_id_only() {
+        assert_eq!(
+            newly_added_object_modifier_id(&[4, 9], &[4, 12, 9]),
+            Some(12)
+        );
+        assert_eq!(newly_added_object_modifier_id(&[4, 9], &[4, 9]), None);
     }
 }

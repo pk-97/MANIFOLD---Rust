@@ -2608,6 +2608,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 embedded_presets_fingerprint: 0,
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
+                modifier_selection_update: None,
+                object_modifier_selection_update: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };

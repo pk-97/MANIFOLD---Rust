@@ -64,6 +64,9 @@ pub trait TimelineInputHost {
     /// Paste effects. Returns true if handled.
     fn handle_effect_paste(&mut self) -> bool;
 
+    /// Duplicate selected cards without replacing the clipboard.
+    fn handle_effect_duplicate(&mut self) -> bool { false }
+
     /// Delete selected effects. Returns true if handled.
     fn handle_effect_delete(&mut self) -> bool;
 

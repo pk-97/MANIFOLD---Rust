@@ -10,6 +10,21 @@ use manifold_core::LayerId;
 
 /// One preset menu vocabulary for all card families; addressing is captured by
 /// the caller, independently of the current editor or later selection changes.
+fn card_edit_menu_items(can_paste: bool, effects: bool, grouped: bool) -> Vec<DropdownItem> {
+    use manifold_ui::panels::actions::CardEditAction::*;
+    let mut entries = vec![("Cut", Cut), ("Copy", Copy), ("Paste", Paste), ("Duplicate", Duplicate), ("Delete", Delete)];
+    if effects {
+        entries.push(("Group", Group));
+        if grouped { entries.push(("Ungroup", Ungroup)); }
+    }
+    entries.into_iter().map(|(label, edit)| {
+        let mut item = DropdownItem::new(label).with_action(PanelAction::Params(ParamsAction::EditCards(edit)));
+        item.enabled = edit != Paste || can_paste;
+        item.separator_after = edit == Delete;
+        item
+    }).collect()
+}
+
 fn preset_menu_items(
     modified: bool,
     action: impl Fn(manifold_ui::panels::actions::PresetActionKind) -> ParamsAction,
@@ -1512,29 +1527,35 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
+            PanelAction::Root(RootAction::ObjectModifierCardRightClicked(address)) => {
+                self.object_cards_have_focus = true;
+                self.scene_setup_panel.select_object_modifier_by_address(
+                    &address.layer_id, address.group_node_id.unwrap_or(address.object_id),
+                    address.node_doc_id, &mut self.tree,
+                );
+                let items = card_edit_menu_items(self.object_modifier_clipboard.is_some(), false, false);
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             PanelAction::Root(RootAction::SceneModifierCardRightClicked(layer, id)) => {
-                let selected = self.inspector.selected_modifier_ids_for(layer, id);
+                self.object_cards_have_focus = false;
+                self.inspector.select_modifier_for_context_menu(layer, id);
+                self.inspector.apply_selection_visuals(&mut self.tree);
                 let target = manifold_ui::view::UiGraphTarget::SceneModifier {
                     owner: Box::new(manifold_ui::view::UiGraphTarget::Generator(layer.clone())),
                     modifier_id: id.clone(),
                 };
-                let mut items = vec![
-                    DropdownItem::new("Copy").with_action(PanelAction::Project(
-                        ProjectAction::SceneModifiersCopy(layer.clone(), selected.clone()))),
-                ];
-                if self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0) {
-                    items.push(DropdownItem::new("Paste").with_action(PanelAction::Project(
-                        ProjectAction::SceneModifiersPaste(layer.clone()))));
-                }
-                items.push(
-                    DropdownItem::new("Duplicate").with_action(PanelAction::Project(
-                        ProjectAction::SceneModifiersDuplicate(layer.clone(), selected.clone()))),
-                );
-                items.push(DropdownItem::new("Remove").with_action(PanelAction::Project(
-                        ProjectAction::SceneModifiersRemove(layer.clone(), selected))).with_separator(),
-                );
+                let mut items = card_edit_menu_items(self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0), false, false);
                 items.extend(preset_menu_items(self.inspector.modifier_has_graph_mod(layer, id),
                     |kind| ParamsAction::PresetAction(target.clone(), kind)));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
+            PanelAction::Params(ParamsAction::EffectGroupRightClicked(group_id)) => {
+                self.object_cards_have_focus = false;
+                self.inspector.select_rack_group(group_id, false);
+                self.inspector.apply_selection_visuals(&mut self.tree);
+                let items = card_edit_menu_items(self.effect_clipboard.has_content(), true, true);
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
@@ -1554,6 +1575,7 @@ impl UIRoot {
                 true
             }
             PanelAction::Params(ParamsAction::CardRightClicked(gpt)) => {
+                self.object_cards_have_focus = false;
                 // Generators carry Copy/Paste (their own clipboard); both kinds
                 // share Make Unique / Export / Import. The menu CONTENTS differ
                 // per kind by design (the legitimately-divergent shell); the
@@ -1562,6 +1584,9 @@ impl UIRoot {
                 // target, so the dispatch runs one path for effects + generators.
                 let mut items = Vec::new();
                 if let GraphParamTarget::Effect(clicked_idx) = gpt {
+                    self.inspector.select_effect_for_context_menu(*clicked_idx);
+                    self.inspector.apply_selection_visuals(&mut self.tree);
+                    items.extend(card_edit_menu_items(self.effect_clipboard.has_content(), true, self.inspector.selection_has_group()));
                     let selected = self.inspector.get_selected_effect_indices();
                     let selected_indices = if selected.contains(clicked_idx) {
                         selected
@@ -1729,6 +1754,13 @@ impl UIRoot {
                 let items: Vec<DropdownItem> = manifold_ui::panels::scene_setup_panel::MESH_MODIFIER_CHOICES
                     .iter()
                     .map(|(label, type_id)| {
+                        // These nodes require a second authored source. A card
+                        // picker cannot create a meaningful connection for it.
+                        match *type_id {
+                            "node.push_mesh" => return DropdownItem::disabled("Displace by Texture — connect a texture in Graph"),
+                            "node.morph_mesh" => return DropdownItem::disabled("Morph — connect a target mesh in Graph"),
+                            _ => {}
+                        }
                         DropdownItem::new(label).with_action(PanelAction::Project(ProjectAction::SceneSetupAddModifier(
                             layer_id.clone(),
                             *group_node_id,

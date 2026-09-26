@@ -101,13 +101,40 @@ impl ParamCardPanel {
     /// — it is set independently via [`set_layer_id`](Self::set_layer_id)
     /// before configure (the generator config doesn't carry it).
     pub fn configure(&mut self, config: &ParamSurface) {
+        self.configure_with_object_modifier(config, None);
+    }
+
+    /// Configure an object-owned modifier through the same shared card
+    /// projection used by effect cards. The object address is kept alongside
+    /// the surface so stable card identity and Scene Setup removal routing do
+    /// not require a second renderer or synthetic parameter ids.
+    pub fn configure_object_modifier(
+        &mut self,
+        config: &ParamSurface,
+        address: crate::param_surface::ObjectModifierCardInfo,
+    ) {
+        self.configure_with_object_modifier(config, Some(address));
+    }
+
+    fn configure_with_object_modifier(
+        &mut self,
+        config: &ParamSurface,
+        object_modifier: Option<crate::param_surface::ObjectModifierCardInfo>,
+    ) {
+        let previous_collapsed = self.is_collapsed;
+        let same_object_modifier = self.object_modifier == object_modifier;
+        self.object_modifier = object_modifier;
         self.kind = config.kind;
         self.effect_index = config.effect_index;
         self.effect_id = config.effect_id.clone();
         self.name = config.title.clone();
         self.enabled = config.enabled;
         self.relight = config.relight;
-        self.is_collapsed = config.collapsed;
+        self.is_collapsed = if self.object_modifier.is_some() && same_object_modifier {
+            previous_collapsed
+        } else {
+            config.collapsed
+        };
         self.sync_collapse_anim();
         self.supports_envelopes = config.supports_envelopes;
         self.rows = config.rows.clone();
@@ -290,7 +317,7 @@ impl ParamCardPanel {
     /// relight is a 2D per-instance concept with no meaning on a scene
     /// modifier card (a permanent chrome difference between card species).
     fn relight_block_height(&self) -> f32 {
-        if self.modifier.is_some() {
+        if self.modifier.is_some() || self.object_modifier.is_some() {
             return 0.0;
         }
         // Feature disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
@@ -544,7 +571,7 @@ impl ParamCardPanel {
     /// between card species, not state-conditional visibility.
     fn effect_header_row(&self, header_bg: Color32) -> View {
         let author = self.context == CardContext::Author;
-        let modifier = self.modifier.is_some();
+        let object_modifier = self.object_modifier.is_some();
         let transparent_btn = |hover: Color32, pressed: Color32| UIStyle {
             bg_color: Color32::TRANSPARENT,
             hover_bg_color: hover,
@@ -589,16 +616,19 @@ impl ParamCardPanel {
                         .key(KEY_NAME),
                 ),
         );
-        // Every modifier uses the common chrome toggle. The projection omits
-        // the authored enabled parameter's duplicate row.
-        row = row.child(
-            View::button(if self.enabled { "ON" } else { "OFF" })
-                .fixed(TOGGLE_W, 16.0)
-                .style(toggle_btn_style(self.enabled))
-                .inert()
-                .key(KEY_TOGGLE),
-        );
-        if modifier {
+        // Inspector modifier cards use the common enable and object-target
+        // controls. Object modifier cards deliberately omit both: enable and
+        // target selection belong to the owning object/stack context.
+        if !object_modifier {
+            row = row.child(
+                View::button(if self.enabled { "ON" } else { "OFF" })
+                    .fixed(TOGGLE_W, 16.0)
+                    .style(toggle_btn_style(self.enabled))
+                    .inert()
+                    .key(KEY_TOGGLE),
+            );
+        }
+        if self.modifier.is_some() {
             row = row
                 .child(
                     View::button("OBJ")
@@ -609,6 +639,19 @@ impl ParamCardPanel {
                 );
             // Remove × — structural inverse through the generic remove command;
             // the delete-collapse exit animation rides the existing machinery.
+            row = row.child(
+                View::button("\u{2715}")
+                    .fixed(CHEVRON_W, 16.0)
+                    .style(UIStyle {
+                        text_color: color::CHEVRON_COLOR,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
+                    })
+                    .inert()
+                    .key(KEY_MODIFIER_REMOVE),
+            );
+        } else if object_modifier {
             row = row.child(
                 View::button("\u{2715}")
                     .fixed(CHEVRON_W, 16.0)
@@ -746,8 +789,9 @@ impl ParamCardPanel {
         // card keeps the cog and packs object-target and remove controls to its
         // left.
         let chevron_x = x + w - PADDING - CHEVRON_W;
-        let modifier = self.modifier.is_some();
-        let (badge_right, content_left) = if modifier {
+        let modifier = self.modifier.is_some() || self.object_modifier.is_some();
+        let object_modifier = self.object_modifier.is_some();
+        let (badge_right, content_left) = if self.modifier.is_some() {
             let cog_x = chevron_x - GAP - COG_W;
             let remove_x = cog_x - GAP - CHEVRON_W;
             let chrome_left = remove_x
@@ -763,6 +807,17 @@ impl ParamCardPanel {
                     0.0
                 };
             (chrome_left, content_left)
+        } else if object_modifier {
+            let cog_x = chevron_x - GAP - COG_W;
+            let remove_x = cog_x - GAP - CHEVRON_W;
+            let content_left = x
+                + PADDING
+                + if self.context == CardContext::Perform {
+                    DRAG_HANDLE_W + GAP
+                } else {
+                    0.0
+                };
+            (remove_x, content_left)
         } else {
             let cog_x = chevron_x - GAP - COG_W;
             let toggle_x = cog_x - GAP - TOGGLE_W;

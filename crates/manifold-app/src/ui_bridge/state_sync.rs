@@ -156,6 +156,27 @@ pub fn push_state(
             ui.last_graph_edit_diagnostic_sequence = Some(sequence);
         }
 
+        if let Some(update) = &content_state.modifier_selection_update {
+            if ui.last_modifier_selection_sequence != Some(update.sequence) {
+                ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
+                ui.inspector.apply_selection_visuals(tree);
+                ui.last_modifier_selection_sequence = Some(update.sequence);
+            }
+        } else {
+            ui.last_modifier_selection_sequence = None;
+        }
+
+        if let Some(update) = &content_state.object_modifier_selection_update {
+            if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
+                ui.scene_setup_panel.select_object_modifier_by_address(
+                    &update.layer_id, update.owner_id, update.node_doc_id, tree,
+                );
+                ui.last_object_modifier_selection_sequence = Some(update.sequence);
+            }
+        } else {
+            ui.last_object_modifier_selection_sequence = None;
+        }
+
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
             ui.ableton_session = Some(std::sync::Arc::clone(session));

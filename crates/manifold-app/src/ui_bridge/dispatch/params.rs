@@ -364,7 +364,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // No model mutation.
             DispatchResult::structural()
         }
-        ParamsAction::EffectCardClicked(_) => {
+        ParamsAction::EffectCardClicked(_) | ParamsAction::EffectSelectionChanged => {
             // Deselect generator card when an effect card is clicked
             if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
                 gp.update_selection_visual(&mut ctx.ui.tree, false);
@@ -431,6 +431,26 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
             }
+            DispatchResult::structural()
+        }
+        ParamsAction::EffectMove { tab, layer_id, ids, before, destination_group, preserve_groups } => {
+            let target = match tab {
+                InspectorTab::Master => EffectTarget::Master,
+                _ => match layer_id { Some(id) => EffectTarget::Layer { layer_id: id.clone() }, None => return DispatchResult::handled() },
+            };
+            let command = manifold_editing::commands::effect_groups::MoveEffectsToGroupCommand::new(
+                target, ids.clone(), before.clone(), destination_group.clone(), *preserve_groups,
+            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+            DispatchResult::structural()
+        }
+        ParamsAction::EffectGroupCollapsed { tab, layer_id, group_id, collapsed } => {
+            let target = match tab {
+                InspectorTab::Master => EffectTarget::Master,
+                _ => match layer_id { Some(id) => EffectTarget::Layer { layer_id: id.clone() }, None => return DispatchResult::handled() },
+            };
+            let command = manifold_editing::commands::effect_groups::SetGroupCollapsedCommand::new(target, group_id.clone(), *collapsed);
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::structural()
         }
         ParamsAction::EffectReorder(from_idx, to_idx) => {
@@ -976,7 +996,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::structural()
         }
 
-        ParamsAction::PasteEffects => DispatchResult::handled(),
+        ParamsAction::PasteEffects | ParamsAction::EditCards(_) | ParamsAction::EffectGroupRightClicked(_) => DispatchResult::handled(),
 
         // Label right-clicks are consumed by try_open_dropdown — shouldn't reach here
         ParamsAction::ParamLabelRightClick(..) => {

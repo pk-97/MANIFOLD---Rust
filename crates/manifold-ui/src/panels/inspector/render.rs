@@ -9,6 +9,10 @@ fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
     crate::param_surface::stable_key(&format!("inspector.effect_group.add_modifier:{group_id}"))
 }
 
+fn rack_group_key(group_id: &EffectGroupId, part: &str) -> u64 {
+    crate::param_surface::stable_key(&format!("inspector.effect_group.{part}:{group_id}"))
+}
+
 const GROUP_CONTAINER_NAME: &str = "inspector.effect_group.container";
 
 fn rack_group_scope_text(group: &RackGroupConfig) -> String {
@@ -40,11 +44,21 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
             ..UIStyle::default()
         })
         .child(
-            View::label(format!("▾ {}", group.name))
+            View::button(if group.collapsed { "▸" } else { "▾" })
+                .w(Sizing::Fixed(24.0)).fill_h()
+                .style(crate::chrome::components::button_secondary_style())
+                .name("inspector.effect_group.collapse")
+                .key(rack_group_key(&group.id, "collapse"))
+                .inert(),
+        )
+        .child(
+            View::button(format!("⠿ {}", group.name))
                 .fill_w()
                 .fill_h()
                 .font(color::FONT_SUBHEADING)
                 .text_color(color::TEXT_PRIMARY_C32)
+                .name("inspector.effect_group.header")
+                .key(rack_group_key(&group.id, "header"))
                 .inert(),
         )
         .child(
@@ -57,7 +71,7 @@ fn rack_group_header_view(group: &RackGroupConfig) -> View {
     let label = if group.mask_effect_id.is_some() {
         "Change Mask"
     } else {
-        "+ Add Modifier"
+        "+ Add Mask"
     };
     view = view.child(
         View::button(label)
@@ -109,9 +123,11 @@ fn rack_group_span(
         if member_group.is_none_or(|group| group.id != *group_id) {
             break;
         }
-        height += cards[end].compute_height();
+        if !groups[group_idx].collapsed {
+            height += cards[end].compute_height();
+        }
         end += 1;
-        if end < cards.len()
+        if !groups[group_idx].collapsed && end < cards.len()
             && rack_group_for_effect(groups, cards[end].effect_id())
                 .is_some_and(|group| group.id == *group_id)
         {
@@ -129,10 +145,11 @@ fn build_rack_group_frame(
     width: f32,
     height: f32,
     group_add_modifier_btns: &mut Vec<(NodeId, EffectGroupId)>,
+    group_nodes: &mut Vec<RackGroupNodes>,
 ) {
-    chrome::materialize(
+    let frame_ids = chrome::materialize(
         tree,
-        &rack_group_container_view(),
+        &rack_group_container_view().key(rack_group_key(&group.id, "frame")),
         Rect::new(x, y, width, height),
     );
     let header_ids = chrome::materialize(
@@ -140,6 +157,10 @@ fn build_rack_group_frame(
         &rack_group_header_view(group),
         Rect::new(x, y, width, InspectorCompositePanel::RACK_HEADER_H),
     );
+    let node = |part: &str| header_ids.iter().find(|(key, _)| *key == rack_group_key(&group.id, part)).map(|(_, id)| *id);
+    if let (Some(header), Some(collapse), Some((_, frame))) = (node("header"), node("collapse"), frame_ids.first()) {
+        group_nodes.push(RackGroupNodes { group_id: group.id.clone(), frame: *frame, header, collapse });
+    }
     if let Some((_, button_id)) = header_ids
         .iter()
         .find(|(key, _)| *key == rack_group_add_modifier_key(&group.id))
@@ -149,8 +170,8 @@ fn build_rack_group_frame(
 }
 
 impl InspectorCompositePanel {
-    const RACK_HEADER_H: f32 = 28.0;
-    const RACK_INDENT: f32 = color::SPACE_XL;
+    pub(super) const RACK_HEADER_H: f32 = 28.0;
+    pub(super) const RACK_INDENT: f32 = color::SPACE_XL;
     const RACK_GROUP_BOTTOM_PAD: f32 = color::SPACE_M;
 
     /// Set which tab rungs are available (display order, local→global) and which
@@ -365,6 +386,7 @@ impl InspectorCompositePanel {
         // mid-collapse over the new selection. Drop them instantly instead, and
         // abandon any in-flight death carried over from the old scope.
         if scope != self.layer_scope_id.as_ref() {
+            self.selected_layer_ids.clear();
             self.effects[Self::SCOPE_LAYER].clear();
             self.layer_dying.clear();
             self.layer_scope_id = scope.cloned();
@@ -394,10 +416,14 @@ impl InspectorCompositePanel {
                 .gen_params
                 .take()
                 .filter(|p| p.owning_layer_id() == layer_id.as_ref());
+            let preserved_collapse = reused.as_ref().map(ParamCardPanel::is_collapsed);
             let mut panel = reused.unwrap_or_default();
             panel.set_context(self.card_context);
             panel.set_layer_id(layer_id);
             panel.configure(cfg);
+            if let Some(collapsed) = preserved_collapse {
+                panel.set_collapsed(collapsed);
+            }
             // The LED composite preview (LED_STRIPS_DESIGN MVP-P4) rides the
             // same card lifecycle as `card_context` — applied to the reused
             // or freshly-built card either way.
@@ -472,6 +498,7 @@ impl InspectorCompositePanel {
         picker: Vec<crate::param_surface::ModifierPickerEntry>,
     ) {
         if scope != self.modifier_scope_id.as_ref() {
+            self.selected_modifier_ids.clear();
             self.modifier_cards.clear();
             self.modifier_dying.clear();
             self.modifier_scope_id = scope.cloned();
@@ -481,6 +508,7 @@ impl InspectorCompositePanel {
         let existing = std::mem::take(&mut self.modifier_cards);
         self.modifier_cards =
             Self::reconcile_cards(existing, configs, &mut self.modifier_dying, self.card_context);
+        self.selected_modifier_ids.retain(|id| configs.iter().any(|config| config.modifier.as_ref().is_some_and(|modifier| modifier.instance_id == *id)));
     }
 
     /// Set the chrome context applied to every card this panel owns —
@@ -539,7 +567,17 @@ impl InspectorCompositePanel {
             .map(|cfg| match existing.iter().position(|c| c.matches_effect_config(cfg)) {
                 Some(pos) => {
                     let mut card = existing.remove(pos);
+                    let preserved_collapse = card
+                        .modifier_info()
+                        .zip(cfg.modifier.as_ref())
+                        .filter(|(old, new)| {
+                            old.instance_id == new.instance_id && old.layer_id == new.layer_id
+                        })
+                        .map(|_| card.is_collapsed());
                     card.configure(cfg);
+                    if let Some(collapsed) = preserved_collapse {
+                        card.set_collapsed(collapsed);
+                    }
                     card
                 }
                 None => {
@@ -654,6 +692,7 @@ impl InspectorCompositePanel {
         self.add_layer_effect_btn = None;
         self.add_modifier_btn = None;
         self.group_add_modifier_btns.clear();
+        self.group_nodes.clear();
 
         // Range truthfulness (the single invariant the rest of this panel leans
         // on): a sub-panel's (first_node, node_count) must describe what it built
@@ -811,8 +850,13 @@ impl InspectorCompositePanel {
                                 inner_w,
                                 group_height,
                                 &mut self.group_add_modifier_btns,
+                                &mut self.group_nodes,
                             );
                             cy += Self::RACK_HEADER_H;
+                            if groups[group_idx].collapsed {
+                                card_idx = group_end;
+                                cy += SECTION_GAP;
+                            }
                             while card_idx < group_end {
                                 let card = &mut self.effects[Self::SCOPE_MASTER][card_idx];
                                 let card_h = card.compute_height();
@@ -943,8 +987,13 @@ impl InspectorCompositePanel {
                                 inner_w,
                                 group_height,
                                 &mut self.group_add_modifier_btns,
+                                &mut self.group_nodes,
                             );
                             cy += Self::RACK_HEADER_H;
+                            if groups[group_idx].collapsed {
+                                card_idx = group_end;
+                                cy += SECTION_GAP;
+                            }
                             while card_idx < group_end {
                                 let card = &mut self.effects[Self::SCOPE_LAYER][card_idx];
                                 let card_h = card.compute_height();
@@ -1053,6 +1102,7 @@ mod tests {
         RackGroupConfig {
             id: EffectGroupId::new("group"),
             name: "Modifier Group".to_string(),
+            collapsed: false,
             member_ids: vec![EffectId::new("mask"), EffectId::new("effect")],
             mask_effect_id,
         }

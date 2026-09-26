@@ -326,6 +326,10 @@ pub struct ParamCardPanel {
     /// the header differences (no relight), and the stack/remove
     /// controls. `None` on every effect/generator card.
     modifier: Option<crate::param_surface::ModifierCardInfo>,
+    /// Object-scoped modifier card address used by Scene Setup. This shares
+    /// the effect row renderer but deliberately has slimmer chrome: object
+    /// enable/target/relight controls belong to the owning object card.
+    object_modifier: Option<crate::param_surface::ObjectModifierCardInfo>,
     modifier_remove_btn_id: Option<NodeId>,
     modifier_objects_btn_id: Option<NodeId>,
 
@@ -522,6 +526,7 @@ impl ParamCardPanel {
             led_band_interior_h: 0.0,
             led_band_version: 0,
             modifier: None,
+            object_modifier: None,
             modifier_remove_btn_id: None,
             modifier_objects_btn_id: None,
             cached_enabled: true,
@@ -570,6 +575,9 @@ impl ParamCardPanel {
         if let Some(m) = &self.modifier {
             return GraphParamTarget::GeneratorOf(m.layer_id.clone());
         }
+        if let Some(m) = &self.object_modifier {
+            return GraphParamTarget::GeneratorOf(m.layer_id.clone());
+        }
         match self.kind {
             ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
             ParamCardKind::Generator => GraphParamTarget::Generator,
@@ -602,6 +610,32 @@ impl ParamCardPanel {
         self.modifier.as_ref()
     }
 
+    pub(crate) fn object_modifier_info(
+        &self,
+    ) -> Option<&crate::param_surface::ObjectModifierCardInfo> {
+        self.object_modifier.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn modifier_remove_node_id(&self) -> Option<NodeId> {
+        self.modifier_remove_btn_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn modifier_objects_node_id(&self) -> Option<NodeId> {
+        self.modifier_objects_btn_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn toggle_node_id(&self) -> Option<NodeId> {
+        self.toggle_btn_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn relight_node_id(&self) -> Option<NodeId> {
+        self.relight_btn_id
+    }
+
     /// The card ROOT's identity key (D4): cards are siblings under the
     /// inspector column, so the root's `View::key` — which now pins the
     /// durable WidgetId — must be the card's stable identity, never a
@@ -613,6 +647,15 @@ impl ParamCardPanel {
                 "scene_modifier:{}:{}",
                 m.layer_id,
                 m.instance_id
+            ));
+        }
+        if let Some(m) = &self.object_modifier {
+            return crate::param_surface::stable_key(&format!(
+                "scene_object_modifier:{}:{}:{}:{}",
+                m.layer_id,
+                m.object_id,
+                m.group_node_id.unwrap_or(m.object_id),
+                m.node_doc_id,
             ));
         }
         match self.kind {

@@ -18,7 +18,19 @@ use crate::types::{
     PresetTypeId, TonemapCurve,
 };
 use crate::view::{UiGraphTarget, UiSegmentShape};
-use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, NodeId, ParamId};
+use manifold_foundation::{AudioSendId, Beats, ClipId, EffectId, LayerId, NodeId, ParamId};
+
+/// Card menus and keyboard shortcuts share these editing operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardEditAction {
+    Copy,
+    Cut,
+    Paste,
+    Duplicate,
+    Delete,
+    Group,
+    Ungroup,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum AutomationShape {
@@ -504,6 +516,9 @@ pub enum ParamsAction {
     /// structural rebuild so every card's drawers hide/show. No model mutation.
     ModsCompactToggled,
     EffectCardClicked(usize),
+    EffectSelectionChanged,
+    EditCards(CardEditAction),
+    EffectGroupRightClicked(manifold_foundation::EffectGroupId),
     /// A scene-modifier card was selected. The stable instance id is the UI
     /// selection address; it is never converted to an effect position.
     ModifierCardClicked(NodeId),
@@ -533,6 +548,21 @@ pub enum ParamsAction {
     EffectReorder(usize, usize),
     /// Reorder multiple effect cards as a group: (sorted source indices, target index).
     EffectReorderGroup(Vec<usize>, usize),
+    /// Move stable card identities to an explicit stack/group boundary.
+    EffectMove {
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+        ids: Vec<EffectId>,
+        before: Option<EffectId>,
+        destination_group: Option<manifold_foundation::EffectGroupId>,
+        preserve_groups: bool,
+    },
+    EffectGroupCollapsed {
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+        group_id: manifold_foundation::EffectGroupId,
+        collapsed: bool,
+    },
     GenTypeClicked(Option<LayerId>), // layer_id
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the inspector "+ Add Modifier"
     /// button on a scene layer's scope. Opens the modifier picker (one entry
@@ -890,6 +920,8 @@ pub enum RootAction {
     SceneModifierObjectsClicked(LayerId, NodeId),
     /// Open the shared preset menu for one exact scene modifier card.
     SceneModifierCardRightClicked(LayerId, NodeId),
+    /// Context menu for the exact object modifier under the pointer.
+    ObjectModifierCardRightClicked(crate::param_surface::ObjectModifierCardInfo),
     /// Preview one exact scene object through a scene modifier instance.
     PreviewSceneModifierObject(
         LayerId,

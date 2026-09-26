@@ -219,7 +219,8 @@ must debug blind — the exact BoomBox/near-plane class of failure, `gltf_import
 Rejected: merging by re-running `assemble_import_graph` and splicing defs wholesale
 (duplicates chrome, collides ids — the hurried implementer's move, forbidden by name).
 
-**D6 — The modifier stack is graph splicing inside the object's group, with a curated
+**D6 — The modifier stack is graph splicing at the selected object's mesh input (inside
+its group when present), with a curated
 vocabulary.** "Add modifier" on an object row opens a fixed list (display name → type_id):
 Bend (`node.bend_mesh`), Twist (`node.twist_mesh`), Taper (`node.taper_mesh`), Inflate
 (`node.push_along_normals`), Displace by Texture (`node.push_mesh`), Morph (`node.morph_mesh`),
@@ -233,7 +234,16 @@ composite commands in `manifold-editing/commands/graph.rs`, each one undo unit, 
 - `MoveMeshModifierCommand` — reorder within the stack (unsplice + resplice).
 The stack the panel shows IS the wire chain (D3's trace) — no stored list, so graph edits
 made in the editor and stack edits made in the panel are the same facts. Modifier rows show
-the atom's own params (amount/axis/center …) as ordinary rows. An object whose mesh chain
+the atom's own params (amount/axis/center …) inside shared `ParamCardPanel` cards in wire
+order. Controls are selected from the generator `ParamSurface` by scoped binding identity;
+they are not repeated in detached property sections. Cards share collapse, row gestures,
+mapping, drawers, context-menu editing, drag feedback, and release-outside cancellation.
+Copy/paste and duplicate preserve authored values and modulation with fresh identities;
+each structural gesture is one admitted, undoable content-thread edit. Graph-connected
+side inputs must resolve in the destination scope or paste is rejected with a reason.
+Displace by Texture and Morph require a texture/target connection in Graph; their picker
+entries explain that requirement and do not insert an incomplete node.
+An object whose mesh chain
 the trace couldn't parse shows "custom chain — edit in graph" and the add button disabled
 for that object (never a blind splice into a topology we didn't understand).
 **Instrument meaning:** this is Peter's opening ask made literal — the "add effect" button
