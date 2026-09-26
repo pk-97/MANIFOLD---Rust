@@ -20,6 +20,8 @@ use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
 
 pub(crate) mod automation;
+mod card_edit;
+mod object_card_edit;
 
 /// Wrapper implementing TimelineInputHost by borrowing Application fields.
 ///
@@ -181,6 +183,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
 
     fn handle_effect_select_all(&mut self) -> bool {
+        if self.ui_root.object_cards_have_focus { return true; }
         let selected = if self.ui_root.inspector.has_modifier_selection() {
             self.ui_root.inspector.select_all_modifiers()
         } else { self.ui_root.inspector.select_all_effects() };
@@ -193,28 +196,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_copy(&mut self) -> bool {
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Copy) { return true; }
         // An effect selection takes precedence on a scene layer: the modifier
         // scope is also present while the generator card is displayed.
         if self.ui_root.inspector.has_effect_selection() {
-            let tab = self.ui_root.inspector.last_effect_tab();
-            let indices = self.ui_root.inspector.get_selected_effect_indices();
-            let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
-            if let Some(effects) = effects {
-                let selected: Vec<_> = indices
-                    .iter()
-                    .filter_map(|&i| effects.get(i).cloned())
-                    .collect();
-                if selected.len() == 1 {
-                    self.ui_root.effect_clipboard.copy_single(&selected[0]);
-                } else if !selected.is_empty() {
-                    self.ui_root.effect_clipboard.copy_all(&selected);
-                }
-                if !selected.is_empty() {
-                    self.ui_root.scene_modifier_clipboard = None;
-                }
-                return !selected.is_empty();
-            }
-            return false;
+            self.copy_effect_selection();
+            return true;
         }
         // Selected modifiers own Cmd+C within their generator scope.
         if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
@@ -239,52 +226,68 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_cut(&mut self) -> bool {
-        if !self.ui_root.inspector.has_effect_selection() {
-            return false;
-        }
-        let tab = self.ui_root.inspector.last_effect_tab();
-        let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Cut) { return true; }
+        if self.ui_root.inspector.has_effect_selection() {
+            self.copy_effect_selection();
+            let target = self.card_effect_target();
+            let selected = self.ui_root.inspector.selected_effect_ids();
+            let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+            manifold_editing::commands::effect_target::with_effects(self.project, &target, |effects, _| {
+                for (index, effect) in effects.iter().enumerate().rev().filter(|(_, effect)| selected.contains(&effect.id)) {
+                    commands.push(Box::new(RemoveEffectCommand::new(target.clone(), effect.clone(), index)));
+                }
+            });
+            if !commands.is_empty() {
+                ContentCommand::send(
+                    self.content_tx,
+                    ContentCommand::ExecuteBatch(commands, "Cut effects".into()),
+                );
+            }
 
-        // Copy first
-        let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
-        if let Some(effects) = effects {
-            let selected: Vec<_> = indices
-                .iter()
-                .filter_map(|&i| effects.get(i).cloned())
-                .collect();
-            if selected.len() == 1 {
-                self.ui_root.effect_clipboard.copy_single(&selected[0]);
-            } else if !selected.is_empty() {
-                self.ui_root.effect_clipboard.copy_all(&selected);
-            }
-            if !selected.is_empty() {
-                self.ui_root.scene_modifier_clipboard = None;
-            }
-        }
-
-        // Remove in reverse index order (Unity lines 242-246)
-        for &idx in indices.iter().rev() {
-            let effects_slice =
-                resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
-            if let Some(effects) = effects_slice
-                && let Some(fx) = effects.get(idx)
-            {
-                let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(self.project);
-                ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
-            }
+            let ui = &mut self.ui_root;
+            ui.inspector.clear_effect_selection(&mut ui.tree);
+            *self.needs_structural_sync = true;
+            *self.needs_rebuild = true;
+            return true;
         }
 
-        let ui = &mut self.ui_root;
-        ui.inspector.clear_effect_selection(&mut ui.tree);
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
-        true
+        // Selected modifiers own Cmd+X within their generator scope. Capture
+        // before dispatching the content-owned removal so paste remains valid.
+        if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
+            && self.ui_root.inspector.has_modifier_selection()
+        {
+            let selected = self.ui_root.inspector.selected_modifier_ids();
+            match crate::scene_modifier_transfer::ModifierClipboard::capture(
+                self.project,
+                &layer,
+                &selected,
+            ) {
+                Ok(clipboard) => {
+                    self.ui_root.set_scene_modifier_clipboard(Some(clipboard));
+                    ContentCommand::send(
+                        self.content_tx,
+                        ContentCommand::SceneModifier(
+                            crate::scene_modifier_edit::SceneModifierAction::RemoveMany(
+                                layer, selected,
+                            ),
+                        ),
+                    );
+                    *self.needs_structural_sync = true;
+                    *self.needs_rebuild = true;
+                }
+                Err(reason) => ContentCommand::send(
+                    self.content_tx,
+                    ContentCommand::GraphEditRejected(reason),
+                ),
+            }
+            return true;
+        }
+
+        false
     }
 
     fn handle_effect_paste(&mut self) -> bool {
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Paste) { return true; }
         // Paste remains in the scene-modifier context, including an empty
         // destination stack. The content thread owns the actual mutation.
         if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
@@ -307,47 +310,34 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
             return true;
         }
-        if !self.ui_root.effect_clipboard.has_content() {
-            return false;
+        self.paste_effect_selection()
+    }
+
+    fn handle_effect_duplicate(&mut self) -> bool {
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Duplicate) { return true; }
+        if self.ui_root.inspector.has_modifier_selection() {
+            if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
+                ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
+                    crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer, self.ui_root.inspector.selected_modifier_ids()),
+                ));
+                *self.needs_structural_sync = true;
+                *self.needs_rebuild = true;
+            }
+            return true;
         }
-        let tab = self.ui_root.inspector.last_effect_tab();
-        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
-
-        // Insert after last selected card, or append to end (Unity lines 257-263)
-        let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let effects_len =
-            resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection)
-                .map(|e| e.len())
-                .unwrap_or(0);
-        let insert_at = if let Some(&last) = indices.last() {
-            last + 1
-        } else {
-            effects_len
-        };
-
-        let clones = self.ui_root.effect_clipboard.get_paste_clones();
-        for (offset, fx) in clones.into_iter().enumerate() {
-            // Fresh, independent copy: new EffectId + dropped hardware bindings.
-            // Drop group membership too — this is a cross-chain paste, so the
-            // source's group doesn't exist in the destination chain.
-            let mut fx = fx.duplicated();
-            fx.group_id = None;
-            let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
-                target.clone(),
-                fx,
-                insert_at + offset,
-            );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(self.project);
-            ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
-        }
-
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
+        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        let clipboard = std::mem::take(&mut self.ui_root.effect_clipboard);
+        let modifiers = self.ui_root.scene_modifier_clipboard.take();
+        let objects = self.ui_root.object_modifier_clipboard.take();
+        if self.copy_effect_selection() { self.paste_effect_selection(); }
+        self.ui_root.effect_clipboard = clipboard;
+        self.ui_root.scene_modifier_clipboard = modifiers;
+        self.ui_root.object_modifier_clipboard = objects;
         true
     }
 
     fn handle_effect_delete(&mut self) -> bool {
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Delete) { return true; }
         if self.ui_root.inspector.has_modifier_selection() {
             if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
                 let ids = self.ui_root.inspector.selected_modifier_ids();
@@ -361,25 +351,14 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.ui_root.inspector.has_effect_selection() {
             return false;
         }
-        let tab = self.ui_root.inspector.last_effect_tab();
-        let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
-
-        // Collect commands in reverse index order (Unity lines 274-289)
+        let target = self.card_effect_target();
+        let selected = self.ui_root.inspector.selected_effect_ids();
         let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-        for &idx in indices.iter().rev() {
-            let effects_slice =
-                resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
-            if let Some(effects) = effects_slice
-                && let Some(fx) = effects.get(idx)
-            {
-                commands.push(Box::new(RemoveEffectCommand::new(
-                    target.clone(),
-                    fx.clone(),
-                    idx,
-                )));
+        manifold_editing::commands::effect_target::with_effects(self.project, &target, |effects, _| {
+            for (index, effect) in effects.iter().enumerate().rev().filter(|(_, effect)| selected.contains(&effect.id)) {
+                commands.push(Box::new(RemoveEffectCommand::new(target.clone(), effect.clone(), index)));
             }
-        }
+        });
 
         if !commands.is_empty() {
             ContentCommand::send(
@@ -399,12 +378,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_group(&mut self) -> bool {
-        let tab = self.ui_root.inspector.last_effect_tab();
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Group) { return true; }
         let indices = self.ui_root.inspector.get_selected_effect_indices();
         if indices.is_empty() {
             return false;
         }
-        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
+        let target = self.card_effect_target();
         let cmd = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
             target,
             indices,
@@ -420,31 +399,21 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_ungroup(&mut self) -> bool {
-        let tab = self.ui_root.inspector.last_effect_tab();
-        let indices = self.ui_root.inspector.get_selected_effect_indices();
-        if indices.is_empty() {
-            return false;
-        }
-        let primary_idx = indices[0];
-        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
-        // Get the group_id of the primary selected effect
-        let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
-        let group_id = effects
-            .and_then(|e| e.get(primary_idx))
-            .and_then(|fx| fx.group_id.clone());
-        if let Some(gid) = group_id {
-            let cmd =
-                manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(target, gid);
-            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::ExecuteOnContent(boxed),
-            );
+        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Ungroup) { return true; }
+        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        let target = self.card_effect_target();
+        let selected = self.ui_root.inspector.selected_effect_ids();
+        let commands = manifold_editing::commands::effect_target::with_effects(self.project, &target, |effects, groups| {
+            groups.iter().filter(|group| effects.iter().any(|effect| selected.contains(&effect.id) && effect.group_id.as_ref() == Some(&group.id)))
+                .map(|group| Box::new(manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(target.clone(), group.id.clone())) as Box<dyn Command>)
+                .collect::<Vec<_>>()
+        }).unwrap_or_default();
+        if !commands.is_empty() {
+            ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(commands, "Ungroup effects".into()));
+            *self.needs_structural_sync = true;
             *self.needs_rebuild = true;
-            true
-        } else {
-            false
         }
+        true
     }
 
     fn clear_effect_selection(&mut self) {
@@ -1819,34 +1788,6 @@ fn to_core_segment_shape(shape: UiSegmentShape) -> SegmentShape {
 
 // ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──
 
-use manifold_core::effects::PresetInstance;
-use manifold_core::project::Project;
-
-fn resolve_effects_ref<'a>(
-    tab: InspectorTab,
-    project: &'a Project,
-    active_layer: &Option<LayerId>,
-    selection: &UIState,
-) -> Option<&'a [PresetInstance]> {
-    match tab {
-        InspectorTab::Master => Some(&project.settings.master_effects),
-        InspectorTab::Layer | InspectorTab::Group => active_layer
-            .as_ref()
-            .and_then(|id| project.timeline.find_layer_index_by_id(id))
-            .and_then(|idx| project.timeline.layers.get(idx))
-            .and_then(|l| l.effects.as_deref()),
-        InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid| {
-            project
-                .timeline
-                .layers
-                .iter()
-                .flat_map(|l| l.clips.iter())
-                .find(|c| c.id == *cid)
-                .map(|c| c.effects.as_slice())
-        }),
-    }
-}
-
 fn resolve_effect_target(
     tab: InspectorTab,
     active_layer: &Option<LayerId>,
@@ -2103,6 +2044,111 @@ mod automation_clipboard_host_tests {
     }
 
     #[test]
+    fn effect_group_paste_preserves_structure_selects_copies_and_undoes_once() {
+        let mut h = Harness::new();
+        let mut group = manifold_core::effects::EffectGroup::new("My group".into());
+        group.collapsed = true;
+        let original = h.project.settings.master_effects[0].clone();
+        let mut second = original.duplicated();
+        second.group_id = Some(group.id.clone());
+        h.project.settings.master_effects[0].group_id = Some(group.id.clone());
+        h.project.settings.master_effects.push(second);
+        h.project.settings.master_effect_groups = Some(vec![group.clone()]);
+        let surfaces = |effects: &[PresetInstance]| effects.iter().enumerate().map(|(index, effect)| {
+            manifold_ui::param_surface::ParamSurface {
+                kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+                title: "Card".into(), collapsed: false, enabled: true,
+                effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
+                has_graph_mod: false, layer_id: None, modifier: None,
+                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(), relight: Default::default(),
+            }
+        }).collect::<Vec<_>>();
+        h.ui_root.inspector.configure_master_effects(&surfaces(&h.project.settings.master_effects));
+        h.ui_root.inspector.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let ids = h.project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>();
+        h.ui_root.inspector.select_effect_ids(InspectorTab::Master, &ids);
+        assert!(h.host().handle_effect_copy());
+        let before = serde_json::to_vec(&h.project.settings).unwrap();
+        assert!(h.host().handle_effect_paste());
+        assert_eq!(before, serde_json::to_vec(&h.project.settings).unwrap());
+        let ContentCommand::ExecuteOnContent(command) = h.rx.try_recv().unwrap() else { panic!("atomic paste"); };
+        let mut service = EditingService::new();
+        service.execute(command, &mut h.project);
+        let effects = &h.project.settings.master_effects;
+        assert_eq!(effects.len(), 4);
+        let pasted_ids: Vec<_> = effects[2..].iter().map(|effect| effect.id.clone()).collect();
+        let pasted_groups = h.project.settings.master_effect_groups.as_ref().unwrap();
+        assert_eq!(pasted_groups.len(), 2);
+        assert_ne!(pasted_groups[1].id, group.id);
+        assert_eq!(pasted_groups[1].name, "My group");
+        assert!(pasted_groups[1].collapsed);
+        assert!(effects[2..].iter().all(|effect| effect.group_id.as_ref() == Some(&pasted_groups[1].id)));
+        h.ui_root.inspector.configure_master_effects(&surfaces(effects));
+        assert_eq!(h.ui_root.inspector.selected_effect_ids(), pasted_ids);
+        assert!(service.undo(&mut h.project));
+        assert_eq!(serde_json::to_vec(&h.project.settings).unwrap(), before);
+        assert!(service.redo(&mut h.project));
+        assert_eq!(h.project.settings.master_effects.len(), 4);
+    }
+
+    #[test]
+    fn effect_cut_and_paste_are_atomic_and_leave_ui_snapshot_unchanged() {
+        let mut h = Harness::new();
+        let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
+        let layer_id = layer.layer_id.clone();
+        let effects = (0..3)
+            .map(|_| PresetInstance::new(PresetTypeId::new("Mirror")))
+            .collect::<Vec<_>>();
+        let surfaces = effects.iter().enumerate().map(|(index, effect)| {
+            manifold_ui::param_surface::ParamSurface {
+                kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+                title: "Mirror".into(), collapsed: false, enabled: true,
+                effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
+                has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
+                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
+                relight: Default::default(),
+            }
+        }).collect::<Vec<_>>();
+        layer.effects = Some(effects);
+        h.project.timeline.layers.push(layer);
+        h.active_layer = Some(layer_id.clone());
+        h.ui_root.inspector.configure_layer_effects(&surfaces, Some(&layer_id));
+        assert!(h.ui_root.inspector.select_all_effects());
+
+        let before = serde_json::to_vec(&h.project).expect("project serializes");
+        let before_effects = serde_json::to_vec(&h.project.timeline.find_layer_by_id(&layer_id).unwrap().1.effects).unwrap();
+        assert!(h.host().handle_effect_cut());
+        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
+        let (cut_commands, cut_description) = match h.rx.try_recv().expect("cut batch") {
+            ContentCommand::ExecuteBatch(commands, description) => (commands, description),
+            other => panic!("expected effect cut batch, got {:?}", std::mem::discriminant(&other)),
+        };
+        assert_eq!(cut_commands.len(), 3);
+
+        let mut authoritative = h.project.clone();
+        let mut service = EditingService::new();
+        service.execute_batch(cut_commands, cut_description, &mut authoritative);
+        assert!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().is_none_or(Vec::is_empty));
+        assert!(service.undo(&mut authoritative));
+        assert_eq!(serde_json::to_vec(&authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects).unwrap(), before_effects);
+        assert!(service.redo(&mut authoritative));
+
+        let before_paste = serde_json::to_vec(&h.project).expect("project serializes");
+        assert!(h.host().handle_effect_paste());
+        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before_paste);
+        let paste_command = match h.rx.try_recv().expect("paste command") {
+            ContentCommand::ExecuteOnContent(command) => command,
+            other => panic!("expected atomic effect paste, got {:?}", std::mem::discriminant(&other)),
+        };
+        service.execute(paste_command, &mut authoritative);
+        assert_eq!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().unwrap().len(), 3);
+        assert!(service.undo(&mut authoritative));
+        assert!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().is_none_or(Vec::is_empty));
+        assert!(service.redo(&mut authoritative));
+        assert_eq!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
     fn modifier_paste_dispatches_from_clipboard_into_empty_modifier_stack() {
         let mut h = Harness::new();
         let mut layer = Layer::new_generator("WaveGrid".into(), PresetTypeId::new("WaveGrid"), 0);
@@ -2191,8 +2237,75 @@ mod automation_clipboard_host_tests {
         assert!(h.ui_root.scene_modifier_clipboard.is_none());
         h.ui_root.inspector.clear_effect_selection(&mut h.ui_root.tree);
         assert!(h.host().handle_effect_paste());
-        assert!(matches!(h.rx.try_recv().unwrap(), ContentCommand::Execute(_)));
+        let ContentCommand::ExecuteOnContent(mut command) = h.rx.try_recv().unwrap() else { panic!("expected paste command"); };
+        assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 1);
+        command.execute(&mut h.project);
         assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn modifier_cut_captures_before_removal_and_consumes_capture_failure() {
+        let mut h = Harness::new();
+        let mut layer = Layer::new_generator("WaveGrid".into(), PresetTypeId::new("WaveGrid"), 0);
+        let layer_id = LayerId::new("modifier-cut-layer");
+        layer.layer_id = layer_id.clone();
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
+            .expect("WaveGrid fixture").clone();
+        layer.gen_params_or_init().graph = Some(graph);
+        layer.gen_params_or_init().refresh_manifest_from_graph();
+        h.project.timeline.layers.push(layer);
+        let mut add = crate::scene_modifier_edit::build_action(
+            &h.project,
+            crate::scene_modifier_edit::SceneModifierAction::Add(layer_id.clone(), "SceneFog".into()),
+        ).expect("scene modifier add");
+        add.execute(&mut h.project);
+        let modifier_id = h.project
+            .graph_target_owner(&GraphTarget::Generator(layer_id.clone()))
+            .and_then(|owner| owner.graph.as_ref()).expect("generator graph")
+            .scene_modifiers[0].id.clone();
+        let surface = manifold_ui::param_surface::ParamSurface {
+            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+            title: "SceneFog".into(), rows: Vec::new(), string_params: Vec::new(),
+            audio_sends: Vec::new(),
+            modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
+                instance_id: modifier_id.clone(), layer_id: layer_id.clone(),
+                enabled_label: "Enabled".into(), stack_index: 0, stack_len: 1,
+                targets_all: true, objects: Vec::new(),
+            }),
+            effect_index: 0,
+            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{modifier_id}")),
+            enabled: true, collapsed: false, supports_envelopes: true, has_graph_mod: false,
+            layer_id: None, relight: Default::default(),
+        };
+        h.ui_root.inspector.configure_modifier_cards(std::slice::from_ref(&surface), Some(&layer_id), true, Vec::new());
+        assert!(h.ui_root.inspector.select_all_modifiers());
+        let before = serde_json::to_vec(&h.project).expect("project serializes");
+        let mut input = crate::input_handler::InputHandler::new();
+        input.inspector_has_focus = true;
+        assert!(input.handle_keyboard_input(
+            &winit::keyboard::Key::Character(winit::keyboard::SmolStr::new("x")),
+            manifold_ui::input::Modifiers { command: true, ..Default::default() },
+            &mut h.host(),
+        ));
+        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
+        assert_eq!(h.ui_root.scene_modifier_clipboard.as_ref().unwrap().count(), 1);
+        let (remove_layer, remove_ids) = match h.rx.try_recv().expect("modifier cut") {
+            ContentCommand::SceneModifier(crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids)) => (layer, ids),
+            other => panic!("expected modifier removal, got {:?}", std::mem::discriminant(&other)),
+        };
+        assert_eq!(remove_layer, layer_id);
+        assert_eq!(remove_ids, vec![modifier_id.clone()]);
+
+        // A stale scope still consumes Cmd+X and reports capture failure.
+        let invalid_layer = LayerId::new("missing-modifier-layer");
+        h.ui_root.inspector.configure_modifier_cards(&[surface], Some(&invalid_layer), true, Vec::new());
+        assert!(h.ui_root.inspector.select_all_modifiers());
+        assert!(input.handle_keyboard_input(
+            &winit::keyboard::Key::Character(winit::keyboard::SmolStr::new("x")),
+            manifold_ui::input::Modifiers { command: true, ..Default::default() },
+            &mut h.host(),
+        ));
+        assert!(matches!(h.rx.try_recv().expect("capture rejection"), ContentCommand::GraphEditRejected(_)));
     }
 
     #[test]

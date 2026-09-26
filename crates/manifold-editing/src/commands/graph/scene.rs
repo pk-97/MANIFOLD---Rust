@@ -2139,7 +2139,7 @@ fn target_string_bindings(
 /// them (the importer deliberately fans out one outer control to many nodes).
 /// Return only ids that no longer have any surviving binding so the host
 /// manifest and its modulation collections can be pruned by the caller.
-fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> Vec<String> {
+pub(super) fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> Vec<String> {
     let Some(meta) = def.preset_metadata.as_mut() else {
         return Vec::new();
     };

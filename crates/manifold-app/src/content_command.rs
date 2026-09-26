@@ -23,6 +23,7 @@ pub enum ContentCommand {
     /// legacy optimistic Execute producers, headless UI must execute this too.
     ExecuteOnContent(Box<dyn Command + Send>),
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
+    ObjectModifier(crate::object_modifier_transfer::ObjectModifierAction),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),

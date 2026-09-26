@@ -52,9 +52,17 @@ const ADD_EFFECT_BTN_H: f32 = 26.0;
 pub struct RackGroupConfig {
     pub id: EffectGroupId,
     pub name: String,
+    pub collapsed: bool,
     pub member_ids: Vec<EffectId>,
     /// The composable mask modifier in this group, when present.
     pub mask_effect_id: Option<EffectId>,
+}
+
+struct RackGroupNodes {
+    group_id: EffectGroupId,
+    frame: NodeId,
+    header: NodeId,
+    collapse: NodeId,
 }
 
 // ── Tab strip ───────────────────────────────────────────────────
@@ -280,6 +288,7 @@ pub struct InspectorCompositePanel {
     /// ids. Rebuilt each frame with the header nodes so intent registration
     /// cannot retain bindings to dead nodes after a structural rebuild.
     group_add_modifier_btns: Vec<(NodeId, EffectGroupId)>,
+    group_nodes: Vec<RackGroupNodes>,
     /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's
     /// node id (layer scope only), and whether the current layer scope is a
     /// scene layer at all (the picker needs a live scene to offer kinds).
@@ -332,6 +341,11 @@ pub struct InspectorCompositePanel {
 
     // ── Effect card drag-reorder state (Unity EffectsListBitmapPanel) ──
     card_drag_active: bool,
+    card_drag_valid: bool,
+    card_drag_pos: Option<Vec2>,
+    card_drag_group: Option<EffectGroupId>,
+    card_drag_destination_group: Option<EffectGroupId>,
+    card_drag_effect_ids: Vec<EffectId>,
     card_drag_stack: CardDragStack,
     card_drag_tab: InspectorTab,
     card_drag_source_index: usize, // index within the tab's effect cards vec
@@ -456,6 +470,7 @@ impl InspectorCompositePanel {
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
             group_add_modifier_btns: Vec::new(),
+            group_nodes: Vec::new(),
             add_modifier_btn: None,
             show_add_modifier: false,
             // Set by `configure_gen_params`, which the app calls with the
@@ -481,6 +496,11 @@ impl InspectorCompositePanel {
             last_clicked_layer: None,
             last_clicked_modifier: None,
             card_drag_active: false,
+            card_drag_valid: false,
+            card_drag_pos: None,
+            card_drag_group: None,
+            card_drag_destination_group: None,
+            card_drag_effect_ids: Vec::new(),
             card_drag_stack: CardDragStack::Effects(InspectorTab::Master),
             card_drag_tab: InspectorTab::Master,
             card_drag_source_index: 0,
@@ -1081,6 +1101,16 @@ impl InspectorCompositePanel {
     /// EffectCardClicked is returned). Updates border colors without rebuild.
     /// This is the SINGLE place that syncs is_selected + tree style together.
     pub fn apply_selection_visuals(&mut self, tree: &mut UITree) {
+        for nodes in &self.group_nodes {
+            let selected = self.rack_groups[Self::scope_idx(self.active_tab)].iter()
+                .find(|group| group.id == nodes.group_id)
+                .is_some_and(|group| group.member_ids.iter().all(|id| self.selection_for_tab(self.active_tab).0.contains(id)));
+            if let Some(node) = tree.get_node(nodes.frame) {
+                let mut style = node.style;
+                style.border_color = if selected { color::ACCENT_BLUE_C32 } else { color::DEFAULT_GROUP_ACCENT };
+                tree.set_style(nodes.frame, style);
+            }
+        }
         for tab in [
             InspectorTab::Master,
             InspectorTab::Layer,
@@ -1218,6 +1248,7 @@ impl Panel for InspectorCompositePanel {
             .map(|t| (t.elapsed().as_secs_f32() * 1000.0).min(100.0))
             .unwrap_or(0.0);
         self.motion_last_tick = Some(Instant::now());
+        self.tick_card_drag_scroll(tree, dt_ms);
         let mut any = false;
         for card in self.effects.iter_mut().flatten() {
             any |= card.tick_drawers(dt_ms);
@@ -1332,6 +1363,10 @@ impl Panel for InspectorCompositePanel {
         // `node_count() > 0` here — one signal, the same the rest of the panel uses.
         self.macros_panel.register_intents(intents);
         self.audio_trigger_section.register_intents(intents);
+        for nodes in &self.group_nodes {
+            intents.on(nodes.header, crate::intent::Gesture::RightClick,
+                PanelAction::Params(ParamsAction::EffectGroupRightClicked(nodes.group_id.clone())));
+        }
         for (node_id, group_id) in &self.group_add_modifier_btns {
             intents.on(
                 *node_id,
@@ -2493,6 +2528,68 @@ mod tests {
         (configs, layer)
     }
 
+    fn grouped_fixture(collapsed: bool) -> (InspectorCompositePanel, UITree) {
+        let configs: Vec<_> = (0..3).map(|i| mk_config(super::super::param_card::ParamCardKind::Effect, &format!("FX{i}"), 1)).collect();
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_master_effects(&configs);
+        panel.configure_rack_groups(InspectorTab::Master, &[RackGroupConfig {
+            id: EffectGroupId::new("group"), name: "Group".into(), collapsed,
+            member_ids: vec![EffectId::new("FX0"), EffectId::new("FX1")], mask_effect_id: None,
+        }]);
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let mut tree = UITree::new();
+        panel.build(&mut tree, &inspector_layout());
+        (panel, tree)
+    }
+
+    #[test]
+    fn rack_group_collapse_hides_members_and_header_selects_them() {
+        let (mut panel, tree) = grouped_fixture(true);
+        assert!(panel.effects[0][0].live_bounds(&tree).is_none());
+        assert!(panel.effects[0][1].live_bounds(&tree).is_none());
+        assert!(panel.effects[0][2].live_bounds(&tree).is_some());
+        let header = panel.group_nodes[0].header;
+        let bounds = tree.get_bounds(header);
+        panel.route_pointer_down(header, Vec2::new(bounds.x + 1.0, bounds.y + 1.0), Modifiers::NONE, &tree);
+        assert_eq!(panel.get_selected_effect_indices(), vec![0, 1]);
+        let collapse = panel.group_nodes[0].collapse;
+        assert!(matches!(&panel.route_click(collapse, Modifiers::NONE, &tree)[..],
+            [PanelAction::Params(ParamsAction::EffectGroupCollapsed { collapsed: false, .. })]));
+    }
+
+    #[test]
+    fn rack_group_drag_moves_whole_group_and_outside_release_cancels() {
+        let (mut panel, mut tree) = grouped_fixture(false);
+        let header = panel.group_nodes[0].header;
+        assert!(panel.try_begin_card_drag(Some(header), &mut tree));
+        let after = panel.effects[0][2].live_bounds(&tree).unwrap();
+        panel.update_card_drag(Vec2::new(after.x + 8.0, after.y + after.height - 1.0), &mut tree);
+        let actions = panel.end_card_drag(&mut tree);
+        assert!(matches!(&actions[..], [PanelAction::Params(ParamsAction::EffectMove { ids, before: None, preserve_groups: true, .. })]
+            if ids == &[EffectId::new("FX0"), EffectId::new("FX1")]));
+        assert!(panel.try_begin_card_drag(Some(header), &mut tree));
+        panel.update_card_drag(Vec2::new(panel.viewport_rect.x - 1.0, after.y), &mut tree);
+        assert!(panel.end_card_drag(&mut tree).is_empty());
+        assert!(!panel.is_card_drag_active());
+    }
+
+    #[test]
+    fn rack_group_drop_inside_joins_and_outer_edge_leaves_group() {
+        let (mut panel, mut tree) = grouped_fixture(false);
+        let handle = find_drag_handle_id(&panel.effects[0][2], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
+        let second = panel.effects[0][1].live_bounds(&tree).unwrap();
+        panel.update_card_drag(Vec2::new(second.x + 16.0, second.y + 1.0), &mut tree);
+        assert!(matches!(&panel.end_card_drag(&mut tree)[..], [PanelAction::Params(ParamsAction::EffectMove { before: Some(before), destination_group: Some(group), preserve_groups: false, .. })]
+            if *before == EffectId::new("FX1") && *group == EffectGroupId::new("group")));
+        let handle = find_drag_handle_id(&panel.effects[0][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
+        let group = tree.get_bounds(panel.group_nodes[0].frame);
+        panel.update_card_drag(Vec2::new(group.x + 1.0, group.y + group.height - 1.0), &mut tree);
+        assert!(matches!(&panel.end_card_drag(&mut tree)[..], [PanelAction::Params(ParamsAction::EffectMove { before: Some(before), destination_group: None, preserve_groups: false, .. })]
+            if *before == EffectId::new("FX2")));
+    }
+
     #[test]
     fn modifier_drag_emits_complete_stable_id_order() {
         let (configs, layer) = modifier_fixture();
@@ -2521,6 +2618,107 @@ mod tests {
                         manifold_foundation::NodeId::new("modifier-2"),
                     ]
         ), "modifier drag must address the complete stack: {actions:?}");
+    }
+
+    #[test]
+    fn generator_collapse_survives_same_owner_reconfigure_and_resets_for_new_owner() {
+        use super::super::param_card::ParamCardKind;
+
+        let mut panel = InspectorCompositePanel::new();
+        let config = mk_config(ParamCardKind::Generator, "Generator", 1);
+        let first_layer = LayerId::new("first-layer");
+        let second_layer = LayerId::new("second-layer");
+
+        panel.configure_gen_params(Some(&config), Some(first_layer.clone()));
+        panel.gen_params.as_mut().unwrap().set_collapsed(true);
+        panel.configure_gen_params(Some(&config), Some(first_layer));
+        assert!(panel.gen_params.as_ref().unwrap().is_collapsed());
+
+        panel.configure_gen_params(Some(&config), Some(second_layer));
+        assert!(!panel.gen_params.as_ref().unwrap().is_collapsed());
+    }
+
+    #[test]
+    fn modifier_collapse_is_local_and_survives_same_identity_reconcile() {
+        let (configs, layer) = modifier_fixture();
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
+        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
+        panel.build(&mut tree, &layout);
+
+        let chevron = panel.modifier_cards[0].chevron_node_id().unwrap();
+        let actions = panel.modifier_cards[0].handle_click(chevron, &tree);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Params(ParamsAction::SectionFoldToggled)]
+        ));
+        assert!(panel.modifier_cards[0].is_collapsed());
+
+        let mut reordered = configs.clone();
+        reordered[0].modifier.as_mut().unwrap().stack_index = 1;
+        panel.configure_modifier_cards(&reordered, Some(&layer), true, Vec::new());
+        assert!(panel.modifier_cards[0].is_collapsed());
+
+        reordered[0].modifier.as_mut().unwrap().instance_id =
+            manifold_foundation::NodeId::new("replacement");
+        panel.configure_modifier_cards(&reordered, Some(&layer), true, Vec::new());
+        assert!(!panel.modifier_cards[0].is_collapsed());
+    }
+
+    #[test]
+    fn modifier_drag_rejects_generator_and_effect_regions() {
+        use super::super::param_card::ParamCardKind;
+
+        let (configs, layer) = modifier_fixture();
+        let mut panel = InspectorCompositePanel::new();
+        let mut tree = UITree::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+        let generator = mk_config(ParamCardKind::Generator, "Generator", 1);
+        let effect = mk_config(ParamCardKind::Effect, "Effect", 1);
+        panel.configure_gen_params(Some(&generator), Some(layer.clone()));
+        panel.configure_layer_effects(&[effect], Some(&layer));
+        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
+        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
+        panel.build(&mut tree, &layout);
+
+        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
+        let second = panel.modifier_cards[2].live_bounds(&tree).unwrap();
+        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
+        panel.update_card_drag(
+            Vec2::new(second.x + 10.0, second.y + second.height * 0.5),
+            &mut tree,
+        );
+        assert!(!panel.end_card_drag(&mut tree).is_empty());
+
+        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
+        let generator_bounds = panel.gen_params.as_ref().unwrap().live_bounds(&tree).unwrap();
+        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
+        panel.update_card_drag(
+            Vec2::new(generator_bounds.x + 10.0, generator_bounds.y + generator_bounds.height * 0.5),
+            &mut tree,
+        );
+        assert!(panel.end_card_drag(&mut tree).is_empty());
+
+        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
+        let effect_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][0]
+            .live_bounds(&tree)
+            .unwrap();
+        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
+        panel.update_card_drag(
+            Vec2::new(effect_bounds.x + 10.0, effect_bounds.y + effect_bounds.height * 0.5),
+            &mut tree,
+        );
+        assert!(panel.end_card_drag(&mut tree).is_empty());
     }
 
     #[test]
@@ -2789,75 +2987,23 @@ mod tests {
         }
     }
 
-    /// P3 geometry monopoly, case (d): `end_card_drag`'s target→effect-index
-    /// mapping, isolated from the hit-test geometry (covered above). Exact
-    /// regression pin for BUG-265 root cause 3 (findings doc): the
-    /// after-last-drop branch must use the HIGHEST `effect_index` among the
-    /// tab's cards, not `cards.last()`'s — this test builds a card list
-    /// whose Vec order deliberately diverges from effect_index order so the
-    /// two computations disagree, and pins the correct (max-based) one.
-    /// Also covers the ordinary to_card < cards.len() branch with the same
-    /// non-contiguous index set.
     #[test]
-    fn end_card_drag_maps_target_index_to_effect_index_with_non_contiguous_indices() {
+    fn end_card_drag_addresses_stable_ids_independent_of_effect_indices() {
         use super::super::param_card::ParamCardKind;
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
-        let layout = inspector_layout();
-
-        let mut configs: Vec<_> = (0..4)
-            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 2))
-            .collect();
-        // Non-monotonic effect_index, and the LAST card in Vec order (FX3)
-        // is deliberately NOT the max — the divergence root cause 3 fixed.
-        configs[0].effect_index = 7; // max
-        configs[1].effect_index = 1; // drag source
-        configs[2].effect_index = 3;
-        configs[3].effect_index = 2; // last in Vec order, but not max
+        let mut configs: Vec<_> = (0..4).map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 2)).collect();
+        for (config, index) in configs.iter_mut().zip([7, 1, 3, 2]) { config.effect_index = index; }
         panel.configure_layer_effects(&configs, None);
-        panel.configure_tabs(
-            &[InspectorTab::Layer, InspectorTab::Master],
-            InspectorTab::Layer,
-        );
-        panel.build(&mut tree, &layout);
-
-        // Middle drop: to_card < cards.len() reads the target card's own
-        // effect_index directly.
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
-        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
-        panel.card_drag_target_index = 2; // FX2, effect_index 3
-        let actions = panel.end_card_drag(&mut tree);
-        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
-        match &actions[0] {
-            PanelAction::Params(ParamsAction::EffectReorder(from, to)) => {
-                assert_eq!(*from, 1, "dragged card's effect_index");
-                assert_eq!(*to, 3, "middle drop reads the target card's own effect_index");
-            }
-            other => panic!("expected EffectReorder, got {other:?}"),
-        }
-
-        // After-last drop: to_card == cards.len() must use max(effect_index)
-        // + 1 (7 + 1 = 8), NOT cards.last()'s effect_index + 1 (2 + 1 = 3 —
-        // the pre-fix bug, and coincidentally equal to the middle-drop
-        // target above, so a regression here would be easy to miss without
-        // this explicit pin).
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
-        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
-        panel.card_drag_target_index = panel.effects[InspectorCompositePanel::SCOPE_LAYER].len();
-        let actions = panel.end_card_drag(&mut tree);
-        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
-        match &actions[0] {
-            PanelAction::Params(ParamsAction::EffectReorder(from, to)) => {
-                assert_eq!(*from, 1, "dragged card's effect_index");
-                assert_eq!(
-                    *to, 8,
-                    "after-last drop must land past the HIGHEST effect_index (7), \
-                     not past cards.last()'s effect_index (2)"
-                );
-            }
-            other => panic!("expected EffectReorder, got {other:?}"),
+        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
+        panel.build(&mut tree, &inspector_layout());
+        for (target, before) in [(2, Some(EffectId::new("FX2"))), (4, None)] {
+            let handle = find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
+            assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
+            panel.card_drag_target_index = target;
+            let actions = panel.end_card_drag(&mut tree);
+            assert!(matches!(&actions[..], [PanelAction::Params(ParamsAction::EffectMove { ids, before: actual, .. })]
+                if ids == &[EffectId::new("FX1")] && *actual == before));
         }
     }
 
@@ -2916,8 +3062,8 @@ mod tests {
         let target_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
             .live_bounds(&tree)
             .expect("built card has live bounds");
-        let expected_effect_index =
-            panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx].effect_index();
+        let expected_effect_id =
+            panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx].effect_id().clone();
         let cursor_y = target_bounds.y + 1.0;
 
         panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
@@ -2925,17 +3071,8 @@ mod tests {
 
         let actions = panel.end_card_drag(&mut tree);
         assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
-        match &actions[0] {
-            PanelAction::Params(ParamsAction::EffectReorder(_from, to)) => {
-                assert_eq!(
-                    *to, expected_effect_index,
-                    "the dispatched command must target the effect_index of the \
-                     card actually under the cursor post-scroll, not a stale \
-                     geometry snapshot's idea of it"
-                );
-            }
-            other => panic!("expected EffectReorder, got {other:?}"),
-        }
+        assert!(matches!(&actions[0], PanelAction::Params(ParamsAction::EffectMove { before: Some(id), .. })
+            if *id == expected_effect_id), "live bounds must resolve the same stable target: {actions:?}");
     }
 
     #[test]
