@@ -58,7 +58,7 @@
             .find(|s| s.node == src)
             .and_then(|s| s.outputs.iter().find(|(p, _)| *p == "out").map(|(_, r)| *r))
             .expect("source produces an out resource");
-        let assignment = assign_texture2d_slots(&plan, src_res, (64, 64));
+        let assignment = assign_texture2d_slots(&plan, Some(src_res), (64, 64));
 
         let mix_out_res = plan
             .steps()

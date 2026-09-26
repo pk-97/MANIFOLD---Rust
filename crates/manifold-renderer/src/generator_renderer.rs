@@ -1295,7 +1295,7 @@ impl GeneratorRenderer {
         if let Some(prior) = self.layer_generators.get_mut(&layer_id)
             && prior.generator_type == gen_type
         {
-            generator.carry_modifier_control_state_from(&mut prior.generator);
+            generator.carry_generator_state_from(&mut prior.generator);
         }
         self.layer_generators.insert(
             layer_id.clone(),

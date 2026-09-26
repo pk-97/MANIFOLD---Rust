@@ -842,9 +842,8 @@ impl Executor {
         self.mesh_revisions.get(res.0 as usize).copied().unwrap_or_default()
     }
 
-    /// Test-only read of the logical per-resource mesh pending flag —
-    /// the producer's declaration OR any wired input's pending.
-    #[cfg(test)]
+    /// Logical resource availability, including upstream pending inputs.
+    /// Rebuild handoff must not publish a pending CPU value as ready.
     pub(crate) fn mesh_pending_of(&self, res: ResourceId) -> bool {
         self.mesh_pending.get(res.0 as usize).copied().unwrap_or(false)
     }

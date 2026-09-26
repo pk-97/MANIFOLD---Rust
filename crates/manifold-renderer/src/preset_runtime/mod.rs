@@ -90,6 +90,7 @@ use build::{assign_texture2d_slots, compute_topology_hash};
 mod groups;
 use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
 mod physics_sampling;
+mod physics_carry;
 mod convert_heal;
 mod math_view;
 mod math_view_events;

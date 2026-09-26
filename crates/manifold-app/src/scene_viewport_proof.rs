@@ -108,6 +108,10 @@ fn observation(
 }
 
 fn selected_scene_pixels(ct: &ContentThread, device: &manifold_gpu::GpuDevice) -> Vec<u8> {
+    scene_pixels(ct, device, 0)
+}
+
+fn scene_pixels(ct: &ContentThread, device: &manifold_gpu::GpuDevice, index: usize) -> Vec<u8> {
     let generator = ct
         .engine
         .renderers()
@@ -118,11 +122,189 @@ fn selected_scene_pixels(ct: &ContentThread, device: &manifold_gpu::GpuDevice) -
                 .downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
         })
         .unwrap();
-    let clip = &ct.engine.project().unwrap().timeline.layers[0].clips[0].id;
+    let clip = &ct.engine.project().unwrap().timeline.layers[index].clips[0].id;
     let texture = generator
         .get_clip_texture(clip.as_str())
         .expect("selected live scene output");
     readback_raw_halves(device, texture, 320, 200)
+}
+
+#[test]
+fn shared_scene_viewport_watched_generator_preserves_liquid() {
+    let mut project = project();
+    // One scene uses a prepared mesh collider; the other retains legacy box
+    // inputs. Editor rebuilds must preserve both the worker and its role Arc.
+    let params = project.timeline.layers[0].gen_params_or_init();
+    let def = params.graph.as_mut().unwrap();
+    def.nodes.push(
+        serde_json::from_value(serde_json::json!({
+            "id": 40, "nodeId": "mesh_collider", "typeId": "node.fluid_role_source",
+            "params": {"role": {"type": "Enum", "value": 3}}
+        }))
+        .unwrap(),
+    );
+    def.wires
+        .retain(|wire| !(wire.to_node == 4 && wire.to_port == "obstacle"));
+    for (from_node, from_port, to_node, to_port) in [
+        (10, "source", 40, "mesh_0"),
+        (7, "transform", 40, "transform"),
+        (40, "role", 4, "role_0"),
+    ] {
+        def.wires
+            .push(manifold_core::effect_graph_def::EffectGraphWire {
+                from_node,
+                from_port: from_port.into(),
+                to_node,
+                to_port: to_port.into(),
+            });
+    }
+    params.refresh_manifest_from_graph();
+    let targets: Vec<_> = project
+        .timeline
+        .layers
+        .iter()
+        .map(|layer| GraphTarget::Generator(layer.layer_id.clone()))
+        .collect();
+    let mut ct = crate::headless_harness::headless_content_thread(project, 320, 200);
+    ct.timer.set_frame_clocked(true);
+    ct.handle_command(ContentCommand::SeekToBeat(Beats::ZERO));
+    let device = ct.content_pipeline.native_device_handle().unwrap();
+    let bridge = Arc::new(SharedTextureBridge::new(320, 200));
+    ct.content_pipeline.set_node_preview_textures(
+        std::array::from_fn(|slot| unsafe { bridge.import_texture_native(&device, slot) }),
+        bridge.clone(),
+    );
+    let (tx, rx) = crossbeam_channel::unbounded();
+    // Give the off-thread proxy preparation a bounded paused warmup.
+    for _ in 0..4 {
+        tick(&mut ct, &tx, &rx);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    ct.handle_command(ContentCommand::Play);
+    for _ in 0..4 {
+        tick(&mut ct, &tx, &rx);
+    }
+    ct.handle_command(ContentCommand::Pause);
+
+    let inspect = |ct: &mut ContentThread, index: usize| {
+        ct.handle_command(ContentCommand::WatchGraphTarget(Some(
+            targets[index].clone(),
+        )));
+        ct.handle_command(ContentCommand::SetGraphPreviewNode(Some(NodeId::new(
+            "fluid_surface",
+        ))));
+        let mut accepted = None;
+        let mut last_outputs = Vec::new();
+        for _ in 0..60 {
+            let state = tick(ct, &tx, &rx);
+            let outputs = &state
+                .node_preview_info
+                .as_ref()
+                .expect("liquid diagnostics")
+                .outputs;
+            let value = |name: &str| {
+                outputs
+                    .iter()
+                    .find(|(port, _)| port == name)
+                    .map_or(0.0, |(_, value)| *value)
+            };
+            if value("vertex_count") > 0.0
+                && value("simulation_time") > 0.0
+                && value("lag_seconds") <= 1e-6
+            {
+                accepted = Some((
+                    value("simulation_time"),
+                    value("vertex_count"),
+                    state.current_time.0,
+                ));
+                break;
+            }
+            last_outputs.clone_from(outputs);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let accepted = accepted.unwrap_or_else(|| {
+            panic!("liquid {index} did not retain a complete frame: {last_outputs:?}")
+        });
+        ct.handle_command(ContentCommand::SetGraphPreviewNode(Some(NodeId::new(
+            "scene",
+        ))));
+        let navigation = SceneViewportNavigation::new(320, 200);
+        let request = navigation.request(&targets[index], &NodeId::new("scene"), None, None);
+        ct.handle_command(ContentCommand::SetSceneViewport(Some(request.clone())));
+        // A new owner/session may still have an older image in the surface
+        // ring. Follow the UI's matching protocol before reading its metadata.
+        let mut published = None;
+        for _ in 0..4 {
+            let state = tick(ct, &tx, &rx);
+            let lease = bridge.acquire_read();
+            if let Some(frame_id) = bridge.leased_frame(lease)
+                && let Some(frame) = &state.scene_viewport_frames[lease.slot()]
+                && frame.matches(&request, frame_id, bridge.generation())
+            {
+                published = Some(frame.clone());
+            }
+            bridge.retire_read(lease);
+            if published.is_some() {
+                break;
+            }
+        }
+        let frame = published.expect("matching viewport frame after owner switch");
+        let domain = frame
+            .domains
+            .iter()
+            .find(|(node, _)| node.as_str() == "fluid_surface")
+            .unwrap()
+            .1;
+        assert_eq!(domain.state, FluidDomainState::Ready);
+        (accepted, domain, scene_pixels(ct, &device, index))
+    };
+    let baselines = [inspect(&mut ct, 0), inspect(&mut ct, 1)];
+    for index in [0, 1, 0, 1] {
+        let current = inspect(&mut ct, index);
+        assert_eq!(
+            current.0, baselines[index].0,
+            "paused editor switch changed simulation time or geometry"
+        );
+        assert_eq!(
+            current.1, baselines[index].1,
+            "paused editor switch changed the accepted epoch"
+        );
+        assert!(
+            current.2 == baselines[index].2,
+            "paused editor switch changed the rendered liquid"
+        );
+    }
+    ct.handle_command(ContentCommand::WatchGraphTarget(None));
+    tick(&mut ct, &tx, &rx);
+    assert_eq!(
+        inspect(&mut ct, 0).0,
+        baselines[0].0,
+        "closing editor reset physics"
+    );
+
+    ct.handle_command(ContentCommand::Play);
+    for index in [1, 0, 1, 0] {
+        ct.handle_command(ContentCommand::WatchGraphTarget(Some(
+            targets[index].clone(),
+        )));
+        tick(&mut ct, &tx, &rx);
+    }
+    ct.handle_command(ContentCommand::Pause);
+    for (index, baseline) in baselines.iter().enumerate() {
+        let current = inspect(&mut ct, index);
+        assert_eq!(
+            current.1.epoch, baseline.1.epoch,
+            "playing editor switch restarted the worker"
+        );
+        let transport_delta = current.0.2 - baseline.0.2;
+        assert!(transport_delta > 0.0);
+        assert!(
+            (f64::from(current.0.0 - baseline.0.0) - transport_delta).abs() < 1e-6,
+            "playing rebuild lost simulation time: before={:?}, after={:?}",
+            baseline.0,
+            current.0
+        );
+    }
 }
 
 #[test]
@@ -296,6 +478,15 @@ fn shared_scene_viewport_content_bridge_and_editor_painter() {
 
 #[test]
 fn shared_scene_viewport_effect_rebuild_and_inactive_owner() {
+    scene_effect_rebuild_and_inactive_owner(true);
+}
+
+#[test]
+fn shared_scene_viewport_source_independent_effect() {
+    scene_effect_rebuild_and_inactive_owner(false);
+}
+
+fn scene_effect_rebuild_and_inactive_owner(consume_source: bool) {
     use manifold_core::{clip::TimelineClip, effects::PresetInstance, layer::Layer};
     let mut project = manifold_core::project::Project::default();
     project.settings.output_width = 160;
@@ -313,16 +504,19 @@ fn shared_scene_viewport_effect_rebuild_and_inactive_owner() {
         .find(|node| node.type_id == "system.generator_input")
         .unwrap()
         .type_id = "system.source".into();
-    // This is an effect scene: its upstream image supplies the environment.
-    def.wires
-        .retain(|wire| !(wire.to_node == 30 && wire.to_port == "envmap"));
-    def.wires
-        .push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: 0,
-            from_port: "out".into(),
-            to_node: 30,
-            to_port: "envmap".into(),
-        });
+    if consume_source {
+        // The upstream image supplies the environment in a consuming effect.
+        // Otherwise the scene uses its own environment and replaces the input.
+        def.wires
+            .retain(|wire| !(wire.to_node == 30 && wire.to_port == "envmap"));
+        def.wires
+            .push(manifold_core::effect_graph_def::EffectGraphWire {
+                from_node: 0,
+                from_port: "out".into(),
+                to_node: 30,
+                to_port: "envmap".into(),
+            });
+    }
     let mut effect = PresetInstance::new(PresetTypeId::new("SceneStarter"));
     effect.graph = Some(def);
     effect.refresh_manifest_from_graph();

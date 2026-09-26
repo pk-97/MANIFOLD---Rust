@@ -252,8 +252,11 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   the leased image and overlays; picking uses the displayed camera, including while
   a newer navigation request is pending. No UI solver or synchronous readback/upload
   remains. Native content/bridge/painter proofs cover paused liquid navigation and
-  effect rebuild/disable; live window-event acceptance remains open. Watched-generator
-  state preservation is BUG-vglg.11; source-independent effect building is BUG-vglg.10.
+  effect rebuild/disable; live window-event acceptance remains open. Compatible
+  watched-generator rebuilds retain native physics and input history, including
+  prepared fluid roles (BUG-vglg.11). Source-independent scene effects also build
+  and render without allocating an external input slot (BUG-vglg.10). Native app
+  proofs cover paused/playing owner switches and both effect input modes.
   **Original P5b/P5c (2026-07-17; renderer replaced above):** the persistent-session architecture
   (`ViewportSession`, amortizing the rebuild to open/def-change only) and the
   live panel wiring (dock rect in the graph-editor sidebar, `v` toggle,

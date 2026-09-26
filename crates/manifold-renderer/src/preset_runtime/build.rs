@@ -87,15 +87,16 @@ pub(super) fn compute_topology_hash(
 
 /// Result of `assign_texture2d_slots`: one physical slot per logical
 /// resource (with sharing for non-overlapping lifetimes), plus the
-/// dedicated source slot and the total slot count.
+/// optional dedicated source slot and the total slot count. A source slot is
+/// absent when the graph compiler prunes an unconsumed external Source output.
 pub(super) struct SlotAssignment {
     pub(super) resource_to_slot: AHashMap<ResourceId, Slot>,
-    /// Dedicated slot for the upstream input texture. Held across the
-    /// frame (the chain `replace_texture_2d`s a clone of the input
-    /// into this slot's `RenderTarget` each frame), never recycled
-    /// for intermediate writes — sharing would corrupt the upstream
-    /// caller's texture when a later effect writes its output.
-    pub(super) source_slot: Slot,
+    /// Dedicated slot for the upstream input texture when the chain consumes
+    /// it. Held across the frame (the chain `replace_texture_2d`s a clone of
+    /// the input into this slot's `RenderTarget` each frame), never recycled
+    /// for intermediate writes — sharing would corrupt the upstream caller's
+    /// texture when a later effect writes its output.
+    pub(super) source_slot: Option<Slot>,
     /// Total physical slots needed = slots actually allocated.
     pub(super) slot_count: u32,
     /// Allocation dims per slot, indexed by `Slot.0`. Canvas-sized for the
@@ -107,8 +108,8 @@ pub(super) struct SlotAssignment {
 
 /// Walk the plan in topological order, mirroring the executor's
 /// acquire/release ordering, to compute the minimum set of physical
-/// slots needed for every `Texture2D` resource. The `source_resource`
-/// is bound to slot 0 up-front and never returned to the free pool
+/// slots needed for every `Texture2D` resource. The `source_resource`, when
+/// consumed, is bound to slot 0 up-front and never returned to the free pool
 /// (so other resources can't write through it later).
 ///
 /// Persistent resources — those identified by
@@ -128,14 +129,21 @@ pub(super) struct SlotAssignment {
 /// real backend slots 1:1 via `allocate_slot`.
 pub(super) fn assign_texture2d_slots(
     plan: &ExecutionPlan,
-    source_resource: ResourceId,
+    source_resource: Option<ResourceId>,
     canvas_dims: (u32, u32),
 ) -> SlotAssignment {
     let mut resource_to_slot: AHashMap<ResourceId, Slot> = AHashMap::default();
-    let source_slot = Slot(0);
-    resource_to_slot.insert(source_resource, source_slot);
-    let mut next_slot: u32 = 1;
-    let mut slot_dims: Vec<(u32, u32)> = vec![canvas_dims];
+    let source_slot = source_resource.map(|source_resource| {
+        let source_slot = Slot(0);
+        resource_to_slot.insert(source_resource, source_slot);
+        source_slot
+    });
+    let mut next_slot: u32 = if source_slot.is_some() { 1 } else { 0 };
+    let mut slot_dims: Vec<(u32, u32)> = if source_slot.is_some() {
+        vec![canvas_dims]
+    } else {
+        Vec::new()
+    };
 
     // Pre-allocate dedicated slots for every persistent AND held
     // Texture2D resource BEFORE the topological walk. These slots stay
@@ -152,7 +160,7 @@ pub(super) fn assign_texture2d_slots(
         .iter()
         .chain(plan.held_resources())
         .filter(|&&res_id| {
-            res_id != source_resource
+            Some(res_id) != source_resource
                 && plan
                     .resource_type(res_id)
                     .map(|ty| ty.is_texture_2d())
@@ -176,7 +184,7 @@ pub(super) fn assign_texture2d_slots(
     for step in plan.steps() {
         // Acquire output slots — pop from free pool or grow.
         for &(_, res_id) in &step.outputs {
-            if res_id == source_resource {
+            if Some(res_id) == source_resource {
                 continue;
             }
             if dedicated_set.contains(&res_id) {
@@ -207,7 +215,7 @@ pub(super) fn assign_texture2d_slots(
         }
         // Release dead resources — return slots to the free pool.
         for &res_id in &step.free_after {
-            if res_id == source_resource {
+            if Some(res_id) == source_resource {
                 // Source slot is dedicated. Never recycled.
                 continue;
             }
@@ -599,8 +607,10 @@ impl PresetRuntime {
             applied_graph_version: 0,
             bound,
             user_bindings_version: 0,
-            // Generators rebuild through their own registry lifecycle, not the
-            // chain dispatcher's prior-runtime handoff — no harvest key.
+            // `from_def_for_render_view` supplies the canonical key for
+            // compatible physics handoff; direct low-level construction has
+            // no key. Generators otherwise rebuild through their own registry
+            // lifecycle, not the chain dispatcher's prior-runtime handoff.
             def_content_key: 0,
             generator_input_node: Some(generator_input_id),
             card_prefix: String::new(),

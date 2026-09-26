@@ -18,17 +18,17 @@ fn output_resource(
     plan: &ExecutionPlan,
     node: crate::node_graph::NodeInstanceId,
     port: &str,
-) -> ResourceId {
+) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
                 if name == port {
-                    return id;
+                    return Some(id);
                 }
             }
         }
     }
-    panic!("plan: no output `{port}` on node {node:?}");
+    None
 }
 
 /// Whole-chain graph: one cached [`Graph`] containing every effect of
@@ -204,11 +204,12 @@ pub struct PresetRuntime {
 /// input texture; a generator produces from nothing and writes into a
 /// host-provided target.
 pub(super) enum PresetIo {
-    /// Effect chain. `source_slot` receives the upstream input texture each
-    /// frame (via `replace_texture_2d`); `output_slot` holds the chain's final
-    /// output texture, which the host reads via [`PresetRuntime::output_texture`].
+    /// Effect chain. When present, `source_slot` receives the upstream input
+    /// texture each frame (via `replace_texture_2d`); source-independent chains
+    /// leave it absent. `output_slot` holds the chain's final output texture,
+    /// which the host reads via [`PresetRuntime::output_texture`].
     Transform {
-        source_slot: Slot,
+        source_slot: Option<Slot>,
         output_slot: Slot,
     },
     /// Generator. No input. The host installs its target texture into
@@ -1192,7 +1193,8 @@ impl PresetRuntime {
             }
         };
         let source_resource = output_resource(&plan, source_node, "out");
-        let final_output_resource = output_resource(&plan, prev_node, prev_out_port);
+        let final_output_resource = output_resource(&plan, prev_node, prev_out_port)
+            .expect("plan output resource has an assigned slot");
 
         // Assign Texture2D resources to a small set of physical slots
         // via a lifetime-planner simulation. The source resource gets
@@ -1213,7 +1215,7 @@ impl PresetRuntime {
             .resource_to_slot
             .iter()
             .filter(|(resource, _)| {
-                **resource != source_resource
+                Some(**resource) != source_resource
                     && **resource != final_output_resource
                     && plan.is_provided_texture(**resource)
             })
@@ -1241,7 +1243,7 @@ impl PresetRuntime {
                 ));
                 continue;
             }
-            let label = if slot_idx == assignment.source_slot.0 {
+            let label = if assignment.source_slot == Some(Slot(slot_idx)) {
                 "chain-graph-source"
             } else {
                 "chain-graph-pingpong"
@@ -1262,7 +1264,7 @@ impl PresetRuntime {
                 backend.bind_resource_to_slot(*res_id, resolve(*sim_slot));
             }
         }
-        let source_slot = resolve(assignment.source_slot);
+        let source_slot = assignment.source_slot.map(resolve);
         let output_slot = resolve(
             *assignment
                 .resource_to_slot
@@ -1796,17 +1798,14 @@ impl PresetRuntime {
             }
         }
 
-        // Install the upstream input texture into the source slot —
-        // no GPU copy. `GpuTexture::clone` is one atomic retain on the
-        // underlying `MTLTexture`; the source slot's `RenderTarget`
-        // adopts the cloned texture in place, dropping its previous
-        // texture's retain. The Source node's evaluate is a no-op, so
-        // the first downstream effect reads the upstream texture
-        // directly via slot lookup. Eliminates the per-chain
-        // `copy_texture_to_texture` (was ~600μs full-screen blit at 4K)
-        // **and** keeps the active compute encoder alive across the
-        // chain boundary (the blit would have ended it, forcing a
-        // fresh compute encoder + cache loss on the first effect).
+        // Install the upstream input texture into the source slot when the
+        // graph consumes it — no GPU copy. `GpuTexture::clone` is one atomic
+        // retain on the underlying `MTLTexture`; the source slot's
+        // `RenderTarget` adopts the cloned texture in place, dropping its
+        // previous texture's retain. The Source node's evaluate is a no-op,
+        // so the first downstream effect reads the upstream texture directly
+        // via slot lookup. A source-independent chain has no source slot and
+        // runs without touching the host input.
         let PresetIo::Transform {
             source_slot,
             output_slot,
@@ -1816,14 +1815,16 @@ impl PresetRuntime {
             // via `render` instead. Defensive — callers never cross the wires.
             return None;
         };
-        let metal = self
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<MetalBackend>())
-            .expect("PresetRuntime backend is MetalBackend");
-        let ok = metal.replace_texture_2d(source_slot, input_texture.clone());
-        debug_assert!(ok, "source slot pre-bound at build time");
+        if let Some(source_slot) = source_slot {
+            let metal = self
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<MetalBackend>())
+                .expect("PresetRuntime backend is MetalBackend");
+            let ok = metal.replace_texture_2d(source_slot, input_texture.clone());
+            debug_assert!(ok, "source slot pre-bound at build time");
+        }
 
         let frame_time = FrameTime {
             beats: manifold_core::Beats(ctx.beat),

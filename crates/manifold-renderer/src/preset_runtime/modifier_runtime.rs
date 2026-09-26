@@ -109,6 +109,9 @@ impl PresetRuntime {
             } else {
                 (doc, None)
             };
+        // Editor fusion changes execution topology, not the authored simulation.
+        // Compare the effective unfused definition when carrying physics state.
+        let content_key = crate::node_graph::freeze::install::def_content_key(&render_def);
         let fused = if render_fused {
             crate::node_graph::freeze::install::fused_generator_view_for(&render_def)
         } else {
@@ -129,6 +132,7 @@ impl PresetRuntime {
             None => render_def,
         };
         let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules)?;
+        runtime.effect_nodes[0].def_content_key = content_key;
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }
@@ -309,7 +313,7 @@ impl PresetRuntime {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
                 view.events.carry_from(&previous.events);
                 for (variant, previous_variant) in view.variants.iter_mut().zip(&mut previous.variants) {
-                    variant.carry_modifier_control_state_from(previous_variant);
+                    variant.carry_generator_state_from(previous_variant);
                 }
             }
         }

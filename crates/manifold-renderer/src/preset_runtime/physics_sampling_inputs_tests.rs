@@ -168,6 +168,20 @@ fn physics_history_holds_external_edits_while_authored_motion_advances() {
 }
 
 #[test]
+fn physics_history_survives_compatible_generator_rebuild() {
+    let mut prior = runtime();
+    frame(&mut prior, 0.0, 1.0, 0.0);
+    let mut rebuilt = runtime();
+    rebuilt.carry_generator_state_from(&mut prior);
+    let observations = frame(&mut rebuilt, 1.0 / 30.0, 9.0, 3.0);
+    assert_eq!(observations.len(), 9, "rebuild lost the open input interval");
+    let (current, historical) = observations.split_last().unwrap();
+    assert!(historical.iter().all(|sample| sample.values[0] == 1.0 && sample.values[3] == 0.0));
+    assert_eq!(current.values[0], 9.0);
+    assert_eq!(current.values[3], 3.0);
+}
+
+#[test]
 fn physics_history_reanchors_paused_edits_and_backward_seeks() {
     let mut runtime = runtime();
     frame(&mut runtime, 1.0, 1.0, 0.0);

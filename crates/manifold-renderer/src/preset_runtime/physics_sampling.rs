@@ -16,6 +16,14 @@ pub(super) struct PhysicsInputSnapshot {
 }
 
 impl PhysicsInputSnapshot {
+    /// Rebuild-only remap: execution order may differ between fused and
+    /// editable graphs, while held inputs must still belong to the old frame.
+    pub(super) fn carry_from(&mut self, prior: &Self, steps: &[(usize, usize)]) {
+        for &(new, old) in steps {
+            self.values[new].clone_from(&prior.values[old]);
+        }
+    }
+
     pub(super) fn prepare(graph: &Graph, plan: &ExecutionPlan, steps: &[bool]) -> Self {
         assert_eq!(steps.len(), plan.steps().len());
         let mut clock_steps = Vec::new();
