@@ -184,7 +184,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
-        extra_material_textures: [None; 3],
+        extra_material_textures: [None; 15],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,

@@ -64,7 +64,26 @@ fn create_dummy_alpha_texture(device: &GpuDevice) -> GpuTexture {
 }
 
 pub(crate) const SHADOW_WORKGROUP: [u32; 3] = [8, 8, 1];
-const SUBSURFACE_BINDING_COUNT: usize = 9 + MAX_RT_MATERIAL_TEXTURES;
+const SUBSURFACE_BINDING_COUNT: usize = 10 + MAX_RT_MATERIAL_TEXTURES;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SubsurfaceReconstructionParams {
+    inv_view_proj: [[f32; 4]; 4],
+    size: [u32; 2],
+    reset: u32,
+    max_history: u32,
+    step: u32,
+    pixel_radius: f32,
+    filter_strength: f32,
+    _pad: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<SubsurfaceReconstructionParams>() == 96);
+
+fn subsurface_reconstruction_params_bytes(params: &SubsurfaceReconstructionParams) -> &[u8] {
+    bytemuck::bytes_of(params)
+}
 
 fn dispatch_groups_2d(size: [u32; 2], workgroup: [u32; 3]) -> [u32; 3] {
     [
@@ -619,6 +638,12 @@ pub struct MetalShadowRayTracer {
     /// Cached subsurface transport pipeline compiled from the shared
     /// shadow-ray helpers plus `subsurface.msl`.
     subsurface_pipeline: GpuComputePipeline,
+    subsurface_reconstruct_pipeline: GpuComputePipeline,
+    subsurface_filter_pipeline: GpuComputePipeline,
+    secondary_lights: Option<GpuBuffer>,
+    secondary_irradiance: Option<GpuTexture>,
+    secondary_brdf_lut: Option<GpuTexture>,
+    secondary_prefiltered_sheen: Option<GpuTexture>,
 }
 
 /// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
@@ -658,6 +683,8 @@ pub struct RtPipelines {
     pub copy_inline_pipeline: GpuComputePipeline,
     /// Cached `trace_subsurface` pipeline; cloned into each tracer instance.
     pub subsurface_pipeline: GpuComputePipeline,
+    pub subsurface_reconstruct_pipeline: GpuComputePipeline,
+    pub subsurface_filter_pipeline: GpuComputePipeline,
 }
 
 /// P4a (§5.1): the emissive-preparation pipeline set — device-global code
@@ -733,6 +760,10 @@ impl RtPipelines {
         trace_slots.push((6 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         // RT-TL-C: out_svt, MSL [[texture(71)]].
         trace_slots.push((7 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        trace_slots.push((10, SlotKind::Buffer));
+        trace_slots.push((8 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        trace_slots.push((9 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        trace_slots.push((10 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         trace_slots.push((8, SlotKind::Buffer));
         // Three trace passes crossed with binary/translucent ray semantics.
         // Both constants are supplied before compilation; SPP is unchanged.
@@ -765,6 +796,7 @@ impl RtPipelines {
             (0, SlotKind::Texture), // camera depth
             (1, SlotKind::Texture), // environment
             (2, SlotKind::Texture), // output
+            (3, SlotKind::Texture), // geometric normal/object guide
         ];
         subsurface_slots.extend(
             (4..4 + MAX_RT_MATERIAL_TEXTURES as u32).map(|binding| (binding, SlotKind::Texture)),
@@ -774,6 +806,33 @@ impl RtPipelines {
             &library,
             "trace_subsurface",
             identity_slot_map(&subsurface_slots),
+        );
+        let subsurface_reconstruct_pipeline = compile_pipeline(
+            device,
+            &library,
+            "reconstruct_subsurface",
+            identity_slot_map(&[
+                (1, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
+                (2, SlotKind::Texture),
+                (3, SlotKind::Texture),
+                (4, SlotKind::Texture),
+                (5, SlotKind::Texture),
+                (6, SlotKind::Texture),
+            ]),
+        );
+        let subsurface_filter_pipeline = compile_pipeline(
+            device,
+            &library,
+            "filter_subsurface",
+            identity_slot_map(&[
+                (1, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
+                (2, SlotKind::Texture),
+                (3, SlotKind::Texture),
+            ]),
         );
         let upsample_pipeline = compile_pipeline(
             device,
@@ -1056,6 +1115,8 @@ impl RtPipelines {
             emissive,
             copy_inline_pipeline,
             subsurface_pipeline,
+            subsurface_reconstruct_pipeline,
+            subsurface_filter_pipeline,
         }
     }
 }
@@ -1107,6 +1168,12 @@ impl MetalShadowRayTracer {
             emissive: p.emissive.clone(),
             zero_emissive_stats: device.create_buffer_shared(16),
             subsurface_pipeline: p.subsurface_pipeline.clone(),
+            subsurface_reconstruct_pipeline: p.subsurface_reconstruct_pipeline.clone(),
+            subsurface_filter_pipeline: p.subsurface_filter_pipeline.clone(),
+            secondary_lights: None,
+            secondary_irradiance: None,
+            secondary_brdf_lut: None,
+            secondary_prefiltered_sheen: None,
             dummy_alpha_tex,
             rt_diagnostics,
             tlas_probe: std::sync::OnceLock::new(),
@@ -1125,6 +1192,26 @@ impl MetalShadowRayTracer {
     /// firefly floor reduces to its fixed minimum).
     pub fn zero_emissive_stats(&self) -> &GpuBuffer {
         &self.zero_emissive_stats
+    }
+
+    pub fn set_secondary_lighting(
+        &mut self,
+        lights: &GpuBuffer,
+        irradiance: &GpuTexture,
+        brdf_lut: &GpuTexture,
+        prefiltered_sheen: &GpuTexture,
+    ) {
+        self.secondary_lights = Some(lights.clone());
+        self.secondary_irradiance = Some(irradiance.clone());
+        self.secondary_brdf_lut = Some(brdf_lut.clone());
+        self.secondary_prefiltered_sheen = Some(prefiltered_sheen.clone());
+    }
+
+    pub fn clear_secondary_lighting(&mut self) {
+        self.secondary_lights = None;
+        self.secondary_irradiance = None;
+        self.secondary_brdf_lut = None;
+        self.secondary_prefiltered_sheen = None;
     }
 
     /// Encode the cached geometry-aware subsurface transport pass. The
@@ -1146,7 +1233,15 @@ impl MetalShadowRayTracer {
         material_textures: &[&GpuTexture],
         depth: &GpuTexture,
         environment: &GpuTexture,
+        raw_output: &GpuTexture,
+        guide: &GpuTexture,
+        history_read: &GpuTexture,
+        history_write: &GpuTexture,
+        count_read: &GpuTexture,
+        count_write: &GpuTexture,
+        filter_scratch: &GpuTexture,
         output: &GpuTexture,
+        reset: bool,
     ) {
         for object in current_objects {
             validate_instance_source_address(
@@ -1191,7 +1286,11 @@ impl MetalShadowRayTracer {
         });
         bindings.push(GpuBinding::Texture {
             binding: 2,
-            texture: output,
+            texture: raw_output,
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 3,
+            texture: guide,
         });
         for i in 0..MAX_RT_MATERIAL_TEXTURES {
             let texture = material_textures
@@ -1240,6 +1339,59 @@ impl MetalShadowRayTracer {
                 encoder.commit_and_continue(device);
             }
         }
+
+        let reconstruction = SubsurfaceReconstructionParams {
+            inv_view_proj: params.inv_view_proj,
+            size: params.render_size,
+            reset: u32::from(reset),
+            max_history: 64,
+            step: 1,
+            pixel_radius: 4.5,
+            filter_strength: 1.0,
+            _pad: 0,
+        };
+        encoder.dispatch_compute(
+            &self.subsurface_reconstruct_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 1, data: subsurface_reconstruction_params_bytes(&reconstruction) },
+                GpuBinding::Texture { binding: 0, texture: raw_output },
+                GpuBinding::Texture { binding: 1, texture: guide },
+                GpuBinding::Texture { binding: 2, texture: history_read },
+                GpuBinding::Texture { binding: 3, texture: history_write },
+                GpuBinding::Texture { binding: 4, texture: count_read },
+                GpuBinding::Texture { binding: 5, texture: count_write },
+                GpuBinding::Texture { binding: 6, texture: output },
+            ],
+            dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
+            "node.render_scene subsurface reconstruct",
+        );
+        let mut filter_params = reconstruction;
+        filter_params.step = 1;
+        encoder.dispatch_compute(
+            &self.subsurface_filter_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 1, data: subsurface_reconstruction_params_bytes(&filter_params) },
+                GpuBinding::Texture { binding: 0, texture: depth },
+                GpuBinding::Texture { binding: 1, texture: guide },
+                GpuBinding::Texture { binding: 2, texture: output },
+                GpuBinding::Texture { binding: 3, texture: filter_scratch },
+            ],
+            dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
+            "node.render_scene subsurface filter step1",
+        );
+        filter_params.step = 2;
+        encoder.dispatch_compute(
+            &self.subsurface_filter_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 1, data: subsurface_reconstruction_params_bytes(&filter_params) },
+                GpuBinding::Texture { binding: 0, texture: depth },
+                GpuBinding::Texture { binding: 1, texture: guide },
+                GpuBinding::Texture { binding: 2, texture: filter_scratch },
+                GpuBinding::Texture { binding: 3, texture: output },
+            ],
+            dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
+            "node.render_scene subsurface filter step2",
+        );
     }
 
     /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` section 8
@@ -1966,6 +2118,23 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 7 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_svt,
         });
+        bindings.push(GpuBinding::Buffer {
+            binding: 10,
+            buffer: self.secondary_lights.as_ref().unwrap_or(gi_materials),
+            offset: 0,
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 8 + MAX_RT_MATERIAL_TEXTURES as u32,
+            texture: self.secondary_irradiance.as_ref().unwrap_or(prefiltered_env),
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 9 + MAX_RT_MATERIAL_TEXTURES as u32,
+            texture: self.secondary_brdf_lut.as_ref().unwrap_or(prefiltered_env),
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 10 + MAX_RT_MATERIAL_TEXTURES as u32,
+            texture: self.secondary_prefiltered_sheen.as_ref().unwrap_or(prefiltered_env),
+        });
         let caster_count = params.caster_count.min(MAX_RT_CASTERS as u32);
         let sun_count = params.casters[..caster_count as usize].iter()
             .filter(|caster| caster.kind == 0).count() as u32;
@@ -1976,8 +2145,13 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             .mapped_ptr()
             .map(|p| unsafe { (p as *const u32).read_unaligned() != 0 })
             .unwrap_or(false);
+        let diffuse_light_count = if params.light_data_addr != 0 {
+            params.light_count
+        } else {
+            sun_count
+        };
         let query_units = estimate_trace_query_units_per_pixel(
-            caster_count, sun_count, params.shadow_spp, params.ao_spp,
+            caster_count, diffuse_light_count, params.shadow_spp, params.ao_spp,
             params.gi_spp, params.refl_spp, emissive_active,
         ).expect("validated RT quality must have a finite query estimate");
         let mut regions = plan_trace_regions(
@@ -2926,7 +3100,7 @@ mod tests {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-            extra_material_textures: [None; 3],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,

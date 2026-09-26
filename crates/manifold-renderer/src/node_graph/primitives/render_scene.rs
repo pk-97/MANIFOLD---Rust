@@ -779,6 +779,9 @@ pub struct RenderScene {
     /// group's depth-stencil state, drawn as `DepthMsaaPassDesc::second_pass`
     /// right after the opaque group in the same encoder pass.
     blend_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
+    /// E2b: transmissive layer colour compares against its nearest-surface
+    /// depth while keeping depth writes disabled.
+    transmission_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// Memoryless 4x-MSAA color + depth targets for the scene pass, sized
     /// to the render target. Both resolve on-chip; only `msaa_color`
     /// resolves out to the single-sample output. `msaa_real` records which
@@ -1093,6 +1096,13 @@ pub struct RenderScene {
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
+    /// E2b: per-layer camera depth scratch, seeded from the opaque snapshot
+    /// before each transmissive draw. Allocated only when transmission is
+    /// present.
+    transmissive_depth_scratch: Option<manifold_gpu::GpuTexture>,
+    transmissive_depth_scratch_width: u32,
+    transmissive_depth_scratch_height: u32,
+    transmissive_depth_error: Option<String>,
     /// RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the resident RT scene
     /// (one BLAS per object instanced into one TLAS) + its dirty-check
     /// key (hash of every object's vertex-buffer identity + triangle
@@ -1149,6 +1159,10 @@ pub struct RenderScene {
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
     rt_gi_upload: Vec<manifold_gpu::raytrace::GiMaterial>,
+    // Empty between frames; retain heap capacity instead of putting the
+    // expanded per-object material records on the render thread's stack.
+    rt_objects_scratch: Vec<manifold_gpu::raytrace::RtObjectGeometry<'static>>,
+    rt_materials_scratch: Vec<manifold_gpu::raytrace::GiMaterial>,
     /// RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): true when
     /// any object in the scene has `diffuse_transmission_factor > 0` — selects
     /// the translucent trace pipeline (walk_with_transmission) at dispatch time.
@@ -1421,6 +1435,7 @@ fn compute_rt_lighting_key(
     rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
     ambient_tint: &[f32],
     envmap_content: Option<ContentVersion>,
+    light_data: &[[f32; 4]],
 ) -> u64 {
     let mut k = 0xcbf2_9ce4_8422_2325u64;
     let mut mix = |bits: u32| {
@@ -1448,6 +1463,7 @@ fn compute_rt_lighting_key(
     use std::hash::{Hash, Hasher};
     let mut hasher = ahash::AHasher::default();
     k.hash(&mut hasher);
+    hasher.write(bytemuck::cast_slice(light_data));
     envmap_content.hash(&mut hasher);
     hasher.finish()
 }
@@ -1555,9 +1571,20 @@ const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
 type RtMeshSnapshot = Option<(MeshRevision, Option<ContentVersion>)>;
 type RtFrameTables<'a> = (
-    arrayvec::ArrayVec<manifold_gpu::raytrace::GiMaterial, { OBJECT_SAFETY_MAX as usize }>,
     manifold_gpu::raytrace::RtMaterialTextures<'a>, u64, u64, bool,
 );
+
+/// Recycle only the allocation, never references from a previous frame.
+fn recycle_rt_objects<'old, 'new>(
+    mut objects: Vec<manifold_gpu::raytrace::RtObjectGeometry<'old>>,
+) -> Vec<manifold_gpu::raytrace::RtObjectGeometry<'new>> {
+    objects.clear();
+    let mut allocation = std::mem::ManuallyDrop::new(objects);
+    // SAFETY: clear dropped every element before its borrowed resources can
+    // expire. Both element types have identical layout (only the lifetime
+    // differs); the new Vec owns the same allocation with length zero.
+    unsafe { Vec::from_raw_parts(allocation.as_mut_ptr().cast(), 0, allocation.capacity()) }
+}
 
 fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderFailure {
     use manifold_gpu::raytrace::RtAccelError;
@@ -1629,7 +1656,7 @@ struct ObjectDraw<'ctx> {
     vertices_content: Option<ContentVersion>,
     mesh_revision: Option<MeshRevision>,
     topology_hint: Option<ContentVersion>,
-    rt_texture_content: [Option<ContentVersion>; 7],
+    rt_texture_content: [Option<ContentVersion>; 19],
     instances_content: Option<ContentVersion>,
     weights_content: Option<ContentVersion>,
     /// Per-object appearance gain, folded into the shadow dirtiness key.
@@ -2289,9 +2316,9 @@ impl RenderScene {
                 topology_hint: object.topology.and_then(|slot| inputs.content_version_of(slot)),
                 geometry_content_known: [object.mesh, object.instances, object.topology]
                     .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
-                appearance_content_known: [object.weights, object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map]
+                appearance_content_known: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map, object.clearcoat_map, object.clearcoat_roughness_map, object.sheen_color_map, object.sheen_roughness_map, object.transmission_map, object.volume_thickness_map, object.clearcoat_normal_map, object.iridescence_map, object.iridescence_thickness_map, object.diffuse_transmission_map, object.diffuse_transmission_color_map, object.occlusion_map, object.weights]
                     .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
-                rt_texture_content: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map]
+                rt_texture_content: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map, object.clearcoat_map, object.clearcoat_roughness_map, object.sheen_color_map, object.sheen_roughness_map, object.transmission_map, object.volume_thickness_map, object.clearcoat_normal_map, object.iridescence_map, object.iridescence_thickness_map, object.diffuse_transmission_map, object.diffuse_transmission_color_map, object.occlusion_map]
                     .map(|slot| slot.and_then(|slot| ctx.inputs.content_version_of(slot))),
                 instances_content,
                 weights_content: weights_slot.and_then(|s| inputs.content_version_of(s)),
@@ -2307,6 +2334,7 @@ impl RenderScene {
         }
 
         if draws.is_empty() {
+            self.subsurface_pass.reset();
             return None;
         }
 
@@ -2360,6 +2388,14 @@ impl RenderScene {
                 self.blend_depth_stencil = Some(gpu.device.create_depth_stencil_state(
                     &manifold_gpu::GpuDepthStencilDesc {
                         compare: manifold_gpu::GpuCompareFunction::Greater,
+                        write_enabled: false,
+                    },
+                ));
+            }
+            if has_transmission && self.transmission_depth_stencil.is_none() {
+                self.transmission_depth_stencil = Some(gpu.device.create_depth_stencil_state(
+                    &manifold_gpu::GpuDepthStencilDesc {
+                        compare: manifold_gpu::GpuCompareFunction::GreaterEqual,
                         write_enabled: false,
                     },
                 ));
@@ -2519,6 +2555,9 @@ impl RenderScene {
             // place otherwise) would conflict with those borrows under NLL.
             if has_transmission || rt_enabled || has_subsurface {
                 self.ensure_opaque_depth_snapshot(gpu.device, width, height);
+            }
+            if has_transmission {
+                self.transmissive_depth_error = self.ensure_transmissive_depth_scratch(gpu.device, width, height).err();
             }
             if has_subsurface {
                 self.subsurface_pass.ensure(gpu.device, width, height, draws.len());
@@ -2858,6 +2897,7 @@ impl RenderScene {
         rt_ready: &mut bool,
         objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
         draws: &[ObjectDraw<'ctx>],
+        gi_materials_data: &mut Vec<manifold_gpu::raytrace::GiMaterial>,
     ) -> Result<RtFrameTables<'ctx>, FrameRenderFailure> {
             // Reject an unrepresentable material set before publishing tables.
             // Missing texture bindings must never turn a cutout solid or lose a lobe.
@@ -2879,7 +2919,8 @@ impl RenderScene {
             // RS-B: build gi_materials alongside objects (SAME order) for
             // the emissive light table at accel-build time. Reused below
             // for the GPU upload at dispatch time.
-            let gi_materials_data: arrayvec::ArrayVec<manifold_gpu::raytrace::GiMaterial, { OBJECT_SAFETY_MAX as usize }> = opaque_draws.clone()
+            gi_materials_data.clear();
+            gi_materials_data.extend(opaque_draws.clone()
                 .map(|d| {
                     manifold_gpu::raytrace::GiMaterial::new(
                         [
@@ -2914,9 +2955,18 @@ impl RenderScene {
                              (dielectric*tint[1]).min(1.0)*weight,
                              (dielectric*tint[2]).min(1.0)*weight, weight]
                         },
+                    ).with_extensions(
+                        [d.uniforms.alpha_params[2], d.uniforms.alpha_params[3], d.uniforms.normal_uv_t[3], 0.0],
+                        d.uniforms.sheen_params,
+                        d.uniforms.iridescence_params,
+                        [d.uniforms.transmission_volume_params[0], d.uniforms.pbr_metallic_roughness[2],
+                            d.uniforms.transmission_volume_params[1], d.uniforms.anisotropy_dispersion_params[2]],
+                        [d.uniforms.volume_attenuation_color[0], d.uniforms.volume_attenuation_color[1],
+                            d.uniforms.volume_attenuation_color[2], d.uniforms.transmission_volume_params[2]],
+                        [d.uniforms.occlusion_uv_t[2], 0.0, 0.0, 0.0],
                     )
                 })
-                .collect();
+                );
             // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4):
             // scene-level flag — true if any object's diffuse_transmission_factor > 0.
             self.rt_has_translucency = gi_materials_data.iter().any(|m| m.translucency[0] > 0.0);
@@ -2983,13 +3033,19 @@ impl RenderScene {
                 appearance_hasher.content(d.weights_content);
                 appearance_hasher.parameter_bytes(&d.gain.to_bits().to_ne_bytes());
             }
-            for material in &gi_materials_data {
+            for material in gi_materials_data.iter() {
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.albedo));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.emissive));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.metallic_roughness));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.translucency));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.specular));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.kind));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.clearcoat));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.sheen));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.iridescence));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.transmission));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.attenuation));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.surface_misc));
             }
             for draw in opaque_draws.clone() {
                 for content in draw.rt_texture_content { appearance_hasher.content(content); }
@@ -3117,7 +3173,7 @@ impl RenderScene {
             let accel = self.rt_accel.as_mut().ok_or(FrameRenderFailure::RtNeedsPreparation)?;
             let update = tracer.encode_accel_update(
                 gpu.device, gpu.native_enc, accel, objects, &self.rt_changes,
-                &gi_materials_data, instance_changed, changes.refresh_emissive(),
+                gi_materials_data, instance_changed, changes.refresh_emissive(),
             ).map_err(rt_frame_failure)?;
             gpu.rt_updates.blas_builds += update.blas_builds;
             gpu.rt_updates.blas_refits += update.blas_refits;
@@ -3156,7 +3212,7 @@ impl RenderScene {
             self.rt_accel_key = Some(accel_key);
             self.rt_appearance_key = Some(appearance_key);
             *rt_ready = true;
-        Ok((gi_materials_data, alpha_textures, topo_key, content_key, history_changed))
+        Ok((alpha_textures, topo_key, content_key, history_changed))
     }
     /// BUG-trh7 stage 2, pass 7b: the RT trace + accumulate half — trace
     /// gate, emissive stats binding, rt_casters, mask/lighting dispatches,
@@ -3307,6 +3363,12 @@ impl RenderScene {
                 // lighting dispatch). Gated on rt_shadows_enabled: if shadows
                 // are off, this dispatch is skipped entirely.
                 let mask_shadow_spp: u32 = if rt_shadows_enabled { rtq.shadow_spp } else { 0 };
+                self.rt_tracer.as_mut().expect("ensured").set_secondary_lighting(
+                    &self.light_buffers[self.light_frame],
+                    self.irradiance_map.as_ref().expect("ensured"),
+                    self.brdf_lut.as_ref().expect("ensured"),
+                    self.prefiltered_sheen.as_ref().unwrap_or_else(|| self.prefiltered_specular.as_ref().expect("ensured")),
+                );
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     mask_shadow_spp,
@@ -3327,7 +3389,8 @@ impl RenderScene {
                 )
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
-                .with_slot_row_base(objects.len() as u32);
+                .with_slot_row_base(objects.len() as u32)
+                .with_lights(pre.light_count, self.light_buffers[self.light_frame].gpu_address());
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
                 // D16a fuse rule: shadow_spp=1 when mask and lighting trace
@@ -3367,7 +3430,8 @@ impl RenderScene {
                 )
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
-                .with_slot_row_base(objects.len() as u32);
+                .with_slot_row_base(objects.len() as u32)
+                .with_lights(pre.light_count, self.light_buffers[self.light_frame].gpu_address());
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
                 // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
@@ -3666,7 +3730,7 @@ impl RenderScene {
                 // + svt slot). Gesture detection: two consecutive changes arm
                 // a hold counter.
                 let lighting_key =
-                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_content);
+                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_content, &pre.light_data);
                 let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
                     gesture_detect(
                         self.rt_lighting_key,
@@ -4481,8 +4545,8 @@ impl RenderScene {
         // right after (occlusion by opaque geometry falls out of the shared,
         // still-live MSAA depth buffer; no separate resolve/reclear).
         let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
-        let mut blend_entries: Vec<(f32, manifold_gpu::DepthMsaaDraw)> = Vec::new();
-        for (draw, bindings) in draws.iter().zip(&binding_sets) {
+        let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> = Vec::new();
+        for (draw_index, (draw, bindings)) in draws.iter().zip(&binding_sets).enumerate() {
             // SCENE_RENDER_MODE_DESIGN.md D6/D8: the color pass carries each
             // draw's fill mode (Lines under wireframe) and topology (Point
             // under Points). The depth/shadow batches never see either —
@@ -4508,7 +4572,7 @@ impl RenderScene {
                 )
             };
             if draw.routes_to_transparent() {
-                blend_entries.push((draw.sort_depth, call));
+                blend_entries.push((draw.sort_depth, draw_index, call));
             } else {
                 draw_calls.push(call);
             }
@@ -4517,8 +4581,11 @@ impl RenderScene {
         // the camera's forward axis) drawn first, so nearer glass blends
         // correctly over farther glass.
         blend_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> =
-            blend_entries.into_iter().map(|(_, call)| call).collect();
+        let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = if has_transmission {
+            Vec::new()
+        } else {
+            blend_entries.iter().map(|(_, _, call)| *call).collect()
+        };
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: when the scene has a
         // transmissive object, the Blend group is pulled OUT of Pass A
         // entirely and drawn as a separate Pass B below (after the opaque-
@@ -4710,12 +4777,78 @@ impl RenderScene {
         if has_transmission {
             let opaque_scene_color = self.opaque_scene_color.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
-            let blend_depth_stencil = self.blend_depth_stencil.as_ref().expect("ensured");
-            let gpu = ctx.gpu_encoder();
+            let transmissive_depth_scratch = self
+                .transmissive_depth_scratch
+                .as_ref()
+                .expect("transmission depth scratch ensured above");
+            let opaque_depth_stencil = self.depth_stencil.as_ref().expect("ensured");
+            let transmission_depth_stencil = self
+                .transmission_depth_stencil
+                .as_ref()
+                .expect("transmission depth state ensured above");
+            let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             // Capture the already-composited layers before each farther-to-nearer
             // draw. Every glass layer then transmits the layers behind it, instead
             // of all panes replacing one another with the original opaque image.
-            for draw_call in &blend_draw_calls {
+            for (_, draw_index, draw_call) in &blend_entries {
+                let draw = &draws[*draw_index];
+                let nearest_surface = draw.is_transmissive && !draw.points
+                    && draw.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill;
+                let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
+                let shadow_bindings = [
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&shadow_uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: draw.vertices,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: draw.instances.unwrap_or(identity_stub),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: draw.weights.unwrap_or(draw.vertices),
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: draw.base_color_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Sampler {
+                        binding: 5,
+                        sampler: &self.material_samplers[&Self::sampler_cache_key(draw.sampler_descs[0])],
+                    },
+                ];
+                let depth_draw = manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    &shadow_pipeline,
+                    &shadow_bindings,
+                    mesh_vertex_count(draw.vertices),
+                    draw.instance_count,
+                );
+                let gpu = ctx.gpu_encoder();
+                // The layer prepass starts from opaque depth, so a solid mesh
+                // cannot reveal a triangle behind an opaque surface and depth
+                // testing within the mesh selects its nearest surface.
+                if nearest_surface {
+                    gpu.native_enc.copy_texture_to_texture(
+                        opaque_depth_snapshot,
+                        transmissive_depth_scratch,
+                        width,
+                        height,
+                        1,
+                    );
+                    gpu.native_enc.draw_instanced_depth_only_batch_loaded(
+                        transmissive_depth_scratch,
+                        opaque_depth_stencil,
+                        std::slice::from_ref(&depth_draw),
+                        "node.render_scene transmissive depth prepass",
+                    );
+                }
                 gpu.native_enc.copy_texture_to_texture(
                     resolve_target, opaque_scene_color, width, height, 1,
                 );
@@ -4724,8 +4857,8 @@ impl RenderScene {
                 }
                 gpu.native_enc.draw_instanced_depth_batch(
                     resolve_target,
-                    opaque_depth_snapshot,
-                    blend_depth_stencil,
+                    if nearest_surface { transmissive_depth_scratch } else { opaque_depth_snapshot },
+                    if nearest_surface { transmission_depth_stencil } else { self.blend_depth_stencil.as_ref().expect("ensured") },
                     std::slice::from_ref(draw_call),
                     manifold_gpu::GpuLoadAction::Load,
                     manifold_gpu::GpuLoadAction::Load,
@@ -5279,11 +5412,12 @@ impl RenderScene {
     /// RT block).
     fn collect_rt_objects<'ctx>(
         draws: &[ObjectDraw<'ctx>], rt_enabled: bool,
-    ) -> arrayvec::ArrayVec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>, { OBJECT_SAFETY_MAX as usize }> {
+        rt_objects: &mut Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>>,
+    ) {
         // Resolve resident topology before authoring RT consumer flags or
         // selecting raster fallback. Reuse this exact object list for AS work.
-        let rt_objects: arrayvec::ArrayVec<manifold_gpu::raytrace::RtObjectGeometry, { OBJECT_SAFETY_MAX as usize }> =
-            draws.iter()
+        rt_objects.clear();
+        rt_objects.extend(draws.iter()
                 .filter(|d| rt_enabled && !d.routes_to_transparent() && d.instance_count > 0)
                 .map(|d| {
                     let rt_instances_wired = d.instances.is_some();
@@ -5371,23 +5505,22 @@ impl RenderScene {
                     normal_scale: d.uniforms.normal_uv_t[2],
                     base_color_alpha: d.uniforms.base_color[3],
                     tangent_offset: 48,
-                    extra_material_textures: [d.anisotropy_map, d.specular_map, d.specular_color_map],
+                    extra_material_textures: [d.anisotropy_map, d.specular_map, d.specular_color_map, d.clearcoat_map, d.clearcoat_roughness_map, d.sheen_color_map, d.sheen_roughness_map, d.transmission_map, d.volume_thickness_map, d.clearcoat_normal_map, d.iridescence_map, d.iridescence_thickness_map, d.diffuse_transmission_map, d.diffuse_transmission_color_map, d.occlusion_map],
                     material_attributes: manifold_gpu::raytrace::RtMaterialAttributes {
                         uv1_offset: std::mem::offset_of!(MeshVertex, _pad2) as u32,
                         color_offset: std::mem::offset_of!(MeshVertex, color) as u32,
                         sampling: std::array::from_fn(|i| {
-                            let m = d.map_uniforms[[0, 1, 2, 3, 4, 9, 13, 14][i]];
+                            let m = d.map_uniforms[[0, 1, 2, 3, 4, 9, 13, 14, 5, 6, 7, 8, 10, 11, 12, 15, 16, 17, 18, 3][i]];
                             [m.offset_set[2] as u32, m.sampling[0], m.sampling[1], m.sampling[2] & 1]
                         }),
-                        extension_uv_transforms: [9, 13, 14].map(|i| {
+                        extension_uv_transforms: [9, 13, 14, 5, 6, 7, 8, 10, 11, 12, 15, 16, 17, 18, 3].map(|i| {
                             let m = d.map_uniforms[i];
                             [m.matrix[0], m.matrix[1], m.matrix[2], m.matrix[3], m.offset_set[0], m.offset_set[1]]
                         }),
                     },
                 }
                 })
-                .collect();
-        rt_objects
+                );
     }
 
     fn author_rt_flags<'ctx, 'gpu>(
@@ -6027,6 +6160,7 @@ impl RenderScene {
             pipelines: AHashMap::new(),
             depth_stencil: None,
             blend_depth_stencil: None,
+            transmission_depth_stencil: None,
             msaa_color: None,
             depth_texture: None,
             msaa_real: false,
@@ -6106,6 +6240,10 @@ impl RenderScene {
             opaque_depth_snapshot: None,
             opaque_depth_snapshot_width: 0,
             opaque_depth_snapshot_height: 0,
+            transmissive_depth_scratch: None,
+            transmissive_depth_scratch_width: 0,
+            transmissive_depth_scratch_height: 0,
+            transmissive_depth_error: None,
             rt_tracer: None,
             rt_accel: None,
             #[cfg(feature = "gpu-proofs")]
@@ -6130,6 +6268,8 @@ impl RenderScene {
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
             rt_gi_upload: Vec::new(),
+            rt_objects_scratch: Vec::new(),
+            rt_materials_scratch: Vec::new(),
             rt_has_translucency: false,
             rt_prev_toggle_shadows: None,
             rt_prev_toggle_ao: None,
@@ -6217,6 +6357,8 @@ impl RenderScene {
         let objects = objects.clamp(1, OBJECT_SAFETY_MAX);
         let lights = lights.clamp(0, LIGHT_SLIDER_MAX);
         let n_obj = objects as usize;
+        self.rt_objects_scratch.reserve(n_obj.saturating_sub(self.rt_objects_scratch.len()));
+        self.rt_materials_scratch.reserve(n_obj.saturating_sub(self.rt_materials_scratch.len()));
         self.rt_mesh_revisions.resize(n_obj, None);
         self.rt_mesh_revisions.fill(None);
         self.rt_changes = Vec::with_capacity(n_obj);
@@ -7099,6 +7241,39 @@ impl RenderScene {
         }));
         self.opaque_depth_snapshot_width = width;
         self.opaque_depth_snapshot_height = height;
+    }
+
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: allocate the single-sample
+    /// depth attachment used to find each transmissive mesh's nearest visible
+    /// surface. It is reused for every sorted layer in the frame.
+    fn ensure_transmissive_depth_scratch(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        if self.transmissive_depth_scratch_width == width
+            && self.transmissive_depth_scratch_height == height
+            && self.transmissive_depth_scratch.is_some()
+        {
+            return Ok(());
+        }
+        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(), u64::from(width) * u64::from(height) * 4,
+        ).map_err(|error| format!("Glass depth resource admission failed: {error}"))?;
+        self.transmissive_depth_scratch = Some(device.try_create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Depth32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::COPY_DST,
+            label: "node.render_scene transmissive depth scratch (E2b)",
+            mip_levels: 1,
+        })?);
+        self.transmissive_depth_scratch_width = width;
+        self.transmissive_depth_scratch_height = height;
+        Ok(())
     }
 
     /// RAYTRACING_DESIGN.md RT-D3: lazily build the raw-MSL shadow-ray
@@ -8544,6 +8719,7 @@ impl EffectNode for RenderScene {
         // retain prepared geometry/resources, restart sampling and route all
         // temporal consumers through the existing first-frame reset decision.
         self.jitter_frame_index = 0;
+        self.subsurface_pass.reset();
         self.rt_reset_detector = TemporalResetDetector::new();
         self.rt_history_ping = 0;
         self.rt_irr_needs_reset = true;
@@ -8790,6 +8966,19 @@ impl RenderScene {
         self.render_objects(ctx, Some(object));
     }
     fn render_objects<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>, single_object: Option<SceneObject>) {
+        let mut objects = recycle_rt_objects(std::mem::take(&mut self.rt_objects_scratch));
+        let mut materials = std::mem::take(&mut self.rt_materials_scratch);
+        self.render_objects_frame(ctx, single_object, &mut objects, &mut materials);
+        self.rt_objects_scratch = recycle_rt_objects(objects);
+        materials.clear();
+        self.rt_materials_scratch = materials;
+    }
+
+    fn render_objects_frame<'ctx, 'gpu>(
+        &mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>, single_object: Option<SceneObject>,
+        rt_objects: &mut Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>>,
+        gi_materials_data: &mut Vec<manifold_gpu::raytrace::GiMaterial>,
+    ) {
         // BUG-trh7 stage 2: the preamble is pass 0 (`frame_preliminaries`);
         // the destructure below copies the Copy fields out of the shared
         // prelude and borrows the three read-only Vecs, so later pass calls
@@ -8854,14 +9043,15 @@ impl RenderScene {
                 opaque_index += 1;
             }
         }
+        if !has_subsurface { self.subsurface_pass.reset(); }
         let prepare_rt = rt_enabled || has_subsurface || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
-        let rt_objects = Self::collect_rt_objects(&draws, prepare_rt);
+        Self::collect_rt_objects(&draws, prepare_rt, rt_objects);
         let rt_tables = if prepare_rt && !rt_objects.is_empty() {
             self.ensure_rt_tracer(ctx.gpu_encoder().device);
-            match self.rt_accel_maintenance(ctx, &mut rt_ready, &rt_objects, &draws) {
-                Ok((materials, textures, topo, content, changed)) => {
+            match self.rt_accel_maintenance(ctx, &mut rt_ready, rt_objects, &draws, gi_materials_data) {
+                Ok((textures, topo, content, changed)) => {
                     pre.reset_decision |= changed;
-                    Some((materials, textures, topo, content))
+                    Some((textures, topo, content))
                 }
                 Err(failure) => {
                     ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(failure));
@@ -8885,6 +9075,11 @@ impl RenderScene {
             has_transmission,
             rt_ready,
         );
+        if has_transmission && let Some(error) = &self.transmissive_depth_error {
+            ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation));
+            ctx.error(error);
+            return;
+        }
         // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
         // `ibl_convolution_pass`) — returns the envmap generation the RT
         // block's lighting key folds in.
@@ -8918,11 +9113,11 @@ impl RenderScene {
         self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission, has_subsurface);
 
         if has_subsurface {
-            let Some((materials, textures, _, _)) = rt_tables.as_ref() else {
+            let Some((textures, _, _)) = rt_tables.as_ref() else {
                 ctx.error("Subsurface scattering has no current-frame geometry acceleration data.");
                 return;
             };
-            if !self.subsurface_trace(ctx, &pre, &opaque_draws, &rt_objects, materials, textures) {
+            if !self.subsurface_trace(ctx, &pre, &opaque_draws, rt_objects, gi_materials_data, textures) {
                 return;
             }
         }
@@ -8944,7 +9139,7 @@ impl RenderScene {
         // the accel below is instance-aware — one TLAS slot per wired
         // instance capacity, composed GPU-side (descriptor-build kernel),
         // so instanced objects trace one copy per live raster slot. ----
-        if let Some((gi_materials_data, alpha_textures, topo_key, content_key)) = rt_tables
+        if let Some((alpha_textures, topo_key, content_key)) = rt_tables
             && rt_enabled
         {
             let objects = rt_objects;
@@ -8960,9 +9155,9 @@ impl RenderScene {
                 &mut irr_filtered_valid,
                 denoise_active,
                 rt_just_resumed,
-                &objects,
+                objects,
                 &opaque_draws,
-                &gi_materials_data,
+                gi_materials_data,
                 &alpha_textures,
                 topo_key,
                 content_key,

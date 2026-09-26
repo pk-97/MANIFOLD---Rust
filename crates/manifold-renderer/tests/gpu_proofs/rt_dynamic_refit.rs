@@ -122,7 +122,7 @@ fn object<'a>(vertex: &'a GpuBuffer, instances: Option<&'a GpuBuffer>) -> RtObje
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
-        extra_material_textures: [None; 3],
+        extra_material_textures: [None; 15],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
