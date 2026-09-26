@@ -204,99 +204,105 @@ fn varying_color_summary_enables_vertex_colors() {
 
 #[test]
 fn legacy_spec_gloss_recovers_factors_binding_and_gloss_default_once() {
-    let (path, mut graph) = imported_fixture();
-    find_node_mut(&mut graph.nodes, "node.gltf_mesh_source")
-        .unwrap()
-        .params
-        .remove("vertex_colors");
-    let mat_id = material_node(&mut graph).node_id.clone();
-    let mut material = full_material(0, "LegacySG", 3);
-    material.legacy_specular_factor = Some(0.2);
-    material.specular_color_factor = [0.5, 0.75, 1.0];
-    material.mr_texture_is_gloss_alpha = true;
-    material.roughness = 0.8;
-    let mut cache = cached_material(&path, material);
-    let meta = graph.preset_metadata.as_mut().expect("import metadata");
-    let mut binding = meta.bindings.iter().find(|binding| {
+    for missing_tint in [false, true] {
+        let (path, mut graph) = imported_fixture();
+        find_node_mut(&mut graph.nodes, "node.gltf_mesh_source")
+            .unwrap()
+            .params
+            .remove("vertex_colors");
+        let mat_id = material_node(&mut graph).node_id.clone();
+        let mut material = full_material(0, "LegacySG", 3);
+        material.legacy_specular_factor = Some(0.2);
+        material.specular_color_factor = [0.5, 0.75, 1.0];
+        material.mr_texture_is_gloss_alpha = true;
+        material.roughness = 0.8;
+        let mut cache = cached_material(&path, material);
+        let meta = graph.preset_metadata.as_mut().expect("import metadata");
+        let mut binding = meta.bindings.iter().find(|binding| {
         matches!(&binding.target, BindingTarget::Node { node_id, .. } if node_id == &mat_id)
     }).cloned().expect("material binding fixture");
-    binding.id = "legacy_specular".to_string();
-    binding.label = "Legacy Specular".to_string();
-    binding.default_value = 0.2;
-    binding.target = BindingTarget::Node {
-        node_id: mat_id.clone(),
-        param: "specular".to_string(),
-    };
-    meta.bindings.push(binding);
-    {
+        binding.id = "legacy_specular".to_string();
+        binding.label = "Legacy Specular".to_string();
+        binding.default_value = 0.2;
+        binding.target = BindingTarget::Node {
+            node_id: mat_id.clone(),
+            param: "specular".to_string(),
+        };
+        meta.bindings.push(binding);
+        {
+            let mat = material_node(&mut graph);
+            mat.params.insert(
+                "specular".to_string(),
+                SerializedParamValue::Float { value: 0.2 },
+            );
+            for (name, value) in [
+                ("specular_tint_r", 1.0),
+                ("specular_tint_g", 1.0),
+                ("specular_tint_b", 1.0),
+            ] {
+                if missing_tint {
+                    mat.params.remove(name);
+                } else {
+                    mat.params
+                        .insert(name.to_string(), SerializedParamValue::Float { value });
+                }
+            }
+            mat.params.insert(
+                "roughness".to_string(),
+                SerializedParamValue::Float { value: 0.8 },
+            );
+        }
+        let result = upgrade_material_graph(&mut graph, &mut cache);
+        assert!(result.changed);
         let mat = material_node(&mut graph);
+        assert_eq!(
+            mat.params.get("specular"),
+            Some(&SerializedParamValue::Float { value: 1.0 })
+        );
+        assert_eq!(
+            mat.params.get("specular_tint_r"),
+            Some(&SerializedParamValue::Float { value: 0.5 })
+        );
+        assert_eq!(
+            mat.params.get("specular_tint_g"),
+            Some(&SerializedParamValue::Float { value: 0.75 })
+        );
+        assert_eq!(
+            mat.params.get("specular_tint_b"),
+            Some(&SerializedParamValue::Float { value: 1.0 })
+        );
+        assert_eq!(
+            mat.params.get("roughness"),
+            Some(&SerializedParamValue::Float { value: 1.0 })
+        );
+        assert!(
+            result
+                .binding_updates
+                .iter()
+                .any(|update| update.id == "legacy_specular"
+                    && update.old_value == 0.2
+                    && update.new_value == 1.0)
+        );
         mat.params.insert(
             "specular".to_string(),
-            SerializedParamValue::Float { value: 0.2 },
+            SerializedParamValue::Float { value: 0.7 },
         );
-        for (name, value) in [
-            ("specular_tint_r", 1.0),
-            ("specular_tint_g", 1.0),
-            ("specular_tint_b", 1.0),
-        ] {
-            mat.params
-                .insert(name.to_string(), SerializedParamValue::Float { value });
-        }
         mat.params.insert(
-            "roughness".to_string(),
-            SerializedParamValue::Float { value: 0.8 },
+            "specular_tint_r".to_string(),
+            SerializedParamValue::Float { value: 0.9 },
         );
+        let second = upgrade_material_graph(&mut graph, &mut cache);
+        assert!(!second.changed);
+        assert_eq!(
+            material_node(&mut graph).params.get("specular"),
+            Some(&SerializedParamValue::Float { value: 0.7 })
+        );
+        assert_eq!(
+            material_node(&mut graph).params.get("specular_tint_r"),
+            Some(&SerializedParamValue::Float { value: 0.9 })
+        );
+        std::fs::remove_file(path).ok();
     }
-    let result = upgrade_material_graph(&mut graph, &mut cache);
-    assert!(result.changed);
-    let mat = material_node(&mut graph);
-    assert_eq!(
-        mat.params.get("specular"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert_eq!(
-        mat.params.get("specular_tint_r"),
-        Some(&SerializedParamValue::Float { value: 0.5 })
-    );
-    assert_eq!(
-        mat.params.get("specular_tint_g"),
-        Some(&SerializedParamValue::Float { value: 0.75 })
-    );
-    assert_eq!(
-        mat.params.get("specular_tint_b"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert_eq!(
-        mat.params.get("roughness"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert!(
-        result
-            .binding_updates
-            .iter()
-            .any(|update| update.id == "legacy_specular"
-                && update.old_value == 0.2
-                && update.new_value == 1.0)
-    );
-    mat.params.insert(
-        "specular".to_string(),
-        SerializedParamValue::Float { value: 0.7 },
-    );
-    mat.params.insert(
-        "specular_tint_r".to_string(),
-        SerializedParamValue::Float { value: 0.9 },
-    );
-    let second = upgrade_material_graph(&mut graph, &mut cache);
-    assert!(!second.changed);
-    assert_eq!(
-        material_node(&mut graph).params.get("specular"),
-        Some(&SerializedParamValue::Float { value: 0.7 })
-    );
-    assert_eq!(
-        material_node(&mut graph).params.get("specular_tint_r"),
-        Some(&SerializedParamValue::Float { value: 0.9 })
-    );
-    std::fs::remove_file(path).ok();
 }
 
 fn collect_group_wires(

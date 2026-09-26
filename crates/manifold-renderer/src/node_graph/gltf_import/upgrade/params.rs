@@ -113,18 +113,11 @@ pub(super) fn repair_material_node(
     let mut defaults = generated_material_defaults(node, material);
     if node.type_id == "node.unlit_material" {
         retain_unlit_params(&mut defaults);
+        return fill_missing(node, defaults);
     }
+    // Compare authored fields before filling new defaults: a missing old tint
+    // means neutral, not an authored edit to the newly imported colour.
     let mut changed = false;
-    for (name, value) in defaults {
-        if node.params.contains_key(&name) {
-            continue;
-        }
-        node.params.insert(name, value);
-        changed = true;
-    }
-    if node.type_id != "node.pbr_material" {
-        return changed;
-    }
     if let Some(old_mean) = material.legacy_specular_factor {
         let old_tint = [
             float_param(node, "specular_tint_r"),
@@ -138,7 +131,7 @@ pub(super) fn repair_material_node(
             && !incoming.contains("specular_tint_b")
             && old_tint
                 .iter()
-                .all(|value| value.is_some_and(|v| approximately(v, 1.0)));
+                .all(|value| value.is_none_or(|v| approximately(v, 1.0)));
         if scalar_unchanged && tint_unchanged {
             changed |= replace_float(node, "specular", 1.0, old_mean, metadata, result);
             for (name, value) in [
@@ -161,6 +154,20 @@ pub(super) fn repair_material_node(
             changed |= replace_float(node, "roughness", 1.0, old, metadata, result);
         }
     }
+    changed | fill_missing(node, defaults)
+}
+
+fn fill_missing(
+    node: &mut EffectGraphNode,
+    defaults: BTreeMap<String, SerializedParamValue>,
+) -> bool {
+    let mut changed = false;
+    for (name, value) in defaults {
+        if let std::collections::btree_map::Entry::Vacant(entry) = node.params.entry(name) {
+            entry.insert(value);
+            changed = true;
+        }
+    }
     changed
 }
 fn replace_float(
@@ -171,9 +178,7 @@ fn replace_float(
     metadata: &mut manifold_core::effect_graph_def::PresetMetadata,
     result: &mut MaterialGraphUpgrade,
 ) -> bool {
-    let Some(value) = float_param(node, name) else {
-        return false;
-    };
+    let value = float_param(node, name).unwrap_or(old_value);
     if !approximately(value, old_value) || approximately(value, new_value) {
         return false;
     }
