@@ -59,6 +59,12 @@ pub enum ContentCommand {
     /// Apply render scale and resize the content pipeline as one content-owned,
     /// undoable operation.
     SetRenderScale(f32),
+    /// Select a tonemapping curve; selecting a named curve also enables it.
+    SetTonemapCurve(manifold_core::TonemapCurve),
+    /// Enable or disable the saved SDR tonemapping curve.
+    SetTonemapEnabled(bool),
+    /// Toggle the runtime-only SDR presentation preview.
+    SetSdrPreview(bool),
 
     // ── GPU ────────────────────────────────────────────────────────
     /// Resize the content pipeline to `(width, height)` output resolution

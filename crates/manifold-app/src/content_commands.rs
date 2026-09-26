@@ -1380,6 +1380,51 @@ impl ContentThread {
                     }
                 }
             }
+            ContentCommand::SetTonemapCurve(new_curve) => {
+                let change = self.engine.project().and_then(|project| {
+                    let old_curve = project.settings.tonemap_curve;
+                    let old_enabled = project.settings.tonemap_enabled;
+                    (new_curve != old_curve || !old_enabled).then(|| {
+                        manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
+                            old_curve,
+                            old_enabled,
+                            new_curve,
+                            true,
+                        )
+                    })
+                });
+                if let Some(command) = change {
+                    self.handle_command(ContentCommand::Execute(Box::new(command)));
+                }
+            }
+            ContentCommand::SetTonemapEnabled(enabled) => {
+                let change = self.engine.project().and_then(|project| {
+                    let old_curve = project.settings.tonemap_curve;
+                    let old_enabled = project.settings.tonemap_enabled;
+                    (enabled != old_enabled).then(|| {
+                        manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
+                            old_curve,
+                            old_enabled,
+                            old_curve,
+                            enabled,
+                        )
+                    })
+                });
+                if let Some(command) = change {
+                    self.handle_command(ContentCommand::Execute(Box::new(command)));
+                }
+            }
+            ContentCommand::SetSdrPreview(enabled) => {
+                if self.content_pipeline.set_sdr_preview(enabled) {
+                    self.engine.mark_compositor_dirty_now();
+                    // Runtime preview state does not belong in EditingService
+                    // history, but it must publish a paused snapshot. Force
+                    // the existing version-gated publisher without changing
+                    // the project's data version or saved state.
+                    self.last_data_version =
+                        self.editing_service.data_version().wrapping_sub(1);
+                }
+            }
             ContentCommand::SetFrameRate(fps) => {
                 if let Some(p) = self.engine.project_mut() {
                     p.settings.frame_rate = fps as f32;

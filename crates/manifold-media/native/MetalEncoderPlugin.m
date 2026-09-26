@@ -407,18 +407,15 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         MetalEncoderState* state = (MetalEncoderState*)handle;
 
         if (state->assetWriter.status != AVAssetWriterStatusWriting)
-            return ME_ERR_WRITER_NOT_READY;
-
-        // Wait for the writer to be ready for more data (non-blocking spin)
-        // In practice this returns immediately for offline encoding.
-        int spinCount = 0;
-        while (!state->videoInput.isReadyForMoreMediaData && spinCount < 1000)
         {
-            usleep(100); // 0.1ms
-            spinCount++;
-        }
-        if (!state->videoInput.isReadyForMoreMediaData)
+            NSLog(@"[MetalEncoder] writer not writing at frame %d (status %ld): %@",
+                  frameIndex, (long)state->assetWriter.status, state->assetWriter.error);
             return ME_ERR_WRITER_NOT_READY;
+        }
+
+        // Readiness is required when appending, after the GPU copy below.
+        // Use the existing bounded backpressure wait there; an earlier 100ms
+        // timeout used to abort healthy writers before they could reach it.
 
         // Get a CVPixelBuffer from the adaptor's pool
         CVPixelBufferRef pixelBuffer = NULL;

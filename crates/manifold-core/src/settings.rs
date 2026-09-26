@@ -61,9 +61,13 @@ pub struct ProjectSettings {
     /// Valid notched values: 1.0 (native), 0.75 (quality), 0.5 (performance).
     #[serde(default = "default_one")]
     pub render_scale: f32,
-    /// Tonemapping curve for display output.
+    /// Tonemapping curve selected for final SDR presentation after master FX.
     #[serde(default)]
     pub tonemap_curve: TonemapCurve,
+    /// Whether the selected SDR tonemapping curve is applied. Defaults off for
+    /// compatibility with projects written before this opt-in control existed.
+    #[serde(default)]
+    pub tonemap_enabled: bool,
 
     /// Physical multi-display / totem arrangement (empty = legacy single
     /// canvas at `output_width`/`output_height`, today's behavior,
@@ -275,6 +279,7 @@ impl Default for ProjectSettings {
             resolution_preset: ResolutionPreset::FHD1080p,
             render_scale: 1.0,
             tonemap_curve: TonemapCurve::AcesNarkowicz,
+            tonemap_enabled: false,
             stage_layout: crate::stage::StageLayout::default(),
             master_opacity: 1.0,
             master_effects: Vec::new(),
@@ -657,6 +662,27 @@ mod tests {
     }
 
     #[test]
+    fn tonemap_enabled_missing_defaults_off_and_round_trips_curve() {
+        let legacy: ProjectSettings = serde_json::from_str(
+            r#"{"tonemapCurve":"agx"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.tonemap_curve, TonemapCurve::Agx);
+        assert!(!legacy.tonemap_enabled);
+
+        let settings = ProjectSettings {
+            tonemap_curve: TonemapCurve::KhronosPbrNeutral,
+            tonemap_enabled: true,
+            ..ProjectSettings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"tonemapEnabled\":true"));
+        let restored: ProjectSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.tonemap_curve, TonemapCurve::KhronosPbrNeutral);
+        assert!(restored.tonemap_enabled);
+    }
+
+    #[test]
     fn rt_ray_resolution_fraction() {
         assert_eq!(RtRayResolution::Quarter.fraction(), (1, 4));
         assert_eq!(RtRayResolution::Half.fraction(), (1, 2));
@@ -664,4 +690,3 @@ mod tests {
         assert_eq!(RtRayResolution::Native.fraction(), (1, 1));
     }
 }
-

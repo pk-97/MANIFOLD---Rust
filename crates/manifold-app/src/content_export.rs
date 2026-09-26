@@ -24,7 +24,10 @@ struct ExportFrameFailure {
 
 /// One production export frame immediately before the native encoder call.
 /// This is test-only evidence: it observes the already-rendered frame and
-/// never evaluates the graph or performs another GPU submission.
+/// never evaluates the graph or performs another render submission. The
+/// explicit colour-proof opt-in may additionally request one blocking readback
+/// of frame 0's already-mapped SDR texture or the canonical HDR texture fed to
+/// the PQ encoder.
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 #[derive(Clone, Debug)]
 pub(crate) struct ExportFrameObservation {
@@ -37,6 +40,8 @@ pub(crate) struct ExportFrameObservation {
     pub history_resets: u32,
     pub beat: f64,
     pub generator_values: Vec<(String, f32)>,
+    pub sdr_mapped_rgba16f: Option<Vec<u8>>,
+    pub hdr_scene_rgba16f: Option<Vec<u8>>,
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -54,6 +59,8 @@ pub(crate) enum ExportTestFault {
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 thread_local! {
     static EXPORT_OBSERVER: RefCell<Option<Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
+    static EXPORT_SDR_READBACK: Cell<bool> = const { Cell::new(false) };
+    static EXPORT_HDR_READBACK: Cell<bool> = const { Cell::new(false) };
     static EXPORT_FAILURE_FRAME: Cell<Option<(u32, ExportTestFault)>> = const { Cell::new(None) };
     static EXPORT_GPU_ABORT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 }
@@ -69,10 +76,25 @@ pub(crate) fn install_export_observer(
     sender: Sender<ExportFrameObservation>,
     fail_before_encode_frame: Option<(u32, ExportTestFault)>,
 ) -> ExportObservationGuard {
+    install_export_observer_with_export_readbacks(sender, fail_before_encode_frame, false, false)
+}
+
+/// Install the observer with explicit first-frame readback of already-rendered
+/// export textures. This remains test-only; normal observers perform no GPU
+/// readback and no production allocation.
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) fn install_export_observer_with_export_readbacks(
+    sender: Sender<ExportFrameObservation>,
+    fail_before_encode_frame: Option<(u32, ExportTestFault)>,
+    capture_first_sdr_frame: bool,
+    capture_first_hdr_frame: bool,
+) -> ExportObservationGuard {
     EXPORT_OBSERVER.with(|slot| {
         assert!(slot.borrow().is_none(), "export observer already installed");
         *slot.borrow_mut() = Some(sender);
     });
+    EXPORT_SDR_READBACK.with(|capture| capture.set(capture_first_sdr_frame));
+    EXPORT_HDR_READBACK.with(|capture| capture.set(capture_first_hdr_frame));
     EXPORT_FAILURE_FRAME.with(|frame| frame.set(fail_before_encode_frame));
     EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(false));
     ExportObservationGuard
@@ -82,6 +104,8 @@ pub(crate) fn install_export_observer(
 impl Drop for ExportObservationGuard {
     fn drop(&mut self) {
         EXPORT_OBSERVER.with(|slot| *slot.borrow_mut() = None);
+        EXPORT_SDR_READBACK.with(|capture| capture.set(false));
+        EXPORT_HDR_READBACK.with(|capture| capture.set(false));
         EXPORT_FAILURE_FRAME.with(|frame| frame.set(None));
     }
 }
@@ -103,6 +127,16 @@ fn export_test_fault(frame_idx: u32) -> Option<ExportTestFault> {
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 pub(crate) fn export_test_gpu_abort_requested() -> bool {
     EXPORT_GPU_ABORT_REQUESTED.with(Cell::get)
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+fn export_sdr_readback_requested(frame_idx: u32) -> bool {
+    frame_idx == 0 && EXPORT_SDR_READBACK.with(Cell::get)
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+fn export_hdr_readback_requested(frame_idx: u32) -> bool {
+    frame_idx == 0 && EXPORT_HDR_READBACK.with(Cell::get)
 }
 
 /// A signalled fence is not success if any GPU work failed during the frame.
@@ -919,15 +953,38 @@ impl ContentThread {
             return Some(ExportFrameFailure { message, gpu: false });
         }
 
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut sdr_mapped_rgba16f = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut sdr_mapped_texture = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut hdr_scene_rgba16f = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut hdr_scene_texture = None;
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if export_hdr_readback_requested(frame_idx) {
+                // The canonical scene texture is the production source fed to
+                // PQ encoding. Clone only its native handle so readback can
+                // happen after the completion barrier without retaining a
+                // borrow into ContentPipeline.
+                hdr_scene_texture = Some(self.content_pipeline.export_output_texture().clone());
+            }
             let texture = self
                 .content_pipeline
                 .pq_encode_for_export(paper_white, max_nits);
             Self::get_metal_texture_ptr(texture)
         } else {
             let texture = self.content_pipeline.sdr_export_output_texture();
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if export_sdr_readback_requested(frame_idx) {
+                // Clone only the native texture handle so the readback can
+                // happen after the export completion barrier without holding
+                // a borrow into ContentPipeline across that wait.
+                sdr_mapped_texture = Some(texture.clone());
+            }
             Self::get_metal_texture_ptr(texture)
         };
 
@@ -941,6 +998,36 @@ impl ContentThread {
             Some(ExportTestFault::CompletionTimeout) => export_gpu_completion(false, 0, 0, false, true).unwrap(),
             _ => Ok(()),
         });
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        if completion.is_ok()
+            && let Some(texture) = sdr_mapped_texture.as_ref()
+        {
+            let device = self
+                .content_pipeline
+                .native_device()
+                .expect("SDR colour proof requires the export Metal device");
+            sdr_mapped_rgba16f = Some(manifold_renderer::headless_readback::readback_raw_halves(
+                device,
+                texture,
+                texture.width,
+                texture.height,
+            ));
+        }
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        if completion.is_ok()
+            && let Some(texture) = hdr_scene_texture.as_ref()
+        {
+            let device = self
+                .content_pipeline
+                .native_device()
+                .expect("HDR colour proof requires the export Metal device");
+            hdr_scene_rgba16f = Some(manifold_renderer::headless_readback::readback_raw_halves(
+                device,
+                texture,
+                texture.width,
+                texture.height,
+            ));
+        }
         if let Err(message) = completion {
             log::error!("[Export] Frame {frame_idx} failed: {message}");
             return Some(ExportFrameFailure { message, gpu: true });
@@ -964,6 +1051,8 @@ impl ContentThread {
                     .filter_map(|layer| layer.gen_params())
                     .flat_map(|instance| instance.params.iter())
                     .map(|param| (param.id().to_owned(), param.value)).collect(),
+                sdr_mapped_rgba16f,
+                hdr_scene_rgba16f,
             });
             if export_test_fault(frame_idx) == Some(ExportTestFault::BeforeEncode) {
                 return Some(ExportFrameFailure {

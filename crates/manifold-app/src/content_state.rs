@@ -125,6 +125,9 @@ pub struct ContentState {
     pub frame_rate: f64,
     pub clock_authority: ClockAuthority,
     pub time_signature_numerator: i32,
+    /// Runtime-only SDR presentation preview. Partial event/export snapshots
+    /// leave this absent so they cannot reset the displayed viewing preference.
+    pub sdr_preview: Option<bool>,
 
     // ── Transport controller state ────────────────────────────────
     pub link_enabled: bool,
@@ -512,6 +515,7 @@ impl Default for ContentState {
             frame_rate: 60.0,
             clock_authority: ClockAuthority::Internal,
             time_signature_numerator: 4,
+            sdr_preview: None,
             link_enabled: false,
             link_peers: 0,
             midi_clock_enabled: false,

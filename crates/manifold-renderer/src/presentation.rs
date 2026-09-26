@@ -123,7 +123,7 @@ impl DisplayPresentationState {
     pub fn plan(
         &self,
         destination: DisplayDestination,
-        curve: TonemapCurve,
+        curve: Option<TonemapCurve>,
     ) -> Option<DisplayPlan> {
         self.capabilities(destination)
             .map(|capabilities| DisplayPlan::new(capabilities, curve))
@@ -150,13 +150,19 @@ impl DisplayPresentationState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplayPlan {
     current: CurrentHeadroom,
-    curve: TonemapCurve,
+    /// True when the destination can present HDR, even if its current
+    /// brightness is temporarily at SDR white.
+    hdr_capable: bool,
+    /// Optional artistic curve for genuine SDR destinations. HDR-capable
+    /// destinations always use the EDR shoulder.
+    curve: Option<TonemapCurve>,
 }
 
 impl DisplayPlan {
-    pub fn new(capabilities: DisplayCapabilities, curve: TonemapCurve) -> Self {
+    pub fn new(capabilities: DisplayCapabilities, curve: Option<TonemapCurve>) -> Self {
         Self {
             current: capabilities.current,
+            hdr_capable: capabilities.potential.value() > 1.0,
             curve,
         }
     }
@@ -283,8 +289,14 @@ impl PresentationPipeline {
             exposure: 1.0,
             paper_white: 1.0,
             current_headroom: plan.current.value() as f32,
-            mode: u32::from(plan.current.value() > 1.0),
-            curve: plan.curve as u32,
+            mode: if plan.hdr_capable || plan.current.value() > 1.0 {
+                1
+            } else if plan.curve.is_some() {
+                2
+            } else {
+                0
+            },
+            curve: plan.curve.map_or(0, |curve| curve as u32),
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
@@ -345,7 +357,7 @@ mod tests {
             PotentialHeadroom::new(4.0).unwrap(),
             CurrentHeadroom::new(1.5).unwrap(),
         );
-        let plan = DisplayPlan::new(capabilities, TonemapCurve::AcesNarkowicz);
+        let plan = DisplayPlan::new(capabilities, None);
         assert_eq!(plan.current.value(), 1.5);
     }
 
@@ -413,7 +425,7 @@ mod gpu_tests {
         device: &manifold_gpu::GpuDevice,
         input: [f32; 4],
         capabilities: DisplayCapabilities,
-        curve: TonemapCurve,
+        curve: Option<TonemapCurve>,
     ) -> [f32; 4] {
         let source = make_texture(
             device,
@@ -449,6 +461,7 @@ mod gpu_tests {
         device: &manifold_gpu::GpuDevice,
         input: [f32; 4],
         mode: TonemapMode,
+        curve: TonemapCurve,
     ) -> [f32; 4] {
         let source = make_texture(
             device,
@@ -467,6 +480,7 @@ mod gpu_tests {
                 &source,
                 &TonemapSettings {
                     mode,
+                    curve,
                     ..TonemapSettings::default()
                 },
             );
@@ -495,7 +509,7 @@ mod gpu_tests {
             &device,
             [2.0, 1.5, 0.5, 1.0],
             caps,
-            TonemapCurve::AcesNarkowicz,
+            Some(TonemapCurve::AcesNarkowicz),
         );
         assert!(
             out[0] > 1.9 && out[0] < 2.1,
@@ -518,7 +532,7 @@ mod gpu_tests {
             &device,
             [2.0, 2.0, 2.0, 1.0],
             caps,
-            TonemapCurve::AcesNarkowicz,
+            Some(TonemapCurve::AcesNarkowicz),
         );
         assert!(
             out[0] <= 1.0 && out[0] > 0.0,
@@ -530,20 +544,99 @@ mod gpu_tests {
     #[test]
     fn presentation_sdr_preserves_authored_colour_without_an_extra_curve() {
         let device = crate::test_device();
+        let presentation = run_presentation(&device, [1.7, 0.6, 0.2, 0.75], sdr(), None);
+        // Legacy SDR encoding of the linear HDR image: clip highlights,
+        // preserve midtones, colour ratios below white, and alpha.
+        let expected = [1.0, 0.6, 0.2, 0.75];
+        for channel in 0..4 {
+            assert!(
+                (presentation[channel] - expected[channel]).abs() < 0.002,
+                "channel {channel} differs: presentation={presentation:?} expected={expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn presentation_sdr_selected_curves_are_distinct_and_bounded() {
+        let device = crate::test_device();
+        let input = [2.0, 0.7, 0.1, 0.75];
+        let curves = [
+            TonemapCurve::AcesNarkowicz,
+            TonemapCurve::AcesHill,
+            TonemapCurve::Agx,
+            TonemapCurve::KhronosPbrNeutral,
+        ];
+        let outputs = curves
+            .into_iter()
+            .map(|curve| run_presentation(&device, input, sdr(), Some(curve)))
+            .collect::<Vec<_>>();
+
+        for (index, output) in outputs.iter().enumerate() {
+            for channel in 0..3 {
+                assert!(
+                    output[channel].is_finite()
+                        && (0.0..=1.0).contains(&output[channel]),
+                    "selected SDR curve {index} escaped finite bounds: {output:?}"
+                );
+            }
+            assert_eq!(output[3], input[3], "curve {index} changed alpha: {output:?}");
+            for other in outputs.iter().skip(index + 1) {
+                let distance = output[..3]
+                    .iter()
+                    .zip(&other[..3])
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0, f32::max);
+                assert!(
+                    distance > 0.01,
+                    "selected SDR curves are not distinct: {output:?} vs {other:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hdr_capability_keeps_edr_path_when_current_headroom_is_one() {
+        let device = crate::test_device();
+        let caps = DisplayCapabilities::new(
+            PotentialHeadroom::new(4.0).unwrap(),
+            CurrentHeadroom::new(1.0).unwrap(),
+        );
+        let input = [1.0, 0.9, 0.5, 0.75];
+        let baseline = run_presentation(&device, input, caps, None);
         for curve in [
             TonemapCurve::AcesNarkowicz,
             TonemapCurve::AcesHill,
             TonemapCurve::Agx,
             TonemapCurve::KhronosPbrNeutral,
         ] {
-            let presentation = run_presentation(&device, [1.7, 0.6, 0.2, 0.75], sdr(), curve);
-            // Legacy SDR encoding of the linear HDR image: clip highlights,
-            // preserve midtones, colour ratios below white, and alpha.
-            let expected = [1.0, 0.6, 0.2, 0.75];
+            let output = run_presentation(&device, input, caps, Some(curve));
             for channel in 0..4 {
                 assert!(
-                    (presentation[channel] - expected[channel]).abs() < 0.002,
-                    "{curve:?} channel {channel} differs: presentation={presentation:?} expected={expected:?}"
+                    (output[channel] - baseline[channel]).abs() < 0.002,
+                    "HDR-capable display activated {curve:?} at headroom 1: {output:?} vs {baseline:?}"
+                );
+            }
+            assert!(output[..3].iter().all(|value| value.is_finite() && *value <= 1.0));
+        }
+        assert!((baseline[0] - 1.0).abs() < 0.001, "white changed: {baseline:?}");
+    }
+
+    #[test]
+    fn presentation_curve_matches_compute_tonemap_pipeline() {
+        let device = crate::test_device();
+        let input = [2.0, 0.7, 0.1, 0.75];
+        for curve in [
+            TonemapCurve::AcesNarkowicz,
+            TonemapCurve::AcesHill,
+            TonemapCurve::Agx,
+            TonemapCurve::KhronosPbrNeutral,
+        ] {
+            let presentation = run_presentation(&device, input, sdr(), Some(curve));
+            let compute = run_tonemap_mode(&device, input, TonemapMode::Sdr, curve);
+            for channel in 0..4 {
+                assert!(
+                    (presentation[channel] - compute[channel]).abs() < 0.01,
+                    "{curve:?} presentation diverges from compute tonemap on channel {channel}: presentation={presentation:?} compute={compute:?}"
                 );
             }
         }
@@ -558,7 +651,7 @@ mod gpu_tests {
                 CurrentHeadroom::new(headroom).unwrap(),
             );
             let input = [1.0, 0.9, 0.5, 0.75];
-            let output = run_presentation(&device, input, caps, TonemapCurve::AcesNarkowicz);
+            let output = run_presentation(&device, input, caps, None);
             for channel in 0..4 {
                 assert!(
                     (output[channel] - input[channel]).abs() < 0.001,
@@ -578,7 +671,7 @@ mod gpu_tests {
                 PotentialHeadroom::new(4.0).unwrap(),
                 CurrentHeadroom::new(headroom).unwrap(),
             );
-            let output = run_presentation(&device, input, caps, TonemapCurve::AcesNarkowicz);
+            let output = run_presentation(&device, input, caps, None);
             for channel in 0..3 {
                 assert!(
                     output[channel].is_finite()
@@ -603,13 +696,13 @@ mod gpu_tests {
             &device,
             [0.001, 0.001, 0.001, 1.0],
             caps,
-            TonemapCurve::AcesNarkowicz,
+            None,
         );
         let high = run_presentation(
             &device,
             [0.002, 0.002, 0.002, 1.0],
             caps,
-            TonemapCurve::AcesNarkowicz,
+            None,
         );
         assert!(
             low[0] > 0.0 && high[0] > low[0],
@@ -620,7 +713,12 @@ mod gpu_tests {
     #[test]
     fn scene_linear_tonemap_preserves_hdr_values() {
         let device = crate::test_device();
-        let out = run_tonemap_mode(&device, [2.0, 1.25, 0.5, 0.75], TonemapMode::SceneLinear);
+        let out = run_tonemap_mode(
+            &device,
+            [2.0, 1.25, 0.5, 0.75],
+            TonemapMode::SceneLinear,
+            TonemapCurve::AcesNarkowicz,
+        );
         assert!((out[0] - 2.0).abs() < 0.01);
         assert!((out[1] - 1.25).abs() < 0.01);
         assert!((out[3] - 0.75).abs() < 0.01);
@@ -629,7 +727,12 @@ mod gpu_tests {
     #[test]
     fn edr_tonemap_mode_keeps_the_existing_soft_shoulder() {
         let device = crate::test_device();
-        let out = run_tonemap_mode(&device, [2.0, 1.25, 0.5, 1.0], TonemapMode::Edr);
+        let out = run_tonemap_mode(
+            &device,
+            [2.0, 1.25, 0.5, 1.0],
+            TonemapMode::Edr,
+            TonemapCurve::AcesNarkowicz,
+        );
         assert!(
             out[0] > 1.0 && out[0] < 2.01,
             "EDR mode lost highlight headroom: {out:?}"
