@@ -29,5 +29,5 @@ fn body(
         p.z = min(p.z, mix(p.z, cut, w));
     }
 
-    return Element(p, e_in.normal, e_in.uv, e_in.tangent);
+    return Element(p, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

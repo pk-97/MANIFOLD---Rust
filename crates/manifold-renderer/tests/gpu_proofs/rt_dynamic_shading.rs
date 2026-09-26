@@ -77,7 +77,7 @@ fn rewrite_shared<T: Copy>(buf: &GpuBuffer, data: &[T]) {
 }
 
 fn flat_object(vb: &GpuBuffer, triangle_count: u32) -> RtObjectGeometry<'_> {
-    RtObjectGeometry {
+    RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: vb,
         vertex_stride: VERTEX_STRIDE,
         vertex_offset: 0,
@@ -93,6 +93,7 @@ fn flat_object(vb: &GpuBuffer, triangle_count: u32) -> RtObjectGeometry<'_> {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -101,6 +102,12 @@ fn flat_object(vb: &GpuBuffer, triangle_count: u32) -> RtObjectGeometry<'_> {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }
 }
 
@@ -690,18 +697,30 @@ fn rt_dynamic_coverage_and_attributes() {
         assert!(w0 >= 0.05 && bary[0] >= 0.05 && bary[1] >= 0.05,
             "bary {bary:?} clears A0's 0.05 edge exclusion");
     }
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         appearance_weights: Some(&weights_buf),
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
         ..flat_object(&vb, 1)
     }];
     let (accel, mut ns_slot, _) = prepare_query_scene(device, &tracer, &objects);
     let mut report_lines: Vec<String> = Vec::new();
 
     let mut run_case = |gain: f32, bary: [f32; 2], n: usize, seed_base: u32| {
-        let objects = [RtObjectGeometry {
+        let objects = [RtObjectGeometry { material_attributes: Default::default(),
             appearance_weights: Some(&weights_buf),
             appearance_gain: gain,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
             ..flat_object(&vb, 1)
         }];
         refresh_normal_sources(device, &mut ns_slot, &objects);
@@ -816,9 +835,15 @@ fn rt_dynamic_coverage_and_attributes() {
             std::slice::from_raw_parts(tex_px.as_ptr().cast::<u8>(), std::mem::size_of_val(&tex_px))
         });
         let ones_buf = write_shared(device, &[1.0f32, 1.0, 1.0]);
-        let mk_objects = |gain: f32| [RtObjectGeometry {
+        let mk_objects = |gain: f32| [RtObjectGeometry { material_attributes: Default::default(),
             appearance_weights: Some(&ones_buf),
             appearance_gain: gain,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
             alpha_mask: true,
             alpha_cutoff: 0.5,
             base_color_texture: Some(&alpha_tex),
@@ -918,7 +943,7 @@ fn rt_dynamic_coverage_and_attributes() {
         let two_tris = [triangle_at(0.0, 1.0), triangle_at(4.0, 1.0)].concat();
         let vb2 = write_shared(device, &two_tris);
         let short_weights = write_shared(device, &[1.0f32, 1.0]); // 4 floats, mesh has 6 vertices
-        let bad = [RtObjectGeometry {
+        let bad = [RtObjectGeometry { material_attributes: Default::default(),
             appearance_weights: Some(&short_weights),
             ..flat_object(&vb2, 2)
         }];
@@ -930,9 +955,15 @@ fn rt_dynamic_coverage_and_attributes() {
             other => panic!("a short weights buffer must fail plan_accel with InvalidGeometry, got {:?}", other.map(|_| ())),
         }
         let nan_weights = write_shared(device, &[f32::NAN, 0.5, 1.0]);
-        let nan_objects = [RtObjectGeometry {
+        let nan_objects = [RtObjectGeometry { material_attributes: Default::default(),
             appearance_weights: Some(&nan_weights),
-            appearance_gain: 1.0,
+        appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
             ..flat_object(&vb, 1)
         }];
         let (nan_accel, nan_ns, _) = prepare_query_scene(device, &tracer, &nan_objects);
@@ -948,9 +979,15 @@ fn rt_dynamic_coverage_and_attributes() {
     {
         let em_weights = write_shared(device, &[0.25f32, 0.5, 0.75]);
         let evb = write_shared(device, &triangle_at(0.0, 1.0));
-        let objects = [RtObjectGeometry {
+        let objects = [RtObjectGeometry { material_attributes: Default::default(),
             appearance_weights: Some(&em_weights),
-            appearance_gain: 1.0,
+        appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
             ..flat_object(&evb, 1)
         }];
         let materials = [emissive_material([1.0, 1.0, 1.0])];
@@ -991,9 +1028,9 @@ fn rt_dynamic_coverage_and_attributes() {
         vertex([1.0, 1.0, 1.0], [1.0, 1.0]),
         vertex([-1.0, 1.0, 1.0], [0.0, 1.0]),
     ]
-    // Vertex normals UP (data, not geometry): the sun-bounce term needs
-    // dot(hit_n, sun_dir) = 1 on the ceiling's underside hits.
-    .map(|v| PackedVertex { normal: [0.0, 1.0, 0.0, 0.0], ..v });
+    // The underside faces the receiver, so Fresnel leaves nonzero diffuse
+    // energy. The grazing sun below clears the finite floor on shadow rays.
+    .map(|v| PackedVertex { normal: [0.0, -1.0, 0.0, 0.0], ..v });
     let floor_vb = write_shared(device, &floor_verts);
     let ceil_vb = write_shared(device, &ceil_verts);
 
@@ -1014,9 +1051,15 @@ fn rt_dynamic_coverage_and_attributes() {
     ) -> (Vec<f32>, Vec<f32>) {
         let objects = [
             flat_object(floor_vb, 2),
-            RtObjectGeometry {
+            RtObjectGeometry { material_attributes: Default::default(),
                 appearance_weights: ceil_weights,
                 appearance_gain: ceil_gain,
+                base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                normal_scale: 1.0,
+                base_color_alpha: 1.0,
+                tangent_offset: u32::MAX,
                 ..flat_object(ceil_vb, 2)
             },
         ];
@@ -1074,7 +1117,7 @@ fn rt_dynamic_coverage_and_attributes() {
         device.upload_texture(&prefiltered_env, &[0u8; 8]);
 
         let casters = if sun {
-            vec![RtCasterParams::new([0.0, 1.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
+            vec![RtCasterParams::new([0.9950372, -0.09950372, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
         } else {
             vec![]
         };
@@ -1115,8 +1158,8 @@ fn rt_dynamic_coverage_and_attributes() {
     }
 
     // ── Section 7: accepted-hit brightness multiplies the GI gather's
-    // evaluated radiance ONCE. Ceiling sun-bounce term is a constant per
-    // accepted hit (albedo 0.8/π), so the gain-2/gain-1 ratio is exactly 2
+    // evaluated radiance ONCE. The ceiling lighting and Fresnel weights are
+    // identical for each paired hit, so the gain-2/gain-1 ratio is exactly 2
     // (not 4 — coverage is not multiplied again). gain 0.5 (coverage 0.5)
     // halves the texel-sum ratio within tolerance (fixed seeds, Bernoulli
     // acceptance among the identical geometric hits of the two runs).

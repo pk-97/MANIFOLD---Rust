@@ -271,7 +271,9 @@ mod gpu_tests {
         unsafe {
             outline_buf.write(0, bytemuck::cast_slice(outline));
         }
-        let dst_buf = device.create_buffer_shared(dst_cap as u64 * 48);
+        let dst_buf = device.create_buffer_shared(
+            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+        );
 
         let uniforms = ExtrudeCurveUniforms {
             depth,

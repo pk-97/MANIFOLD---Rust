@@ -20,18 +20,19 @@
 //! A wide emissive quad (`y=2.0`, `x in [-5,5]`, `z in [-2,2]`) catches
 //! both, so ANY texel that casts a reflection ray hits it.
 //!
-//! MR texture: 2x1, texel 0 (`u=0.25`, exact texel-0 center) `G=0.0` (sharp,
-//! `max(0.0,0.01)=0.01` after the kernel's floor — below
-//! `refl_max_roughness(0.6)+refl_rough_band(0.1)=0.7`, so a reflection ray
-//! IS cast), texel 1 (`u=0.75`, exact texel-1 center) `G=1.0` (rough, above
-//! the cutoff — the kernel takes the no-ray-cast env branch entirely).
+//! MR texture: 2x1, texel 0 (`u=0.25`, exact texel-0 center) has `G=0.5`,
+//! and texel 1 (`u=0.75`, exact texel-1 center) has `G=1.0`. The floor
+//! roughness factor is `0.5`, so the product values are `0.25` and `0.5`;
+//! both remain below `refl_max_roughness(0.6)+refl_rough_band(0.1)=0.7` and
+//! therefore cast reflection rays. Replacement semantics would make texel 1
+//! exactly `1.0` and take the no-ray-cast env branch.
 //! `prefiltered_env` is a 1x1 all-zero dummy, so a cast-and-hit ray reads
 //! EXACTLY the emitter's `GiMaterial::emissive` (env/sun-bounce terms all
 //! multiply through zero — no caster, black env) and the env-branch reads
 //! EXACTLY `(0,0,0)`.
 //!
-//! Assert 1 (MR texture bound): texel 0 (sharp) >= a bright threshold;
-//! texel 1 (rough) stays near-zero (env-band path, no ray cast).
+//! Assert 1 (MR texture bound): both texels stay bright, proving that the
+//! texture roughness multiplies the non-neutral floor factor.
 //! Assert 2 (no MR texture — flat `GiMaterial::metallic_roughness.y`
 //! fallback, both directions): factor `0.0` (exact mirror, NO GGX
 //! perturbation since `roughness > 0.0` is false) makes BOTH texels hit the
@@ -83,6 +84,8 @@ fn upload_texture_f32(
     pixels: &[f32],
     label: &str,
 ) -> manifold_gpu::GpuTexture {
+    assert!(matches!(format, GpuTextureFormat::Rgba32Float | GpuTextureFormat::Depth32Float),
+        "f32 fixture uploads require a 32-bit channel format");
     let texture = device.create_texture(&GpuTextureDesc {
         width,
         height,
@@ -108,12 +111,47 @@ const IDENTITY: [[f32; 4]; 4] = [
 
 const EMITTER_EMISSIVE: [f32; 3] = [2.0, 2.0, 2.0];
 
+#[derive(Clone, Copy)]
+struct FixtureConfig<'a> {
+    mr_texture: Option<&'a manifold_gpu::GpuTexture>,
+    floor_roughness: f32,
+    floor_metallic: f32,
+    floor_anisotropy: [f32; 2],
+    floor_extra_material_textures: [Option<&'a manifold_gpu::GpuTexture>; 3],
+    emitter_albedo: [f32; 3],
+    emitter_emissive: [f32; 3],
+    emitter_metallic: f32,
+    emitter_roughness: f32,
+    emitter_specular: [f32; 4],
+    emitter_extra_material_textures: [Option<&'a manifold_gpu::GpuTexture>; 3],
+    env_rgba: [f32; 4],
+    emitter_bounds: [f32; 4], // x_min, x_max, z_min, z_max
+}
+
+impl<'a> FixtureConfig<'a> {
+    fn base(mr_texture: Option<&'a manifold_gpu::GpuTexture>, floor_roughness: f32) -> Self {
+        Self {
+            mr_texture,
+            floor_roughness,
+            floor_metallic: 0.4,
+            floor_anisotropy: [0.0, 0.0],
+            floor_extra_material_textures: [None; 3],
+            emitter_albedo: [0.5, 0.5, 0.5],
+            emitter_emissive: EMITTER_EMISSIVE,
+            emitter_metallic: 0.0,
+            emitter_roughness: 0.5,
+            emitter_specular: [0.04, 0.04, 0.04, 1.0],
+            emitter_extra_material_textures: [None; 3],
+            env_rgba: [0.0; 4],
+            emitter_bounds: [-5.0, 5.0, -2.0, 2.0],
+        }
+    }
+}
+
 /// Runs the shared floor+emitter fixture with `mr_texture` and the floor's
-/// flat `roughness` factor (read only when `mr_texture` is `None`, or when
-/// the texture is bound but this texel's roughness path is meant to fall
-/// through — here always overridden by the texture when bound). Returns
+/// flat `roughness` factor (multiplied by the map when present). Returns
 /// `[refl_texel0_rgb, refl_texel1_rgb]` (`out_refl`'s rgb channels).
-fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f32) -> [[f32; 3]; 2] {
+fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3]; 2] {
     let h = harness::shared();
     let device = &h.device;
 
@@ -131,18 +169,18 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     // ─── Emitter: wide quad at y=2.0, x in [-5,5], z in [-2,2] — catches
     // both texels' reflection directions (CPU math: x=-1.5 / x=+1.5) ──
     let emitter_verts = [
-        PackedVertexNUV { pos: [-5.0, 2.0, -2.0], normal: [0.0, 0.0, 1.0], uv: [0.0, 0.0] },
-        PackedVertexNUV { pos: [5.0, 2.0, -2.0], normal: [0.0, 0.0, 1.0], uv: [1.0, 0.0] },
-        PackedVertexNUV { pos: [5.0, 2.0, 2.0], normal: [0.0, 0.0, 1.0], uv: [1.0, 1.0] },
-        PackedVertexNUV { pos: [-5.0, 2.0, -2.0], normal: [0.0, 0.0, 1.0], uv: [0.0, 0.0] },
-        PackedVertexNUV { pos: [5.0, 2.0, 2.0], normal: [0.0, 0.0, 1.0], uv: [1.0, 1.0] },
-        PackedVertexNUV { pos: [-5.0, 2.0, 2.0], normal: [0.0, 0.0, 1.0], uv: [0.0, 1.0] },
+        PackedVertexNUV { pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[2]], normal: [0.0, -1.0, 0.0], uv: [0.0, 0.0] },
+        PackedVertexNUV { pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[2]], normal: [0.0, -1.0, 0.0], uv: [1.0, 0.0] },
+        PackedVertexNUV { pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[3]], normal: [0.0, -1.0, 0.0], uv: [1.0, 1.0] },
+        PackedVertexNUV { pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[2]], normal: [0.0, -1.0, 0.0], uv: [0.0, 0.0] },
+        PackedVertexNUV { pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[3]], normal: [0.0, -1.0, 0.0], uv: [1.0, 1.0] },
+        PackedVertexNUV { pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[3]], normal: [0.0, -1.0, 0.0], uv: [0.0, 1.0] },
     ];
     let emitter_vertex_buffer = write_shared_buffer(device, &emitter_verts);
 
     let vsize = std::mem::size_of::<PackedVertexNUV>() as u32;
     let objects = [
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &floor_vertex_buffer,
             vertex_stride: vsize,
             vertex_offset: 0,
@@ -155,9 +193,10 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             translucent: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
-            mr_texture,
+            mr_texture: config.mr_texture,
             normal_texture: None,
                         emissive_texture: None,
+        extra_material_textures: config.floor_extra_material_textures,
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -166,8 +205,14 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &emitter_vertex_buffer,
             vertex_stride: vsize,
             vertex_offset: 0,
@@ -183,6 +228,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             mr_texture: None,
             normal_texture: None,
                         emissive_texture: None,
+        extra_material_textures: config.emitter_extra_material_textures,
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -191,6 +237,12 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
     ];
 
@@ -269,14 +321,14 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         device,
         1,
         1,
-        GpuTextureFormat::Rgba16Float,
-        &[0.0f32, 0.0, 0.0, 0.0],
+        GpuTextureFormat::Rgba32Float,
+        &config.env_rgba,
         "rt-r3-prefiltered-env-dummy",
     );
 
     let params = ShadowRayParams::new(
         &[],
-        1,
+        frame_index,
         0,
         [2, 1],
         [2, 1],
@@ -297,8 +349,8 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     // gi_materials[1] = emitter (only .emissive is read on the reflection
     // HIT path — env/specular terms multiply through the zero dummy).
     let gi_materials = [
-        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, floor_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
-        GiMaterial::new([0.5, 0.5, 0.5], EMITTER_EMISSIVE, [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
+        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [config.floor_metallic, config.floor_roughness, config.floor_anisotropy[0], config.floor_anisotropy[1]], [0.0, 0.0, 0.0, 0.0]),
+        GiMaterial::new(config.emitter_albedo, config.emitter_emissive, [config.emitter_metallic, config.emitter_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]).with_surface(2.0, config.emitter_specular),
     ];
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
@@ -369,19 +421,39 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
     [[floats[0], floats[1], floats[2]], [floats[4], floats[5], floats[6]]]
 }
 
+fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f32) -> [[f32; 3]; 2] {
+    run_fixture_config(FixtureConfig::base(mr_texture, floor_roughness), 1)
+}
+
+fn mean_frames(config: FixtureConfig<'_>, frame_count: u32) -> [[f32; 3]; 2] {
+    let mut sum = [[0.0; 3]; 2];
+    for frame in 0..frame_count {
+        let sample = run_fixture_config(config, frame);
+        for pixel in 0..2 {
+            for channel in 0..3 {
+                sum[pixel][channel] += sample[pixel][channel];
+            }
+        }
+    }
+    for pixel in &mut sum {
+        for channel in pixel {
+            *channel /= frame_count as f32;
+        }
+    }
+    sum
+}
+
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
-/// MR texture bound: 2x1, texel 0 G=0.0 (sharp), texel 1 G=1.0 (rough).
-/// `floor_roughness` factor is deliberately set to 0.5 (< the 0.7 cutoff) —
-/// if the texture were silently ignored, BOTH texels would cast a ray and
-/// read bright, failing the "rough stays dark" assertion below.
+/// MR texture bound: both channels multiply non-neutral metallic/roughness
+/// factors. The roughness products remain below the 0.7 ray-cast cutoff.
 #[test]
-fn mr_texture_replaces_flat_factor_per_texel() {
+fn mr_texture_multiplies_flat_factors_per_texel() {
     let mr_tex_px: [f32; 8] = [
-        0.0, 0.0, 0.0, 1.0, // texel 0: sharp (G=0.0)
-        0.0, 1.0, 0.0, 1.0, // texel 1: rough (G=1.0)
+        0.0, 0.5, 0.75, 1.0, // texel 0: products (metallic=.3, roughness=.25)
+        0.0, 1.0, 0.25, 1.0, // texel 1: products (metallic=.1, roughness=.5)
     ];
     let mr_tex = upload_texture_f32(
         &harness::shared().device,
@@ -393,17 +465,16 @@ fn mr_texture_replaces_flat_factor_per_texel() {
     );
     let [refl0, refl1] = run_fixture(Some(&mr_tex), 0.5);
     let (luma0, luma1) = (luma(refl0), luma(refl1));
-    eprintln!("mr_texture_replaces_flat_factor_per_texel: sharp(texel0)={refl0:?} luma={luma0:.4} rough(texel1)={refl1:?} luma={luma1:.4}");
+    eprintln!("mr_texture_multiplies_flat_factors_per_texel: texel0={refl0:?} luma={luma0:.4} texel1={refl1:?} luma={luma1:.4}");
 
     const BRIGHT_THRESHOLD: f32 = 1.5; // emitter luma is exactly 2.0 (luma of gray [2,2,2])
-    const DARK_CEILING: f32 = 0.05;
     assert!(
         luma0 >= BRIGHT_THRESHOLD,
-        "sharp texel (G=0.0 -> roughness 0.01) must show the emitter — luma {luma0:.4} < {BRIGHT_THRESHOLD}"
+        "texel 0 (factor*map roughness=0.25) must show the emitter — luma {luma0:.4} < {BRIGHT_THRESHOLD}"
     );
     assert!(
-        luma1 <= DARK_CEILING,
-        "rough texel (G=1.0 -> roughness 1.0) must stay dark (env-band path, no ray cast) — luma {luma1:.4} > {DARK_CEILING}"
+        luma1 >= BRIGHT_THRESHOLD,
+        "texel 1 (factor*map roughness=0.5) must show the emitter — luma {luma1:.4} < {BRIGHT_THRESHOLD}"
     );
 }
 
@@ -437,4 +508,150 @@ fn no_mr_texture_falls_back_to_flat_factor_both_directions() {
             );
         }
     }
+}
+
+const EXTENSION_MEAN_FRAMES: u32 = 16;
+
+#[test]
+fn anisotropy_rotation_changes_elongated_emitter_coverage() {
+    let mut x_strip = FixtureConfig::base(None, 0.55);
+    x_strip.floor_anisotropy = [0.95, 0.0];
+    x_strip.emitter_bounds = [-5.0, 5.0, 0.22, 0.38];
+    let mut z_strip = x_strip;
+    z_strip.floor_anisotropy[1] = std::f32::consts::FRAC_PI_2;
+
+    let x_mean = mean_frames(x_strip, EXTENSION_MEAN_FRAMES);
+    let z_mean = mean_frames(z_strip, EXTENSION_MEAN_FRAMES);
+    let x_coverage = x_mean.iter().filter(|pixel| luma(**pixel) > 0.25).count();
+    let z_coverage = z_mean.iter().filter(|pixel| luma(**pixel) > 0.25).count();
+    eprintln!("anisotropy coverage: x={x_mean:?} ({x_coverage}) z={z_mean:?} ({z_coverage})");
+    assert_ne!(
+        x_coverage, z_coverage,
+        "rotating anisotropy across an elongated emitter must change the measured reflection coverage"
+    );
+}
+
+#[test]
+fn zero_blue_anisotropy_map_equals_strength_zero_control() {
+    let aniso_map = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[1.0, 0.0, 0.0, 1.0],
+        "rt-r3-aniso-zero-blue",
+    );
+    let mut mapped = FixtureConfig::base(None, 0.45);
+    mapped.floor_anisotropy = [1.0, 0.7];
+    mapped.floor_extra_material_textures[0] = Some(&aniso_map);
+    let control = FixtureConfig::base(None, 0.45);
+    let mapped_mean = mean_frames(mapped, EXTENSION_MEAN_FRAMES);
+    let control_mean = mean_frames(control, EXTENSION_MEAN_FRAMES);
+    for pixel in 0..2 {
+        for channel in 0..3 {
+            assert!(
+                (mapped_mean[pixel][channel] - control_mean[pixel][channel]).abs() < 1e-4,
+                "zero-blue anisotropy map changed pixel {pixel} channel {channel}: mapped={} control={}",
+                mapped_mean[pixel][channel],
+                control_mean[pixel][channel]
+            );
+        }
+    }
+}
+
+#[test]
+fn anisotropy_rg_direction_matches_scalar_rotation() {
+    let direction_map = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[0.5, 1.0, 1.0, 1.0],
+        "rt-r3-aniso-direction",
+    );
+    let mut mapped = FixtureConfig::base(None, 0.5);
+    mapped.floor_anisotropy = [1.0, 0.0];
+    mapped.floor_extra_material_textures[0] = Some(&direction_map);
+    let mut scalar = FixtureConfig::base(None, 0.5);
+    scalar.floor_anisotropy = [1.0, std::f32::consts::FRAC_PI_2];
+    let mapped_mean = mean_frames(mapped, EXTENSION_MEAN_FRAMES);
+    let scalar_mean = mean_frames(scalar, EXTENSION_MEAN_FRAMES);
+    for pixel in 0..2 {
+        for channel in 0..3 {
+            assert!(
+                (mapped_mean[pixel][channel] - scalar_mean[pixel][channel]).abs() < 1e-3,
+                "RG direction rotation disagrees with scalar rotation at pixel {pixel} channel {channel}: mapped={} scalar={}",
+                mapped_mean[pixel][channel],
+                scalar_mean[pixel][channel]
+            );
+        }
+    }
+}
+
+#[test]
+fn zero_specular_weight_removes_dielectric_but_not_metallic_reflection() {
+    let weight_zero = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[1.0, 1.0, 1.0, 0.0],
+        "rt-r3-specular-weight-zero",
+    );
+    let mut dielectric = FixtureConfig::base(None, 0.0);
+    dielectric.emitter_albedo = [0.0; 3];
+    dielectric.emitter_emissive = [0.0; 3];
+    dielectric.env_rgba = [1.0; 4];
+    let mut dielectric_zero = dielectric;
+    dielectric_zero.emitter_extra_material_textures[1] = Some(&weight_zero);
+    let dielectric_default = mean_frames(dielectric, EXTENSION_MEAN_FRAMES);
+    let dielectric_zero_mean = mean_frames(dielectric_zero, EXTENSION_MEAN_FRAMES);
+    assert!(
+        luma(dielectric_default[0]) > 0.01,
+        "unmasked dielectric should retain a visible white-environment reflection: {:?}",
+        dielectric_default
+    );
+    assert!(
+        luma(dielectric_zero_mean[0]) < 1e-3,
+        "weight=0 must remove dielectric reflection: {:?}",
+        dielectric_zero_mean
+    );
+
+    let mut metallic = dielectric;
+    metallic.emitter_albedo = [1.0; 3];
+    metallic.emitter_metallic = 1.0;
+    let mut metallic_zero = metallic;
+    metallic_zero.emitter_extra_material_textures[1] = Some(&weight_zero);
+    let metallic_default = mean_frames(metallic, EXTENSION_MEAN_FRAMES);
+    let metallic_zero_mean = mean_frames(metallic_zero, EXTENSION_MEAN_FRAMES);
+    for channel in 0..3 {
+        assert!(
+            (metallic_default[0][channel] - metallic_zero_mean[0][channel]).abs() < 1e-3,
+            "weight=0 changed metallic reflection channel {channel}: default={} zero={}",
+            metallic_default[0][channel],
+            metallic_zero_mean[0][channel]
+        );
+    }
+}
+
+#[test]
+fn colored_specular_map_tints_f0_against_white_environment() {
+    let color_map = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[1.0, 0.25, 0.1, 1.0],
+        "rt-r3-specular-color",
+    );
+    let mut tinted = FixtureConfig::base(None, 0.0);
+    tinted.emitter_albedo = [0.0; 3];
+    tinted.emitter_emissive = [0.0; 3];
+    tinted.env_rgba = [1.0; 4];
+    tinted.emitter_extra_material_textures[2] = Some(&color_map);
+    let mean = mean_frames(tinted, EXTENSION_MEAN_FRAMES);
+    let rgb = mean[0];
+    assert!(rgb[0] > 1e-3, "white environment should produce a nonzero F0 response: {rgb:?}");
+    assert!((rgb[1] / rgb[0] - 0.25).abs() < 0.02, "green F0 tint ratio is wrong: {rgb:?}");
+    assert!((rgb[2] / rgb[0] - 0.1).abs() < 0.02, "blue F0 tint ratio is wrong: {rgb:?}");
 }

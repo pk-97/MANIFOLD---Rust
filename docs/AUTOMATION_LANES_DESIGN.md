@@ -224,6 +224,33 @@ segments remain stepped. Draw mode takes precedence over point/segment drags.
 The corresponding inspector parameter receives a selection outline. Modifier
 changes and lane geometry changes refresh feedback without requiring mouse motion.
 
+Gesture continuity contract (2026-09-26): pressing an empty plot or segment shows
+the prospective point in that input frame; releasing commits one undoable edit.
+Starting a drag restores the pre-press envelope before marquee/segment routing,
+and Escape or an abandoned press restores it without a history entry. Content
+snapshots cannot replace that provisional envelope. Adding a handle on a curve
+samples the snapped beat and splits the original shape, preserving both sides.
+Bending starts from the captured shape and follows vertical pointer movement
+for both rising and falling ramps. Fine-adjustment changes remain continuous.
+Segment movement uses a shared boundary clamp, preserving its slope. Pencil
+strokes replace the swept interval, including skipped pointer samples, retain
+outside automation, and honor Cmd-unsnap. The first and final automation drag
+positions are applied before committing. Alt-click straightens a curved segment;
+the lane menu also offers Straighten, Hold, Ease In, and Ease Out.
+
+Phrase selection contract (2026-09-26): dragging empty plot space selects a beat
+interval across the intersected lanes, independent of the points' vertical values.
+The selection stays visible after release and can contain no interior points.
+Copy includes sampled boundary values and clipped segment shapes. Pasting a single
+point edits a breakpoint and its adjoining segments. Pasting a phrase replaces
+the destination interval, retaining the exact curve outside it; a single-lane
+phrase can map into another parameter's range. Cut and Delete hold the entry value
+through the selected interval. Duplicate places the phrase at the selection's end
+(or one grid step later for a single point). Each edit is one undo step. Keyboard
+paste uses the automation selection start or the most recent lane insertion beat;
+Paste Here uses the menu's clicked beat. A context menu in a selected lane retains
+a multi-lane selection.
+
 The AUTOMATION and DRAW buttons expose mode state. Beat/bar/subdivision grid lines
 share one grid policy with the layer and ruler, including subdivision visibility
 and physical pixel widths. Curves include every breakpoint and draw Hold and
@@ -242,10 +269,13 @@ Authoring the first curve clears an earlier slider touch so it begins active.
 
 **Placement — automation lives on the layer.** Expanding a layer (the
 existing layer-expand affordance) reveals the advanced layer controls,
-including automation: a param-chooser lane (device/instance dropdown +
-param dropdown, Live's exact pair) with a **"+"** button that breaks out
-additional lanes stacked under the layer. Each automated param gets its own
-lane. Lane rows ride the shipped timeline redesign.
+including automation. **Choose parameter…** in the layer or lane menu opens a
+searchable picker grouped by effect/generator instance. Choosing a parameter
+reveals its existing lane or a flat placeholder without changing its value.
+Each automated parameter gets a separate strip. Lane menus hide, pin, and reorder
+strips independently of their envelopes; Show All restores hidden strips. These
+view choices last for the session. A placeholder retains its position when its
+first point creates a real envelope.
 
 **Touch-to-select.** Touching any param on the layer (card slider, inspector
 knob) auto-selects that param in the lane's chooser — Live's behavior; it
@@ -301,7 +331,8 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   `Curved(f32)` shape in section 2.
 - **Cmd-drag** bypasses grid snap for fine placement (Live's convention);
   **Shift-drag** for fine value adjustment.
-- **Marquee-select** multiple dots and drag/delete them together.
+- **Drag-select time** across one or more lanes; all points in the interval are
+  selected regardless of vertical position. Selected points can be moved together.
   Group drags move points in time and value, using the grabbed point as the
   snap anchor and preserving beat spacing. Cmd bypasses snap; Shift scales
   value movement. A shared boundary clamp keeps the group at or after beat
@@ -336,8 +367,8 @@ workflow.
 
 - **Strips-under, not overlay-on-track.** Live draws the selected envelope
   over the track's clips; MANIFOLD keeps the shipped strips-below-the-layer
-  model (Peter: "strips under is better for Manifold"). The chooser + "+"
-  spec above is unchanged; don't build the overlay.
+  model (Peter: "strips under is better for Manifold"). The September 2026
+  searchable chooser uses the layer/lane menus; automation stays in strips.
 - **`A` binds to the automation-mode toggle** (same as the transport LANES
   button). Plain `a` is currently unbound (`input_handler.rs`); Cmd+A
   stays select-all. `B` draw-mode already ships.
@@ -426,22 +457,17 @@ reviewable arc; P3/P4 independent after.
   automation-placeholder-first-click.json` against the new
   `automationplaceholder` ui-snap scene — strip exists with 0 points before,
   a synthesized click, 1 point after; PNGs show the dot appearing where none
-  existed. The two pre-existing automation scripts (`toggle-lanes.json`,
-  `drag-automation-point.json`) still pass unchanged — no regression on the
-  shared lane pipeline.
+  existed. The September 2026 first-click flow also observes the held press,
+  undo, and redo; the point-drag flow asserts the exact release position.
+
+- **Chooser follow-up (2026-09-26):** the shared `PickerCore` now backs
+  **Choose parameter…** in the layer and lane menus. This supersedes the
+  originally proposed pair of dropdowns and "+" button. Search and keyboard
+  navigation resolve a captured target/parameter address. Independent hide,
+  pin, and ordering are session view state; they do not remove automation.
 
 **Descoped, not silently dropped:**
 
-- **The "+" button / full param-picker popover** (device dropdown + param
-  dropdown search list) is NOT built. Building a real one (vs. another
-  "read-only stand-in," the exact anti-pattern that caused the original dead-
-  LANES report) means a new popover consumer of `PickerCore`
-  (`panels/picker_core.rs` — the existing reusable pick-from-a-list model
-  the preset browser already uses; it does the filter/keyboard-nav, drawing
-  stays per-surface) with its own render + dismiss-on-outside-click wiring —
-  a scoped follow-up, not a two-line addition. Touch-to-select already covers
-  the zero-friction path the design doc calls out ("wiggle the knob, then
-  draw") without it.
 - **The two-tier header height reconciliation** (TIMELINE_UX_AUDIT item #2,
   the unused `TrackHeight::Tall` stop) turned out NOT to be a hard
   dependency for the chooser's home, on inspection: the chooser/placeholder
@@ -478,8 +504,8 @@ reviewable arc; P3/P4 independent after.
    gesture, records the smoothed/applied value.
 7. Per-frame sampling bypasses undo and never bumps `DataVersion`.
 8. UI = Ableton's model: lanes live in the expanded layer's advanced
-   controls, one lane per automated param + "+" to add, touch-to-select in
-   the chooser, Live's gesture vocabulary (click-to-dot, modifier-drag
+   controls, one lane per automated parameter, searchable Choose parameter,
+   touch-to-select, Live's gesture vocabulary (click-to-dot, modifier-drag
    curves, draw mode, grid snap w/ Cmd bypass).
 
 ## 12. Deferred / rejected

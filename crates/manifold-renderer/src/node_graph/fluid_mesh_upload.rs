@@ -12,7 +12,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 const FLUID_MESH_UPLOAD_WGSL: &str = include_str!("primitives/shaders/fluid_mesh_upload.wgsl");
 const MESH_VERTEX_SIZE: usize = std::mem::size_of::<MeshVertex>();
-const MAX_VERTICES_PER_UPLOAD: usize = 63;
+const MAX_VERTICES_PER_UPLOAD: usize = 50;
 const WORKGROUP_SIZE: u32 = 64;
 const VEC4S_PER_VERTEX: usize = MESH_VERTEX_SIZE / std::mem::size_of::<[f32; 4]>();
 
@@ -27,7 +27,7 @@ struct UploadParams {
 }
 
 const _: () = assert!(std::mem::size_of::<UploadParams>() <= 4096);
-const _: () = assert!(std::mem::size_of::<UploadParams>() == 4048);
+const _: () = assert!(std::mem::size_of::<UploadParams>() == 4016);
 
 /// Version and destination gate for a CPU-origin fluid mesh upload.
 #[derive(Default)]
@@ -174,6 +174,7 @@ mod gpu_tests {
             uv: [value * 0.01, value * 0.02],
             _pad2: [0.0; 2],
             tangent: [1.0, 0.0, 0.0, 1.0],
+            color: [value + 1.0, value + 2.0, value + 3.0, 1.0],
         }
     }
 
@@ -212,22 +213,21 @@ mod gpu_tests {
     }
 
     #[test]
-    fn uploads_more_than_two_inline_chunks() {
+    fn uploads_more_than_two_inline_chunks_with_distinct_boundary_colors() {
         let device = crate::test_device();
         let dst = device.create_buffer_shared((200 * MESH_VERTEX_SIZE) as u64);
         let source: Vec<_> = (0..189).map(vertex).collect();
         let mut upload = FluidMeshUpload::default();
+        assert_ne!(source[49].color, source[50].color);
 
         assert_eq!(
             encode(&device, &mut upload, &dst, &source, 1, true),
             Ok(true)
         );
         assert_vertices_equal(&read_vertices(&dst, source.len()), &source);
-        assert!(
-            read_vertex_range(&dst, source.len(), 11)
-                .iter()
-                .all(|v| bytemuck::bytes_of(v).iter().all(|b| *b == 0))
-        );
+        assert!(read_vertex_range(&dst, source.len(), 11)
+            .iter()
+            .all(|v| bytemuck::bytes_of(v).iter().all(|b| *b == 0)));
     }
 
     #[test]
@@ -246,17 +246,13 @@ mod gpu_tests {
             encode(&device, &mut upload, &dst, &short, 2, true),
             Ok(true)
         );
-        assert!(
-            read_vertices(&dst, 9)[3..]
-                .iter()
-                .all(|v| bytemuck::bytes_of(v).iter().all(|b| *b == 0))
-        );
+        assert!(read_vertices(&dst, 9)[3..]
+            .iter()
+            .all(|v| bytemuck::bytes_of(v).iter().all(|b| *b == 0)));
         assert_eq!(encode(&device, &mut upload, &dst, &[], 3, true), Ok(true));
-        assert!(
-            read_vertices(&dst, 12)
-                .iter()
-                .all(|v| bytemuck::bytes_of(v).iter().all(|b| *b == 0))
-        );
+        assert!(read_vertices(&dst, 12)
+            .iter()
+            .all(|v| bytemuck::bytes_of(v).iter().all(|b| *b == 0)));
     }
 
     #[test]

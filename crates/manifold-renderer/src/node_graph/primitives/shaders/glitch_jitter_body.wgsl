@@ -28,5 +28,5 @@ fn body(
 
     let jitter = vec3<f32>(dx, dy, dz) * amount * w;
     let displaced = e_in.position + jitter;
-    return Element(displaced, e_in.normal, e_in.uv, e_in.tangent);
+    return Element(displaced, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

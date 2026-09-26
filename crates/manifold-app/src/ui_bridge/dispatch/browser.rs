@@ -12,20 +12,18 @@ use manifold_ui::BrowserAction;
 /// `manifold_core::preset_def::PresetKind` on the UI side of the browser's
 /// management actions (PRESET_LIBRARY_DESIGN P5) — `manifold-ui` mirrors core
 /// types rather than depending on `manifold-core` (see `BrowserCellContext`'s
-/// doc comment). `Node` never reaches these arms in practice: the browser
-/// only classifies a source (and therefore only ever fires
-/// `BrowserCellRightClicked`) for the Effect/Generator pickers, never the
-/// graph-editor's node picker — degrade to `Effect` rather than panic if that
-/// invariant is ever violated.
+/// doc comment). Node and action pickers have no preset-management commands.
 pub(crate) fn browser_mode_to_kind(
     mode: manifold_ui::panels::browser_popup::BrowserPopupMode,
-) -> manifold_core::preset_def::PresetKind {
+) -> Option<manifold_core::preset_def::PresetKind> {
     use manifold_ui::panels::browser_popup::BrowserPopupMode;
     match mode {
-        BrowserPopupMode::Effect | BrowserPopupMode::Node => {
-            manifold_core::preset_def::PresetKind::Effect
+        BrowserPopupMode::Effect => Some(manifold_core::preset_def::PresetKind::Effect),
+        BrowserPopupMode::Generator => Some(manifold_core::preset_def::PresetKind::Generator),
+        BrowserPopupMode::Node | BrowserPopupMode::Actions => {
+            log::warn!("Ignoring preset-management action from non-preset picker {mode:?}");
+            None
         }
-        BrowserPopupMode::Generator => manifold_core::preset_def::PresetKind::Generator,
     }
 }
 
@@ -35,7 +33,9 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
         BrowserAction::BrowserRenamePresetClicked(mode, type_id, source) => {
             use manifold_ui::panels::picker_core::Source;
 
-            let kind = browser_mode_to_kind(*mode);
+            let Some(kind) = browser_mode_to_kind(*mode) else {
+                return DispatchResult::handled();
+            };
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
             let initial_name = match source {
                 Source::MyLibrary => {
@@ -59,7 +59,9 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
         }
         BrowserAction::BrowserDuplicatePresetClicked(mode, type_id) => {
             // My Library only — the menu never offers Duplicate for Project.
-            let kind = browser_mode_to_kind(*mode);
+            let Some(kind) = browser_mode_to_kind(*mode) else {
+                return DispatchResult::handled();
+            };
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
             let lib = crate::user_library::UserLibrary::new();
             match lib.duplicate(kind, &id) {
@@ -72,7 +74,9 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
         BrowserAction::BrowserDeletePresetClicked(mode, type_id, source) => {
             use manifold_ui::panels::picker_core::Source;
 
-            let kind = browser_mode_to_kind(*mode);
+            let Some(kind) = browser_mode_to_kind(*mode) else {
+                return DispatchResult::handled();
+            };
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
             let (place, undo_note) = match source {
                 Source::MyLibrary => ("your library", "This can't be undone."),
@@ -110,7 +114,9 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
             // My Library only — the menu never offers Reveal for Project
             // (a project-embedded preset has no file to reveal). Doesn't
             // close the popup: a read-only peek shouldn't interrupt browsing.
-            let kind = browser_mode_to_kind(*mode);
+            let Some(kind) = browser_mode_to_kind(*mode) else {
+                return DispatchResult::handled();
+            };
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
             crate::user_library::UserLibrary::new().reveal(kind, &id);
             DispatchResult::handled()

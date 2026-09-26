@@ -9,6 +9,7 @@ merging origin/main into it. Exit 0 iff no check fails.
 import argparse
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,14 +48,51 @@ GPU_PROOFS_SCOPE = [
 ]
 
 
+
+def build_environment(cmd, cwd):
+    """Check each build stage and pin Cargo to its admitted canonical target.
+
+    The gate constructs its own argv; only its known build-driving stages need
+    admission. Setting the absolute target also prevents a Cargo config file
+    from silently redirecting a gate build to an unmanaged directory.
+    """
+    builds = ((Path(cmd[0]).name == "cargo" and len(cmd) > 1
+               and cmd[1] in {"clippy", "nextest", "test", "check", "build", "run"})
+              or any(Path(arg).name in {"gpu_proofs_gate.py", "run_ui_flows.py"}
+                     for arg in cmd[:2]))
+    if not builds:
+        return None, None
+    from storage_budget import check_build
+    repo = Path(cwd).resolve()
+    environment = os.environ.copy()
+    overrides = [environment[name] for name in
+                 ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR") if environment.get(name)]
+    targets = {Path(os.path.abspath(repo / value)) for value in overrides}
+    if len(targets) > 1:
+        return None, "Storage admission refused: conflicting Cargo target overrides"
+    target = next(iter(targets), repo / "target")
+    try:
+        admission = check_build(target, repo)
+    except OSError as error:
+        return None, f"Storage admission refused: cannot inspect disk: {error}"
+    if not admission:
+        return None, "Storage admission refused: " + admission.reason
+    environment["CARGO_TARGET_DIR"] = str(admission.target)
+    return environment, None
+
+
 def run_cmd(cmd, cwd, timeout):
     """Run subprocess, return (exit, stdout, stderr, duration).
 
     A timeout is a FAIL (-1), never a traceback — the gate must always end
     at its summary line."""
     start = time.time()
+    environment, refusal = build_environment(cmd, cwd)
+    if refusal:
+        return 2, "", refusal, time.time() - start
     try:
-        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
+                           timeout=timeout, env=environment)
     except subprocess.TimeoutExpired:
         duration = time.time() - start
         return -1, "", f"TIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration

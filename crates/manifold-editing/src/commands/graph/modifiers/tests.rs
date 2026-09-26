@@ -159,6 +159,68 @@ fn migrated_object_group_scene(modifier_type_ids: &[&str]) -> EffectGraphDef {
     }
 }
 
+/// A legacy bare object: the scene object owns the mesh chain directly in the
+/// current scope, with no object group wrapper. This is still a valid scene
+/// card shape and is addressed by passing the scene object's node id as the
+/// command owner.
+fn bare_object_scene(modifier_type_ids: &[&str]) -> EffectGraphDef {
+    let mesh = plain_node(10, "mesh", "node.cube_mesh");
+    let scene_object_id = 90;
+    let scene_object = plain_node(scene_object_id, "Hero", "node.scene_object");
+    let mut nodes = vec![mesh];
+    let mut wires = Vec::new();
+    let mut prev = (10u32, "vertices".to_string());
+    for (i, type_id) in modifier_type_ids.iter().enumerate() {
+        let id = 11 + i as u32;
+        nodes.push(plain_node(id, &format!("mod{i}"), type_id));
+        wires.push(scene_build_wire(prev.0, &prev.1, id, "in"));
+        prev = (id, "out".to_string());
+    }
+    wires.push(scene_build_wire(prev.0, &prev.1, scene_object_id, "vertices"));
+    nodes.push(scene_object);
+
+    let mut render = plain_node(0, "render", "node.render_scene");
+    render.params.insert(
+        "objects".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
+    nodes.push(render);
+    wires.push(scene_build_wire(scene_object_id, "object", 0, "object_0"));
+
+    EffectGraphDef {
+        version: EFFECT_GRAPH_VERSION,
+        name: None,
+        description: None,
+        preset_metadata: None,
+        scene_modifiers: Vec::new(),
+        nodes,
+        wires,
+    }
+}
+
+fn grouped_and_bare_object_scene() -> EffectGraphDef {
+    let mut def = object_group_scene(&[]);
+    let mesh_id = 110;
+    let scene_object_id = 190;
+    def.nodes.push(plain_node(mesh_id, "mesh2", "node.cube_mesh"));
+    def.nodes.push(plain_node(
+        scene_object_id,
+        "Bare",
+        "node.scene_object",
+    ));
+    def.wires
+        .push(scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"));
+    def.wires
+        .push(scene_build_wire(scene_object_id, "object", 0, "object_1"));
+    if let Some(render) = def.nodes.iter_mut().find(|node| node.id == 0) {
+        render.params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Float { value: 2.0 },
+        );
+    }
+    def
+}
+
 /// Wrap `def`'s whole top level inside a fresh outer group at `outer_id`
 /// — the "nested-group placement" gate: the object's group (id 1) now
 /// lives at `scope_path = [outer_id]` instead of root, so
@@ -282,9 +344,7 @@ fn insert_modifier_appends_to_empty_stack_and_undo_restores() {
 /// glTF importer's modifier section convention, duplicated in
 /// `modifier_section_label` since this crate has no renderer dep). Undo
 /// restores `preset_metadata` verbatim; execute→undo→redo is
-/// structurally stable (see the AddSceneObjectCommand sibling test for
-/// why redo isn't byte-identical: `execute` mints a fresh random NodeId
-/// every call).
+/// structurally stable, including the inserted node's stable identity.
 #[test]
 fn insert_modifier_stamps_exposures_and_undo_redo_are_stable() {
     use manifold_core::effect_graph_def::BindingTarget;
@@ -340,6 +400,7 @@ fn insert_modifier_stamps_exposures_and_undo_redo_are_stable() {
 
     cmd.execute(&mut project);
     assert_stamped(&project);
+    let after_first_execute = graph_of(&project, &fx).clone();
 
     cmd.undo(&mut project);
     let def = graph_of(&project, &fx);
@@ -350,6 +411,28 @@ fn insert_modifier_stamps_exposures_and_undo_redo_are_stable() {
 
     cmd.execute(&mut project); // redo
     assert_stamped(&project);
+    assert_eq!(graph_of(&project, &fx), &after_first_execute);
+}
+
+#[test]
+fn insert_undo_restores_an_original_none_graph() {
+    let catalog = object_group_scene(&[]);
+    let (mut project, fx) = project_with_graph(catalog.clone());
+    project.graph_target_owner_mut(&GraphTarget::Effect(fx.clone())).unwrap().graph = None;
+    let target = GraphTarget::Effect(fx.clone());
+    let mut cmd = InsertMeshModifierCommand::new(
+        target.clone(),
+        vec![],
+        1,
+        "node.bend_mesh".to_string(),
+        None,
+        Vec::new(),
+        catalog,
+    );
+    cmd.execute(&mut project);
+    assert!(project.graph_target_owner(&target).unwrap().graph.is_some());
+    cmd.undo(&mut project);
+    assert!(project.graph_target_owner(&target).unwrap().graph.is_none());
 }
 
 /// BUG-218 escape: the migrated/starter shape (`migrate_scene_object_wires`
@@ -616,6 +699,189 @@ fn insert_modifier_refuses_on_unparseable_chain() {
         def, &before,
         "an unparseable chain is refused — no node pushed, no wires touched"
     );
+    assert!(!cmd.was_applied());
+    assert!(cmd.rejection_reason().is_some());
+}
+
+#[test]
+fn bare_object_modifier_commands_use_scene_object_vertices_and_restore() {
+    let (mut project, fx) = project_with_graph(bare_object_scene(&[
+        "node.bend_mesh",
+        "node.twist_mesh",
+    ]));
+    let target = GraphTarget::Effect(fx.clone());
+    let before = graph_of(&project, &fx).clone();
+    let mut insert = InsertMeshModifierCommand::new(
+        target.clone(),
+        vec![],
+        90,
+        "node.taper_mesh".to_string(),
+        Some(1),
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    let mut admitted = Vec::new();
+    insert.graph_admission_targets(&mut admitted);
+    assert_eq!(admitted, vec![target.clone()]);
+    insert.execute(&mut project);
+    assert!(insert.was_applied());
+    let def = graph_of(&project, &fx);
+    let scene_object = def.nodes.iter().find(|node| node.id == 90).unwrap();
+    let inserted_id = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.taper_mesh")
+        .unwrap()
+        .id;
+    assert_eq!(scene_object.type_id, "node.scene_object");
+    assert!(def.wires.iter().any(|wire| {
+        wire.to_node == inserted_id && wire.to_port == "in"
+    }));
+    assert!(def.wires.iter().any(|wire| {
+        wire.from_node == inserted_id && wire.from_port == "out"
+    }));
+
+    let mut remove = RemoveMeshModifierCommand::new(
+        target.clone(),
+        vec![],
+        90,
+        inserted_id,
+        mirror_catalog_default(),
+    );
+    remove.execute(&mut project);
+    assert!(remove.was_applied());
+    assert!(!graph_of(&project, &fx).nodes.iter().any(|node| node.id == inserted_id));
+    remove.undo(&mut project);
+    assert!(graph_of(&project, &fx).nodes.iter().any(|node| node.id == inserted_id));
+
+    insert.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &before);
+}
+
+#[test]
+fn inserted_modifier_ids_are_unique_across_grouped_and_bare_objects() {
+    let (mut project, fx) = project_with_graph(grouped_and_bare_object_scene());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut grouped = InsertMeshModifierCommand::new(
+        target.clone(),
+        vec![],
+        1,
+        "node.bend_mesh".to_string(),
+        None,
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    grouped.execute(&mut project);
+    let grouped_id = graph_of(&project, &fx)
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GROUP_TYPE_ID)
+        .unwrap()
+        .group
+        .as_deref()
+        .unwrap()
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.bend_mesh")
+        .unwrap()
+        .id;
+
+    let mut bare = InsertMeshModifierCommand::new(
+        target,
+        vec![],
+        190,
+        "node.twist_mesh".to_string(),
+        None,
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    bare.execute(&mut project);
+    let def = graph_of(&project, &fx);
+    let bare_id = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.twist_mesh")
+        .unwrap()
+        .id;
+    assert_ne!(grouped_id, bare_id);
+    assert!(bare_id > grouped_id);
+}
+
+#[test]
+fn remove_modifier_prunes_exposure_side_wire_and_automation_atomically() {
+    let (mut project, fx) = project_with_graph(bare_object_scene(&[]));
+    let target = GraphTarget::Effect(fx.clone());
+    let mut insert = InsertMeshModifierCommand::new(
+        target.clone(),
+        vec![],
+        90,
+        "node.bend_mesh".to_string(),
+        None,
+        vec![scene_param_meta("amount", "Amount")],
+        mirror_catalog_default(),
+    );
+    insert.execute(&mut project);
+    let inserted = graph_of(&project, &fx)
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.bend_mesh")
+        .unwrap()
+        .clone();
+    let param_id = format!("{}_amount", inserted.id);
+
+    {
+        let owner = project.graph_target_owner_mut(&target).unwrap();
+        owner.params = manifold_core::params::ParamManifest::from_params(vec![
+            slot(&param_id, 0.25, true),
+        ]);
+        owner.automation_lanes = Some(vec![manifold_core::effects::AutomationLane {
+            param_id: param_id.clone().into(),
+            enabled: true,
+            points: Vec::new(),
+        }]);
+        let graph = owner.graph.as_mut().unwrap();
+        graph.nodes.push(plain_node(300, "side", "node.value"));
+        graph.wires.push(scene_build_wire(300, "value", inserted.id, "aux"));
+    }
+    let before_remove = graph_of(&project, &fx).clone();
+    let before_params = project.graph_target_owner(&target).unwrap().params.clone();
+
+    let mut remove = RemoveMeshModifierCommand::new(
+        target.clone(),
+        vec![],
+        90,
+        inserted.id,
+        mirror_catalog_default(),
+    );
+    remove.execute(&mut project);
+    let owner = project.graph_target_owner(&target).unwrap();
+    let graph = owner.graph.as_ref().unwrap();
+    assert!(!graph.nodes.iter().any(|node| node.id == inserted.id));
+    assert!(graph
+        .wires
+        .iter()
+        .all(|wire| wire.from_node != inserted.id && wire.to_node != inserted.id));
+    assert!(graph
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .all(|binding| !matches!(
+            &binding.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. }
+                if node_id == &inserted.node_id
+        )));
+    assert!(!owner.params.contains(&param_id));
+    assert!(owner.automation_lanes.is_none());
+
+    remove.undo(&mut project);
+    let owner = project.graph_target_owner(&target).unwrap();
+    assert_eq!(owner.graph.as_ref().unwrap(), &before_remove);
+    assert_eq!(owner.params, before_params);
+    let lanes = owner.automation_lanes.as_ref().unwrap();
+    assert_eq!(lanes.len(), 1);
+    assert_eq!(lanes[0].param_id.as_ref(), param_id);
 }
 
 #[test]

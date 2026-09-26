@@ -1,6 +1,6 @@
 //! `docs/RAYTRACING_DESIGN.md` section 16 (TL-B) — value-level proofs for
 //! `walk_with_transmission` (`manifold_gpu::raytrace::MetalShadowRayTracer`'s
-//! translucent shadow-ray walk — `tint *= factor * albedo_at_hit`, declined
+//! translucent shadow-ray walk — `tint *= factor * transmission_colour`, declined
 //! candidate continuation, single/stack/cutout legs).
 //!
 //! Fixture: 2x1 depth buffer at depth 0.3 with `inv_view_proj = IDENTITY`:
@@ -28,11 +28,12 @@
 //!   2x1 checkerboard texture (texel0 rgba=(0,0,0,0), texel1=(1,1,1,1)),
 //!   alpha_mask=true, alpha_cutoff=0.5, translucent=true, factor=0.5.
 //!   Texel 0: below-cutoff passes UNATTENUATED — vis=1.0.
-//!   Texel 1: accepted, albedo from texture = (1,1,1), tint = 0.5 — vis=0.5.
+//!   Texel 1: accepted, explicit transmission colour=(1,1,1), tint=0.5 — vis=0.5.
 //!
-//! Test 5 — albedo_tint_folds_to_luma:
-//!   One quad, factor 0.6, albedo (1.0, 0.1, 0.1), no texture.
-//!   tint = (0.6, 0.06, 0.06). Expected luma = 0.2126*0.6 + 0.7152*0.06 + 0.0722*0.06 = 0.174804.
+//! Test 5 — transmission_colour_is_independent_of_albedo:
+//!   One quad, base albedo (0.2, 0.1, 0.05), factor 0.6, and explicit
+//!   transmission colour (1.0, 0.1, 0.1). Tint is (0.6, 0.06, 0.06), proving
+//!   the base colour is not folded into the transmitted tint.
 
 use std::ffi::c_void;
 use std::slice;
@@ -325,7 +326,7 @@ fn single_translucent_occluder_attenuates_half() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -341,6 +342,7 @@ fn single_translucent_occluder_attenuates_half() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -349,12 +351,18 @@ fn single_translucent_occluder_attenuates_half() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
         [0.0; 3],
         [0.0; 4],
-        [0.5, 0.0, 0.0, 0.0],
+        [0.5, 1.0, 1.0, 1.0],
     )];
 
     let [v0, v1] = run_tl_fixture(&objects, &gi_materials, None);
@@ -376,7 +384,7 @@ fn factor_zero_control_stays_fully_shadowed() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -392,6 +400,7 @@ fn factor_zero_control_stays_fully_shadowed() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -400,6 +409,12 @@ fn factor_zero_control_stays_fully_shadowed() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
@@ -430,7 +445,7 @@ fn stacked_petals_compound_to_quarter() {
     let vertex_buffer2 = write_shared_buffer(device, &verts2);
 
     let objects = [
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer1,
             vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
             vertex_offset: 0,
@@ -446,6 +461,7 @@ fn stacked_petals_compound_to_quarter() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -454,8 +470,14 @@ fn stacked_petals_compound_to_quarter() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer2,
             vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
             vertex_offset: 0,
@@ -471,6 +493,7 @@ fn stacked_petals_compound_to_quarter() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -479,11 +502,17 @@ fn stacked_petals_compound_to_quarter() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
     ];
     let gi_materials = [
-        GiMaterial::new([1.0, 1.0, 1.0], [0.0; 3], [0.0; 4], [0.5, 0.0, 0.0, 0.0]),
-        GiMaterial::new([1.0, 1.0, 1.0], [0.0; 3], [0.0; 4], [0.5, 0.0, 0.0, 0.0]),
+        GiMaterial::new([1.0, 1.0, 1.0], [0.0; 3], [0.0; 4], [0.5, 1.0, 1.0, 1.0]),
+        GiMaterial::new([1.0, 1.0, 1.0], [0.0; 3], [0.0; 4], [0.5, 1.0, 1.0, 1.0]),
     ];
 
     let [v0, v1] = run_tl_fixture(&objects, &gi_materials, None);
@@ -512,7 +541,7 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
     ];
     let base_color_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Rgba32Float, &tex_px, "rt-tlb-cutout-tex");
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -528,6 +557,7 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -536,16 +566,20 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
-    // Albedo ignored when texture supplies albedo at hit — still passed through
-    // so the flat-albedo fallback (no-texture branch in walk_with_transmission) is
-    // exercised in other tests. Here texture supplies (0,0,0) for texel 0 and
-    // (1,1,1) for texel 1.
+    // The texture controls alpha coverage; transmission colour is supplied
+    // independently by the material.
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
         [0.0; 3],
         [0.0; 4],
-        [0.5, 0.0, 0.0, 0.0],
+        [0.5, 1.0, 1.0, 1.0],
     )];
 
     let [v0, v1] = run_tl_fixture(&objects, &gi_materials, Some(&base_color_tex));
@@ -555,19 +589,19 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
     );
     assert!(
         (v1 - 0.5).abs() < 1e-6,
-        "texel 1 (checkerboard alpha=1.0, accepted): translucent factor 0.5, albedo from texture (1,1,1) — expected vis 0.5, got {v1}"
+        "texel 1 (checkerboard alpha=1.0, accepted): translucent factor 0.5 with white transmission colour — expected vis 0.5, got {v1}"
     );
 }
 
 #[test]
-fn albedo_tint_folds_to_luma() {
+fn transmission_colour_is_independent_of_albedo() {
     let h = harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -583,6 +617,7 @@ fn albedo_tint_folds_to_luma() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -591,24 +626,31 @@ fn albedo_tint_folds_to_luma() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
-    // factor 0.6, albedo (1.0, 0.1, 0.1) → tint = (0.6, 0.06, 0.06)
+    // Base albedo differs from the explicit transmission colour, proving the
+    // transmitted tint is not multiplied by the base colour a second time.
     // luma = 0.2126*0.6 + 0.7152*0.06 + 0.0722*0.06 = 0.174804
     let gi_materials = [GiMaterial::new(
-        [1.0, 0.1, 0.1],
+        [0.2, 0.1, 0.05],
         [0.0; 3],
         [0.0; 4],
-        [0.6, 0.0, 0.0, 0.0],
+        [0.6, 1.0, 0.1, 0.1],
     )];
 
     let [v0, v1] = run_tl_fixture(&objects, &gi_materials, None);
     let expected: f32 = 0.2126 * 0.6 + 0.7152 * 0.06 + 0.0722 * 0.06;
     assert!(
         (v0 - expected).abs() < 1e-5,
-        "texel 0: albedo-tinted translucent — expected luma {expected}, got {v0}"
+        "texel 0: transmission-colour tint — expected luma {expected}, got {v0}"
     );
     assert!(
         (v1 - expected).abs() < 1e-5,
-        "texel 1: albedo-tinted translucent — expected luma {expected}, got {v1}"
+        "texel 1: transmission-colour tint — expected luma {expected}, got {v1}"
     );
 }

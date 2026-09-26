@@ -319,7 +319,12 @@ pub(super) fn build_import_graph(
         ));
     }
 
-    let sun_id = fresh_id();
+    let sun_id = if summary.lights.is_empty() {
+        Some(fresh_id())
+    } else {
+        None
+    };
+    if let Some(sun_id) = sun_id {
     let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
     sun_node.params.insert("mode".to_string(), enum_val(0)); // Sun
     sun_node.params.insert("pos_x".to_string(), float(5.0));
@@ -366,16 +371,16 @@ pub(super) fn build_import_graph(
         &metadata_for_node_type("node.light"),
         &sun_node_params,
     );
+    }
 
     let render_id = fresh_id();
     let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
     render_node.params.insert("objects".to_string(), int(n as i32));
-    // BUG-5uqg: light_0 is always the synthesized sun; every KHR_lights_punctual
-    // light imported below takes light_1, light_2, ... — the port count grows
-    // with the glb, it never silently drops a light past a fixed cap.
+    // The synthesized sun occupies light_0 only when the asset has no
+    // authored punctual lights; authored lights otherwise start at light_0.
     render_node
         .params
-        .insert("lights".to_string(), int(1 + summary.lights.len() as i32));
+        .insert("lights".to_string(), int(summary.lights.len().max(1) as i32));
     // RAYTRACING_DESIGN.md D14/section 5.2: stamp the root's curated RT subset
     // (RENDER_SCENE_STAMPED_PARAMS) like every other vocab node above —
     // without it a fresh import has no "Rendering" rows until a save/reload
@@ -391,51 +396,26 @@ pub(super) fn build_import_graph(
         &render_node.params.clone(),
     );
 
-    // BUG-5uqg: KHR_lights_punctual was listed in MANIFOLD_SUPPORTED_EXTENSIONS
-    // but never imported — one node.light card per glb light, ADDED alongside
-    // the synthesized sun above (never replacing it). `node.light` only has
-    // two modes (Sun/Point — see primitives::light's doc comment), so a spec
-    // Directional maps to Sun and both Point and Spot map to Point; Spot's
-    // cone is a real loss (Point is omnidirectional) — flagged in the report
-    // line below, never silently approximated.
-    //
-    // Unit conversion: glTF's photometric units (lux for Directional,
-    // candela for Point/Spot) have no native meaning on node.light's unitless
-    // `intensity` scale. Both convert through the same recipe: divide by 683
-    // (the standard lm/W luminous-efficacy constant used for photometric ↔
-    // radiometric conversion, e.g. by the reference glTF-Blender-IO
-    // importer), then multiply by π — the exact energy-conservation
-    // compensation the synthesized sun's hand-tuned `intensity: 3.5` above
-    // already approximates (node.pbr_material divides diffuse by π), derived
-    // here instead of eyeballed. A glTF asset authored at real-world
-    // brightness (e.g. ~100,000 lux daylight) will therefore land far
-    // outside node.light's 0..10 UI slider range — the underlying param has
-    // no hard clamp, so it still renders, just past the slider's drawn end;
-    // flagged in the report so an unexpectedly blown-out import is
-    // traceable to this conversion, not a mystery.
-    const LUX_OR_CANDELA_PER_WATT: f32 = 683.0;
+    // KHR_lights_punctual is imported one-to-one. Keep the source photometric
+    // intensity and physical inverse-square falloff; no synthetic conversion
+    // is applied at this graph boundary.
     let mut imported_light_report_lines: Vec<String> = Vec::new();
     for (i, light) in summary.lights.iter().enumerate() {
         let label = light.name.clone().unwrap_or_else(|| format!("Light {}", i + 1));
-        let node_str_id = format!("light_{}", i + 1);
+        let node_str_id = format!("light_{i}");
         let light_id = fresh_id();
         let mut light_node = plain_node(light_id, &node_str_id, "node.light", &node_str_id);
 
-        let (mode, spec_unit, kind_note) = match light.kind {
-            gltf_load::GltfLightKind::Directional => (0u32, "lux", String::new()),
-            gltf_load::GltfLightKind::Point => (1u32, "candela", String::new()),
+        let (mode, spec_unit, kind_note, cones) = match light.kind {
+            gltf_load::GltfLightKind::Directional => (0u32, "lux", String::new(), (0.0, 0.0)),
+            gltf_load::GltfLightKind::Point => (1u32, "candela", String::new(), (0.0, 0.0)),
             gltf_load::GltfLightKind::Spot { inner_cone_angle, outer_cone_angle } => (
-                1u32,
+                2u32,
                 "candela",
-                format!(
-                    " — spot cone (inner {:.1}°, outer {:.1}°) DROPPED: node.light has no cone \
-                     attenuation, imported as an omnidirectional Point",
-                    inner_cone_angle.to_degrees(),
-                    outer_cone_angle.to_degrees(),
-                ),
+                format!(" — spot cone (inner {:.1}°, outer {:.1}°)", inner_cone_angle.to_degrees(), outer_cone_angle.to_degrees()),
+                (inner_cone_angle, outer_cone_angle),
             ),
         };
-        let manifold_intensity = (light.intensity / LUX_OR_CANDELA_PER_WATT) * std::f32::consts::PI;
 
         // aim only needs to sit somewhere along the light's own forward
         // direction (Light::dir is `normalize(aim - pos)` — see light.rs) so
@@ -449,16 +429,7 @@ pub(super) fn build_import_graph(
             light.world_pos[1] + light.world_forward[1] * reach,
             light.world_pos[2] + light.world_forward[2] * reach,
         ];
-        // glTF `range` is a hard distance cutoff (intensity considered zero
-        // beyond it); node.light's `range` is the SOFT attenuation
-        // half-distance (`1/(1+d²/range²)`, 50% at d = range — see light.rs).
-        // These are different falloff shapes, not just different numbers —
-        // passing the spec value straight through means the imported light
-        // reads dimmer at range than the source asset intended. Approximated
-        // here rather than solved (no request to reshape node.light's
-        // falloff curve); absent a spec range, fall back to the same
-        // radius-scaled default reasoning as the sun's shadow extent.
-        let manifold_range = light.range.unwrap_or_else(|| (radius * 2.0).max(0.01));
+        let imported_range = light.range.unwrap_or(0.0);
 
         light_node.params.insert("mode".to_string(), enum_val(mode));
         light_node.params.insert("pos_x".to_string(), float(light.world_pos[0]));
@@ -470,8 +441,11 @@ pub(super) fn build_import_graph(
         light_node.params.insert("color_r".to_string(), float(light.color[0]));
         light_node.params.insert("color_g".to_string(), float(light.color[1]));
         light_node.params.insert("color_b".to_string(), float(light.color[2]));
-        light_node.params.insert("intensity".to_string(), float(manifold_intensity));
-        light_node.params.insert("range".to_string(), float(manifold_range));
+        light_node.params.insert("intensity".to_string(), float(light.intensity));
+        light_node.params.insert("range".to_string(), float(imported_range));
+        light_node.params.insert("falloff".to_string(), enum_val(1)); // InverseSquare
+        light_node.params.insert("inner_cone_angle".to_string(), float(cones.0));
+        light_node.params.insert("outer_cone_angle".to_string(), float(cones.1));
         light_node.params.insert("cast_shadows".to_string(), float(1.0));
         light_node.params.insert("shadow_softness".to_string(), enum_val(1)); // Soft
         let light_node_params = light_node.params.clone();
@@ -486,15 +460,15 @@ pub(super) fn build_import_graph(
             &metadata_for_node_type("node.light"),
             &light_node_params,
         );
-        wires.push(wire(light_id, "out", render_id, &format!("light_{}", i + 1)));
+        wires.push(wire(light_id, "out", render_id, &node_str_id));
 
         imported_light_report_lines.push(format!(
             "{label}: KHR_lights_punctual {:?} imported as node.light ({}) — intensity {:.1} \
-             {spec_unit} → {manifold_intensity:.3} (÷{LUX_OR_CANDELA_PER_WATT:.0}, ×π \
-             energy-conservation compensation){kind_note}",
+             {spec_unit} (raw), range {:.3}{kind_note}",
             light.kind,
-            if mode == 0 { "Sun" } else { "Point" },
+            match mode { 0 => "Sun", 1 => "Point", _ => "Spot" },
             light.intensity,
+            imported_range,
         ));
     }
 
@@ -699,7 +673,9 @@ pub(super) fn build_import_graph(
     wires.push(wire(hdri_id, "out", hdri_gain_id, "in"));
     wires.push(wire(hdri_gain_id, "out", env_select_id, "in_1"));
     wires.push(wire(env_select_id, "out", render_id, "envmap"));
-    wires.push(wire(sun_id, "out", render_id, "light_0"));
+    if let Some(sun_id) = sun_id {
+        wires.push(wire(sun_id, "out", render_id, "light_0"));
+    }
 
     // render_scene → ao (contact AO) → dof → motion_blur → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
@@ -729,6 +705,7 @@ pub(super) fn build_import_graph(
     // `hdri_gain.gain` into the def's node params, so the plant is the only
     // thing that puts the sun direction and the HDRI gain there.
     for (param, axis) in [("pos_x", "sun_x"), ("pos_y", "sun_y"), ("pos_z", "sun_z")] {
+        let Some(sun_id) = sun_id else { break };
         let id = format!("{sun_id}_{param}");
         let default = card_bindings
             .iter()

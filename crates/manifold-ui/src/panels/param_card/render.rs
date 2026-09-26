@@ -101,13 +101,40 @@ impl ParamCardPanel {
     /// — it is set independently via [`set_layer_id`](Self::set_layer_id)
     /// before configure (the generator config doesn't carry it).
     pub fn configure(&mut self, config: &ParamSurface) {
+        self.configure_with_object_modifier(config, None);
+    }
+
+    /// Configure an object-owned modifier through the same shared card
+    /// projection used by effect cards. The object address is kept alongside
+    /// the surface so stable card identity and Scene Setup removal routing do
+    /// not require a second renderer or synthetic parameter ids.
+    pub fn configure_object_modifier(
+        &mut self,
+        config: &ParamSurface,
+        address: crate::param_surface::ObjectModifierCardInfo,
+    ) {
+        self.configure_with_object_modifier(config, Some(address));
+    }
+
+    fn configure_with_object_modifier(
+        &mut self,
+        config: &ParamSurface,
+        object_modifier: Option<crate::param_surface::ObjectModifierCardInfo>,
+    ) {
+        let previous_collapsed = self.is_collapsed;
+        let same_object_modifier = self.object_modifier == object_modifier;
+        self.object_modifier = object_modifier;
         self.kind = config.kind;
         self.effect_index = config.effect_index;
         self.effect_id = config.effect_id.clone();
         self.name = config.title.clone();
         self.enabled = config.enabled;
         self.relight = config.relight;
-        self.is_collapsed = config.collapsed;
+        self.is_collapsed = if self.object_modifier.is_some() && same_object_modifier {
+            previous_collapsed
+        } else {
+            config.collapsed
+        };
         self.sync_collapse_anim();
         self.supports_envelopes = config.supports_envelopes;
         self.rows = config.rows.clone();
@@ -290,7 +317,7 @@ impl ParamCardPanel {
     /// relight is a 2D per-instance concept with no meaning on a scene
     /// modifier card (a permanent chrome difference between card species).
     fn relight_block_height(&self) -> f32 {
-        if self.modifier.is_some() {
+        if self.modifier.is_some() || self.object_modifier.is_some() {
             return 0.0;
         }
         // Feature disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
@@ -544,7 +571,7 @@ impl ParamCardPanel {
     /// between card species, not state-conditional visibility.
     fn effect_header_row(&self, header_bg: Color32) -> View {
         let author = self.context == CardContext::Author;
-        let modifier = self.modifier.is_some();
+        let object_modifier = self.object_modifier.is_some();
         let transparent_btn = |hover: Color32, pressed: Color32| UIStyle {
             bg_color: Color32::TRANSPARENT,
             hover_bg_color: hover,
@@ -589,16 +616,28 @@ impl ParamCardPanel {
                         .key(KEY_NAME),
                 ),
         );
-        // Every modifier uses the common chrome toggle. The projection omits
-        // the authored enabled parameter's duplicate row.
-        row = row.child(
-            View::button(if self.enabled { "ON" } else { "OFF" })
-                .fixed(TOGGLE_W, 16.0)
-                .style(toggle_btn_style(self.enabled))
-                .inert()
-                .key(KEY_TOGGLE),
-        );
-        if modifier {
+        // Inspector modifier cards use the common enable and object-target
+        // controls when the recipe actually has an object-scoped output.
+        // Object modifier cards deliberately omit both: enable and target
+        // selection belong to the owning object/stack context.
+        let show_modifier_header_toggle = self
+            .modifier
+            .as_ref()
+            .is_none_or(|modifier| modifier.enabled_label == "Enabled");
+        if !object_modifier && show_modifier_header_toggle {
+            row = row.child(
+                View::button(if self.enabled { "ON" } else { "OFF" })
+                    .fixed(TOGGLE_W, 16.0)
+                    .style(toggle_btn_style(self.enabled))
+                    .inert()
+                    .key(KEY_TOGGLE),
+            );
+        }
+        let show_object_targets = self
+            .modifier
+            .as_ref()
+            .is_some_and(|modifier| modifier.targets_all || !modifier.objects.is_empty());
+        if self.modifier.is_some() && show_object_targets {
             row = row
                 .child(
                     View::button("OBJ")
@@ -609,6 +648,19 @@ impl ParamCardPanel {
                 );
             // Remove × — structural inverse through the generic remove command;
             // the delete-collapse exit animation rides the existing machinery.
+            row = row.child(
+                View::button("\u{2715}")
+                    .fixed(CHEVRON_W, 16.0)
+                    .style(UIStyle {
+                        text_color: color::CHEVRON_COLOR,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
+                    })
+                    .inert()
+                    .key(KEY_MODIFIER_REMOVE),
+            );
+        } else if self.modifier.is_some() || object_modifier {
             row = row.child(
                 View::button("\u{2715}")
                     .fixed(CHEVRON_W, 16.0)
@@ -743,18 +795,27 @@ impl ParamCardPanel {
         // as wide as possible and a lone badge never floats mid-header.
         // Trailing order (right→left): chevron (always rightmost), cog, toggle —
         // matches the host View child order in `effect_header_row`. A modifier
-        // card keeps the cog and packs object-target and remove controls to its
-        // left.
+        // card keeps the cog and packs its remove control and, when the recipe
+        // has object-scoped output, its target control to the left.
         let chevron_x = x + w - PADDING - CHEVRON_W;
-        let modifier = self.modifier.is_some();
-        let (badge_right, content_left) = if modifier {
+        let modifier = self.modifier.is_some() || self.object_modifier.is_some();
+        let object_modifier = self.object_modifier.is_some();
+        let show_object_targets = self
+            .modifier
+            .as_ref()
+            .is_some_and(|modifier| modifier.targets_all || !modifier.objects.is_empty());
+        let show_modifier_header_toggle = self
+            .modifier
+            .as_ref()
+            .is_none_or(|modifier| modifier.enabled_label == "Enabled");
+        let (badge_right, content_left) = if self.modifier.is_some() {
             let cog_x = chevron_x - GAP - COG_W;
             let remove_x = cog_x - GAP - CHEVRON_W;
-            let chrome_left = remove_x
-                - GAP
-                - OBJECTS_W
-                - GAP
-                - TOGGLE_W;
+            let target_width = if show_object_targets { OBJECTS_W } else { 0.0 };
+            let target_gap = if show_object_targets { GAP } else { 0.0 };
+            let toggle_width = if show_modifier_header_toggle { TOGGLE_W } else { 0.0 };
+            let toggle_gap = if show_modifier_header_toggle { GAP } else { 0.0 };
+            let chrome_left = remove_x - target_gap - target_width - toggle_gap - toggle_width;
             let content_left = x
                 + PADDING
                 + if self.context == CardContext::Perform {
@@ -763,6 +824,17 @@ impl ParamCardPanel {
                     0.0
                 };
             (chrome_left, content_left)
+        } else if object_modifier {
+            let cog_x = chevron_x - GAP - COG_W;
+            let remove_x = cog_x - GAP - CHEVRON_W;
+            let content_left = x
+                + PADDING
+                + if self.context == CardContext::Perform {
+                    DRAG_HANDLE_W + GAP
+                } else {
+                    0.0
+                };
+            (remove_x, content_left)
         } else {
             let cog_x = chevron_x - GAP - COG_W;
             let toggle_x = cog_x - GAP - TOGGLE_W;
@@ -2203,9 +2275,19 @@ impl ParamCardPanel {
         }
     }
 
-    pub fn sync_enabled(&mut self, _tree: &mut UITree, enabled: bool) {
-        // Just update the field — tree update happens in sync_values() dirty-check.
+    pub fn sync_enabled(&mut self, tree: &mut UITree, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
         self.enabled = enabled;
+        self.cached_enabled = enabled;
+        // Modifier cards with semantic body toggles deliberately have no
+        // header toggle node. Ordinary effect cards can update their compact
+        // ON/OFF control immediately during the value-sync pass.
+        if let Some(toggle_btn_id) = self.toggle_btn_id {
+            tree.set_style(toggle_btn_id, toggle_btn_style(enabled));
+            tree.set_text(toggle_btn_id, if enabled { "ON" } else { "OFF" });
+        }
     }
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {

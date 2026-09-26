@@ -22,7 +22,7 @@
 //! the last point in its stable equal-beat order.
 
 use crate::command::Command;
-use manifold_core::effects::{AutomationLane, AutomationPoint};
+use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
 use manifold_core::project::Project;
 use manifold_core::GraphTarget;
 
@@ -50,6 +50,7 @@ pub struct AddAutomationPointCommand {
     target: GraphTarget,
     param_id: String,
     point: AutomationPoint,
+    on_curve: bool,
     previous_lane: Option<AutomationLane>,
     previous_lane_index: Option<usize>,
     previous_lanes_were_none: bool,
@@ -62,11 +63,43 @@ impl AddAutomationPointCommand {
             target,
             param_id: param_id.into(),
             point,
+            on_curve: false,
             previous_lane: None,
             previous_lane_index: None,
             previous_lanes_were_none: false,
             applied: false,
         }
+    }
+
+    /// Construct an insertion at `beat` that samples the existing lane
+    /// and splits the segment containing that beat. The ordinary [`Self::new`]
+    /// constructor keeps its arbitrary-point semantics, including the caller's
+    /// value and outgoing shape.
+    pub fn new_on_curve(
+        target: GraphTarget,
+        param_id: impl Into<String>,
+        beat: manifold_core::Beats,
+    ) -> Self {
+        Self {
+            target,
+            param_id: param_id.into(),
+            point: AutomationPoint {
+                beat,
+                value: 0.0,
+                shape: manifold_core::effects::SegmentShape::Linear,
+            },
+            on_curve: true,
+            previous_lane: None,
+            previous_lane_index: None,
+            previous_lanes_were_none: false,
+            applied: false,
+        }
+    }
+}
+
+impl AddAutomationPointCommand {
+    pub fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -77,7 +110,7 @@ impl Command for AddAutomationPointCommand {
         self.previous_lanes_were_none = false;
         self.applied = false;
         let param_id = self.param_id.clone();
-        let point = self.point;
+        let mut point = self.point;
         let mut prior_lane = None;
         let mut prior_index = None;
         let mut lanes_were_none = false;
@@ -91,28 +124,70 @@ impl Command for AddAutomationPointCommand {
             prior_lane = found.map(|(_, lane)| lane.clone());
             prior_index = found.map(|(idx, _)| idx);
             lanes_were_none = inst.automation_lanes.is_none();
+            if self.on_curve
+                && prior_lane.as_ref().is_none_or(|lane| {
+                    !lane
+                        .points
+                        .windows(2)
+                        .any(|pair| pair[0].beat.0 < pair[1].beat.0)
+                })
+            {
+                return false;
+            }
             // A pre-automation slider edit is not an override of a future lane.
-            if prior_lane.is_none() && let Some(param) = inst.params.get_mut(&param_id) {
+            if !self.on_curve && prior_lane.is_none() && let Some(param) = inst.params.get_mut(&param_id) {
                 param.touched = false;
             }
             let lanes = inst.automation_lanes_mut();
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) {
                 Some(lane) => {
-                    // Distinct values at one beat are independent breakpoints;
-                    // only an exact `(beat, value)` duplicate is replaced.
-                    lane.points.retain(|p| {
-                        !same_point(p, &point)
-                    });
-                    insert_sorted(&mut lane.points, point);
+                    if self.on_curve {
+                        point.value = lane.value_at(point.beat);
+                        // An insertion on an existing breakpoint is a no-op.
+                        // In particular, do not rewrite its outgoing shape.
+                        if lane.points.iter().any(|p| p.beat == point.beat) {
+                            return false;
+                        }
+                        let segment = lane.points.windows(2).position(|pair| {
+                            pair[0].beat.0 < point.beat.0 && point.beat.0 < pair[1].beat.0
+                        });
+                        if let Some(index) = segment {
+                            let left = lane.points[index];
+                            let t = ((point.beat.0 - left.beat.0)
+                                / (lane.points[index + 1].beat.0 - left.beat.0)) as f32;
+                            lane.points[index].shape = left.shape.subrange(0.0, t);
+                            point.shape = left.shape.subrange(t, 1.0);
+                        } else {
+                            // Outside the authored range the sampler holds the
+                            // nearest endpoint value, so keep that extension
+                            // explicit in the inserted point's outgoing shape.
+                            point.shape = SegmentShape::Hold;
+                        }
+                        insert_sorted(&mut lane.points, point);
+                    } else {
+                        // Distinct values at one beat are independent breakpoints;
+                        // only an exact `(beat, value)` duplicate is replaced.
+                        lane.points.retain(|p| !same_point(p, &point));
+                        insert_sorted(&mut lane.points, point);
+                    }
                 }
-                None => lanes.push(AutomationLane { param_id: param_id.into(), enabled: true, points: vec![point] }),
+                None => {
+                    if !self.on_curve {
+                        lanes.push(AutomationLane {
+                            param_id: param_id.into(),
+                            enabled: true,
+                            points: vec![point],
+                        });
+                    }
+                }
             }
             true
         });
+        self.point = point;
         self.previous_lane = prior_lane;
         self.previous_lane_index = prior_index;
         self.previous_lanes_were_none = lanes_were_none;
-        self.applied = applied.is_some();
+        self.applied = applied == Some(true);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -762,6 +837,142 @@ mod tests {
             lane_points(&project, &fx_id),
             &[original[0], original[1], point(2.0, 0.9), point(4.0, 0.8)]
         );
+    }
+
+    #[test]
+    fn on_curve_add_splits_nested_shape_without_changing_samples() {
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        let nested = SegmentShape::Curved(0.7).subrange(0.15, 0.9).subrange(0.2, 0.8);
+        let original = vec![
+            AutomationPoint { beat: Beats(0.0), value: 0.1, shape: nested },
+            AutomationPoint { beat: Beats(8.0), value: 0.9, shape: SegmentShape::Hold },
+            point(12.0, 0.2),
+        ];
+        install_lane(&mut project, &fx_id, original.clone());
+        let expected_samples: Vec<_> = [0.0, 1.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+            .into_iter()
+            .map(|beat| (beat, AutomationLane { param_id: "amount".into(), enabled: true, points: original.clone() }.value_at(Beats(beat))))
+            .collect();
+
+        let mut command = AddAutomationPointCommand::new_on_curve(target, "amount", Beats(4.0));
+        command.execute(&mut project);
+        let inserted = lane_points(&project, &fx_id);
+        assert_eq!(inserted.len(), 4);
+        assert_eq!(inserted[1].beat, Beats(4.0));
+        assert_eq!(inserted[1].value, expected_samples[3].1);
+        assert_eq!(inserted[0].shape, nested.subrange(0.0, 0.5));
+        assert_eq!(inserted[1].shape, nested.subrange(0.5, 1.0));
+        for (beat, value) in expected_samples {
+            let actual = AutomationLane { param_id: "amount".into(), enabled: true, points: inserted.to_vec() }.value_at(Beats(beat));
+            assert!((actual - value).abs() < 1e-6, "beat {beat}: {actual} != {value}");
+        }
+        command.undo(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), original.as_slice());
+        command.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id)[1].shape, nested.subrange(0.5, 1.0));
+    }
+
+    #[test]
+    fn on_curve_add_preserves_dense_samples_for_shape_and_direction_matrix() {
+        let shapes = [
+            SegmentShape::Linear,
+            SegmentShape::Hold,
+            SegmentShape::Curved(-0.7),
+            SegmentShape::CurvedRange { bend: 0.65, start: 0.1, end: 0.85 },
+            SegmentShape::Curved(0.8).subrange(0.15, 0.9).subrange(0.2, 0.75),
+        ];
+        let sample_beats = [
+            0.0, 0.25, 0.75, 1.5, 2.25, 3.0, 3.75, 4.5, 5.25, 6.0, 6.75, 7.5, 8.0,
+        ];
+        for shape in shapes {
+            for falling in [false, true] {
+                let (mut project, fx_id) = project_with_effect();
+                let (start, end) = if falling { (0.9, 0.1) } else { (0.1, 0.9) };
+                let original = vec![
+                    AutomationPoint { beat: Beats(0.0), value: start, shape },
+                    point(8.0, end),
+                ];
+                install_lane(&mut project, &fx_id, original.clone());
+                let expected: Vec<_> = sample_beats
+                    .iter()
+                    .map(|&beat| {
+                        (
+                            beat,
+                            AutomationLane {
+                                param_id: "amount".into(),
+                                enabled: true,
+                                points: original.clone(),
+                            }
+                            .value_at(Beats(beat)),
+                        )
+                    })
+                    .collect();
+
+                let mut command = AddAutomationPointCommand::new_on_curve(
+                    GraphTarget::Effect(fx_id.clone()),
+                    "amount",
+                    Beats(4.0),
+                );
+                command.execute(&mut project);
+                let inserted = lane_points(&project, &fx_id).to_vec();
+                assert_eq!(inserted.len(), 3);
+                for (beat, value) in expected {
+                    let actual = AutomationLane {
+                        param_id: "amount".into(),
+                        enabled: true,
+                        points: inserted.clone(),
+                    }
+                    .value_at(Beats(beat));
+                    assert!((actual - value).abs() < 1e-5, "shape {shape:?}, falling {falling}, beat {beat}: {actual} != {value}");
+                }
+                command.undo(&mut project);
+                assert_eq!(lane_points(&project, &fx_id), original.as_slice());
+                command.execute(&mut project);
+                assert_eq!(lane_points(&project, &fx_id), inserted.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn on_curve_add_at_existing_beat_preserves_point_and_shape() {
+        let (mut project, fx_id) = project_with_effect();
+        let original = vec![
+            AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.1,
+                shape: SegmentShape::CurvedRange { bend: 0.5, start: 0.2, end: 0.8 },
+            },
+            AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Hold },
+            AutomationPoint { beat: Beats(4.0), value: 0.7, shape: SegmentShape::CurvedRange { bend: -0.4, start: 0.15, end: 0.8 } },
+        ];
+        install_lane(&mut project, &fx_id, original.clone());
+        let mut command = AddAutomationPointCommand::new_on_curve(
+            GraphTarget::Effect(fx_id.clone()),
+            "amount",
+            Beats(4.0),
+        );
+        command.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), original.as_slice());
+        command.undo(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), original.as_slice());
+    }
+
+    #[test]
+    fn on_curve_add_without_a_segment_is_a_true_noop() {
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        let mut missing = AddAutomationPointCommand::new_on_curve(target.clone(), "amount", Beats(2.0));
+        missing.execute(&mut project);
+        assert!(!missing.was_applied());
+        assert!(project.find_effect_by_id(&fx_id).unwrap().automation_lanes.is_none());
+
+        let original = vec![point(4.0, 0.4)];
+        install_lane(&mut project, &fx_id, original.clone());
+        let mut single = AddAutomationPointCommand::new_on_curve(target, "amount", Beats(2.0));
+        single.execute(&mut project);
+        assert!(!single.was_applied());
+        assert_eq!(lane_points(&project, &fx_id), original.as_slice());
     }
 
     #[test]

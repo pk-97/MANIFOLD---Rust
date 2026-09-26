@@ -319,7 +319,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.enable_toggle"
+          "name_suffix": "\"enabled\"]"
         }
       }
     }
@@ -328,7 +328,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.enable_toggle"
+          "name_suffix": "\"enabled\"]"
         }
       },
       "gesture": {
@@ -342,7 +342,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "inspector.modifier.enable_toggle"
+          "name_suffix": "\"enabled\"]"
         }
       },
       "check": {
@@ -354,7 +354,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.enable_toggle"
+          "name_suffix": "\"enabled\"]"
         }
       }
     }
@@ -363,7 +363,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "inspector.modifier.enable_toggle"
+          "name_suffix": "\"enabled\"]"
         }
       },
       "gesture": {
@@ -377,7 +377,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "inspector.modifier.enable_toggle"
+          "name_suffix": "\"enabled\"]"
         }
       },
       "check": {

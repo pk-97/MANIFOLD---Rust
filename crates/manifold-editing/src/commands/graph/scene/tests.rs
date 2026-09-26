@@ -5,7 +5,8 @@ use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, GROUP_TYPE_ID, ParamSpecDef, PresetMetadata, StringBindingDef,
+    BindingDef, BindingTarget, GROUP_TYPE_ID, GroupDef, GroupInterface, ParamSpecDef,
+    PresetMetadata, StringBindingDef,
 };
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
@@ -206,6 +207,188 @@ fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
     assert_eq!(
         def, &before,
         "undo restores the pre-add graph exactly (inverse-pair)"
+    );
+}
+
+#[test]
+fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_redo() {
+    use manifold_core::effects::ParamConvert;
+    use std::collections::HashSet;
+
+    let existing_node_id = NodeId::new("nested-transform");
+    let mut existing_params = BTreeMap::new();
+    existing_params.insert(
+        "pos_x".to_string(),
+        SerializedParamValue::Float { value: 0.25 },
+    );
+    let existing_node = EffectGraphNode {
+        id: 900,
+        node_id: existing_node_id.clone(),
+        type_id: "node.transform_3d".to_string(),
+        handle: Some("nested_transform".to_string()),
+        params: existing_params,
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let nested_group = EffectGraphNode {
+        id: 700,
+        node_id: NodeId::new("nested-group"),
+        type_id: GROUP_TYPE_ID.to_string(),
+        handle: Some("Nested".to_string()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: Vec::new(),
+            },
+            nodes: vec![existing_node],
+            wires: Vec::new(),
+            tint: None,
+        })),
+    };
+
+    let binding_id = "authored_pos_x".to_string();
+    let mut def = render_scene_graph(1, 0);
+    def.nodes.push(nested_group);
+    def.preset_metadata = Some(PresetMetadata {
+        id: PresetTypeId::new("test.scene"),
+        display_name: "Test Scene".to_string(),
+        category: "Test".to_string(),
+        osc_prefix: "test_scene".to_string(),
+        legacy_discriminant: None,
+        available: true,
+        is_line_based: false,
+        layer_types: None,
+        params: vec![ParamSpecDef {
+            id: binding_id.clone(),
+            name: "Position X".to_string(),
+            min: -10.0,
+            max: 10.0,
+            default_value: 0.25,
+            ..Default::default()
+        }],
+        bindings: vec![BindingDef {
+            id: binding_id.clone(),
+            label: "Position X".to_string(),
+            default_value: 0.25,
+            target: BindingTarget::Node {
+                node_id: existing_node_id,
+                param: "pos_x".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: true,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        }],
+        param_aliases: Vec::new(),
+        value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
+        scene_modifier: None,
+        scene_bounds: None,
+    });
+
+    let (mut project, fx) = project_with_graph(def);
+    let target = GraphTarget::Effect(fx.clone());
+    refresh_target_manifest(&mut project, &target);
+    {
+        let host = project.find_effect_by_id_mut(&fx).unwrap();
+        host.ensure_base_values();
+        let param = host.params.get_mut(&binding_id).unwrap();
+        param.base = 0.73;
+        param.value = 0.73;
+    }
+    let before_graph = graph_of(&project, &fx).clone();
+    let before_manifest = project.find_effect_by_id(&fx).unwrap().params.clone();
+
+    let mut command = AddSceneObjectCommand::new(
+        target.clone(),
+        vec![],
+        0,
+        1,
+        (20.0, 30.0),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+
+    let after_add = graph_of(&project, &fx);
+    fn assert_unique_recursive(nodes: &[EffectGraphNode], ids: &mut HashSet<u32>) {
+        for node in nodes {
+            assert!(ids.insert(node.id), "duplicate document id {}", node.id);
+            if let Some(group) = node.group.as_deref() {
+                assert_unique_recursive(&group.nodes, ids);
+            }
+        }
+    }
+    assert_unique_recursive(after_add.nodes.as_slice(), &mut HashSet::new());
+    let added_group = after_add
+        .nodes
+        .iter()
+        .find(|node| node.handle.as_deref() == Some("Object 2"))
+        .unwrap();
+    let added_ids: HashSet<u32> = added_group
+        .group
+        .as_deref()
+        .unwrap()
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .chain(std::iter::once(added_group.id))
+        .collect();
+    assert_eq!(added_ids, (901..=906).collect());
+
+    let after_add_host = project.find_effect_by_id(&fx).unwrap();
+    assert_eq!(after_add_host.params, before_manifest);
+    assert!(
+        after_add
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .any(|binding| binding.id == binding_id)
+    );
+
+    command.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &before_graph);
+    assert_eq!(
+        project.find_effect_by_id(&fx).unwrap().params,
+        before_manifest
+    );
+
+    command.execute(&mut project);
+    assert_unique_recursive(
+        graph_of(&project, &fx).nodes.as_slice(),
+        &mut HashSet::new(),
+    );
+    assert_eq!(
+        project.find_effect_by_id(&fx).unwrap().params,
+        before_manifest
+    );
+    assert!(
+        graph_of(&project, &fx)
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .any(|binding| binding.id == binding_id)
     );
 }
 

@@ -10,6 +10,21 @@ Provenance: RT toggles card-visibility bug, 2026-08-11.
 
 ## Where each surface sources its params
 
+Object modifiers in Scene Setup use the same `ParamCardPanel` as inspector
+effects and scene modifiers. Their controls stay attached to stable instance
+IDs through reorder, duplicate, rename, undo, and save/reopen. Card titles and
+drag handles both start reordering; buttons retain their own actions.
+
+Successful insertions select and reveal the new item from the content-thread
+result. Rejected edits preserve the previous selection. Inspector tab changes
+retarget card shortcuts immediately. Pasting a group preserves its membership.
+
+Scene modifier controls describe the recipe's actual scope: Fog and Render Mode
+have no object-target selector; Scene Loop exposes a labeled Camera Travel
+toggle because disabling travel retains the repeated objects. Unavailable
+recipes show an admission reason in the picker. Bend and Twist show degrees
+with an initial −360° to 360° scrub range; the primitive input remains unbounded.
+
 Both surfaces read from the same `PresetInstance.params` manifest, built by `build_param_manifest` (`crates/manifold-core/src/effects/instance_serde.rs`).
 
 For scene generators (imported .glb, the scene-builder), the manifest comes from the graph's `preset_metadata.params`, which is populated at load time by `migrate_scene_exposures` (`crates/manifold-core/src/scene_exposure.rs`). That function walks every scene-vocabulary node (the `SCENE_VOCABULARY_TYPE_IDS` list) and calls `stamp_scene_node_exposures_into`, which writes one `ParamSpecDef` + one `BindingDef` per param. The `card_visible` flag on each `ParamSpecDef` is set by calling `card_visible_for(type_id, param_name)` — a hand-curated lookup table in the same file.

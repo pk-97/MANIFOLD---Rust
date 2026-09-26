@@ -1,0 +1,294 @@
+// Concatenated after shadow_rays.msl. Geometry, alpha, instance transforms and
+// random-number helpers have one authority in that source.
+struct SubsurfaceMaterial {
+    float4 color_weight;
+    float4 radius_phase;
+    uint4 config;
+};
+struct SubsurfaceParams {
+    float4x4 inv_view_proj;
+    float4 camera_pos;
+    uint2 render_size;
+    uint frame_index;
+    uint slot_row_base;
+    uint light_count;
+    uint material_count;
+    uint query_units_per_pixel;
+    uint _pad;
+};
+constant float SSS_PI = 3.14159265358979323846f;
+constant uint SSS_MAX_EVENTS = 256u;
+constant uint SSS_MAX_BOUNDARIES = 32u;
+
+// Force candidate delivery even for opaque BLASes: a ray inside one object
+// must not stop at a different instance which happens to overlap its bounds.
+static bool sss_boundary(
+    instance_acceleration_structure accel, ray r, uint instance,
+    thread intersection_query<triangle_data, instancing>& q)
+{
+    intersection_params options;
+    options.force_opacity(forced_opacity::non_opaque);
+    q.reset(r, accel, RT_MASK_VISIBLE, options);
+    while (q.next()) {
+        if (q.get_candidate_intersection_type() == intersection_type::triangle &&
+            q.get_candidate_instance_id() == instance) q.commit_triangle_intersection();
+    }
+    return q.get_committed_intersection_type() == intersection_type::triangle;
+}
+
+static float3 sss_hg(float3 direction, float g, float2 u) {
+    float c = 1.0f - 2.0f * u.x;
+    if (abs(g) > 1e-3f) {
+        float t = (1.0f - g*g) / (1.0f - g + 2.0f*g*u.x);
+        c = clamp((1.0f + g*g - t*t) / (2.0f*g), -1.0f, 1.0f);
+    }
+    float s = sqrt(max(0.0f, 1.0f - c*c));
+    float phi = 2.0f * SSS_PI * u.y;
+    float3 t = ortho_basis_x(direction);
+    return normalize(direction*c + s*(t*cos(phi) + cross(direction,t)*sin(phi)));
+}
+
+// Outgoing diffuse boundary radiance (irradiance / pi). The cosine-sampled
+// environment term already cancels its cosine/pi PDF. Other-surface emission
+// is included; secondary diffuse interreflection is not part of this estimator.
+static float3 sss_boundary_light(
+    instance_acceleration_structure accel, constant SubsurfaceParams& p,
+    device RtNormalSource* sources, device const GiMaterial* materials,
+    device const float4* lights,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> textures,
+    texture2d<float> environment, float3 position, float3 normal, float eps,
+    uint2 pixel, uint seed)
+{
+    float3 result = float3(0.0f);
+    for (uint i = 0u; i < p.light_count; ++i) {
+        float4 source = lights[i*4u];
+        float4 color = lights[i*4u+1u];
+        float4 settings = lights[i*4u+2u];
+        float3 direction = source.xyz;
+        float attenuation = 1.0f;
+        float distance = INFINITY;
+        if (source.w > 0.5f) {
+            float3 delta = source.xyz - position;
+            distance = length(delta);
+            direction = delta / max(distance, eps);
+            float range = settings.x;
+            if (settings.y > 0.5f) {
+                float cutoff = range > 0.0f ? max(1.0f-pow(distance/range,4.0f),0.0f) : 1.0f;
+                attenuation = cutoff/max(distance*distance,1e-6f);
+            } else {
+                attenuation = range > 0.0f ? 1.0f / (1.0f + distance*distance/(range*range)) : 0.0f;
+            }
+            if (source.w > 1.5f) {
+                float cosine = dot(lights[i*4u+3u].xyz,-direction);
+                float cone = clamp((cosine-settings.w)/max(settings.z-settings.w,0.001f),0.0f,1.0f);
+                attenuation *= cone*cone;
+            }
+        }
+        float cosine = max(dot(normal, direction), 0.0f);
+        if (cosine <= 0.0f || attenuation <= 0.0f) continue;
+        bool blocked = false;
+        if (color.w >= 0.0f) {
+            ray r;
+            r.origin = position + normal*eps;
+            r.direction = direction;
+            r.min_distance = eps*0.25f;
+            r.max_distance = max(eps, distance - 2.0f*eps);
+            intersection_query<triangle_data, instancing> q;
+            q.reset(r, accel, RT_MASK_SHADOW_CASTER);
+            float brightness;
+            blocked = walk_with_alpha_test(q, sources, textures, true, pixel,
+                p.frame_index, seed + i, brightness);
+        }
+        if (!blocked) result += color.rgb * (cosine*attenuation/SSS_PI);
+    }
+    ray r;
+    r.origin = position + normal*eps;
+    r.direction = cosine_hemisphere(normal, rand2(pixel, p.frame_index, seed+100u));
+    r.min_distance = eps*0.25f;
+    r.max_distance = INFINITY;
+    intersection_query<triangle_data, instancing> q;
+    q.reset(r, accel, RT_MASK_VISIBLE);
+    float brightness;
+    if (walk_with_alpha_test(q, sources, textures, false, pixel, p.frame_index,
+        seed+101u, brightness)) {
+        uint instance = q.get_committed_instance_id();
+        device RtNormalSource& src = sources[instance];
+        result += brightness * emissive_at_hit(float3(materials[src.object_index].emissive),
+            src, sources, textures, instance, q.get_committed_primitive_id(),
+            q.get_committed_triangle_barycentric_coord());
+    } else {
+        constexpr sampler env_sampler(coord::normalized, s_address::repeat,
+            t_address::clamp_to_edge, filter::linear, mip_filter::linear);
+        float2 uv = float2(atan2(r.direction.z, r.direction.x)/(2.0f*SSS_PI)+0.5f,
+            asin(clamp(r.direction.y,-1.0f,1.0f))/SSS_PI+0.5f);
+        result += environment.sample(env_sampler, uv, level(0.0f)).rgb;
+    }
+    return result;
+}
+
+static float3 sss_dipole(float distance, float3 radius, float3 color, float g) {
+    // Index-matched diffuse boundary: A = 1. Reduced extinction = 1/radius.
+    float3 reduced_albedo = color * (1.0f-g) / max(1.0f-color*g, float3(1e-6f));
+    float3 sigma_tr = sqrt(max(3.0f*(1.0f-reduced_albedo), float3(0.0f))) / radius;
+    float3 zr = radius;
+    float3 zv = radius * (1.0f + 4.0f/3.0f);
+    float3 dr = sqrt(distance*distance + zr*zr);
+    float3 dv = sqrt(distance*distance + zv*zv);
+    return reduced_albedo/(4.0f*SSS_PI) *
+        (zr*(1.0f+sigma_tr*dr)*exp(-sigma_tr*dr)/(dr*dr*dr) +
+         zv*(1.0f+sigma_tr*dv)*exp(-sigma_tr*dv)/(dv*dv*dv));
+}
+
+static float sss_projection_pdf(float3 delta, float3 hit_normal, float3 axis, float d) {
+    float along = dot(delta,axis);
+    float radius = sqrt(max(0.0f,dot(delta,delta)-along*along));
+    // Gamma(2,d) radial proposal, divided by the polar Jacobian 2*pi*r.
+    return exp(-radius/d) / (2.0f*SSS_PI*d*d) * abs(dot(hit_normal,axis));
+}
+
+kernel void trace_subsurface(
+    instance_acceleration_structure accel [[buffer(0)]],
+    constant SubsurfaceParams& p [[buffer(1)]],
+    device RtNormalSource* normal_sources [[buffer(2)]],
+    device const SubsurfaceMaterial* subsurface [[buffer(3)]],
+    device const float4* lights [[buffer(4)]],
+    device const GiMaterial* materials [[buffer(5)]],
+    constant uint4& region [[buffer(6)]],
+    depth2d<float> depth [[texture(0)]],
+    texture2d<float> environment [[texture(1)]],
+    texture2d<float, access::write> output [[texture(2)]],
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> textures [[texture(4)]],
+    uint2 local_pixel [[thread_position_in_grid]])
+{
+    if (any(local_pixel >= region.zw)) return;
+    uint2 pixel = local_pixel + region.xy;
+    if (any(pixel >= p.render_size)) return;
+    output.write(float4(0.0f),pixel);
+    bool valid;
+    float3 position = world_pos_from_depth(pixel,p.render_size,depth.read(pixel,0),p.inv_view_proj,valid);
+    if (!valid) return;
+    device RtNormalSource* sources = normal_sources + p.slot_row_base;
+    float3 delta = position-p.camera_pos.xyz;
+    float distance = length(delta);
+    if (distance <= 1e-7f) return;
+    ray primary;
+    primary.origin = p.camera_pos.xyz;
+    primary.direction = delta/distance;
+    primary.min_distance = 0.0f;
+    primary.max_distance = distance*1.001f+1e-4f;
+    intersection_query<triangle_data, instancing> primary_q;
+    primary_q.reset(primary,accel,RT_MASK_VISIBLE);
+    float brightness;
+    if (!walk_with_alpha_test(primary_q,sources,textures,false,pixel,p.frame_index,19000u,brightness)) return;
+    uint instance = primary_q.get_committed_instance_id();
+    uint object = sources[instance].object_index;
+    if (object >= p.material_count) return;
+    SubsurfaceMaterial material = subsurface[object];
+    if (material.color_weight.w <= 0.0f) return;
+    position = primary.origin + primary.direction*primary_q.get_committed_distance();
+    float3 normal = fetch_interpolated_normal(sources,instance,
+        primary_q.get_committed_primitive_id(),primary_q.get_committed_triangle_barycentric_coord());
+    if (dot(normal,primary.direction)>0.0f) normal=-normal;
+    float3 radius = max(material.radius_phase.xyz,float3(1e-5f));
+    float3 color = clamp(material.color_weight.xyz,0.0f,1.0f);
+    float g = clamp(material.radius_phase.w,-0.95f,0.95f);
+    float eps = max(1e-7f,2e-7f*max(1.0f,max(abs(position.x),max(abs(position.y),abs(position.z)))));
+    uint count = clamp(material.config.y,1u,64u);
+    float3 total = float3(0.0f);
+    bool invalid = false;
+    for (uint sample=0u;sample<count;++sample) {
+        uint seed = 20000u+sample*4096u;
+        float2 u = blue_noise_sample(pixel,p.frame_index,sample,count);
+        if (material.config.x == 1u) {
+            uint channel = min(uint(rand2(pixel,p.frame_index,seed).x*3.0f),2u);
+            float sigma_t = 1.0f/(radius[channel]*(1.0f-color[channel]*g));
+            float throughput = 3.0f;
+            ray r;
+            r.origin = position-normal*eps;
+            r.direction = cosine_hemisphere(-normal,u);
+            r.min_distance = eps*0.1f;
+            r.max_distance = INFINITY;
+            bool ended = false;
+            for (uint event=0u;event<SSS_MAX_EVENTS;++event) {
+                intersection_query<triangle_data, instancing> boundary;
+                if (!sss_boundary(accel,r,instance,boundary)) { invalid=true; ended=true; break; }
+                float flight = -log(max(1e-7f,1.0f-rand2(pixel,p.frame_index,seed+1u+event*4u).x))/sigma_t;
+                float edge = boundary.get_committed_distance();
+                if (flight >= edge) {
+                    float3 exit_position = r.origin+r.direction*edge;
+                    float3 exit_normal = fetch_interpolated_normal(sources,instance,
+                        boundary.get_committed_primitive_id(),boundary.get_committed_triangle_barycentric_coord());
+                    if (dot(exit_normal,r.direction)<0.0f) exit_normal=-exit_normal;
+                    float3 light = sss_boundary_light(accel,p,sources,materials,lights,textures,
+                        environment,exit_position,exit_normal,eps,pixel,seed+2048u);
+                    total[channel] += throughput*light[channel];
+                    ended=true; break;
+                }
+                r.origin += r.direction*flight;
+                throughput *= color[channel];
+                if (throughput<=0.0f) { ended=true; break; }
+                if (event>=8u) {
+                    float survival = clamp(throughput,0.05f,0.95f);
+                    if (rand2(pixel,p.frame_index,seed+2u+event*4u).x>=survival) { ended=true; break; }
+                    throughput /= survival;
+                }
+                r.direction = sss_hg(r.direction,g,rand2(pixel,p.frame_index,seed+3u+event*4u));
+                // At a real volume event the next segment begins exactly at
+                // that event; a surface epsilon would bias dense media.
+                r.min_distance=0.0f;
+            }
+            if (!ended) invalid=true;
+        } else {
+            float3 t=ortho_basis_x(normal), b=cross(normal,t);
+            float axis_choice=rand2(pixel,p.frame_index,seed).x;
+            float3 axis=normal, x=t, y=b;
+            if (axis_choice>=0.5f && axis_choice<0.75f) { axis=t; x=b; y=normal; }
+            if (axis_choice>=0.75f) { axis=b; x=normal; y=t; }
+            float d=max(radius.x,max(radius.y,radius.z));
+            float2 radial=rand2(pixel,p.frame_index,seed+1u);
+            float r=-d*log(max(1e-12f,(1.0f-radial.x)*(1.0f-radial.y)));
+            float extent=16.0f*d;
+            if (r>=extent) continue;
+            float h=sqrt(max(0.0f,extent*extent-r*r));
+            float angle=2.0f*SSS_PI*u.y;
+            float3 offset=r*(x*cos(angle)+y*sin(angle));
+            ray projection;
+            projection.origin=position+offset-axis*h;
+            projection.direction=axis;
+            projection.min_distance=0.0f;
+            projection.max_distance=2.0f*h;
+            uint hits=0u;
+            float3 chosen_position=position, chosen_normal=normal;
+            for (uint k=0u;k<SSS_MAX_BOUNDARIES;++k) {
+                intersection_query<triangle_data, instancing> q;
+                if (!sss_boundary(accel,projection,instance,q)) break;
+                float edge=q.get_committed_distance();
+                float3 hit=projection.origin+axis*edge;
+                ++hits;
+                if (rand2(pixel,p.frame_index,seed+2u+k).x<1.0f/float(hits)) {
+                    chosen_position=hit;
+                    chosen_normal=fetch_interpolated_normal(sources,instance,q.get_committed_primitive_id(),
+                        q.get_committed_triangle_barycentric_coord());
+                }
+                projection.origin=hit+axis*eps;
+                projection.max_distance-=edge+eps;
+                if (projection.max_distance<=0.0f) break;
+                if (k+1u==SSS_MAX_BOUNDARIES) invalid=true;
+            }
+            if (hits==0u) continue;
+            float3 separation=chosen_position-position;
+            float pdf=0.5f*sss_projection_pdf(separation,chosen_normal,normal,d)
+                +0.25f*sss_projection_pdf(separation,chosen_normal,t,d)
+                +0.25f*sss_projection_pdf(separation,chosen_normal,b,d);
+            if (pdf<=1e-12f) continue;
+            float3 profile=sss_dipole(length(separation),radius,color,g);
+            float3 light=sss_boundary_light(accel,p,sources,materials,lights,textures,environment,
+                chosen_position,chosen_normal,eps,pixel,seed+2048u);
+            total += light*profile*(float(hits)/pdf);
+        }
+    }
+    float3 result=total/float(count);
+    if (!rt_finite(result.x) || !rt_finite(result.y) || !rt_finite(result.z)
+        || max(result.x,max(result.y,result.z)) > 65504.0f) invalid=true;
+    output.write(invalid ? float4(0.0f,0.0f,0.0f,-1.0f) : float4(result,float(object+1u)),pixel);
+}

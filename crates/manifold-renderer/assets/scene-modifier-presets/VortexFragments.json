@@ -566,7 +566,7 @@
               },
               "sample_mode": {
                 "type": "Enum",
-                "value": 1
+                "value": 0
               },
               "center_x": {
                 "type": "Float",

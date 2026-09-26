@@ -98,5 +98,5 @@ fn body(
             tangent = vec4<f32>(normalize(orthogonal), self_v.tangent.w);
         }
     }
-    return Element(position, normal, self_v.uv, tangent);
+    return Element(position, normal, self_v.uv, self_v.uv1, tangent, self_v.color);
 }

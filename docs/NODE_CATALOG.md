@@ -68,7 +68,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Bilateral Blur | `node.bilateral_blur` | Filter | A depth-guided blur that smooths noise without bleeding across depth edges — the standard denoise pass after any per-pixel noisy sampler (ambient occlusion, di… |
 | Blur | `node.blur` | Filter | Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur. |
 | Blur (3D) | `node.blur_3d` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
-| Bokeh Gather | `node.bokeh_gather` | Filter | A true circular-aperture depth-of-field blur: each out-of-focus pixel gathers from a disc of neighbors sized by its own blur amount, and neighbors only contrib… |
+| Bokeh Gather | `node.bokeh_gather` | Filter | Depth-of-field blur with clean foreground coverage and circular or polygonal highlights. |
 | Custom Convolution | `node.custom_convolution` | Filter | Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't d… |
 | Gaussian Blur | `node.gaussian_blur` | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
 | Motion Blur | `node.motion_blur` | Filter | Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object move… |
@@ -437,7 +437,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotWeather` | Apricot Weather | generator | Geometry | 177 |
+| `ApricotWeather` | Apricot Weather | generator | Geometry | 180 |
 | `AutoGain` | Auto Gain | effect | Color | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
@@ -455,7 +455,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DataMosh` | Data Mosh | effect | Stylize | 8 |
-| `DepthOfField` | Depth of Field | effect | Filmic | 8 |
+| `DepthOfField` | Depth of Field | effect | Filmic | 10 |
 | `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
 | `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
 | `Dither` | Dither | effect | Stylize | 2 |
@@ -465,7 +465,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `FilmGrain` | Film Grain | effect | Filmic | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
-| `FogBlast` | Fog Blast | generator | Geometry | 89 |
+| `FogBlast` | Fog Blast | generator | Geometry | 92 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
@@ -489,8 +489,8 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 165 |
-| `LightOrbit` | Light Orbit | generator | Geometry | 78 |
+| `Lantern` | Lantern | generator | Geometry | 362 |
+| `LightOrbit` | Light Orbit | generator | Geometry | 81 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -501,7 +501,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 150 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 347 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
@@ -509,13 +509,13 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 518 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 776 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1297 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1946 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 135 |
-| `SceneStrobe` | Scene Strobe | generator | Geometry | 78 |
-| `Skin` | Skin | generator | Geometry | 61 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 141 |
+| `SceneStrobe` | Scene Strobe | generator | Geometry | 81 |
+| `Skin` | Skin | generator | Geometry | 64 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
@@ -524,13 +524,13 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
-| `TimeScrub` | Time Scrub | generator | Geometry | 78 |
+| `TimeScrub` | Time Scrub | generator | Geometry | 81 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
-| `WaveGrid` | Wave Grid | generator | Geometry | 73 |
-| `WaveRing` | Wave Ring | generator | Geometry | 73 |
-| `WaveSpiral` | Wave Spiral | generator | Geometry | 73 |
+| `WaveGrid` | Wave Grid | generator | Geometry | 76 |
+| `WaveRing` | Wave Ring | generator | Geometry | 76 |
+| `WaveSpiral` | Wave Spiral | generator | Geometry | 76 |
 | `Wireframe` | Wireframe | generator | Geometry | 12 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
 

@@ -14,7 +14,9 @@ use manifold_fluids::FrameStats;
 const MAGIC: &[u8; 8] = b"MFLUIDC1";
 const LEGACY_FORMAT_VERSION: u32 = 3;
 const LEGACY_LIQUID_FORMAT_VERSION: u32 = 4;
-const FORMAT_VERSION: u32 = 5;
+const LEGACY_TIME_STEPS_FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
+const LEGACY_MESH_VERTEX_SIZE: usize = 64;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
 const MAX_WHITEWATER: usize = 250_000;
@@ -115,6 +117,7 @@ impl CacheWriter {
 
 pub(crate) struct CacheReader {
     directory: Arc<PathBuf>,
+    format_version: u32,
     max_vertices: usize,
     max_whitewater: usize,
 }
@@ -127,10 +130,11 @@ impl CacheReader {
         let manifest = File::open(directory.join(MANIFEST))
             .map_err(|error| format!("Water cache playback could not open manifest: {error}"))?;
         let mut reader = BufReader::new(manifest);
-        read_manifest(&mut reader, settings)
+        let format_version = read_manifest(&mut reader, settings)
             .map_err(|error| format!("Water cache playback rejected manifest: {error}"))?;
         Ok(Self {
             directory,
+            format_version,
             max_vertices: settings.max_vertices,
             max_whitewater: settings.whitewater.max_particles as usize,
         })
@@ -154,6 +158,7 @@ impl CacheReader {
             &mut decoder,
             vertices,
             whitewater,
+            self.format_version,
             self.max_vertices,
             self.max_whitewater,
         )
@@ -206,7 +211,7 @@ fn write_header(writer: &mut impl Write, settings: FluidSettings) -> io::Result<
     write_settings(writer, settings)
 }
 
-fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<()> {
+fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<u32> {
     let mut magic = [0; MAGIC.len()];
     reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -215,7 +220,10 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
     let version = read_u32(reader)?;
     if !matches!(
         version,
-        LEGACY_FORMAT_VERSION | LEGACY_LIQUID_FORMAT_VERSION | FORMAT_VERSION
+        LEGACY_FORMAT_VERSION
+            | LEGACY_LIQUID_FORMAT_VERSION
+            | LEGACY_TIME_STEPS_FORMAT_VERSION
+            | FORMAT_VERSION
     ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -239,7 +247,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
     if read_settings(
         reader,
         version >= LEGACY_LIQUID_FORMAT_VERSION,
-        version == FORMAT_VERSION,
+        version >= LEGACY_TIME_STEPS_FORMAT_VERSION,
     )? != settings
     {
         return Err(io::Error::new(
@@ -247,7 +255,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             "physical settings do not match",
         ));
     }
-    Ok(())
+    Ok(version)
 }
 
 fn write_settings(writer: &mut impl Write, settings: FluidSettings) -> io::Result<()> {
@@ -359,6 +367,7 @@ fn read_frame(
     reader: &mut impl Read,
     vertices: &mut Vec<MeshVertex>,
     whitewater: &mut WhitewaterFrame,
+    format_version: u32,
     max_vertices: usize,
     max_whitewater: usize,
 ) -> io::Result<(u64, Transform, FrameStats)> {
@@ -370,7 +379,11 @@ fn read_frame(
             "mesh vertex count is not triangular",
         ));
     }
-    read_float_records(reader, vertices, vertex_count)?;
+    if format_version < FORMAT_VERSION {
+        read_legacy_mesh_vertices(reader, vertices, vertex_count)?;
+    } else {
+        read_float_records(reader, vertices, vertex_count)?;
+    }
     read_instances(reader, &mut whitewater.foam, max_whitewater)?;
     read_instances(reader, &mut whitewater.bubbles, max_whitewater)?;
     read_instances(reader, &mut whitewater.spray, max_whitewater)?;
@@ -402,6 +415,49 @@ fn read_frame(
         return Err(io::Error::new(io::ErrorKind::InvalidData, "trailing bytes"));
     }
     Ok((tick, obstacle, stats))
+}
+
+fn read_legacy_mesh_vertices(
+    reader: &mut impl Read,
+    vertices: &mut Vec<MeshVertex>,
+    count: usize,
+) -> io::Result<()> {
+    let zero = MeshVertex {
+        position: [0.0; 3],
+        _pad0: 0.0,
+        normal: [0.0; 3],
+        _pad1: 0.0,
+        uv: [0.0; 2],
+        _pad2: [0.0; 2],
+        tangent: [0.0; 4],
+        color: [1.0; 4],
+    };
+    vertices.resize(count, zero);
+    for vertex in vertices.iter_mut() {
+        let mut bytes = [0; LEGACY_MESH_VERTEX_SIZE];
+        reader.read_exact(&mut bytes)?;
+        let mut words = [0.0; LEGACY_MESH_VERTEX_SIZE / std::mem::size_of::<f32>()];
+        for (word, bytes) in words.iter_mut().zip(bytes.chunks_exact(4)) {
+            *word = f32::from_le_bytes(bytes.try_into().unwrap());
+            if !word.is_finite() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "non-finite frame data",
+                ));
+            }
+        }
+        *vertex = MeshVertex {
+            position: [words[0], words[1], words[2]],
+            _pad0: words[3],
+            normal: [words[4], words[5], words[6]],
+            _pad1: words[7],
+            uv: [words[8], words[9]],
+            _pad2: [words[10], words[11]],
+            tangent: [words[12], words[13], words[14], words[15]],
+            color: [1.0; 4],
+        };
+    }
+    Ok(())
 }
 
 fn write_instances(writer: &mut impl Write, values: &[InstanceTransform]) -> io::Result<()> {
@@ -576,6 +632,7 @@ mod tests {
                     uv: [0.25, 0.5],
                     _pad2: [0.0; 2],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [0.2, 0.4, 0.6, 1.0],
                 };
                 3
             ],
@@ -707,11 +764,9 @@ mod tests {
         );
         assert_eq!(decoded_obstacle, obstacle);
         assert_eq!(decoded_stats, stats);
-        assert!(
-            reader
-                .read_into(3, &mut decoded_vertices, &mut decoded_whitewater)
-                .is_err()
-        );
+        assert!(reader
+            .read_into(3, &mut decoded_vertices, &mut decoded_whitewater)
+            .is_err());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -731,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_v5_rejects_each_liquid_and_time_step_mismatch() {
+    fn cache_v6_rejects_each_liquid_and_time_step_mismatch() {
         let root = std::env::temp_dir().join(format!(
             "manifold-fluid-cache-liquid-mismatch-{}",
             std::process::id()
@@ -776,6 +831,94 @@ mod tests {
         let mut changed_adaptive_obstacles = settings;
         changed_adaptive_obstacles.time_steps.adaptive_obstacles = false;
         assert!(CacheReader::open(directory, changed_adaptive_obstacles).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v5_decodes_legacy_64_byte_vertices_with_white_color() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v5-legacy-{}",
+            std::process::id()
+        ));
+        let directory = root.join("frames");
+        let settings = FluidSettings::default();
+        fs::create_dir_all(&directory).unwrap();
+
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(MAGIC);
+        write_u32(&mut manifest, LEGACY_TIME_STEPS_FORMAT_VERSION).unwrap();
+        manifest.extend_from_slice(manifold_fluids::UPSTREAM_REVISION.as_bytes());
+        write_f64(&mut manifest, TICK).unwrap();
+        write_settings(&mut manifest, settings).unwrap();
+        fs::write(directory.join(MANIFEST), manifest).unwrap();
+
+        let mut frame = Vec::new();
+        write_u64(&mut frame, 11).unwrap();
+        write_u32(&mut frame, 3).unwrap();
+        for index in 0..3 {
+            let value = index as f32;
+            let words = [
+                value,
+                value + 0.25,
+                value + 0.5,
+                0.0,
+                0.0,
+                1.0,
+                value,
+                0.0,
+                value * 0.01,
+                value * 0.02,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+            ];
+            for word in words {
+                write_f32(&mut frame, word).unwrap();
+            }
+        }
+        write_u32(&mut frame, 0).unwrap();
+        write_u32(&mut frame, 0).unwrap();
+        write_u32(&mut frame, 0).unwrap();
+        write_transform(
+            &mut frame,
+            Transform {
+                pos: [0.0, 0.0, 0.0],
+                rot_euler: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+                billboard: false,
+            },
+        )
+        .unwrap();
+        write_u32(&mut frame, 3).unwrap();
+        write_u32(&mut frame, 1).unwrap();
+        write_u32(&mut frame, 2).unwrap();
+        write_f64(&mut frame, 1.25).unwrap();
+        write_f64(&mut frame, 2.5).unwrap();
+        let path = frame_path(&directory, 11);
+        let encoded = zstd::stream::encode_all(frame.as_slice(), 1).unwrap();
+        fs::write(&path, &encoded).unwrap();
+
+        let reader = CacheReader::open(Arc::new(directory.clone()), settings).unwrap();
+        let mut vertices = Vec::new();
+        let mut whitewater = WhitewaterFrame::default();
+        reader
+            .read_into(11, &mut vertices, &mut whitewater)
+            .unwrap();
+        assert_eq!(vertices.len(), 3);
+        for (index, vertex) in vertices.iter().enumerate() {
+            let value = index as f32;
+            assert_eq!(vertex.position, [value, value + 0.25, value + 0.5]);
+            assert_eq!(vertex.tangent, [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(vertex.color, [1.0; 4]);
+        }
+        fs::write(&path, &encoded[..encoded.len() - 1]).unwrap();
+        assert!(reader
+            .read_into(11, &mut vertices, &mut whitewater)
+            .is_err());
+
         fs::remove_dir_all(root).unwrap();
     }
 

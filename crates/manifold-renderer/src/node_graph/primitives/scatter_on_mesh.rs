@@ -449,8 +449,9 @@ mod gpu_tests {
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
 
     #[allow(clippy::too_many_arguments)]
     fn dispatch_scatter(

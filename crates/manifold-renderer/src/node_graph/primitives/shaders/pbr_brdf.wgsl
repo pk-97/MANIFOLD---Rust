@@ -147,3 +147,26 @@ fn pbr_cosine_sample_hemisphere(xi: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
 fn pbr_g_schlick_ggx_k(NdotX: f32, k: f32) -> f32 {
     return NdotX / (NdotX * (1.0 - k) + k);
 }
+
+// Charlie distribution and Ashikhmin visibility, matching the scene cloth
+// lobe. Its directional albedo must be integrated independently of GGX.
+fn pbr_d_charlie(roughness: f32, ndoth: f32) -> f32 {
+    let inv_alpha = 1.0 / max(roughness * roughness, 0.0001);
+    return (2.0 + inv_alpha) * pow(max(1.0 - ndoth * ndoth, 0.0), 0.5 * inv_alpha)
+        / (2.0 * PBR_PI);
+}
+
+fn pbr_v_sheen(ndotv: f32, ndotl: f32) -> f32 {
+    return 1.0 / max(4.0 * (ndotv + ndotl - ndotv * ndotl), 0.0001);
+}
+
+fn pbr_importance_sample_charlie(xi: vec2<f32>, roughness: f32, n: vec3<f32>) -> vec3<f32> {
+    let alpha = max(roughness * roughness, 0.0001);
+    let sin_theta = pow(xi.y, alpha / (2.0 * alpha + 1.0));
+    let cos_theta = sqrt(max(1.0 - sin_theta * sin_theta, 0.0));
+    let phi = 2.0 * PBR_PI * xi.x;
+    let up = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.z) < 0.999);
+    let tangent = normalize(cross(up, n));
+    let bitangent = cross(n, tangent);
+    return tangent * (sin_theta * cos(phi)) + bitangent * (sin_theta * sin(phi)) + n * cos_theta;
+}

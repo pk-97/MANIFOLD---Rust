@@ -18,7 +18,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\ud83c\udf0d World"
+          "text": "🌍 World"
         }
       },
       "gesture": {
@@ -47,6 +47,15 @@
         }
       },
       "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Fog"
+        }
+      }
     }
   },
   {

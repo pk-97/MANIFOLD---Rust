@@ -249,7 +249,9 @@ mod gpu_tests {
         unsafe {
             profile_buf.write(0, bytemuck::cast_slice(profile));
         }
-        let dst_buf = device.create_buffer_shared(dst_cap as u64 * 48);
+        let dst_buf = device.create_buffer_shared(
+            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+        );
 
         let uniforms = RevolveCurveUniforms {
             segments,
@@ -309,7 +311,9 @@ mod gpu_tests {
             src_buf.write(0, bytemuck::cast_slice(&revolved));
         }
         let tri_dst_cap = tri_expected_count;
-        let tri_dst_buf = device.create_buffer_shared(tri_dst_cap as u64 * 48);
+        let tri_dst_buf = device.create_buffer_shared(
+            tri_dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+        );
 
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

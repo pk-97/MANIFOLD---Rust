@@ -65,5 +65,5 @@ fn body(idx: u32, count: u32, e_in: Element, separation: f32, rotation: f32, orb
     let n = blend_frame(e_in.normal, rotated_normal, w, vec3<f32>(0.0, 1.0, 0.0));
     let rotated_tangent = rotate_about(rotate_about(e_in.tangent.xyz, local_axis, rotation), axis, orbit);
     let t = blend_tangent(e_in.tangent.xyz, rotated_tangent, n, w);
-    return Element(p, n, e_in.uv, vec4<f32>(t, e_in.tangent.w));
+    return Element(p, n, e_in.uv, e_in.uv1, vec4<f32>(t, e_in.tangent.w), e_in.color);
 }

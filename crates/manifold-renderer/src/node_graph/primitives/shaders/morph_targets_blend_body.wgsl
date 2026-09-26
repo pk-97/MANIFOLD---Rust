@@ -37,5 +37,5 @@ fn body(
     }
 
     let mag = max(length(nrm), 1e-12);
-    return Element(pos, nrm / mag, e_in.uv, e_in.tangent);
+    return Element(pos, nrm / mag, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

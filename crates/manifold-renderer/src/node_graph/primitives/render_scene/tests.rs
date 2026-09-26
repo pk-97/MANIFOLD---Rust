@@ -80,11 +80,14 @@
     fn svt_test_light(mode: crate::node_graph::light::LightMode) -> crate::node_graph::light::Light {
         crate::node_graph::light::Light {
             mode,
+            falloff: crate::node_graph::light::LightFalloff::Legacy,
             pos: [0.0, 0.0, 0.0],
             aim: [0.0, 0.0, 1.0],
             dir: [0.0, 0.0, 1.0],
             color: [1.0, 1.0, 1.0, 1.0],
             range: 30.0,
+            inner_cone_angle: 0.0,
+            outer_cone_angle: 0.0,
             cast_shadows: true,
             shadow_softness: crate::node_graph::light::ShadowSoftness::Soft,
             shadow_bias: 0.005,

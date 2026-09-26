@@ -46,6 +46,15 @@ use crate::window_registry::WindowRole;
 /// and the editor's cursor-anchored zoom — so a notch means the same everywhere.
 pub(crate) const LINE_DELTA_PX: f32 = 20.0;
 
+/// A graph-editor UI press remains owned by the editor tree after the cursor
+/// crosses into the canvas. The hit region only chooses the owner on press;
+/// once a widget is pressed, the tree must keep receiving the threshold move
+/// and terminal release from anywhere in the window.
+#[inline]
+fn editor_ui_pointer_owned(in_panel: bool, pressed_widget: bool) -> bool {
+    in_panel || pressed_widget
+}
+
 /// Normalize a winit scroll delta to logical pixels `(dx, dy)`.
 ///
 /// `LineDelta` (mouse wheel) is scaled by [`LINE_DELTA_PX`] per notch;
@@ -226,6 +235,12 @@ impl Application {
         is_graph_editor: bool,
         position: PhysicalPosition<f64>,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if is_primary {
+                self.primary_cursor_moved(window_id, position);
+            }
+            return;
+        }
         // An active text session's drag claims pointer motion ahead of
         // everything else (P5b) — but only actually consumes it while a
         // drag is armed (`text_input_pointer_move` returns `false`
@@ -250,6 +265,12 @@ impl Application {
         button: MouseButton,
         state: ElementState,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if is_primary {
+                self.primary_mouse_input(window_id, is_primary, button, state);
+            }
+            return;
+        }
         // An active text session claims the press/release ahead of normal
         // dispatch (P5b/D16): inside the field it places the caret/word and
         // consumes the event; outside it commits first and then falls
@@ -293,6 +314,9 @@ impl Application {
         is_graph_editor: bool,
         delta: MouseScrollDelta,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            return;
+        }
         if is_graph_editor {
             // The editor's zoom is self-contained; the primary scroll block
             // below is `is_primary`-gated and would never run for the editor
@@ -398,6 +422,20 @@ impl Application {
         self.apply_pending_cursor(window_id);
     }
 
+    /// Menus retain their source focus; direct presses choose the card host.
+    fn update_card_keyboard_focus(&mut self) {
+        let ui = &mut self.ws.ui_root;
+        if ui.background_input_blocked() { return; }
+        let in_inspector = ui.layout.inspector().contains(self.cursor_pos);
+        let in_objects = ui.scene_setup_panel.is_open()
+            && ui.layout.scene_setup().contains(self.cursor_pos);
+        if !in_inspector && self.input_handler.inspector_has_focus {
+            ui.inspector.clear_effect_selection(&mut ui.tree);
+        }
+        ui.object_cards_have_focus = in_objects;
+        self.input_handler.inspector_has_focus = in_inspector || in_objects;
+    }
+
     /// `MouseInput` in the timeline/inspector window (`is_primary`) or the output
     /// window (the `else` — double-click toggles borderless presentation).
     pub(crate) fn primary_mouse_input(
@@ -420,17 +458,19 @@ impl Application {
                         ElementState::Pressed => {
                             self.mouse_pressed = true;
 
-                            // Track which panel has focus for context-sensitive shortcuts.
-                            // Matches Unity's InputHandler.inspectorHasFocus.
-                            // Any click outside inspector clears focus and effect selection
-                            // — layer headers, timeline tracks, transport bar, etc.
-                            let inspector_rect = self.ws.ui_root.layout.inspector();
-                            let in_inspector = inspector_rect.contains(self.cursor_pos);
-                            if !in_inspector && self.input_handler.inspector_has_focus {
+                            self.update_card_keyboard_focus();
+
+                            if self.ws.ui_root.object_cards_have_focus
+                                && !self.ws.ui_root.background_input_blocked()
+                                && let Some(node) = self.ws.ui_root.tree.hit_test(self.cursor_pos)
+                            {
                                 let ui = &mut self.ws.ui_root;
-                                ui.inspector.clear_effect_selection(&mut ui.tree);
+                                if ui.scene_setup_panel.select_outliner_node(node)
+                                    || ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree)
+                                {
+                                    self.needs_rebuild = true;
+                                }
                             }
-                            self.input_handler.inspector_has_focus = in_inspector;
 
                             if self.ws.ui_root.background_input_blocked() {
                                 // A modal is open: its full-screen scrim owns
@@ -594,6 +634,7 @@ impl Application {
                 }
                 MouseButton::Right => {
                     if state == ElementState::Pressed {
+                        self.update_card_keyboard_focus();
                         self.ws.ui_root.right_click(self.cursor_pos);
                     }
                 }
@@ -978,7 +1019,11 @@ impl Application {
             .graph_editor
             .as_ref()
             .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
-        if (in_panel || picker_open)
+        let ui_pointer_owned = self
+            .graph_editor
+            .as_ref()
+            .is_some_and(|ed| ed.ui_root.input.pressed_widget().is_some());
+        if (in_panel || picker_open || ui_pointer_owned)
             && let Some(ed) = self.graph_editor.as_mut()
         {
             ed.ui_root.input.process_pointer(
@@ -991,6 +1036,101 @@ impl Application {
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.offscreen_dirty = true;
         }
+    }
+
+    /// Terminate every editor-owned pointer gesture when the OS withholds the
+    /// matching button release (focus loss) or Escape cancels the gesture.
+    ///
+    /// The editor tree gets a terminal `Up` even when the last cursor position
+    /// is outside its panels. A press that never crossed the drag threshold is
+    /// sent off-screen so cancellation cannot turn into an accidental click;
+    /// an active drag uses the real cursor position so its existing end path
+    /// can commit/finish normally. Canvas, mapping-popover, viewport, dock,
+    /// and pan cleanup then reuse the normal release APIs below.
+    pub(crate) fn cancel_editor_pointer_capture(&mut self, window_id: WindowId) -> bool {
+        let Some(ed) = self.graph_editor.as_ref() else {
+            return false;
+        };
+        let ui_pressed = ed.ui_root.input.pressed_widget().is_some();
+        let ui_dragging = ed.ui_root.input.is_dragging();
+        let cursor = self
+            .graph_canvas
+            .as_ref()
+            .map(|canvas| {
+                let (x, y) = canvas.cursor();
+                Vec2::new(x, y)
+            })
+            .unwrap_or(Vec2::ZERO);
+        let had_mapping = self.editor_mapping_popover.is_open();
+        let had_canvas_popover = self
+            .graph_canvas
+            .as_ref()
+            .is_some_and(|canvas| canvas.popover_open());
+
+        // End the canvas-owned capture before routing synthetic button-up
+        // events through the normal host path. Wire, marquee, and pan are
+        // discarded; live node/value gestures use their existing terminal
+        // commit path. In particular, this prevents a stale cursor over an
+        // input port from turning Escape/focus loss into ConnectPorts.
+        let (window_w, window_h) = self
+            .window_registry
+            .get(&window_id)
+            .map(|ws| {
+                let scale = ws.window.scale_factor();
+                let size = ws.window.inner_size();
+                (size.width as f32 / scale as f32, size.height as f32 / scale as f32)
+            })
+            .unwrap_or((1.0, 1.0));
+        let area = manifold_ui::Rect::new(0.0, 0.0, window_w, window_h);
+        let viewport = self
+            .graph_editor
+            .as_ref()
+            .map(|ed| ed.dock.rects(area).canvas)
+            .unwrap_or(area);
+        let viewport = crate::graph_canvas::Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
+        let canvas_capture = self
+            .graph_canvas
+            .as_mut()
+            .is_some_and(|canvas| canvas.finish_pointer_capture(viewport));
+
+        // Escape and focus loss cancel open mapping surfaces before the normal
+        // release path, whose `on_release` would otherwise commit a live range
+        // scrub. The popover APIs are idempotent when no drag is active.
+        self.editor_mapping_popover.close();
+        if let Some(canvas) = self.graph_canvas.as_mut()
+            && canvas.popover_open()
+        {
+            canvas.close_mapping_popover();
+        }
+
+        if ui_pressed
+            && let Some(ed) = self.graph_editor.as_mut()
+        {
+            let terminal_pos = if ui_dragging {
+                cursor
+            } else {
+                Vec2::new(-1.0, -1.0)
+            };
+            ed.ui_root.input.process_pointer(
+                &mut ed.ui_root.tree,
+                terminal_pos,
+                manifold_ui::input::PointerAction::Up,
+                self.time_since_start,
+            );
+        }
+
+        // These methods are the single existing terminal paths for canvas and
+        // viewport gestures; both are idempotent when no gesture is active.
+        self.editor_mouse_input(window_id, MouseButton::Left, ElementState::Released);
+        self.editor_mouse_input(window_id, MouseButton::Middle, ElementState::Released);
+
+        let capture_cancelled = canvas_capture || ui_pressed || had_mapping || had_canvas_popover;
+        if capture_cancelled
+            && let Some(ed) = self.graph_editor.as_mut()
+        {
+            ed.offscreen_dirty = true;
+        }
+        capture_cancelled
     }
 
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
@@ -1512,18 +1652,24 @@ impl Application {
                     // Commit any in-progress drawer/popover drag.
                     self.editor_mapping_popover.on_release();
                     canvas.popover_on_left_release();
-                    if in_panel {
-                        if let Some(ed) = self.graph_editor.as_mut() {
-                            ed.ui_root.input.process_pointer(
-                                &mut ed.ui_root.tree,
-                                Vec2::new(cx, cy),
-                                manifold_ui::input::PointerAction::Up,
-                                self.time_since_start,
-                            );
-                        }
-                    } else {
-                        canvas.on_left_button_up(viewport, cx, cy);
+                    let ui_pointer_owned = self
+                        .graph_editor
+                        .as_ref()
+                        .is_some_and(|ed| ed.ui_root.input.pressed_widget().is_some());
+                    if editor_ui_pointer_owned(in_panel, ui_pointer_owned)
+                        && let Some(ed) = self.graph_editor.as_mut()
+                    {
+                        ed.ui_root.input.process_pointer(
+                            &mut ed.ui_root.tree,
+                            Vec2::new(cx, cy),
+                            manifold_ui::input::PointerAction::Up,
+                            self.time_since_start,
+                        );
                     }
+                    // The canvas owns its own captured drag state. Its release
+                    // API is idempotent, so always deliver the terminal event;
+                    // the drag may have crossed into the inspector column.
+                    canvas.on_left_button_up(viewport, cx, cy);
                 }
                 (MouseButton::Right, ElementState::Pressed) => {
                     // Right-click an expanded param row that's
@@ -1570,9 +1716,8 @@ impl Application {
                     }
                 }
                 (MouseButton::Middle, ElementState::Released) => {
-                    if !in_panel {
-                        canvas.on_pan_button_up();
-                    }
+                    // Pan capture survives crossing into a side pane.
+                    canvas.on_pan_button_up();
                 }
                 _ => {}
             }
@@ -1758,20 +1903,15 @@ impl Application {
             }
         }
         if is_graph_editor && matches!(logical_key, Key::Named(NamedKey::Escape)) {
-            if self.editor_mapping_popover.is_open() {
-                self.editor_mapping_popover.close();
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-                return true;
-            }
-            if let Some(canvas) = self.graph_canvas.as_mut()
-                && canvas.popover_open()
-            {
-                canvas.close_mapping_popover();
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
+            let capture_cancelled = self
+                .graph_editor_window_id
+                .map(|window_id| self.cancel_editor_pointer_capture(window_id))
+                .unwrap_or(false);
+            let picker_open = self
+                .graph_editor
+                .as_ref()
+                .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
+            if capture_cancelled && !picker_open {
                 return true;
             }
         }
@@ -1885,6 +2025,9 @@ impl Application {
                 == crate::text_input::TextInputField::GraphNodeSearch;
             match &logical_key {
                 Key::Named(NamedKey::Escape) => {
+                    if let Some(window_id) = self.graph_editor_window_id {
+                        self.cancel_editor_pointer_capture(window_id);
+                    }
                     self.text_input.cancel();
                     if was_search && let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.set_node_search("");
@@ -2312,6 +2455,13 @@ impl Application {
     ) {
         use manifold_ui::panels::PanelAction;
         use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
+        let action = match action {
+            BrowserPopupAction::ActionSelected(action) => {
+                self.ws.ui_root.pending_keyboard_actions.push(action);
+                return;
+            }
+            action => action,
+        };
         if let BrowserPopupAction::Selected {
             type_id,
             mode,
@@ -2335,7 +2485,7 @@ impl Application {
                     layer_id,
                     manifold_ui::types::PresetTypeId::from_string(type_id),
                 )),
-                BrowserPopupMode::Node => return,
+                BrowserPopupMode::Node | BrowserPopupMode::Actions => return,
             };
             self.ws.ui_root.pending_keyboard_actions.push(panel_action);
         }
@@ -2354,6 +2504,15 @@ impl Application {
         is_graph_editor: bool,
         logical_key: Key,
     ) {
+        if self.ws.ui_root.export_progress.is_open() {
+            if matches!(logical_key, Key::Named(NamedKey::Escape))
+                && self.ws.ui_root.export_progress.request_cancel()
+            {
+                self.send_content_cmd(crate::content_command::ContentCommand::CancelExport);
+                self.ws.ui_root.overlay_dirty = true;
+            }
+            return;
+        }
         if is_primary && self.perform_handle_key(&logical_key) {
             return;
         }
@@ -2389,7 +2548,7 @@ impl Application {
             // "restore and close batch", never commit-then-undo) that must
             // be rolled back before anything else touches the project.
             if matches!(logical_key, Key::Named(NamedKey::Escape))
-                && matches!(
+                && (self.overlay.has_pending_automation_press() || matches!(
                     self.overlay.drag_mode(),
                     DragMode::Move
                         | DragMode::TrimLeft
@@ -2397,16 +2556,18 @@ impl Application {
                         | DragMode::AutomationPoint
                         | DragMode::AutomationSegmentBend
                         | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationMarquee
                         | DragMode::AutomationGroupMove
                         | DragMode::AutomationDraw
-                )
+                ))
                 && let Some(content_tx) = self.content_tx.as_ref()
             {
-                let automation_cancel = matches!(
+                let automation_cancel = self.overlay.has_pending_automation_press() || matches!(
                     self.overlay.drag_mode(),
                     DragMode::AutomationPoint
                         | DragMode::AutomationSegmentBend
                         | DragMode::AutomationSegmentDrag
+                        | DragMode::AutomationMarquee
                         | DragMode::AutomationGroupMove
                         | DragMode::AutomationDraw
                 );
@@ -2677,5 +2838,12 @@ mod tests {
             normalize_scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(7.5, -4.25)));
         assert_eq!(dx, 7.5);
         assert_eq!(dy, -4.25);
+    }
+
+    #[test]
+    fn editor_ui_capture_survives_crossing_out_of_panel() {
+        assert!(editor_ui_pointer_owned(false, true));
+        assert!(editor_ui_pointer_owned(true, false));
+        assert!(!editor_ui_pointer_owned(false, false));
     }
 }

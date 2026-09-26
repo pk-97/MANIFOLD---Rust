@@ -31,7 +31,7 @@ fn body(
         let pos = mix(e_in.position, e_b.position, raw_tw);
         let n = mix(e_in.normal, e_b.normal, raw_tw);
         let mag = max(length(n), 1e-12);
-        return Element(pos, n / mag, e_in.uv, e_in.tangent);
+        return Element(pos, n / mag, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
     }
 
     let tw = clamp(raw_tw, 0.0, 1.0);
@@ -42,7 +42,7 @@ fn body(
         return e_in;
     }
     if tw >= 1.0 {
-        return Element(e_b.position, e_b.normal, e_in.uv, e_b.tangent);
+        return Element(e_b.position, e_b.normal, e_in.uv, e_in.uv1, e_b.tangent, e_in.color);
     }
 
     let mixed_normal = mix(e_in.normal, e_b.normal, tw);
@@ -79,6 +79,8 @@ fn body(
         mix(e_in.position, e_b.position, tw),
         normal,
         e_in.uv,
+        e_in.uv1,
         vec4<f32>(tangent_xyz, handedness),
+        e_in.color,
     );
 }

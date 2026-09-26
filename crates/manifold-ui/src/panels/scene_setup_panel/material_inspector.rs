@@ -78,6 +78,7 @@ impl ScenePanel {
                 match group {
                     MaterialGroup::Surface => "Surface".to_string(),
                     MaterialGroup::Opacity => "Opacity & Cutout".to_string(),
+                    MaterialGroup::Subsurface => "Subsurface".to_string(),
                     MaterialGroup::Feature(feature) => match feature {
                         crate::param_surface::MaterialFeature::Coat => "Coat".to_string(),
                         crate::param_surface::MaterialFeature::Iridescence => {
@@ -230,7 +231,9 @@ impl ScenePanel {
                 matches!(port, "sheen_color_map" | "sheen_roughness_map")
             }
             crate::param_surface::MaterialFeature::Anisotropy => port == "anisotropy_map",
-            crate::param_surface::MaterialFeature::Translucency => port == "volume_thickness_map",
+            crate::param_surface::MaterialFeature::Translucency => matches!(
+                port, "diffuse_transmission_map" | "diffuse_transmission_color_map"
+            ),
         }
     }
 
@@ -369,6 +372,8 @@ impl ScenePanel {
             | Some(MaterialParamRole::Colour(MaterialGroup::Surface, ..)) => 0,
             Some(MaterialParamRole::Scalar(MaterialGroup::Opacity))
             | Some(MaterialParamRole::Colour(MaterialGroup::Opacity, ..)) => 1,
+            Some(MaterialParamRole::Scalar(MaterialGroup::Subsurface))
+            | Some(MaterialParamRole::Colour(MaterialGroup::Subsurface, ..)) => 9,
             Some(MaterialParamRole::FeatureMode(feature))
             | Some(MaterialParamRole::Scalar(MaterialGroup::Feature(feature)))
             | Some(MaterialParamRole::Colour(MaterialGroup::Feature(feature), ..)) => {
@@ -851,6 +856,8 @@ impl ScenePanel {
                 crate::param_surface::MaterialColour::Emission => "Emission colour",
                 crate::param_surface::MaterialColour::Sheen => "Sheen colour",
                 crate::param_surface::MaterialColour::Attenuation => "Attenuation colour",
+                crate::param_surface::MaterialColour::Subsurface => "Scattering colour",
+                crate::param_surface::MaterialColour::Translucency => "Translucency colour",
             },
             label_style(),
         );
@@ -942,7 +949,11 @@ impl ScenePanel {
         cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
-        let btn_w = STEP_W * 4.0; // Frame + Duplicate + Remove
+        // Frame needs two icon-cell widths for its five-letter label. Keep the
+        // existing total header budget so the name, duplicate, and remove
+        // cells retain their established positions and remain reachable.
+        let frame_w = STEP_W * 2.0;
+        let btn_w = frame_w + STEP_W * 2.0;
         let name_w = inner_w - btn_w - 8.0;
         let name_id = tree.add_button_keyed(
             Some(self.content_parent),
@@ -968,7 +979,7 @@ impl ScenePanel {
             Some(self.content_parent),
             inner_x + name_w + 4.0,
             cy,
-            STEP_W,
+            frame_w,
             ROW_H,
             btn_style(),
             "Frame",
@@ -978,7 +989,7 @@ impl ScenePanel {
 
         let dup_id = tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x + name_w + 4.0 + STEP_W,
+            inner_x + name_w + 4.0 + frame_w,
             cy,
             STEP_W,
             ROW_H,
@@ -989,7 +1000,7 @@ impl ScenePanel {
         self.object_duplicate_ids.push((dup_id, row.index));
         let remove_id = tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x + name_w + 4.0 + STEP_W * 2.0,
+            inner_x + name_w + 4.0 + frame_w + STEP_W,
             cy,
             STEP_W,
             ROW_H,
@@ -1001,19 +1012,14 @@ impl ScenePanel {
         cy + ROW_H + ROW_GAP
     }
 
-    /// Object properties body: transform triplets, material quick knobs,
-    /// modifier stack — the body `build_object_row` used to render only when
-    /// expanded; now always rendered (there is no fold state left — the
-    /// outliner IS the fold).
+    /// Object properties body: transform/material rows followed by the
+    /// selected object's shared modifier cards. The body is always rendered
+    /// (there is no fold state left — the outliner IS the fold).
     /// P2 slice 2a: replaced the transform-triplet/material/metallic/
     /// roughness row builders with one `build_filtered_properties` pass over
-    /// `row.sections` (Transform + Material + the object's own section +
-    /// every modifier's own section — see `ObjectKnownRow::sections`'s doc
-    /// comment). The modifier STACK below stays a structural verb (add/
-    /// remove/reorder, unchanged) — only its per-modifier PARAM rows moved
-    /// into the unified pass above (each modifier's section is already part
-    /// of `row.sections`, so its rows render there, grouped under its own
-    /// section header).
+    /// `row.sections` while excluding modifier owners. Each modifier's full
+    /// parameter rows then live inside its own shared card, in stack order;
+    /// the add control remains the one structural affordance beneath them.
     fn build_object_properties_body(
         &mut self,
         tree: &mut UITree,
@@ -1022,6 +1028,29 @@ impl ScenePanel {
         mut cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
+        // Modifier rows are rendered only inside their retained shared cards;
+        // keep transform/object/material rows in the ordinary properties
+        // surface and exclude every known modifier id across the scene. A
+        // copied modifier can retain the source object's section name, so
+        // filtering only this selected row would leak another object's card
+        // controls as loose properties.
+        let modifier_ids: Vec<String> = match &self.state {
+            SceneSetupState::Live(vm) => vm
+                .objects
+                .iter()
+                .filter_map(|object| match object {
+                    ObjectRowVm::Known(row) => Some(row.as_ref()),
+                    ObjectRowVm::Custom { .. } => None,
+                })
+                .flat_map(|object| {
+                    object
+                        .modifiers
+                        .iter()
+                        .flat_map(|modifier| modifier.parameter_ids.iter().cloned())
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         self.active_material_info = row.material_inspector.clone();
         if let Some(material) = row.material_inspector.clone() {
             let context = self
@@ -1041,40 +1070,25 @@ impl ScenePanel {
             }
             self.sync_material_feature_order();
             cy = self.build_material_header(tree, inner_x, inner_w, cy, &material);
-            cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            cy = self.build_filtered_properties_excluding(
+                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            );
             cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &material);
             cy = self.build_material_inspector(tree, inner_x, inner_w, cy, row, row.skin.as_ref());
         } else if let Some(skin) = &row.skin {
             // Non-PBR materials still expose their layer-skin control, but
             // there is no material drawer to host it.
-            cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            cy = self.build_filtered_properties_excluding(
+                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            );
             cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
         } else {
-            cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+            cy = self.build_filtered_properties_excluding(
+                tree, inner_x, inner_w, cy, (&row.sections, None, &modifier_ids),
+            );
         }
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Modifiers",
-            label_style(),
-        );
-        cy += ROW_H;
+        cy = self.build_object_modifier_cards(tree, inner_x, inner_w, cy, row.object_node_id);
         if row.modifiers_addable {
-            for m in &row.modifiers {
-                cy = self.build_modifier_stack_row(
-                    tree,
-                    inner_x,
-                    inner_w,
-                    cy,
-                    row.index,
-                    row.group_node_id.unwrap_or(row.object_node_id),
-                    m,
-                    row.modifiers.len(),
-                );
-            }
             cy = self.build_add_modifier_button(
                 tree,
                 inner_x,
@@ -1457,14 +1471,20 @@ mod tests {
                 0.5,
                 0.5,
             ),
+            material_test_row(
+                "subsurface_mode",
+                MaterialParamRole::Scalar(MaterialGroup::Subsurface),
+                0.0,
+                0.0,
+            ),
         ];
         let panel = ScenePanel::new();
-        let mut indices = [0usize, 1, 2, 3];
+        let mut indices = [0usize, 1, 2, 3, 4];
         indices.sort_by_key(|&index| panel.material_bucket(&rows[index]));
         assert_eq!(
             indices,
-            [3, 2, 1, 0],
-            "surface, opacity, feature, advanced order"
+            [3, 2, 1, 4, 0],
+            "surface, opacity, feature, subsurface, advanced order"
         );
         let names: Vec<String> = indices
             .iter()
@@ -1472,9 +1492,10 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["Surface", "Opacity & Cutout", "Coat", "Advanced"]
+            vec!["Surface", "Opacity & Cutout", "Coat", "Subsurface", "Advanced"]
         );
         assert!(names.windows(2).all(|pair| pair[0] != pair[1]));
+        assert!(!panel.material_section_folded("Subsurface"));
     }
 
     #[test]

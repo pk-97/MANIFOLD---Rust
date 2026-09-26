@@ -808,7 +808,8 @@ fn clip_body_sheet() {
 /// Renders audio-clip bodies with their waveform painted INSIDE the body via the
 /// per-clip GPU content path (section 24 5b) — so the in-clip waveform (spectral colour,
 /// rounded-corner inset, sitting on the gradient body) can be eyeballed headlessly.
-/// Covers a wide clip, a narrow clip, and a selected clip.
+/// Covers overview, beat-level, and close-up source windows with the real GPU
+/// waveform texture path.
 #[test]
 fn clip_waveform_sheet() {
     use manifold_renderer::clip_content_gpu::ClipContentGpu;
@@ -817,6 +818,7 @@ fn clip_waveform_sheet() {
     use manifold_ui::panels::viewport::ClipScreenRect;
     use manifold_ui::waveform_renderer::WaveformRenderer;
     use std::sync::Arc;
+    use std::time::Instant;
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -825,32 +827,62 @@ fn clip_waveform_sheet() {
         .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
     let png = format!("{out_dir}/clip_waveform_sheet.png");
 
-    // One second of a loud-ish sine sweep → visible, spectrally-varied bars.
-    let samples: Vec<f32> = (0..44_100)
-        .map(|i| (i as f32 / (8.0 + i as f32 / 4000.0)).sin() * 0.85)
-        .collect();
+    // Keep the artifact self-contained by default. The three components make
+    // the spectral palette legible at every zoom: low blue pulses, sustained
+    // 800 Hz amber, and short 6 kHz white hits, followed by a quiet tail.
+    let (samples, sample_rate, channels) = if let Ok(path) = std::env::var("WAVEFORM_AUDIO_FILE") {
+        let decoded = manifold_playback::audio_decoder::decode_audio_to_pcm(&path)
+            .unwrap_or_else(|error| panic!("WAVEFORM_AUDIO_FILE {path:?} failed: {error}"));
+        (decoded.samples, decoded.sample_rate, decoded.channels)
+    } else {
+        let sample_rate = 44_100;
+        let samples = (0..sample_rate * 8)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let pulse = ((t * 1.5 * std::f32::consts::TAU).sin() * 0.5 + 0.5).powi(8);
+                let low = (t * 60.0 * std::f32::consts::TAU).sin() * 0.72 * pulse;
+                let mid_gate = if (0.35..6.8).contains(&t) { 0.32 } else { 0.0 };
+                let mid = (t * 800.0 * std::f32::consts::TAU).sin() * mid_gate;
+                let hit_phase = (t * 2.25).fract();
+                let high_gate = if hit_phase < 0.045 { (1.0 - hit_phase / 0.045).sqrt() } else { 0.0 };
+                let high = (t * 6000.0 * std::f32::consts::TAU).sin() * 0.62 * high_gate;
+                (low + mid + high).clamp(-1.0, 1.0)
+            })
+            .collect();
+        (samples, sample_rate, 1)
+    };
+    let analysis_start = Instant::now();
     let mut wr = WaveformRenderer::new();
-    wr.set_audio_data(&samples, 1, 44_100);
+    wr.set_audio_data(&samples, channels, sample_rate);
     assert!(wr.is_ready(), "synthetic waveform should be ready");
+    let duration = samples.len() as f32 / channels.max(1) as f32 / sample_rate as f32;
+    eprintln!(
+        "waveform source: duration={duration:.3}s channels={channels} analysis={:?} storage={}B",
+        analysis_start.elapsed(),
+        wr.storage_bytes()
+    );
     let wf = Arc::new(wr);
 
-    // (label, x, y, w, selected)
-    let cases: &[(&str, f32, f32, f32, bool)] = &[
-        ("wide audio clip", 24.0, 60.0, 380.0, false),
-        ("narrow", 430.0, 60.0, 90.0, false),
-        ("selected audio clip", 24.0, 180.0, 380.0, true),
+    // (label, y, source-start, source-end)
+    let end = duration.max(0.001);
+    let cases: &[(&str, f32, f32, f32)] = &[
+        ("overview · low blue / mid amber / high white", 58.0, 0.0, end),
+        ("beat-level · low blue / mid amber / high white", 248.0, end * 0.20, end * 0.38),
+        ("close-up · low blue / mid amber / high white", 438.0, end * 0.64, end * 0.72),
     ];
     let tracks = Rect::new(0.0, 40.0, W as f32, H as f32 - 40.0);
-    let ch = 88.0;
+    let x = 24.0;
+    let cw = W as f32 - 48.0;
+    let ch = 150.0;
 
     let mut bodies = Vec::new();
     let mut clips = Vec::new();
-    for (i, &(_, x, y, w, sel)) in cases.iter().enumerate() {
-        let rect = Rect::new(x, y, w, ch);
+    for (i, &(_, y, source_start, source_end)) in cases.iter().enumerate() {
+        let rect = Rect::new(x, y, cw, ch);
         bodies.push(ClipBody {
             rect,
             base_color: color::CLIP_NORMAL,
-            selected: sel,
+            selected: i == 1,
             hovered: false,
             muted: false,
             locked: false,
@@ -870,19 +902,17 @@ fn clip_waveform_sheet() {
             is_generator: false,
             is_audio: true,
             waveform: Some(wf.clone()),
-            in_point_seconds: 0.0,
-            // 4 beats × 0.25 s/beat = 1.0 s → whole file maps across the clip.
-            waveform_breakpoints: vec![(0.0, 0.0), (1.0, 1.0)],
+            in_point_seconds: source_start,
+            waveform_breakpoints: vec![(0.0, source_start), (1.0, source_end)],
         });
     }
 
     // Bodies first (Clear), then the per-clip waveform textures on top (Load).
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
-    ui.draw_text(24.0, 14.0, "GPU IN-CLIP WAVEFORMS (\u{00a7}24 5b)", 13.0, color::TEXT_NORMAL);
+    ui.draw_text(24.0, 14.0, "GPU IN-CLIP WAVEFORMS · overview / beat-level / close-up", 13.0, color::TEXT_NORMAL);
     emit_clips(&mut ui, &bodies);
-    for (i, &(label, x, y, ..)) in cases.iter().enumerate() {
-        let _ = i;
+    for &(label, y, ..) in cases {
         ui.draw_text(x, y - 16.0, label, 11.0, color::TEXT_DIMMED);
     }
     let drew = ui.prepare(&device, W, H, 1.0);
@@ -900,6 +930,34 @@ fn clip_waveform_sheet() {
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
+    let capture = LinearUiReadback::from_bytes(
+        &bytes,
+        W,
+        H,
+        FORMAT,
+        AlphaInterpretation::PremultipliedOverBlack,
+    )
+    .expect("waveform readback shape");
+    let pixels = capture.to_srgb_rgba8();
+    let mut blue = 0usize;
+    let mut amber = 0usize;
+    let mut white = 0usize;
+    for &(_, y, _, _) in cases {
+        let y0 = y as usize + 4;
+        let y1 = (y + ch - 30.0) as usize;
+        for row in y0..y1.min(H as usize) {
+            for col in x as usize..(x + cw) as usize {
+                let p = &pixels.as_bytes()[(row * W as usize + col) * 4..][..4];
+                let (r, g, b) = (p[0], p[1], p[2]);
+                blue += usize::from(b > 150 && r < 150 && g < 210);
+                amber += usize::from(r > 160 && g > 100 && b < 160);
+                white += usize::from(r > 200 && g > 200 && b > 200);
+            }
+        }
+    }
+    assert!(blue > 10, "waveform blue band did not reach the GPU readback");
+    assert!(amber > 10, "waveform amber band did not reach the GPU readback");
+    assert!(white > 10, "waveform white band did not reach the GPU readback");
     save_capture(&png, &bytes, W, H);
     eprintln!("clip waveform sheet → {png}");
 }

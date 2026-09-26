@@ -5,6 +5,37 @@
 use crate::ui_root::UIRoot;
 use manifold_core::project::Project;
 
+/// Resolve a modifier's controls through its scoped stable node identity.
+/// The first binding owns a macro; secondary fan-out targets do not acquire
+/// another copy of its UI. Custom exposed names need no numeric prefix.
+pub(crate) fn object_modifier_parameter_ids(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    group_id: Option<u32>,
+    node_doc_id: u32,
+) -> Vec<String> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let Some(def) = def else { return Vec::new(); };
+    let Some(metadata) = &def.preset_metadata else { return Vec::new(); };
+    let nodes = match group_id {
+        Some(id) => {
+            let Some(group) = def.nodes.iter().find(|node| node.id == id).and_then(|node| node.group.as_deref()) else {
+                return Vec::new();
+            };
+            &group.nodes
+        }
+        None => &def.nodes,
+    };
+    let Some(node) = nodes.iter().find(|node| node.id == node_doc_id) else { return Vec::new(); };
+    let identity = if node.node_id.is_empty() {
+        manifold_core::NodeId::new(node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}")))
+    } else { node.node_id.clone() };
+    metadata.params.iter().filter(|param| {
+        metadata.bindings.iter().find(|binding| binding.id == param.id)
+            .is_some_and(|binding| matches!(&binding.target,
+                BindingTarget::Node { node_id, .. } if node_id == &identity))
+    }).map(|param| param.id.clone()).collect()
+}
+
 /// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
 /// sibling of [`sync_card_values`]: push each built row's CURRENT value from
 /// `project` (the layer's generator graph def, instance override or bundled
@@ -273,6 +304,27 @@ mod sections_for_doc_ids_tests {
         // Sun's doc-id set: just its own light node (doc id 7).
         let sections = sections_for_doc_ids(Some(&def), &[7]);
         assert_eq!(sections, vec!["Sun".to_string()]);
+    }
+
+    #[test]
+    fn object_modifier_controls_use_custom_binding_identity_without_fanout_leaks() {
+        let mut def = azalea_like_fixture();
+        def.nodes = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": 7, "nodeId": "sun", "typeId": "node.bend_mesh"
+            })).unwrap(),
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "nodeId": "envmap", "typeId": "node.twist_mesh"
+            })).unwrap(),
+        ];
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        metadata.params[1].id = "custom_amount".into();
+        for binding in &mut metadata.bindings {
+            if binding.id == "7_pos_x" { binding.id = "custom_amount".into(); }
+        }
+        assert_eq!(object_modifier_parameter_ids(Some(&def), None, 7), vec!["custom_amount"]);
+        assert_eq!(object_modifier_parameter_ids(Some(&def), None, 1), vec!["1_intensity"]);
+        assert!(object_modifier_parameter_ids(Some(&def), Some(404), 7).is_empty());
     }
 
     #[test]

@@ -23,6 +23,8 @@ use manifold_ui::{
     PresetTypeId as UiPresetTypeId, RelightCardConfig, SerializedParamValue as UiSerializedParamValue,
     TonemapCurve as UiTonemapCurve, UiRelightField, UiRelightHeightFrom,
 };
+use manifold_ui::ui_state::AutomationLaneKey;
+use std::collections::{HashMap, HashSet};
 
 use manifold_core::ableton_mapping::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
@@ -247,22 +249,25 @@ pub fn layers_to_ui(layers: &[Layer]) -> Vec<UiLayer> {
 /// and (more importantly) would NOT be the value `rebuild_mapper_layout` used,
 /// so a second call site recomputing it independently is exactly the
 /// "single-source-of-truth" trap this field exists to avoid.
-pub fn layers_to_ui_for_layout(
+pub fn layers_to_ui_for_layout_with_view(
     layers: &[Layer],
     automation_visible: bool,
-    chosen_automation_params: &std::collections::HashMap<
-        manifold_core::LayerId,
-        (UiGraphTarget, manifold_core::effects::ParamId),
-    >,
+    chosen_automation_params: &HashMap<manifold_core::LayerId, (UiGraphTarget, manifold_core::effects::ParamId)>,
+    lane_order: &[AutomationLaneKey],
+    hidden_lanes: &HashSet<AutomationLaneKey>,
+    pinned_lanes: &[AutomationLaneKey],
 ) -> Vec<UiLayer> {
     layers
         .iter()
         .map(|l| {
             let mut ui = layer_to_ui(l);
             if automation_visible && !l.is_collapsed && !l.is_group() {
-                ui.automation_lane_count = layer_automation_lanes_to_ui(
+                ui.automation_lane_count = layer_automation_lanes_to_ui_with_view(
                     l,
                     chosen_automation_params.get(&l.layer_id),
+                    lane_order,
+                    hidden_lanes,
+                    pinned_lanes,
                 )
                 .len();
             }
@@ -282,9 +287,15 @@ pub fn layers_to_ui_for_layout(
 /// core-side lane yet) UNLESS a real enabled lane for the same param already
 /// rendered above, so touching an already-automated param never double-draws
 /// it. See `push_chosen_placeholder_lane`.
-pub fn layer_automation_lanes_to_ui(
+/// Project one layer's real lanes and session-only placeholders, then apply
+/// the stable lane view. A placeholder and its materialized lane share the
+/// same `(target, param_id)` key, so materialization cannot move the strip.
+pub fn layer_automation_lanes_to_ui_with_view(
     layer: &Layer,
     chosen: Option<&(UiGraphTarget, manifold_core::effects::ParamId)>,
+    lane_order: &[AutomationLaneKey],
+    hidden_lanes: &HashSet<AutomationLaneKey>,
+    pinned_lanes: &[AutomationLaneKey],
 ) -> Vec<UiAutomationLane> {
     let mut out = Vec::new();
     if let Some(effects) = &layer.effects {
@@ -307,9 +318,46 @@ pub fn layer_automation_lanes_to_ui(
         let target = UiGraphTarget::Generator(layer.layer_id.clone());
         push_instance_automation_lanes(gp, target, &mut out);
     }
+    let chosen_was_real = chosen.is_some_and(|(target, param_id)| {
+        out.iter()
+            .any(|lane| &lane.target == target && lane.param_id == *param_id)
+    });
     if let Some((target, param_id)) = chosen {
         push_chosen_placeholder_lane(layer, target, param_id, &mut out);
     }
+    for (target, param_id) in pinned_lanes {
+        push_chosen_placeholder_lane(layer, target, param_id, &mut out);
+    }
+
+    out.retain(|lane| {
+        !hidden_lanes
+            .iter()
+            .any(|(target, param_id)| target == &lane.target && param_id == &lane.param_id)
+            || pinned_lanes.iter().any(|(target, param_id)| {
+                target == &lane.target && param_id == &lane.param_id
+            })
+    });
+    out.sort_by_key(|lane| {
+        let stable_rank = lane_order
+            .iter()
+            .position(|(target, param_id)| target == &lane.target && param_id == &lane.param_id)
+            .unwrap_or(usize::MAX);
+        // A newly touched lane has no persisted rank yet. Keep it at the
+        // placeholder's append position so materializing its first point does
+        // not reorder the existing effect/generator lanes.
+        if stable_rank == usize::MAX
+            && !chosen_was_real
+            && chosen.is_some_and(|(target, param_id)| {
+                target == &lane.target && param_id == &lane.param_id
+            })
+        {
+            usize::MAX
+        } else if stable_rank == usize::MAX {
+            usize::MAX - 1
+        } else {
+            stable_rank
+        }
+    });
     out
 }
 

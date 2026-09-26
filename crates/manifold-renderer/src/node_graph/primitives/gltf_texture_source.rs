@@ -55,6 +55,7 @@ pub struct ConvertedTextureKey {
     format: manifold_gpu::GpuTextureFormat,
     mip_levels: u32,
     mode_bits: u32,
+    glossiness_factor_bits: u32,
     device_scope_id: u64,
 }
 
@@ -71,6 +72,7 @@ struct GltfTextureBlitUniforms {
     out_width: f32,
     out_height: f32,
     mode: f32,
+    glossiness_factor: f32,
 }
 
 crate::primitive! {
@@ -130,6 +132,14 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &["passthrough", "gloss_to_roughness"],
         },
+        ParamDef {
+            name: Cow::Borrowed("glossiness_factor"),
+            label: "Glossiness Factor",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     // depth_rule: zero-input IO bridge that loads externally-authored image content (not procedurally defined) — treated like system.source's boundary Inherit rather than SourceHeight, since there's no formula whose own luminance is a meaningful height
     depth_rule: Inherit,
@@ -178,6 +188,7 @@ crate::primitive! {
         // blit independently of content/identity — a mode flip with
         // everything else unchanged must still re-blit.
         last_blit_mode: f32 = -1.0,
+        last_blit_glossiness_factor: f32 = -1.0,
         last_blit_dims: (u32, u32) = (0, 0),
         last_blit_format: Option<manifold_gpu::GpuTextureFormat> = None,
         // True once a decoded image has been copied to an output at least
@@ -344,12 +355,16 @@ impl Primitive for GltfTextureSource {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
         };
+        let glossiness_factor = match ctx.params.get("glossiness_factor") {
+            Some(ParamValue::Float(value)) if value.is_finite() => value.clamp(0.0, 1.0),
+            _ => 1.0,
+        };
 
         // 5. A planned node-owned output is immutable and is created by this
         // primitive. Legacy/pre-bound callers deliberately take the writable
         // path below; those callers have no descriptor to query.
         if let Some(desc) = ctx.outputs.provided_texture_descriptor("out") {
-            self.run_provided_output(ctx, desc, mode);
+            self.run_provided_output(ctx, desc, mode, glossiness_factor);
             return;
         }
         // A harvested/reused node can be evaluated by a host-prebound or
@@ -400,10 +415,13 @@ impl Primitive for GltfTextureSource {
         let content_unchanged = self.published_content
             && !fresh_upload
             && mode == self.last_blit_mode
+            && glossiness_factor == self.last_blit_glossiness_factor
             && (w, h) == self.last_blit_dims
             && Some(out.format) == self.last_blit_format;
-        let unchanged =
-            !fresh_upload && out_identity == self.last_mip_identity && mode == self.last_blit_mode;
+        let unchanged = !fresh_upload
+            && out_identity == self.last_mip_identity
+            && mode == self.last_blit_mode
+            && glossiness_factor == self.last_blit_glossiness_factor;
 
         if unchanged && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
@@ -424,6 +442,7 @@ impl Primitive for GltfTextureSource {
                 out_width: w as f32,
                 out_height: h as f32,
                 mode,
+                glossiness_factor,
             };
 
             gpu.native_enc.dispatch_compute(
@@ -459,6 +478,7 @@ impl Primitive for GltfTextureSource {
 
             self.last_mip_identity = out_identity;
             self.last_blit_mode = mode;
+            self.last_blit_glossiness_factor = glossiness_factor;
             self.last_blit_dims = (w, h);
             self.last_blit_format = Some(out.format);
             if content_unchanged {
@@ -495,6 +515,7 @@ impl GltfTextureSource {
         ctx: &mut EffectNodeContext<'_, '_>,
         desc: manifold_gpu::GpuTextureDesc<'static>,
         mode: f32,
+        glossiness_factor: f32,
     ) {
         let source_key = self.source_content_key;
         let device_scope_id = ctx.gpu_encoder().device.resource_scope_id();
@@ -505,6 +526,7 @@ impl GltfTextureSource {
             format: desc.format,
             mip_levels: desc.mip_levels,
             mode_bits: mode.to_bits(),
+            glossiness_factor_bits: glossiness_factor.to_bits(),
             device_scope_id,
         };
 
@@ -584,6 +606,7 @@ impl GltfTextureSource {
                     out_width: desc.width as f32,
                     out_height: desc.height as f32,
                     mode,
+                    glossiness_factor,
                 };
                 gpu.native_enc.dispatch_compute(
                     pipeline,
@@ -713,7 +736,15 @@ mod tests {
         let names: Vec<&str> = GltfTextureSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["path", "texture_index", "color_space", "width", "height", "mode"]
+            vec![
+                "path",
+                "texture_index",
+                "color_space",
+                "width",
+                "height",
+                "mode",
+                "glossiness_factor",
+            ]
         );
     }
 
@@ -1008,6 +1039,21 @@ mod gpu_tests {
         params
     }
 
+    fn synthetic_params_with_factor(
+        w: u32,
+        h: u32,
+        color_space: u32,
+        mode: u32,
+        glossiness_factor: f32,
+    ) -> ParamValues {
+        let mut params = synthetic_params(w, h, color_space, mode);
+        params.insert(
+            Cow::Borrowed("glossiness_factor"),
+            ParamValue::Float(glossiness_factor),
+        );
+        params
+    }
+
     fn inject_upload(prim: &mut GltfTextureSource, w: u32, h: u32, rgba: Vec<u8>) {
         assert_eq!(rgba.len(), (w * h * 4) as usize);
         prim.last_key = (String::new(), 0);
@@ -1231,6 +1277,80 @@ mod gpu_tests {
         let expected_black: Vec<u8> = [0u16, 0, 0, half::f16::ONE.to_bits()]
             .into_iter().flat_map(u16::to_ne_bytes).cycle().take(2 * 2 * 8).collect();
         assert_eq!(readback_texture(&device, &backend_black, slot_black, 2, 2), expected_black);
+    }
+
+    #[test]
+    fn provided_cache_separates_glossiness_factor_but_reuses_source() {
+        CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
+        let device = crate::test_device();
+        let (w, h) = (2u32, 2u32);
+        let rgba = vec![
+            13, 37, 91, 255, 61, 122, 9, 64, 190, 4, 70, 128, 240, 100, 3, 192,
+        ];
+        let (mut backend_a, slot_a) = provided_backend(&device, w, h, false);
+        let (mut backend_b, slot_b) = provided_backend(&device, w, h, false);
+        let (mut backend_c, slot_c) = provided_backend(&device, w, h, false);
+        let scratch_a = vec![("out", slot_a)];
+        let scratch_b = vec![("out", slot_b)];
+        let scratch_c = vec![("out", slot_c)];
+        let mut source_a = GltfTextureSource::new();
+        let mut source_b = GltfTextureSource::new();
+        let mut source_c = GltfTextureSource::new();
+        inject_upload(&mut source_a, w, h, rgba.clone());
+        inject_upload(&mut source_b, w, h, rgba.clone());
+        inject_upload(&mut source_c, w, h, rgba);
+        let params_a = synthetic_params_with_factor(w, h, 0, 1, 0.25);
+        let params_b = synthetic_params_with_factor(w, h, 0, 1, 0.75);
+        let params_c = synthetic_params_with_factor(w, h, 0, 1, 0.25);
+        run_once(
+            &mut source_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params_a,
+            frame_time(),
+        );
+        run_once(
+            &mut source_b,
+            &backend_b,
+            &device,
+            &scratch_b,
+            &params_b,
+            frame_time(),
+        );
+        run_once(
+            &mut source_c,
+            &backend_c,
+            &device,
+            &scratch_c,
+            &params_c,
+            frame_time(),
+        );
+        assert_eq!(source_a.source_content_key, source_b.source_content_key);
+        assert_eq!(source_a.source_content_key, source_c.source_content_key);
+        assert!(Arc::ptr_eq(
+            source_a.source_texture.as_ref().unwrap(),
+            source_b.source_texture.as_ref().unwrap()
+        ));
+        assert_ne!(source_a.converted_key, source_b.converted_key);
+        assert_eq!(source_a.converted_key, source_c.converted_key);
+        assert!(!source_a
+            .provided_texture_output("out")
+            .unwrap()
+            .ptr_eq(source_b.provided_texture_output("out").unwrap()));
+        assert!(source_a
+            .provided_texture_output("out")
+            .unwrap()
+            .ptr_eq(source_c.provided_texture_output("out").unwrap()));
+        install_provided(&source_a, &mut backend_a, slot_a);
+        install_provided(&source_b, &mut backend_b, slot_b);
+        install_provided(&source_c, &mut backend_c, slot_c);
+        let output_a = read_texture_bytes(&device, backend_a.texture_2d(slot_a).unwrap(), w, h);
+        let output_b = read_texture_bytes(&device, backend_b.texture_2d(slot_b).unwrap(), w, h);
+        let rough_a = half::f16::from_le_bytes([output_a[2], output_a[3]]).to_f32();
+        let rough_b = half::f16::from_le_bytes([output_b[2], output_b[3]]).to_f32();
+        assert!((rough_a - 0.75).abs() < 0.01);
+        assert!((rough_b - 0.25).abs() < 0.01);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! `SceneObject` wire migration — SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5.
 //!
-//! `node.render_scene` used to carry 21 parallel per-object port families
-//! (`mesh_k`/`material_k`/17 maps/`transform_k`/`instances_k`); P2 deletes
+//! `node.render_scene` used to carry 23 parallel per-object port families
+//! (`mesh_k`/`material_k`/19 maps/`transform_k`/`instances_k`); P2 deletes
 //! all of them in favor of one `object_k: Object` port fed by a
 //! `node.scene_object` node. Every def written before that landing still
 //! carries the legacy wiring — this migration rewrites it in place,
@@ -46,6 +46,8 @@ const LEGACY_OBJECT_PORT_FAMILIES: &[(&str, &str)] = &[
     ("specular_map_", "specular_map"),
     ("specular_color_map_", "specular_color_map"),
     ("transmission_map_", "transmission_map"),
+    ("diffuse_transmission_map_", "diffuse_transmission_map"),
+    ("diffuse_transmission_color_map_", "diffuse_transmission_color_map"),
     ("volume_thickness_map_", "volume_thickness_map"),
     ("transform_", "transform"),
     ("instances_", "instances"),
@@ -58,7 +60,7 @@ const LEGACY_OBJECT_PORT_FAMILIES: &[(&str, &str)] = &[
 /// matching `migrate_def_type_ids`'s "passes through unchanged" contract.
 ///
 /// Forbidden (D5): dropping a triple this rule can't parse. Any wire whose
-/// `to_port` doesn't match one of the 21 known families with a valid
+/// `to_port` doesn't match one of the 23 known families with a valid
 /// trailing object index is left exactly as loaded — never touched, never
 /// silently discarded.
 pub fn migrate_scene_object_wires(def: &mut EffectGraphDef) -> bool {

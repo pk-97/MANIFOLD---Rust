@@ -1,6 +1,6 @@
 // node.morph_mesh — HAND parity oracle for morph_mesh_body.wgsl. Static
 // two-mesh lerp by index: pos = mix(a, b, t*w), normal = normalize(mix(a.n,
-// b.n, t*w)), uv from `a`. Uniform layout and bindings match the generated
+// b.n, t*w)), UV0 and UV1 from `a`. Uniform layout and bindings match the generated
 // standalone kernel (param t, blend_frames, then the derived weights_len and
 // dispatch_count) so the gpu_tests parity oracle packs ONE uniform for both kernels.
 //   w = weights[idx] if idx < weights_len else 1.0 (degrade, never silent 0)
@@ -20,6 +20,7 @@ struct MeshVertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -51,8 +52,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dst[idx].normal = n / mag;
         dst[idx]._pad1 = 0.0;
         dst[idx].uv = va.uv;
-        dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+        dst[idx]._pad2 = va._pad2;
         dst[idx].tangent = va.tangent;
+        dst[idx].color = va.color;
         return;
     }
 
@@ -67,8 +69,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dst[idx].normal = vb.normal;
         dst[idx]._pad1 = 0.0;
         dst[idx].uv = va.uv;
-        dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+        dst[idx]._pad2 = va._pad2;
         dst[idx].tangent = vb.tangent;
+        dst[idx].color = va.color;
         return;
     }
 
@@ -108,6 +111,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx].normal = normal;
     dst[idx]._pad1 = 0.0;
     dst[idx].uv = va.uv;
-    dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+    dst[idx]._pad2 = va._pad2;
     dst[idx].tangent = vec4<f32>(tangent_xyz, handedness);
+    dst[idx].color = va.color;
 }

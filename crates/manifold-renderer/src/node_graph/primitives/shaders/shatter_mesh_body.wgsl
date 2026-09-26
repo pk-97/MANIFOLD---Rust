@@ -29,7 +29,7 @@ fn body(
         let key = tri_id + u32(seed);
         let h = hash_u32(key);
         let displaced = self_v.position + n * (amount * h * w);
-        return Element(displaced, n, self_v.uv, self_v.tangent);
+        return Element(displaced, n, self_v.uv, self_v.uv1, self_v.tangent, self_v.color);
     }
 
     return self_v;

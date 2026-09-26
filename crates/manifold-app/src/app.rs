@@ -2608,6 +2608,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 embedded_presets_fingerprint: 0,
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
+                edit_selection_update: None,
+                modifier_selection_update: None,
+                object_modifier_selection_update: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
@@ -2838,6 +2841,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Cursor left window → cancel in-progress drags ────────
             WindowEvent::CursorLeft { .. } => {
+                if is_graph_editor { self.cancel_editor_pointer_capture(window_id); }
                 if is_primary && self.perform_handle_cursor_left() {
                     return;
                 }
@@ -2871,6 +2875,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Focus loss → cancel in-progress drags ──────────────
             WindowEvent::Focused(false) => {
+                if is_graph_editor { self.cancel_editor_pointer_capture(window_id); }
                 // Synthesize a PointerUp to cancel any drag that was in
                 // progress when the user alt-tabbed away. Without this the
                 // drag state stays active forever because no real PointerUp
@@ -2903,6 +2908,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // From Unity FileDragDrop.cs — polls for OS-level file drops.
             // In winit, this is event-driven instead of polled.
             WindowEvent::DroppedFile(path) => {
+                if self.ws.ui_root.export_progress.is_open() {
+                    return;
+                }
                 let ext = path
                     .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())

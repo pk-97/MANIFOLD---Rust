@@ -56,7 +56,15 @@ crate::param_tooltips!("node.tone_map", {
 
 crate::param_tooltips!("node.blur", {
     "radius" => "How far the blur reaches, in pixels. 0 leaves the image sharp and higher values soften it more.",
-    "mode" => "The blur shape. Gaussian gives a smooth falloff, Box is a flat even spread, and Radial smears outward from the centre.",
+    "mode" => "The blur shape. Gaussian gives a smooth falloff, Box an even spread, and Smooth a soft wide blur with lower cost at large radii. Radial currently uses Gaussian.",
+});
+
+crate::param_tooltips!("node.bokeh_gather", {
+    "max_radius" => "The widest depth-of-field blur, in source pixels. Keep this equal to the CoC From Depth node's maximum radius.",
+    "enabled" => "Soften objects outside the camera's focus distance. Turning this off keeps the scene sharp.",
+    "aperture" => "The shape of out-of-focus highlights: circular, six-sided or eight-sided.",
+    "quality" => "Higher quality uses more samples for smoother out-of-focus detail. Medium balances detail and rendering cost.",
+    "blur_alpha" => "Let blur spread into transparent areas around an object. Camera depth of field enables this to soften silhouettes.",
 });
 
 crate::param_tooltips!("node.blur_3d", {

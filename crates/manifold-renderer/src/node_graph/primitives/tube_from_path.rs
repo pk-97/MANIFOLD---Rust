@@ -309,7 +309,9 @@ mod gpu_tests {
             None => (device.create_buffer_shared(4), 0),
         };
 
-        let dst_buf = device.create_buffer_shared(dst_cap as u64 * 48);
+        let dst_buf = device.create_buffer_shared(
+            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+        );
 
         let uniforms = TubeFromPathUniforms {
             radius,

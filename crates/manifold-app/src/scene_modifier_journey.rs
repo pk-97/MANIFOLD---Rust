@@ -10,6 +10,7 @@ mod angular;
 mod consolidation;
 mod resize;
 mod scene_add;
+mod object_cards;
 
 use std::path::{Path, PathBuf};
 

@@ -7,7 +7,8 @@
 // vertex reads multiple grid cells (the quad corner + the 4 normal-difference
 // neighbours), so the body indexes the input array global `buf_in` directly
 // (no per-[idx] pre-read). The codegen synthesizes
-//   struct Element { position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32> }
+//   struct Element { position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>,
+//                   uv1: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> }
 // from MeshVertex's Channels signature (in + out share it). `dispatch_count`
 // (= dst capacity) is the wrapper guard; slots past the triangle count emit the
 // degenerate padding vertex. src_cols/src_rows arrive as i32; the hand grid
@@ -25,6 +26,13 @@ fn tg_sample_uv(col: i32, row: i32, src_cols: i32, src_rows: i32) -> vec2<f32> {
     let rr = clamp(row, 0, src_rows - 1);
     let idx = u32(rr) * u32(src_cols) + u32(cc);
     return buf_in[idx].uv;
+}
+
+fn tg_sample_uv1(col: i32, row: i32, src_cols: i32, src_rows: i32) -> vec2<f32> {
+    let cc = clamp(col, 0, src_cols - 1);
+    let rr = clamp(row, 0, src_rows - 1);
+    let idx = u32(rr) * u32(src_cols) + u32(cc);
+    return buf_in[idx].uv1;
 }
 
 fn tg_compute_normal(col: i32, row: i32, src_cols: i32, src_rows: i32) -> vec3<f32> {
@@ -45,7 +53,7 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
 
     if idx >= total_verts {
         // Padding vertex past the triangle count.
-        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
+        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0), vec4<f32>(1.0));
     }
 
     let quad_idx = idx / 6u;
@@ -75,6 +83,10 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
     let pos = tg_sample_pos(col, row, src_cols, src_rows);
     let normal = tg_compute_normal(col, row, src_cols, src_rows);
     let uv = tg_sample_uv(col, row, src_cols, src_rows);
+    let uv1 = tg_sample_uv1(col, row, src_cols, src_rows);
+    let cc = clamp(col, 0, src_cols - 1);
+    let rr = clamp(row, 0, src_rows - 1);
+    let color = buf_in[u32(rr) * u32(src_cols) + u32(cc)].color;
 
-    return Element(pos, normal, uv, vec4<f32>(0.0));
+    return Element(pos, normal, uv, uv1, vec4<f32>(0.0), color);
 }

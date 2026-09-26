@@ -43,8 +43,8 @@ want bug-118 worked on").
 | IBL in `fs_pbr` | `render_scene.wgsl:648-651` | ONE lod-0 equirect sample along `reflect(-V, N)`, dimmed by heuristic `ibl_strength = 1.0 - roughness*0.7`. No prefiltered mips, no diffuse irradiance, no split-sum BRDF LUT — rough metal gets a sharp reflection faded to grey |
 | Shared BRDF helpers | `shaders/pbr_brdf.wgsl` | D_GGX / G_Smith / F_Schlick / equirect UV — correct and reusable; nothing IBL-specific beyond the UV mapping |
 | Envmap bake | `bake_equirect_envmap.rs:47-…` (`node.bake_environment`) | Procedural gradient studio (horizon_strength / azimuth_variation / intensity). No discrete emitters; import wires it at **intensity 0** (`gltf_import.rs:374`) — the deliberate "model on black", which also means zero IBL |
-| MeshVertex | `mesh_common.rs:34-43` | 48-byte position/normal/uv. **No tangents**; stride pinned by test + `MESH_VERTEX_SPECS` Channels signature — growing it is a workspace-wide ABI change |
-| Normal-map contract (render_mesh) | MATERIAL section 11.1 / `render_3d_mesh.rs:66` | Existing `normal_map` is **world-space** (procedural heightfield chains); glTF maps are tangent-space — M6-D5 deferred them with trigger "a hero import that visibly needs them". **The trigger has fired** |
+| MeshVertex | `mesh_common.rs:34-43` | Historical 48-byte position/normal/uv snapshot. Superseded by the current 80-byte position/normal/UV0/UV1/tangent/RGBA layout and its ABI/versioned cache contract in [GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26) |
+| Normal-map contract (render_mesh) | MATERIAL section 11.1 / `render_3d_mesh.rs:66` | Historical world-space/tangent-space boundary snapshot; superseded by the current shared `RenderScene` material evaluation and authored-tangent/cotangent-fallback contract in [GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26) |
 | Exposure | `gltf_import.rs:396` wires `node.camera_lens` (`exposure_ev` port-shadowed) | Exposure exists; HDR→SDR happens at composite (MetallicGlass precedent). No new tone-map infra needed |
 | Texture-set / HDRI drop | `IMPORT_DESIGN.md` D5 / P4 | Already designed there — HDRI file loading is NOT this doc's scope |
 | Instancing / always-bind stub pattern | REALTIME_3D section 10 D11, `render_scene.rs:874` | The precedent every new optional per-object port copies (unwired = dummy bind + flag 0 = byte-identical output) |
@@ -108,19 +108,13 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   binding contract with a channel-select mode flag — a mode flag on a shared
   resolve function is the hidden-fallback shape (`feedback_no_silent_fallbacks`);
   a dedicated `mr_map` binding with its own resolve function is executor-clear.
-- **D4 — Tangent-space normal mapping via screen-space cotangent frame, NOT
-  MeshVertex tangents.** `fs_*` computes the TBN per fragment from
-  `dpdx/dpdy(world_pos)` and `dpdx/dpdy(uv)` (Mikkelsen's cotangent-frame
-  derivation — the technique three.js/filament use when tangents are absent).
-  `MeshVertex` stays 48 bytes: growing it is a workspace ABI change touching every
-  mesh producer, the Channels signature, codegen, and the stride tests — priced
-  and rejected for a per-fragment computation that costs a handful of ALU ops.
-  glTF `normalTexture.scale` imports as a multiplier. *Consequences, stated
-  honestly:* derivative-based TBN is slightly faceted across UV seams and mirrored
-  UVs on low-poly meshes; on photoscan/production assets (dense, well-unwrapped)
-  it is visually indistinguishable. Trigger to revisit: a hero asset whose normal
-  detail visibly breaks → import-time tangent generation into a **separate
-  optional buffer port**, never MeshVertex growth.
+- **D4 — Tangent-space normal mapping via screen-space cotangent frame (historical
+  fallback).** The original 48-byte decision and its separate-buffer trigger are
+  superseded by the current 80-byte `MeshVertex` layout: authored tangents,
+  tangent handedness, UV0/UV1 and RGBA colour now travel through import and
+  shading. The cotangent frame remains the fallback when authored tangents are
+  absent. Current transform and material-parity boundaries are maintained in
+  [GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26).
 - **D5 — Loader parses the full material, importer wires it, everything unmapped
   is a report line (IMPORT D9 doctrine).** `GltfMaterialInfo` gains:
   `normal_texture + normal_scale`, `mr_texture`, `occlusion_texture +
@@ -410,7 +404,7 @@ F-P3/F-P4/F-P7 focused per the scope rule.
    type (D2).
 3. Four new per-object ports with glTF channel conventions; textures never ride
    the Material wire (D3).
-4. No MeshVertex tangents — cotangent frame in the fragment shader (D4).
+4. Historical D4 record: no MeshVertex tangents — cotangent frame in the fragment shader. Superseded by the current authored-tangent layout; cotangent reconstruction remains the fallback.
 5. Default import look = softbox black studio at intensity 1.0; `gradient` mode
    stays byte-identical for existing presets (D7, Peter's quoted call).
 6. Clearcoat stays a report line in v1 (Deferred #1). Glass ships as F-P5's
@@ -431,13 +425,17 @@ F-P3/F-P4/F-P7 focused per the scope rule.
    one). What REMAINS deferred: OIT / per-triangle sorting (trigger: a hero
    asset whose intra-object glass visibly mis-sorts) and refraction/frosted
    transmission (trigger: a look that needs light-bending, not tint+reflection).
-3. **`render_mesh`/`render_copies` IBL upgrade + MetallicGlass re-tune** —
-   trigger: the next look-pass on a `render_mesh` preset; mechanical once the
-   `pbr_brdf.wgsl` IBL helpers exist.
-4. **Import-time tangent generation** (separate buffer port) — trigger: D4's
-   quality consequence visibly bites on a hero asset.
-5. **KHR_materials_specular / IOR mapping** — parse features are enabled by F-P4;
-   mapping into Material waits for an asset that needs non-default F0.
+3. **`render_mesh`/`render_copies` IBL upgrade** — superseded by their shared
+   `RenderScene` evaluator (current material contract, section 7). Artistic
+   MetallicGlass retuning remains a separate look decision.
+4. ~~**Import-time tangent generation** (separate buffer port) — trigger: D4's
+   quality consequence visibly bites on a hero asset.~~ Superseded by the
+   landed authored-tangent vertex layout; the cotangent frame remains its
+   fallback.
+5. ~~**KHR_materials_specular / IOR mapping** — parse features are enabled by F-P4;
+   mapping into Material waits for an asset that needs non-default F0.~~
+   Superseded by the current specular weight, colour and IOR contract in
+   [GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26).
 6. **Per-input generation-counter signal on `EffectNodeContext`** (found at F-P1
    landing, 2026-07-15) — a genuine "did this input's producer change its
    output since I last ran" signal, which would let the prefiltered/irradiance
@@ -464,6 +462,6 @@ F-P3/F-P4/F-P7 focused per the scope rule.
 
 Folded 2026-07-28 from the three landing reports (`docs/landings/2026-07-15-import-fidelity-p1p3.md`, `…-p2p4.md`, `…-p5.md` — kept as history); this is the still-live part.
 
-- **`normal_texture.scale` / `occlusion_texture.strength` parsed but not wired end-to-end** — no shader-ABI param carries them; both held-out fixtures default to neutral values and the import report line names the gap. Tracked Deferred item (section 7 (Deferred) #7).
+- ~~**`normal_texture.scale` / `occlusion_texture.strength` parsed but not wired end-to-end** — no shader-ABI param carries them; both held-out fixtures default to neutral values and the import report line names the gap.~~ Superseded by the current material correction contract in [GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26); the historical residue record is retained here for provenance.
 - **F-P1's diffuse-irradiance gate is a generous-band sanity check**, not the originally specified uniform-white-env value-level test (the current procedural baker can't produce that env without new infra). A stricter gate needs baker infra first.
 - **F-P2 repurposed a dead binding** rather than adding a fourth; dead bindings 5/7 left in place, not renumbered.

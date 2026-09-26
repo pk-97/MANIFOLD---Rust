@@ -4,7 +4,7 @@
 struct Vertex {
     position: vec3<f32>, _pad0: f32,
     normal: vec3<f32>, _pad1: f32,
-    uv: vec2<f32>, _pad2: vec2<f32>, tangent: vec4<f32>,
+    uv: vec2<f32>, _pad2: vec2<f32>, tangent: vec4<f32>, color: vec4<f32>,
 };
 struct Instance { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
 struct Uniforms {

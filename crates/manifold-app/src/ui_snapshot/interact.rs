@@ -72,6 +72,16 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutco
         Some(("collapse", target)) => res(collapse_layer(data, target)),
         Some(("collapse_effect", target)) => res(collapse_effect(ui, data, target)),
         Some(("delete", target)) => res(delete_layer(data, target)),
+        Some(("open", "export")) => {
+            ui.export_progress.begin("Live set — final.mp4");
+            ui.consume_export_notification(&crate::content_state::ContentState {
+                is_exporting: true,
+                export_status: "section 2 of 3 — Exporting 120/600 (20%)".into(),
+                export_progress: 0.2,
+                ..crate::content_state::ContentState::default()
+            });
+            hit("open -> export progress modal".to_string())
+        }
         Some(("open", "settings")) => {
             ui.settings_popup.open();
             hit("open -> settings popup".to_string())

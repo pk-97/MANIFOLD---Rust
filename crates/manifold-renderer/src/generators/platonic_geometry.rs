@@ -185,7 +185,8 @@ fn triangle(points: &[[f32; 3]], a: u8, b: u8, c: u8, out: &mut Vec<MeshVertex>)
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
-        });
+                color: [1.0; 4],
+});
     }
 }
 
@@ -247,7 +248,7 @@ pub fn platonic_mesh(shape: u32) -> &'static [MeshVertex] {
     }
 }
 
-/// Compact CPU-origin upload payload. A full [`MeshVertex`] is 64 bytes, but
+/// Compact CPU-origin upload payload. A full [`MeshVertex`] is 80 bytes, but
 /// only position and normal are authored here. Keeping the source payload at
 /// 108 × 32 bytes fits Metal's inline `setBytes` limit; the shader restores
 /// the zero UV/tangent fields in the output buffer.

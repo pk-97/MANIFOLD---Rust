@@ -1,5 +1,5 @@
 //! Settings popup — a small floating modal for render configuration that used
-//! to clutter the transport/footer bars (resolution, render scale, tonemap,
+//! to clutter the transport/footer bars (resolution, render scale, SDR tone map,
 //! HDR). Opened from `MANIFOLD ▸ Settings…` (⌘,) or the native menu.
 //!
 //! Self-contained like [`super::audio_setup_panel`]: it builds `UITree` nodes
@@ -44,7 +44,7 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 
 /// Number of control rows under the single "Render" section. Kept in lockstep
 /// with `build_rows` so `body_height` matches the imperative layout.
-const ROW_COUNT: f32 = 6.0;
+const ROW_COUNT: f32 = 7.0;
 
 pub struct SettingsPopup {
     open: bool,
@@ -58,6 +58,8 @@ pub struct SettingsPopup {
     resolution_text: String,
     render_scale: f32,
     tonemap: TonemapCurve,
+    tonemap_enabled: bool,
+    sdr_preview: bool,
     hdr_on: bool,
     split_sections: bool,
 
@@ -84,6 +86,8 @@ impl SettingsPopup {
             resolution_text: "1080p".into(),
             render_scale: 1.0,
             tonemap: TonemapCurve::AcesNarkowicz,
+            tonemap_enabled: false,
+            sdr_preview: false,
             hdr_on: false,
             split_sections: false,
             last_placement: None,
@@ -124,6 +128,14 @@ impl SettingsPopup {
     }
     pub fn set_tonemap_curve(&mut self, curve: TonemapCurve) {
         self.tonemap = curve;
+    }
+    pub fn set_tonemap_enabled(&mut self, enabled: bool) {
+        self.tonemap_enabled = enabled;
+    }
+    pub fn set_sdr_preview(&mut self, sdr_preview: bool) -> bool {
+        let changed = self.sdr_preview != sdr_preview;
+        self.sdr_preview = sdr_preview;
+        changed
     }
     pub fn set_hdr(&mut self, on: bool) {
         self.hdr_on = on;
@@ -236,20 +248,54 @@ impl SettingsPopup {
         }
         cy += ROW_H + ROW_GAP;
 
-        // Tonemap: ACE / Hill / AgX / Khr segmented.
-        self.row_label(tree, inner_x, cy, "Tonemap");
+        // SDR tone map: Off / ACE / Hill / AgX / Khr segmented.
+        self.row_label(tree, inner_x, cy, "SDR Tone Map");
+        let segment_count = 5.0_f32;
+        let seg_w = (ctrl_w - SEG_GAP * (segment_count - 1.0)) / segment_count;
+        let off_id = tree.add_button(
+            Some(self.bg_id),
+            ctrl_x,
+            cy,
+            seg_w,
+            ROW_H,
+            btn_style(!self.tonemap_enabled),
+            "Off",
+        );
+        self.actions.push((
+            off_id,
+            PanelAction::Project(ProjectAction::SetTonemapEnabled(false)),
+        ));
         let curves = [
             ("ACE", TonemapCurve::AcesNarkowicz),
             ("Hill", TonemapCurve::AcesHill),
             ("AgX", TonemapCurve::Agx),
             ("Khr", TonemapCurve::KhronosPbrNeutral),
         ];
-        let seg_w = (ctrl_w - SEG_GAP * (curves.len() as f32 - 1.0)) / curves.len() as f32;
         for (i, (label, curve)) in curves.iter().enumerate() {
-            let sx = ctrl_x + i as f32 * (seg_w + SEG_GAP);
-            let active = *curve == self.tonemap;
+            let sx = ctrl_x + (i as f32 + 1.0) * (seg_w + SEG_GAP);
+            let active = self.tonemap_enabled && *curve == self.tonemap;
             let id = tree.add_button(Some(self.bg_id), sx, cy, seg_w, ROW_H, btn_style(active), label);
             self.actions.push((id, PanelAction::Project(ProjectAction::SetTonemapCurve(*curve))));
+        }
+        cy += ROW_H + ROW_GAP;
+
+        // Preview selects the live output transform only; it never changes the project.
+        self.row_label(tree, inner_x, cy, "Preview");
+        let preview = [("Display", false), ("SDR", true)];
+        let seg_w = (ctrl_w - SEG_GAP) / preview.len() as f32;
+        for (i, (label, sdr)) in preview.iter().enumerate() {
+            let sx = ctrl_x + i as f32 * (seg_w + SEG_GAP);
+            let id = tree.add_button(
+                Some(self.bg_id),
+                sx,
+                cy,
+                seg_w,
+                ROW_H,
+                btn_style(*sdr == self.sdr_preview),
+                label,
+            );
+            self.actions
+                .push((id, PanelAction::Project(ProjectAction::SetSdrPreview(*sdr))));
         }
         cy += ROW_H + ROW_GAP;
 
@@ -404,5 +450,46 @@ fn section_style() -> UIStyle {
         font_size: color::FONT_LABEL,
         text_align: TextAlign::Left,
         ..UIStyle::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::panels::overlay::{Overlay, OverlayPlacement};
+
+    fn preview_styles(tree: &UITree) -> (UIStyle, UIStyle) {
+        let mut display = None;
+        let mut sdr = None;
+        for node in tree.nodes() {
+            match node.text.as_deref() {
+                Some("Display") => display = Some(node.style),
+                Some("SDR") => sdr = Some(node.style),
+                _ => {}
+            }
+        }
+        (display.expect("Display preview segment"), sdr.expect("SDR preview segment"))
+    }
+
+    #[test]
+    fn preview_segment_active_style_tracks_runtime_state() {
+        let mut popup = SettingsPopup::new();
+        popup.open();
+        let placement = OverlayPlacement {
+            rect: Rect::new(0.0, 0.0, 340.0, 320.0),
+            screen: Vec2::new(1280.0, 720.0),
+        };
+        let mut tree = UITree::new();
+
+        popup.build_at(&mut tree, placement);
+        let (display, sdr) = preview_styles(&tree);
+        assert_ne!(display.bg_color, sdr.bg_color);
+
+        assert!(popup.set_sdr_preview(true));
+        tree.clear();
+        popup.build_at(&mut tree, placement);
+        let (display_after, sdr_after) = preview_styles(&tree);
+        assert_eq!(display.bg_color, sdr_after.bg_color);
+        assert_eq!(sdr.bg_color, display_after.bg_color);
     }
 }

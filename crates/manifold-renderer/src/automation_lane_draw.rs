@@ -161,6 +161,24 @@ pub fn emit_automation_lanes(
         };
         ui.push_immediate_clip(r.x, r.y, r.width, r.height);
         ui.draw_rect(r.x, r.y, r.width, r.height, color::AUTOMATION_STRIP_BG);
+        if let Some(range) = selection.and_then(|state| state.automation_time_selection.as_ref())
+            && range
+                .lanes
+                .iter()
+                .any(|key| key.0 == lane.target && key.1 == lane.param_id)
+        {
+            let x0 = lane.beat_to_pixel(range.start.0 as f32).max(graph.x);
+            let x1 = lane.beat_to_pixel(range.end.0 as f32).min(graph.x_max());
+            if x1 > x0 {
+                ui.draw_rect(
+                    x0,
+                    graph.y,
+                    x1 - x0,
+                    graph.height,
+                    color::AUTOMATION_LINE_COLOR.with_alpha(38),
+                );
+            }
+        }
         if header.height > 0.0 {
             ui.draw_rect(
                 header.x,

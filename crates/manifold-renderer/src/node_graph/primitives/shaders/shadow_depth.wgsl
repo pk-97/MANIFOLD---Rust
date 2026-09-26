@@ -6,10 +6,9 @@
 // `texture_depth_2d` in the main lit pass via `textureSampleCompareLevel`
 // (PCF).
 //
-// The `Vertex` layout is byte-identical to render_scene.wgsl (48 bytes)
+// The `Vertex` layout is byte-identical to render_scene.wgsl (80 bytes)
 // so the SAME per-object mesh vertex buffer binds here at @binding(1)
-// with no re-pack. Only position is read; normal/uv are ignored (a
-// depth pass has no shading).
+// with no re-pack. UVs are used for alpha coverage; normals are unused.
 //
 // The shadow pass instances too (REALTIME_3D_DESIGN.md section 10 D11+P8): the
 // SAME per-object instances buffer (or identity stub) binds at
@@ -26,16 +25,20 @@ struct Vertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
-// 144 bytes: the light's view-projection, this object's model matrix, and
-// appearance visibility controls.
+// 192 bytes: the light's view-projection, this object's model matrix, and
+// appearance, alpha coverage, and base-colour UV metadata.
 // Bound per (caster, object) draw via GpuBinding::Bytes at @binding(0).
 struct ShadowUniforms {
     light_view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     // x: appearance gain, y: 1 when per-vertex weights are wired.
     appearance: vec4<f32>,
+    alpha: vec4<f32>,
+    uv_m: vec4<f32>,
+    uv_t: vec4<f32>,
 };
 
 struct Instance {
@@ -47,6 +50,8 @@ struct Instance {
 @group(0) @binding(1) var<storage, read> verts: array<Vertex>;
 @group(0) @binding(2) var<storage, read> instances: array<Instance>;
 @group(0) @binding(3) var<storage, read> weights: array<f32>;
+@group(0) @binding(4) var base_color_map: texture_2d<f32>;
+@group(0) @binding(5) var base_color_sampler: sampler;
 
 // Bit-for-bit the same as render_scene.wgsl's euler_xyz — forked, not
 // shared, per this file's header convention.
@@ -79,6 +84,8 @@ fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
 struct ShadowVsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) appearance_weight: f32,
+    @location(1) uv: vec2<f32>,
+    @location(2) vertex_alpha: f32,
 };
 
 @vertex
@@ -89,10 +96,16 @@ fn vs_main(
     let v = verts[vid];
     let inst = instances[iid];
     let rot = euler_xyz(inst.rot_pad.xyz);
-    let inst_pos = rot * (v.position * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let marker = u32(inst.rot_pad.w + 0.5);
+    let mirror = vec3<f32>(select(1.0, -1.0, marker == 1u),
+        select(1.0, -1.0, marker == 2u), select(1.0, -1.0, marker == 3u));
+    let inst_pos = rot * (v.position * mirror * inst.pos_scale.w) + inst.pos_scale.xyz;
     let world = su.model * vec4<f32>(inst_pos, 1.0);
     var out: ShadowVsOut;
     out.clip_pos = su.light_view_proj * world;
+    out.vertex_alpha = v.color.a;
+    let uv = select(v.uv, v._pad2, su.uv_t.z == 1.0);
+    out.uv = vec2<f32>(dot(su.uv_m.xy, uv), dot(su.uv_m.zw, uv)) + su.uv_t.xy;
     if su.appearance.y > 0.5 {
         out.appearance_weight = weights[vid];
     } else {
@@ -105,6 +118,11 @@ fn vs_main(
 // (GpuEncoder::draw_instanced_depth_only) so the only output is depth.
 @fragment
 fn fs_shadow(in: ShadowVsOut) {
+    if su.alpha.x == 1.0 {
+        var alpha = su.alpha.z * in.vertex_alpha;
+        if su.alpha.w > 0.5 { alpha *= textureSample(base_color_map, base_color_sampler, in.uv).a; }
+        if alpha < su.alpha.y { discard; }
+    }
     if su.appearance.x * in.appearance_weight <= 0.0 {
         discard;
     }

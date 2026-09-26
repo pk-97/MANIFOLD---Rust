@@ -46,6 +46,8 @@ pub mod fluid;
 pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod fragment_mask_continuity_tests;
 mod graph;
 mod graph_loader;
 pub mod resource_allocation;

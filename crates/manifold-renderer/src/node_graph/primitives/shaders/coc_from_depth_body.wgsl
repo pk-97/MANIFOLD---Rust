@@ -4,17 +4,19 @@
 // a Camera's fov/near/far/lens (docs/CINEMATIC_POST_DESIGN.md D1). Exact
 // formula, no substitution:
 //   f_mm    = SENSOR_H_MM / (2 * tan(fov_y / 2))
-//   A_mm    = f_mm / f_stop
+//   aperture_radius_mm = f_mm / (2 * f_stop)
 //   D_mm    = linearize_depth(raw_depth, near, far) * WORLD_TO_MM
 //   S_mm    = focus_distance * WORLD_TO_MM
 //   signed  = D_mm - S_mm
-//   coc_mm  = A_mm * f_mm * signed / (D_mm * max(S_mm - f_mm, 1.0))
-//   coc_px  = clamp(|coc_mm| / SENSOR_H_MM * viewport_h, 0.0, max_radius)
-//   out.r   = coc_px / max_radius   (MAGNITUDE — unchanged for every existing
+//   coc_radius_mm = aperture_radius_mm * f_mm * signed
+//                   / (D_mm * max(S_mm - f_mm, 1.0))
+//   coc_radius_px = clamp(|coc_radius_mm| / SENSOR_H_MM * viewport_h,
+//                         0.0, max_radius)
+//   out.r   = coc_radius_px / max_radius   (RADIUS MAGNITUDE — unchanged for every existing
 //             reader: node.variable_blur and node.bokeh_gather read `width.r`)
 //   out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
 //             0.0 = far-or-in-focus; docs/BOKEH_LAYERED_DOF_DESIGN.md D1)
-//   out.b   = out.r   (copy of magnitude)
+//   out.b   = out.r   (copy of radius magnitude)
 //   out.a   = 1.0
 //
 // `depth` is CoincidentTexel (own-texel integer textureLoad, no sampler) —
@@ -49,17 +51,18 @@ fn body(
     f_stop: f32,
 ) -> vec4<f32> {
     let f_mm = SENSOR_H_MM / (2.0 * tan(fov_y * 0.5));
-    let a_mm = f_mm / f_stop;
+    let aperture_radius_mm = f_mm / (2.0 * f_stop);
     let d_mm = linearize_depth(c_depth.r, near, far) * world_to_mm;
     let s_mm = focus_distance * world_to_mm;
     let signed_delta = d_mm - s_mm;
-    let coc_mm = a_mm * f_mm * signed_delta / (d_mm * max(s_mm - f_mm, 1.0));
-    let coc_px = clamp(abs(coc_mm) / SENSOR_H_MM * dims.y, 0.0, max_radius);
+    let coc_radius_mm = aperture_radius_mm * f_mm * signed_delta
+        / (d_mm * max(s_mm - f_mm, 1.0));
+    let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * dims.y, 0.0, max_radius);
     // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
-    // exactly 0 CoC. Without this, S_mm = 0 makes the denominator 1 and the
+    // exactly 0 CoC radius. Without this, S_mm = 0 makes the denominator 1 and the
     // formula degenerates to f_mm^2/f_stop: MAX blur at every aperture
     // (Peter's 2026-08-27 fully-soft frame after dragging Focus to 0).
-    let coc_q = select(coc_px, 0.0, focus_distance <= 0.0);
+    let coc_q = select(coc_radius_px, 0.0, focus_distance <= 0.0);
     let normalized = coc_q / max_radius;
     // Sign flag: 1.0 = nearer than focus, 0.0 = far-or-in-focus.
     let near_flag = select(0.0, 1.0, (signed_delta < 0.0) && (focus_distance > 0.0));

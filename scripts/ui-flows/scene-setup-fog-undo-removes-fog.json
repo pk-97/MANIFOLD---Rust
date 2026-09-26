@@ -50,18 +50,10 @@
     }
   },
   {
-    "Pointer": {
+    "ScrollTo": {
       "target": {
         "Query": {
           "text": "+ Add Fog"
-        }
-      },
-      "gesture": {
-        "Scroll": {
-          "delta": {
-            "x": 0.0,
-            "y": 300.0
-          }
         }
       }
     }

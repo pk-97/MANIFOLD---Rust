@@ -165,7 +165,6 @@ fn validate_graph_ownership(
         .preset_metadata
         .as_ref()
         .or_else(|| catalog_default.and_then(|default| default.preset_metadata.as_ref()));
-    let mut look_writes_metallic_roughness = false;
     for change in changes {
         let id = change.param_id.as_ref();
         let bindings: Vec<_> = metadata
@@ -206,14 +205,6 @@ fn validate_graph_ownership(
                 context.kind,
                 id,
             )?;
-            if context.kind == MaterialEditKind::Look
-                && matches!(param.as_str(), "metallic" | "roughness")
-                // Restoring authored factors preserves the mapped material's
-                // original response; stylized look overrides remain blocked.
-                && change.value != slot.spec.default_value
-            {
-                look_writes_metallic_roughness = true;
-            }
         }
     }
 
@@ -221,18 +212,6 @@ fn validate_graph_ownership(
         && skin_temporarily_owns_object(object_wires, object_doc_id, scope_nodes)
     {
         return Err("material look is blocked while emissive Skin owns this object".to_string());
-    }
-    if context.kind == MaterialEditKind::Look
-        && look_writes_metallic_roughness
-        && object_wires.iter().any(|wire| {
-            wire.to_node == object_doc_id
-                && matches!(wire.to_port.as_str(), "mr_map" | "metallic_roughness_map")
-        })
-    {
-        return Err(
-            "material look is blocked: the selected object's metallic/roughness map owns these values"
-                .to_string(),
-        );
     }
     Ok(())
 }
@@ -375,8 +354,16 @@ fn validate_descriptor_identity(
     }
     let expected = if spec.is_toggle {
         ParamConvert::BoolThreshold
+    } else if spec.is_trigger {
+        ParamConvert::Trigger
     } else if matches!(role, MaterialParamRole::FeatureMode(_)) || !spec.value_labels.is_empty() {
         ParamConvert::EnumRound
+    } else if spec.whole_numbers {
+        // Integer-valued controls without enum labels (for example the
+        // imported PBR subsurface sample count) use IntRound. Treating these
+        // as Float makes an otherwise identity binding fail material-look
+        // validation after the control is added to the manifest.
+        ParamConvert::IntRound
     } else {
         ParamConvert::Float
     };
@@ -821,6 +808,41 @@ mod tests {
     }
 
     #[test]
+    fn material_inspector_accepts_unlabelled_int_round_controls() {
+        let (mut project, target, context) = fixture();
+        with_graph_mut(&mut project, &target, |graph| {
+            let metadata = graph.preset_metadata.as_mut().unwrap();
+            metadata.bindings[0].convert = ParamConvert::IntRound;
+            let spec = &mut metadata.params[0];
+            spec.whole_numbers = true;
+            spec.max = 64.0;
+        });
+        let owner = project.preset_instance_mut(&target).unwrap();
+        {
+            let param = owner.params.get_mut("material_roughness").unwrap();
+            param.spec.whole_numbers = true;
+            param.spec.max = 64.0;
+        }
+        owner.set_base_param_by_id("material_roughness", 8.0);
+
+        let change = [MaterialParamChange {
+            param_id: ParamId::from("material_roughness"),
+            expected: 8.0,
+            value: 16.0,
+        }];
+        assert!(validate_material_edit(&project, &target, &context, &change, None).is_ok());
+
+        with_graph_mut(&mut project, &target, |graph| {
+            graph.preset_metadata.as_mut().unwrap().bindings[0].convert = ParamConvert::Float;
+        });
+        assert!(
+            validate_material_edit(&project, &target, &context, &change, None)
+                .expect_err("an IntRound card cannot use a Float binding")
+                .contains("unsupported conversion")
+        );
+    }
+
+    #[test]
     fn material_inspector_material_command_applies_two_writes_as_one_undo_unit() {
         let (mut project, target, context) = fixture();
         let mut command = ChangeMaterialParamsCommand::new(
@@ -965,9 +987,7 @@ mod tests {
                 to_port: "mr_map".to_string(),
             });
         });
-        let reason = validate_material_edit(&project, &target, &context, &changes, None)
-            .expect_err("selected object's MR map must block metallic look writes");
-        assert!(reason.contains("metallic/roughness map"));
+        assert!(validate_material_edit(&project, &target, &context, &changes, None).is_ok());
         with_graph_mut(&mut project, &target, |graph| {
             graph
                 .wires

@@ -5,7 +5,7 @@ struct Uniforms {
     exposure: f32,
     paper_white: f32,
     max_nits: f32,
-    mode: u32,  // 0 = faithful SDR clamp, 1 = EDR soft shoulder
+    mode: u32,  // 0 = faithful SDR clamp, 1 = EDR, 2 = selected SDR curve
     curve: u32,
     _pad0: f32,
     _pad1: f32,
@@ -41,8 +41,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // linear image, clipping only values SDR cannot represent. Applying
         // an artistic curve here changes midtones/colour after master grading.
         mapped = clamp(scene, vec3<f32>(0.0), vec3<f32>(1.0));
-    } else {
+    } else if (u.mode == 1u) {
         mapped = edr_soft_shoulder(scene, u.max_nits);
+    } else {
+        mapped = tonemap_sdr(scene, u.curve);
     }
     return vec4<f32>(mapped, src.a);
 }

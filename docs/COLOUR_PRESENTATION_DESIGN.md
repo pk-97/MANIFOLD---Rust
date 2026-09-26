@@ -1,6 +1,6 @@
 # Colour presentation — preserve the image, adapt each destination
 
-**Status:** SHIPPED implementation · 2026-09-22 · Codex. Prerequisites: existing native Metal renderer.
+**Status:** SHIPPED implementation, SDR controls and export preview · 2026-09-26 · Codex. Prerequisites: existing native Metal renderer.
 **Hardware acceptance:** pending BUG-qdn7; not a claim of verified physical HDR output.
 **Execution contract:** follow DESIGN_DOC_STANDARD sections 5–6 and the repository landing gate.
 
@@ -52,8 +52,10 @@ settings. Output detach removes only Output. No new locks or per-frame allocatio
 
 **D3. Separate meaning from storage.** presentation.rs owns private checked
 CurrentHeadroom/PotentialHeadroom types and DisplayCapabilities. DisplayPlan uses
-current headroom; potential records capability only. Invalid native values log a
-diagnostic and explicitly select SDR. The native provider remains a small adapter;
+current headroom as the brightness ceiling. Potential headroom identifies an
+HDR-capable destination, so a temporary current headroom of 1.0 does not switch
+on the project's SDR rendering curve. Potential never replaces the actual ceiling.
+Invalid native values log a diagnostic and explicitly select SDR. The native provider remains a small adapter;
 tests inject capability values into the same policy owner rather than inventing a
 second display implementation. Apple documents current-headroom changes as
 posting the existing screen-parameters notification:
@@ -67,13 +69,26 @@ Cost: these buffers use eight bytes per pixel instead of four. This does not
 double the whole engine's memory, and is not a measured performance claim.
 Rejected: changing only the drawable, which leaves clipping in the offscreen buffer.
 
-**D5. Reuse tone mapping formulas.** PresentationPipeline uses extracted shared
-WGSL functions from TonemapPipeline. SDR preserves authored linear values in
-[0, 1] and clips out-of-range values, matching the former HDR-display SDR export.
-The September 25 correction removes the extra artistic curve after master grading;
-EDR preserves values below a soft shoulder at current headroom. Display-mapped
-values remain linear; macOS performs display colour conversion. No unconditional
-sRGB encode in the rendering pipeline and no tone mapping of UI palette colours.
+**D5. Explicit SDR rendering after master effects.** PresentationPipeline reuses
+`tonemap_sdr` from TonemapPipeline. `DisplayPlan::new(capabilities,
+Option<TonemapCurve>)` makes bypass explicit: None preserves authored linear
+values in [0, 1] and clips values outside SDR; Some applies the chosen curve to
+the completed master image. These curves deliberately change midtones/colour as
+well as compressing highlights. They do not process the shared HDR master or HDR
+export. Reject pre-master SDR compression: it would reduce source HDR range for
+every destination, and effects adding new highlights would not restore that range.
+
+`ProjectSettings.tonemap_enabled` serializes as `tonemapEnabled`, defaults false
+when absent and for new projects, and retains the existing `tonemapCurve` choice.
+Old projects therefore retain the September 25 appearance until the user selects
+a curve. Off preserves the saved curve; selecting a named curve enables it.
+`ChangeTonemapCurveCommand` updates enabled and curve atomically through
+EditingService, including undo/redo. UI sends commands and never writes settings.
+
+HDR display mapping remains a linear soft shoulder bounded by current headroom.
+Its knee stays at or above SDR white so current headroom crossing 1.0 does not dim
+white. Display-mapped values remain linear; macOS handles display colour conversion.
+UI palette colours are not passed through the project curve.
 
 **D6. Explicit capture boundary.** LinearUiReadback validates dimensions, storage
 and alpha convention. Only its conversion produces SrgbRgba8; the PNG writer
@@ -82,9 +97,22 @@ accepts that currency and writes sRGB metadata. Float readback is encoded before
 assemble already encoded pixels without a second transfer.
 
 **D7. Export is a destination, not a monitor.** SDR video and live recording map
-the canonical frame to SDR explicitly. HDR video retains its existing PQ encoder;
+the canonical frame with the explicit project SDR policy after master effects.
+HDR video retains its existing PQ encoder;
 still export retains its explicit faithful/rolloff policy. Display attachment or
 brightness cannot change the canonical render. No export codec/gamut redesign.
+
+**D8. Workspace SDR preview shares the export policy.** Settings exposes
+`Preview: Display / SDR` and `SDR tone map: Off / ACE / Hill / AgX / Khr`.
+Display is the runtime default. SDR forces only the workspace preview to use
+`ContentPipeline::sdr_presentation_plan()`, also used by video export and recording.
+The external output and graph-editor preview retain their own display policies.
+The content thread owns `sdr_preview`; `SetSdrPreview(bool)` changes it and
+ContentState snapshots reflect it even while paused; partial event/export snapshots
+omit the preference so they cannot reset the control. It is not serialized, does
+not dirty project data, and has no undo entry. Choosing a curve does not silently
+switch preview mode. Cost: on an HDR display in Display mode, an SDR curve choice
+is visible only after choosing SDR preview. HDR export remains independent of both.
 
 ## 3. Interfaces and ownership
 
@@ -113,7 +141,11 @@ generic colour-framework dependency, or serialized project migration is introduc
 | HDR values survive main-window storage | Shared float format; checked target constructor; GPU pixel proof |
 | GPU wrappers cannot lie about drawable storage | Native pixel-format assertion |
 | Master FX do not depend on attached displays | SceneLinear mode at the common compositor call site |
-| SDR preserves authored colour without another curve | Shared presentation shader; GPU colour-preservation proof |
+| Existing projects retain SDR appearance until explicitly changed | Missing-field serde proof, atomic editing undo/redo, None GPU preservation |
+| SDR curves run after master effects; HDR retains its range | Production compositor/order GPU proofs and actual SDR/HDR export proofs |
+| SDR preview uses export mapping without changing other displays | Shared sdr_presentation_plan; runtime command/snapshot and export parity proofs |
+| HDR-capable display does not activate SDR curves at current headroom 1 | Production presentation GPU proof with potential > 1 and current = 1 |
+| SDR white remains stable as current headroom crosses 1.0 | Production GPU white-stability and monotonic-highlight proofs |
 | Capture RGB is sRGB and alpha remains linear | Typed encoder; numerical, channel-order and metadata tests |
 | Invalid headroom/byte lengths fail visibly | Checked constructors and native diagnostics |
 
@@ -135,7 +167,33 @@ production GPU proofs and three policy tests passed through `gpu_proofs_gate.py
 required landing gate. All 12 capture/native-adapter CPU tests passed. One inspector
 PNG was rendered and inspected. The isolated native launcher was blocked by the
 execution-budget hook even after an exact bounded permit; retries stopped.
-Native window and external-display acceptance are tracked in BUG-qdn7.
+Native window and external-display acceptance are tracked in BUG-qdn7. The September 26
+headroom correction has production GPU regressions for stable SDR white and
+monotonic, bounded highlights. These do not establish whether physical brightness
+changes drop frames; that observation remains open in BUG-7ad4.
+
+September 26 extension validation: 18 focused production GPU/policy checks passed,
+including master-effect ordering, retained HDR range, all four SDR curves and the
+current-headroom-1 capability boundary. Real pointer events through the popup,
+UI bridge and content commands passed Display → SDR, AgX → Off → undo. A separate
+paused content-thread check confirmed a runtime snapshot without a project edit.
+Feature clippy passed with `journey-proofs,ui-snapshot`.
+
+The six 64×64, one-second real exports produced all 24 expected frames. Decoded
+SDR matched mapped output within 0.80 code levels mean / 3 maximum; Off, ACES and
+AgX differed. Changing workspace headroom and preview mode produced zero SDR
+pixel difference. Both HEVC/PQ exports retained 396.3-nit highlights from a 2.0
+linear source (200-nit reference white), with zero decoded difference when the
+SDR controls changed. The fixture writes authored parameter bases because export
+resets effective values each frame. These proofs exercise generated HDR content;
+they do not establish native HDR video decoding or gamut accuracy (BUG-y9lu).
+
+One settings popup PNG/tree capture was produced. Computed geometry checks found
+all rows inside the panel and the five curve/two preview segments visible,
+interactive, bordered and separated. Pointer and export checks supply the
+automated behaviour evidence; subjective appearance and physical external-display
+acceptance remain for Peter. Artifacts were preserved under
+`/private/tmp/manifold-sdr-final-proof-20260926` before slot release.
 
 ## 6. Decided — do not reopen
 

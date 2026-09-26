@@ -119,71 +119,90 @@ impl Command for AddEffectCommand {
 #[derive(Debug)]
 pub struct RemoveEffectCommand {
     target: EffectTarget,
+    effect_id: EffectId,
     effect: Option<PresetInstance>,
     removed_index: usize,
     cleared_mask_groups: Vec<EffectGroupId>,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl RemoveEffectCommand {
     pub fn new(target: EffectTarget, effect: PresetInstance, removed_index: usize) -> Self {
+        let effect_id = effect.id.clone();
         Self {
             target,
+            effect_id,
             effect: Some(effect),
             removed_index,
             cleared_mask_groups: Vec::new(),
+            applied: false,
+            rejection: None,
         }
     }
 }
 
 impl Command for RemoveEffectCommand {
     fn execute(&mut self, project: &mut Project) {
-        let removed = with_effects_mut(project, &self.target, |effects, _groups| {
-            if self.removed_index < effects.len() {
-                self.effect = Some(effects.remove(self.removed_index));
-                true
-            } else {
-                false
-            }
-        })
-        .unwrap_or(false);
+        self.applied = false;
+        self.rejection = None;
         self.cleared_mask_groups.clear();
-        if removed && let Some(effect) = self.effect.as_ref() {
-            let effect_id = effect.id.clone();
-            with_effects_mut(project, &self.target, |_effects, groups| {
-                for group in groups.iter_mut() {
-                    if group.mask_effect_id.as_ref() == Some(&effect_id) {
-                        group.mask_effect_id = None;
-                        self.cleared_mask_groups.push(group.id.clone());
-                    }
+        let Some(removed) = with_effects_mut(project, &self.target, |effects, groups| {
+            let index = effects.iter().position(|effect| effect.id == self.effect_id)?;
+            self.removed_index = index;
+            let removed = effects.remove(index);
+            for group in groups.iter_mut() {
+                if group.mask_effect_id.as_ref() == Some(&self.effect_id) {
+                    group.mask_effect_id = None;
+                    self.cleared_mask_groups.push(group.id.clone());
                 }
-            });
-        }
+            }
+            Some(removed)
+        }) else {
+            self.rejection = Some("effect target is unavailable");
+            return;
+        };
+        let Some(removed) = removed else {
+            self.rejection = Some("effect no longer exists");
+            return;
+        };
+        self.effect = Some(removed);
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(effect) = &self.effect {
-            let effect = effect.clone();
-            let idx = self.removed_index;
-            with_effects_mut(project, &self.target, |effects, _groups| {
-                let insert_idx = idx.min(effects.len());
-                effects.insert(insert_idx, effect);
-            });
-            let groups_to_restore = self.cleared_mask_groups.clone();
-            let mask_id = self.effect.as_ref().map(|effect| effect.id.clone());
-            if let Some(mask_id) = mask_id {
-                with_effects_mut(project, &self.target, |_effects, groups| {
-                    for group in groups {
-                        if groups_to_restore.iter().any(|id| id == &group.id) {
-                            group.mask_effect_id = Some(mask_id.clone());
-                        }
-                    }
-                });
+        if !self.applied {
+            return;
+        }
+        let Some(effect) = self.effect.clone() else {
+            return;
+        };
+        let groups_to_restore = self.cleared_mask_groups.clone();
+        if with_effects_mut(project, &self.target, |effects, groups| {
+            let insert_idx = self.removed_index.min(effects.len());
+            effects.insert(insert_idx, effect.clone());
+            for group in groups {
+                if groups_to_restore.iter().any(|id| id == &group.id) {
+                    group.mask_effect_id = Some(effect.id.clone());
+                }
             }
+        })
+        .is_some()
+        {
+            self.applied = false;
         }
     }
 
     fn description(&self) -> &str {
         "Remove Effect"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -1434,6 +1453,84 @@ mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
     use manifold_core::macro_bank::MacroCurve;
+
+    #[test]
+    fn remove_effect_resolves_id_after_deferred_reorder() {
+        let mut project = Project::default();
+        let first = PresetInstance::new(PresetTypeId::BLOOM);
+        let target = PresetInstance::new(PresetTypeId::new("Mirror"));
+        let last = PresetInstance::new(PresetTypeId::new("ColorGrade"));
+        let target_effect_id = target.id.clone();
+        project.settings.master_effects = vec![first, target, last];
+
+        let mut command = RemoveEffectCommand::new(
+            EffectTarget::Master,
+            project.settings.master_effects[1].clone(),
+            1,
+        );
+        project.settings.master_effects.rotate_left(1);
+        let reordered_ids: Vec<_> = project
+            .settings
+            .master_effects
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect();
+
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        assert_eq!(command.rejection_reason(), None);
+        assert!(!project
+            .settings
+            .master_effects
+            .iter()
+            .any(|effect| effect.id == target_effect_id));
+        command.undo(&mut project);
+        assert_eq!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
+            reordered_ids
+        );
+    }
+
+    #[test]
+    fn remove_effect_missing_id_or_target_is_rejected_without_undo_state() {
+        let mut project = Project::default();
+        project
+            .settings
+            .master_effects
+            .push(PresetInstance::new(PresetTypeId::BLOOM));
+        let missing = PresetInstance::new(PresetTypeId::new("Missing"));
+        let before = project.settings.master_effects.clone();
+        let mut missing_id = RemoveEffectCommand::new(EffectTarget::Master, missing, 0);
+        missing_id.execute(&mut project);
+        assert!(!missing_id.was_applied());
+        assert!(missing_id.rejection_reason().is_some());
+        missing_id.undo(&mut project);
+        assert_eq!(
+            project
+                .settings
+                .master_effects
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>(),
+            before.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>()
+        );
+
+        let mut missing_target = RemoveEffectCommand::new(
+            EffectTarget::Layer {
+                layer_id: manifold_core::LayerId::new("missing-layer"),
+            },
+            project.settings.master_effects[0].clone(),
+            0,
+        );
+        missing_target.execute(&mut project);
+        assert!(!missing_target.was_applied());
+        assert!(missing_target.rejection_reason().is_some());
+    }
 
     fn sample_user_binding(id: &str) -> UserParamBinding {
         UserParamBinding {

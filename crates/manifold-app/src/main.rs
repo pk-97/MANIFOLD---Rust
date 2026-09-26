@@ -28,6 +28,7 @@ mod display_link;
 mod drag_hover;
 mod drag_interpose;
 mod editing_host;
+mod edit_selection;
 mod editor_frame;
 mod edr_surface;
 mod frame_timer;
@@ -41,6 +42,7 @@ mod graph_dump;
 mod graph_target;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
+mod object_modifier_transfer;
 mod generator_change;
 mod modifier_preset;
 // Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md

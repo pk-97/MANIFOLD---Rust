@@ -145,10 +145,12 @@ mod tests {
     fn standalone_formula_and_zero_inactive_slots_are_declared() {
         let body = SampleMeshTriangles::WGSL_BODY.expect("sample mesh triangles body");
         assert!(body.contains("source_face_index(idx / 3u,total,sample_count)"));
-        assert!(body.contains("Element(v.position,v.normal,v.uv,v.tangent)"));
+        assert!(body.contains("Element(v.position,v.normal,v.uv,v.uv1,v.tangent,v.color)"));
         assert!(body.contains("if idx / 3u >= sample_count"));
         assert!(
-            body.contains("Element(vec3<f32>(0.0),vec3<f32>(0.0),vec2<f32>(0.0),vec4<f32>(0.0))")
+            body.contains(
+                "Element(vec3<f32>(0.0),vec3<f32>(0.0),vec2<f32>(0.0),vec2<f32>(0.0),vec4<f32>(0.0), vec4<f32>(1.0))",
+            )
         );
         assert_eq!(SampleMeshTriangles::WGSL_INCLUDES.len(), 1);
     }
@@ -227,6 +229,7 @@ mod gpu_tests {
                 n + 3.3,
                 if corner == 0 { -1.0 } else { 1.0 },
             ],
+            color: [1.0; 4],
         }
     }
 
@@ -282,6 +285,7 @@ mod gpu_tests {
         assert_eq!(actual.normal, expected.normal);
         assert_eq!(actual.uv, expected.uv);
         assert_eq!(actual.tangent, expected.tangent);
+        assert_eq!(actual.color, expected.color);
     }
 
     #[test]
@@ -314,6 +318,7 @@ mod gpu_tests {
             assert_eq!(vertex.normal, [0.0; 3]);
             assert_eq!(vertex.uv, [0.0; 2]);
             assert_eq!(vertex.tangent, [0.0; 4]);
+            assert_eq!(vertex.color, [1.0; 4]);
         }
     }
 }

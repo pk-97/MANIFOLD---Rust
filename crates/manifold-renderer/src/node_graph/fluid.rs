@@ -439,7 +439,7 @@ impl Worker {
                                 position: [v.position[0] - half, v.position[1], v.position[2] - half],
                                 _pad0: 0.0, normal: v.normal, _pad1: 0.0,
                                 uv: [v.position[0] / request.settings.domain_size, v.position[2] / request.settings.domain_size],
-                                _pad2: [0.0; 2], tangent: [0.0; 4],
+                                _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4],
                             }));
                             if request.settings.whitewater.enabled {
                                 native.whitewater(&mut whitewater).map_err(|e| e.to_string())?;

@@ -102,7 +102,7 @@ fn scene_json(occluder_visible: f32) -> String {
     )
 }
 
-fn glass_scene_json(alpha_mode: u32, sheen: f32, translucency: f32) -> String {
+fn glass_scene_json(alpha_mode: u32, transmission: f32, sheen: f32, translucency: f32) -> String {
     use serde_json::json;
     let mut scene: serde_json::Value = serde_json::from_str(&scene_json(1.0)).unwrap();
     let nodes = scene["nodes"].as_array_mut().unwrap();
@@ -114,7 +114,7 @@ fn glass_scene_json(alpha_mode: u32, sheen: f32, translucency: f32) -> String {
         json!({"type":"Enum","value":alpha_mode}),
     );
     for (name, value) in [
-        ("transmission", 1.0),
+        ("transmission", transmission),
         ("color_a", 1.0),
         ("roughness", 0.3),
         ("sheen_color_r", sheen),
@@ -292,11 +292,11 @@ fn invisible_object_casts_no_shadow_and_does_not_draw() {
 
 #[test]
 fn material_inspector_glass_opaque_route_preserves_transmission_lobes() {
-    let (opaque, w, h) = render_readback(&glass_scene_json(0, 0.35, 0.45));
-    let (blend, _, _) = render_readback(&glass_scene_json(2, 0.35, 0.45));
-    let (baseline, _, _) = render_readback(&glass_scene_json(2, 0.0, 0.0));
-    let (sheen_only, _, _) = render_readback(&glass_scene_json(2, 0.35, 0.0));
-    let (translucency_only, _, _) = render_readback(&glass_scene_json(2, 0.0, 0.45));
+    let (opaque, w, h) = render_readback(&glass_scene_json(0, 0.65, 0.35, 0.45));
+    let (blend, _, _) = render_readback(&glass_scene_json(2, 0.65, 0.35, 0.45));
+    let (baseline, _, _) = render_readback(&glass_scene_json(2, 0.65, 0.0, 0.0));
+    let (sheen_only, _, _) = render_readback(&glass_scene_json(2, 0.65, 0.35, 0.0));
+    let (translucency_only, _, _) = render_readback(&glass_scene_json(2, 0.65, 0.0, 0.45));
     assert_eq!(opaque.len(), (w * h * 8) as usize);
     assert!(
         luma(&opaque).1 > 0.2,
@@ -345,4 +345,10 @@ fn material_inspector_glass_opaque_route_preserves_transmission_lobes() {
             "{name} contribution disappeared during transmission"
         );
     }
+    // KHR_materials_diffuse_transmission, "Combining ... transmission":
+    // glass transmission overrides the diffuse BSDF at weight one.
+    let (full_glass, _, _) = render_readback(&glass_scene_json(2, 1.0, 0.0, 0.0));
+    let (full_with_diffuse, _, _) = render_readback(&glass_scene_json(2, 1.0, 0.0, 0.45));
+    assert_eq!(full_glass, full_with_diffuse,
+        "full glass transmission must replace the diffuse transmission lobe");
 }

@@ -1,19 +1,11 @@
 //! CINEMATIC_SCENE_TAIL P1 gate proofs.
 //!
-//! I1 — neutral-lens pass-through at the ASSEMBLED-graph level (extends
-//! CINEMATIC_POST I2 (pinhole pass-through) from the reference preset to the
-//! import-assembled graph): an import graph carrying the full dof + motion_blur
-//! tail, at the defaults the assembler stamps (bokeh enabled = false — DoF
-//! off is the labeled toggle, 2026-08-27; shutter_angle = 180 — the P4
-//! amendment; 0 stopped being the default when Peter asked for motion to
-//! smear out of the box), renders byte-identical to the SAME graph with the
-//! tail surgically stripped (the pre-P1 SSAO-only shape). bokeh disabled is
-//! a host-side in→out alias past every early-out in the chain; the static
-//! scene's zero velocity field collapses every motion-blur tap onto the
-//! center texel even at shutter 180 (velocity × shutter/360 = 0). A fresh
-//! import therefore matches the pre-tail look on a static frame, proven
-//! byte-for-byte on a real import assembly — DoF stays off until the toggle
-//! is flipped; motion blur is live but invisible until something moves.
+//! I1 — the assembled import tail preserves the sharp static fixture at the
+//! default f/32 lens. DoF defaults On; its subpixel circle of confusion must
+//! preserve full-resolution color and transparent silhouette coverage. The
+//! static scene's zero velocity also collapses motion-blur taps at the default
+//! shutter angle of 180 degrees. Compare against the same graph with its tail
+//! surgically stripped, after both variants have loaded and converged.
 //!
 //! The strip is surgical: flatten the assembled def, drop the `dof` group node
 //! (its inner coc/coc_dilate/bokeh atoms ride with it) and the top-level
@@ -170,21 +162,29 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     // can finish before the mesh becomes ready; a black pending frame is
     // not evidence about the neutral lens. Require both non-black output
     // and byte stability, with a deadline so a stuck import still fails.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let started = std::time::Instant::now();
+    // Cold Metal material pipelines can finish only after the first texture
+    // publication (observed at 8s on the third pair). Include that startup
+    // work in a bounded deadline without accepting partially loaded frames.
+    let deadline = started + std::time::Duration::from_secs(30);
     let visible = |bytes: &[u8]| bytes.chunks_exact(8).any(|px| {
         half::f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.03
     });
     let mut previous: Option<(Vec<u8>, Vec<u8>)> = None;
+    let mut attempts = 0;
     let (a, b) = loop {
+        attempts += 1;
         let a = render_one(h, &mut with_tail, &manifest_tail, 0);
         let b = render_one(h, &mut stripped, &manifest_stripped, 0);
-        if visible(&a) && visible(&b)
+        if visible(&a) && visible(&b) && !with_tail.io_pending() && !stripped.io_pending()
             && previous.as_ref().is_some_and(|(pa, pb)| *pa == a && *pb == b)
         {
             break (a, b);
         }
         assert!(std::time::Instant::now() < deadline,
-            "import variants did not reach stable, non-black output");
+            "import variants did not converge after {attempts} pairs in {:?}: visible={}/{}, pending={}/{}, stable={}",
+            started.elapsed(), visible(&a), visible(&b), with_tail.io_pending(), stripped.io_pending(),
+            previous.as_ref().is_some_and(|(pa, pb)| *pa == a && *pb == b));
         previous = Some((a, b));
         std::thread::sleep(std::time::Duration::from_millis(1));
     };
@@ -212,12 +212,12 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
         differing,
         0,
         "import tail is NOT a bit-clean pass-through at default lens: {differing} bytes differ \
-         between the with-tail and stripped spines (bokeh enabled=false must alias in→out \
-         host-side; the static scene's zero velocity must collapse every motion-blur tap even \
+         between the with-tail and stripped spines (neutral camera DoF must preserve focused \
+         pixels and coverage; the static scene's zero velocity must collapse every motion-blur tap even \
          at the P4 shutter=180 default)"
     );
     eprintln!(
-        "[cinematic-tail-I1] PASS: {} bytes, {} differ (bit-clean pass-through at bokeh disabled, shutter=180, zero velocity)",
+        "[cinematic-tail-I1] PASS: {} bytes, {} differ (bit-clean pass-through at f/32, shutter=180, zero velocity)",
         a.len(),
         differing
     );

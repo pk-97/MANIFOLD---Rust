@@ -151,6 +151,7 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_select_all() {
                 return true;
             }
+            if host.select_all_automation() { return true; }
             host.select_all_clips();
             return true;
         }
@@ -219,6 +220,7 @@ impl InputHandler {
         // ── Duplicate: Cmd+D (Unity line 316) ──
         // Context-sensitive: clips take priority; layers if no clips selected.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "d") && m.is_command_only() {
+            if self.inspector_has_focus && host.handle_effect_duplicate() { return true; }
             if host.has_automation_selection() {
                 host.duplicate_selected_automation();
                 return true;
@@ -529,6 +531,11 @@ mod b14_keyboard_layer_tests {
         automation_paste_target: bool,
         automation_paste_calls: Vec<f32>,
         automation_duplicate_calls: u32,
+        effect_cut_result: bool,
+        effect_cut_calls: u32,
+        effect_duplicate_result: bool,
+        effect_duplicate_calls: u32,
+        clip_cut_calls: u32,
     }
 
     impl TimelineInputHost for MockHost {
@@ -560,10 +567,15 @@ mod b14_keyboard_layer_tests {
             false
         }
         fn handle_effect_cut(&mut self) -> bool {
-            false
+            self.effect_cut_calls += 1;
+            self.effect_cut_result
         }
         fn handle_effect_paste(&mut self) -> bool {
             false
+        }
+        fn handle_effect_duplicate(&mut self) -> bool {
+            self.effect_duplicate_calls += 1;
+            self.effect_duplicate_result
         }
         fn handle_effect_delete(&mut self) -> bool {
             false
@@ -594,7 +606,9 @@ mod b14_keyboard_layer_tests {
         }
         fn select_all_clips(&mut self) {}
         fn copy_clips(&mut self, _clip_ids: &[ClipId]) {}
-        fn cut_clips(&mut self, _clip_ids: &[ClipId], _has_region: bool) {}
+        fn cut_clips(&mut self, _clip_ids: &[ClipId], _has_region: bool) {
+            self.clip_cut_calls += 1;
+        }
         fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
             self.paste_clips_calls.push((target_beat, target_layer));
         }
@@ -953,6 +967,41 @@ mod b14_keyboard_layer_tests {
         assert_eq!(host.automation_cut_calls, 1);
         assert_eq!(host.automation_duplicate_calls, 1);
         assert!(host.paste_clips_calls.is_empty());
+    }
+
+    #[test]
+    fn inspector_duplicate_precedes_automation_and_clips() {
+        let (mut handler, mut host) = selected_host();
+        handler.inspector_has_focus = true;
+        host.effect_duplicate_result = true;
+        host.automation_selection = true;
+        assert!(handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("d")),
+            Modifiers { command: true, ..Modifiers::NONE }, &mut host,
+        ));
+        assert_eq!(host.effect_duplicate_calls, 1);
+        assert_eq!(host.automation_duplicate_calls, 0);
+    }
+
+    #[test]
+    fn inspector_cut_consumes_shortcut_without_cutting_clips() {
+        let (mut handler, mut host) = selected_host();
+        host.effect_cut_result = true;
+        handler.inspector_has_focus = true;
+        let command = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+
+        let consumed = handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("x")),
+            command,
+            &mut host,
+        );
+
+        assert!(consumed);
+        assert_eq!(host.effect_cut_calls, 1);
+        assert_eq!(host.clip_cut_calls, 0);
     }
 
     #[test]

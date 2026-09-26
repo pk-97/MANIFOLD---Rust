@@ -1,10 +1,13 @@
-//! Transactional, load-only adoption of complete legacy scene modifier graphs.
+//! Transactional, load-only adoption of complete legacy scene modifier graphs
+//! and conservative repair of known stock fragment-mask snapshots.
 //! Authored custom graphs remain intact when their ownership is ambiguous.
 
+mod fragment_masks;
 mod loop_upgrade;
 mod photoscan;
 mod sources;
 
+use fragment_masks::migrate_stock_fragment_masks;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use super::{PrimitiveRegistry, scene_modifier_expand::prepare_scene_modifiers};
@@ -22,7 +25,10 @@ pub fn migrate_legacy_scene_modifiers(
     registry: &PrimitiveRegistry,
 ) -> SceneModifierMigrationReport {
     if !def.scene_modifiers.is_empty() {
-        return SceneModifierMigrationReport::default();
+        return SceneModifierMigrationReport {
+            changed: migrate_stock_fragment_masks(def),
+            diagnostics: Vec::new(),
+        };
     }
     let result = (|| -> Result<Option<EffectGraphDef>, String> {
         // Historical fixed-row arithmetic stays inside the same private
@@ -35,6 +41,8 @@ pub fn migrate_legacy_scene_modifiers(
         let Some(candidate) = sources.or(photoscan) else {
             return Ok(None);
         };
+        let mut candidate = candidate;
+        migrate_stock_fragment_masks(&mut candidate);
         prepare_scene_modifiers(&candidate, registry).map_err(|error| error.to_string())?;
         Ok(Some(candidate))
     })();

@@ -538,6 +538,10 @@ mod tests {
             ("anisotropy_strength", 0.29),
             ("transmission", 0.38),
             ("ior", 1.33),
+            // PBR imports expose this IntRound control without enum labels.
+            // Default must restore it through the same atomic undo unit as
+            // the float material factors.
+            ("subsurface_samples", 23.0),
         ];
         let material = fixture.material.clone();
         for &(name, default_value) in &authored_defaults {
@@ -718,26 +722,75 @@ mod tests {
     }
 
     #[test]
-    fn material_inspector_selected_mr_map_rejects_without_writes() {
+    fn material_inspector_selected_mr_map_allows_factor_look_and_undo() {
         let mut fixture = physics_solids_fixture();
         add_selected_map_source(&mut fixture, "node.gltf_texture_source", "mr_map");
+        let before_graph = serde_json::to_string(
+            &fixture
+                .project
+                .preset_instance(&fixture.target)
+                .unwrap()
+                .graph,
+        )
+        .unwrap();
+        let roughness_id = fixture
+            .project
+            .preset_instance(&fixture.target)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap()
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .find(|binding| {
+                matches!(
+                    &binding.target,
+                    BindingTarget::Node { node_id, param }
+                        if node_id == &fixture.material.node && param == "roughness"
+                )
+            })
+            .unwrap()
+            .id
+            .clone();
         let before = fixture
             .project
             .preset_instance(&fixture.target)
             .unwrap()
             .get_base_param("metallic");
-        let (command, _) = build_command(&fixture, MaterialLook::Matte);
+        let before_roughness = fixture
+            .project
+            .preset_instance(&fixture.target)
+            .unwrap()
+            .get_base_param(&roughness_id);
+        let (command, changes) = build_command(&fixture, MaterialLook::Matte);
         let mut service = EditingService::new();
         service.execute(Box::new(command), &mut fixture.project);
-        assert!(service.take_rejection().is_some());
-        assert_eq!(
-            fixture
-                .project
-                .preset_instance(&fixture.target)
-                .unwrap()
-                .get_base_param("metallic"),
-            before
-        );
+        assert_eq!(service.take_rejection(), None);
+        let after = fixture.project.preset_instance(&fixture.target).unwrap();
+        assert_eq!(serde_json::to_string(&after.graph).unwrap(), before_graph);
+        for change in &changes {
+            assert_eq!(after.get_base_param(&change.param_id), change.value);
+        }
+        assert_eq!(after.get_base_param("metallic"), 0.0);
+        assert_eq!(after.get_base_param(&roughness_id), 0.8);
+
+        assert!(service.undo(&mut fixture.project));
+        let undone = fixture.project.preset_instance(&fixture.target).unwrap();
+        assert_eq!(undone.get_base_param("metallic"), before);
+        assert_eq!(undone.get_base_param(&roughness_id), before_roughness);
+        assert_eq!(serde_json::to_string(&undone.graph).unwrap(), before_graph);
+
+        assert!(service.redo(&mut fixture.project));
+        let redone = fixture.project.preset_instance(&fixture.target).unwrap();
+        for change in &changes {
+            assert_eq!(redone.get_base_param(&change.param_id), change.value);
+        }
+        assert_eq!(redone.get_base_param("metallic"), 0.0);
+        assert_eq!(redone.get_base_param(&roughness_id), 0.8);
+        assert_eq!(serde_json::to_string(&redone.graph).unwrap(), before_graph);
     }
 
     #[test]

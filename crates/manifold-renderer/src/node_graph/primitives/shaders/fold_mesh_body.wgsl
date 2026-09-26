@@ -33,5 +33,5 @@ fn body(
 
     let new_pos = mix(e_in.position, refl_pos, amount * w);
     let new_nrm = normalize(mix(e_in.normal, refl_nrm, amount * w));
-    return Element(new_pos, new_nrm, e_in.uv, e_in.tangent);
+    return Element(new_pos, new_nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

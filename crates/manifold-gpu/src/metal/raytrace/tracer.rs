@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use arrayvec::ArrayVec;
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -35,6 +36,12 @@ use crate::trace_planner::{TraceRegion, DEFAULT_TRACE_WORK_LIMITS, estimate_trac
 /// bare MSL `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32; 3]`.
 const SHADOW_RAYS_MSL: &str = include_str!("../shadow_rays.msl");
 
+/// Subsurface transport extends the shared shadow-ray helper library.  Keep
+/// `SHADOW_RAYS_MSL` as the original source constant: source-ownership tests
+/// inspect that slice directly, while the device-global library compiles the
+/// concatenated helper and transport kernels once.
+const SUBSURFACE_MSL: &str = include_str!("../subsurface.msl");
+
 // RT-T2-A: a 1x1 fully-opaque (alpha=1.0) texture — bound into every
 // `alpha_textures` slot a frame's `dispatch_shadow_rays` call doesn't fill
 // with a real base-color texture. Fully opaque so an accidental sample
@@ -57,6 +64,7 @@ fn create_dummy_alpha_texture(device: &GpuDevice) -> GpuTexture {
 }
 
 pub(crate) const SHADOW_WORKGROUP: [u32; 3] = [8, 8, 1];
+const SUBSURFACE_BINDING_COUNT: usize = 9 + MAX_RT_MATERIAL_TEXTURES;
 
 fn dispatch_groups_2d(size: [u32; 2], workgroup: [u32; 3]) -> [u32; 3] {
     [
@@ -608,6 +616,9 @@ pub struct MetalShadowRayTracer {
     /// P4a (§5.1): the always-zero 16-byte stats buffer callers bind when
     /// the scene has no emissive table — see [`Self::zero_emissive_stats`].
     zero_emissive_stats: GpuBuffer,
+    /// Cached subsurface transport pipeline compiled from the shared
+    /// shadow-ray helpers plus `subsurface.msl`.
+    subsurface_pipeline: GpuComputePipeline,
 }
 
 /// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
@@ -645,6 +656,8 @@ pub struct RtPipelines {
     /// RT input lands through this kernel on the caller's encoder — no
     /// mapped-table writes at encode time (the last-write-wins tear).
     pub copy_inline_pipeline: GpuComputePipeline,
+    /// Cached `trace_subsurface` pipeline; cloned into each tracer instance.
+    pub subsurface_pipeline: GpuComputePipeline,
 }
 
 /// P4a (§5.1): the emissive-preparation pipeline set — device-global code
@@ -672,7 +685,8 @@ impl RtPipelines {
         // the WGSL path's pinned older version — matches the prototype's
         // `Gpu::compile_library`.
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let src_ns = NSString::from_str(SHADOW_RAYS_MSL);
+        let source = format!("{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}");
+        let src_ns = NSString::from_str(&source);
         let library = device
             .raw_device()
             .newLibraryWithSource_options_error(&src_ns, Some(&opts))
@@ -735,6 +749,32 @@ impl RtPipelines {
             pipeline.label = pass.pipeline_label(translucent).into();
             pipeline
         }));
+
+        // Subsurface transport shares the helper functions and acceleration
+        // bindings from the shadow-ray library, but has its own fixed ABI.
+        // Keep this PSO in the device-global set so no frame can compile a
+        // kernel while dispatching.
+        let mut subsurface_slots: Vec<(u32, SlotKind)> = vec![
+            (0, SlotKind::Buffer), // accel
+            (1, SlotKind::Buffer), // params
+            (2, SlotKind::Buffer), // normal sources
+            (3, SlotKind::Buffer), // scattering materials
+            (4, SlotKind::Buffer), // lights
+            (5, SlotKind::Buffer), // canonical GI materials
+            (6, SlotKind::Buffer), // tile region inline bytes
+            (0, SlotKind::Texture), // camera depth
+            (1, SlotKind::Texture), // environment
+            (2, SlotKind::Texture), // output
+        ];
+        subsurface_slots.extend(
+            (4..4 + MAX_RT_MATERIAL_TEXTURES as u32).map(|binding| (binding, SlotKind::Texture)),
+        );
+        let subsurface_pipeline = compile_pipeline(
+            device,
+            &library,
+            "trace_subsurface",
+            identity_slot_map(&subsurface_slots),
+        );
         let upsample_pipeline = compile_pipeline(
             device,
             &library,
@@ -1015,6 +1055,7 @@ impl RtPipelines {
             descriptor_build_pipeline,
             emissive,
             copy_inline_pipeline,
+            subsurface_pipeline,
         }
     }
 }
@@ -1065,6 +1106,7 @@ impl MetalShadowRayTracer {
             debug_ray_query_pipeline: p.debug_ray_query_pipeline.clone(),
             emissive: p.emissive.clone(),
             zero_emissive_stats: device.create_buffer_shared(16),
+            subsurface_pipeline: p.subsurface_pipeline.clone(),
             dummy_alpha_tex,
             rt_diagnostics,
             tlas_probe: std::sync::OnceLock::new(),
@@ -1083,6 +1125,121 @@ impl MetalShadowRayTracer {
     /// firefly floor reduces to its fixed minimum).
     pub fn zero_emissive_stats(&self) -> &GpuBuffer {
         &self.zero_emissive_stats
+    }
+
+    /// Encode the cached geometry-aware subsurface transport pass. The
+    /// material and light tables are caller-owned GPU buffers; this method
+    /// snapshots only the small parameter and bounded tile payloads as Metal
+    /// inline bytes, so it introduces no per-frame staging allocation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch_subsurface(
+        &self,
+        encoder: &mut GpuEncoder,
+        device: &GpuDevice,
+        params: &SubsurfaceParams,
+        accel: &RtAccel,
+        normal_sources: &GpuBuffer,
+        materials: &GpuBuffer,
+        gi_materials: &GpuBuffer,
+        lights: &GpuBuffer,
+        current_objects: &[RtObjectGeometry<'_>],
+        material_textures: &[&GpuTexture],
+        depth: &GpuTexture,
+        environment: &GpuTexture,
+        output: &GpuTexture,
+    ) {
+        for object in current_objects {
+            validate_instance_source_address(
+                object.instances_addr,
+                object.instances_buffer.map(GpuBuffer::gpu_address),
+            )
+            .unwrap_or_else(|message| panic!("{message}"));
+        }
+
+        let mut bindings: ArrayVec<GpuBinding<'_>, SUBSURFACE_BINDING_COUNT> = ArrayVec::new();
+        bindings.push(GpuBinding::Bytes {
+            binding: 1,
+            data: subsurface_params_bytes(params),
+        });
+        bindings.push(GpuBinding::Buffer {
+            binding: 2,
+            buffer: normal_sources,
+            offset: 0,
+        });
+        bindings.push(GpuBinding::Buffer {
+            binding: 3,
+            buffer: materials,
+            offset: 0,
+        });
+        bindings.push(GpuBinding::Buffer {
+            binding: 4,
+            buffer: lights,
+            offset: 0,
+        });
+        bindings.push(GpuBinding::Buffer {
+            binding: 5,
+            buffer: gi_materials,
+            offset: 0,
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 0,
+            texture: depth,
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 1,
+            texture: environment,
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: 2,
+            texture: output,
+        });
+        for i in 0..MAX_RT_MATERIAL_TEXTURES {
+            let texture = material_textures
+                .get(i)
+                .copied()
+                .unwrap_or(&self.dummy_alpha_tex);
+            bindings.push(GpuBinding::Texture {
+                binding: 4 + i as u32,
+                texture,
+            });
+        }
+
+        // Keep the full-resolution pass bounded by the same deterministic
+        // 8x8 planner as the other ray-query dispatches. The tile is the
+        // shader's binding(6) inline snapshot; no host allocation or commit
+        // is needed between regions because the caller owns the encoder.
+        let mut regions = plan_trace_regions(
+            params.render_size[0],
+            params.render_size[1],
+            SHADOW_WORKGROUP[0],
+            SHADOW_WORKGROUP[1],
+            u64::from(params.query_units_per_pixel.max(1)),
+            DEFAULT_TRACE_WORK_LIMITS,
+        )
+        .expect("validated subsurface dimensions must produce a tile plan")
+        .peekable();
+        while let Some(region) = regions.next() {
+            encoder.dispatch_compute_with_accel(
+                &self.subsurface_pipeline,
+                0,
+                accel,
+                &bindings,
+                current_objects
+                    .iter()
+                    .filter(|object| object.instances_addr != 0)
+                    .map(|object| {
+                        object
+                            .instances_buffer
+                            .expect("validated RT wired instance source buffer")
+                    }),
+                Some((6, trace_region_bytes(&region))),
+                dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
+                "trace_subsurface",
+            );
+            if regions.peek().is_some() {
+                encoder.commit_and_continue(device);
+            }
+        }
     }
 
     /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` section 8
@@ -2387,6 +2544,10 @@ fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
     }
 }
 
+fn subsurface_params_bytes(params: &SubsurfaceParams) -> &[u8] {
+    bytemuck::bytes_of(params)
+}
+
 fn accumulate_params_bytes(params: &AccumulateParams) -> &[u8] {
     // SAFETY: `AccumulateParams` is `#[repr(C)]`, all-POD (u32/f32 fields
     // only), no padding, no interior pointers — same discipline as
@@ -2765,6 +2926,7 @@ mod tests {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+            extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -2773,6 +2935,13 @@ mod tests {
             instance_slots: 0,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
+            material_attributes: Default::default(),
         };
         assert!(!blas_geometry_nonopaque(&base), "plain object keeps the hardware fast path");
         assert!(blas_geometry_nonopaque(&RtObjectGeometry { alpha_mask: true, ..base }));
@@ -2803,10 +2972,11 @@ mod tests {
             "the three corner fetches inside rt_triangle_corners, nowhere else");
         let corners = msl_block(SHADOW_RAYS_MSL, "static uint3 rt_triangle_corners(");
         assert_eq!(corners.matches("rt_index_at(").count(), 3);
-        for consumer in ["static float3 fetch_interpolated_normal(", "static float2 fetch_interpolated_uv(", "static float3 perturb_normal_with_map("] {
+        for consumer in ["static float3 fetch_interpolated_normal(", "static float2 fetch_interpolated_uv(", "static bool tangent_frame_at_hit("] {
             assert!(msl_block(SHADOW_RAYS_MSL, consumer).contains("rt_triangle_corners("),
                 "{consumer} must resolve corners through the shared helper");
         }
+        assert!(msl_block(SHADOW_RAYS_MSL, "static float3 perturb_normal_with_map(").contains("tangent_frame_at_hit("));
         // Emissive generation uses the same index helper (enumerate + gather).
         let enumerate = msl_block(SHADOW_RAYS_MSL, "kernel void emissive_enumerate(");
         assert_eq!(enumerate.matches("rt_index_at(").count(), 3);
@@ -2819,7 +2989,14 @@ mod tests {
         // Accepted hits multiply evaluated radiance by brightness once —
         // GI gather and reflection hit shading.
         assert!(trace.contains("gi += throughput * (bounce_emissive + bounce_term) * gi_brightness;"));
-        assert!(trace.contains("traced = (hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term) * refl_hit_brightness;"));
+        let gi = msl_block(trace, "if (do_diffuse && p.gi_spp");
+        assert!(gi.contains("if (slot_materials[oi].kind == 0.0f)"));
+        assert!(gi.contains("float3 unlit_emission = (sampler_active && bounce == 0u)"));
+        assert!(gi.contains("gi += throughput * (hit_albedo + unlit_emission) * gi_brightness;"));
+        assert!(gi.contains("float hit_kd = (1.0f - max(hit_f.r, max(hit_f.g, hit_f.b))) * (1.0f - hit_metallic);"));
+        assert!(gi.contains("hit_albedo * hit_kd, slot_materials[oi].translucency"));
+        assert!(gi.contains("throughput *= hit_albedo * hit_kd;"));
+        assert!(trace.contains("traced = (hit_emissive + hit_kd * hit_albedo * hit_diffuse_env + hit_f * hit_specular_env + sun_bounce_term) * refl_hit_brightness;"));
     }
 
     #[test]

@@ -2165,6 +2165,53 @@ fn dropping_a_wire_on_empty_canvas_fires_error_shake() {
     assert!(canvas.connect_pop.progress().is_none());
 }
 
+#[test]
+fn finish_pointer_capture_discards_unfinished_wire_and_marquee() {
+    let viewport = Rect::new(0.0, 0.0, 1200.0, 800.0);
+    let mut canvas = GraphCanvas::new();
+
+    canvas.drag.start(
+        CanvasDrag::WireFrom { from_node: 1, from_port: "out".into() },
+        crate::node::Vec2::new(20.0, 20.0),
+    );
+    assert!(canvas.finish_pointer_capture(viewport));
+    assert!(!canvas.drag.is_active());
+    assert!(canvas.drain_edits().is_empty(), "unfinished wire emits no command");
+
+    canvas.drag.start(CanvasDrag::Marquee, crate::node::Vec2::new(30.0, 30.0));
+    assert!(canvas.finish_pointer_capture(viewport));
+    assert!(!canvas.drag.is_active());
+    assert!(canvas.drain_edits().is_empty(), "unfinished marquee emits no command");
+    assert!(!canvas.finish_pointer_capture(viewport), "idle canvas has no capture");
+}
+
+#[test]
+fn finish_pointer_capture_uses_release_path_for_live_scrub() {
+    let (mut canvas, viewport) = expanded_canvas(float_param("amount", 0.5));
+    canvas.drag.start(
+        CanvasDrag::ParamScrub {
+            node_id: 1,
+            param_name: "amount".to_string(),
+            range: (0.0, 1.0),
+            start_value: 0.5,
+            is_int: false,
+            outer_param_id: None,
+        },
+        crate::node::Vec2::new(10.0, 10.0),
+    );
+    canvas.cursor = (30.0, 10.0);
+
+    assert!(canvas.finish_pointer_capture(viewport));
+    assert!(!canvas.drag.is_active());
+    let edits = canvas.drain_edits();
+    assert_eq!(edits.len(), 1, "live scrub emits one terminal action");
+    assert!(matches!(
+        edits.as_slice(),
+        [GraphEditCommand::EndGraphNodeParamScrub { node_id: 1, param_name }]
+            if param_name == "amount"
+    ));
+}
+
 // ── D17 "wire→port magnetize" + "flow pulse" ────────────────────────────
 
 #[test]

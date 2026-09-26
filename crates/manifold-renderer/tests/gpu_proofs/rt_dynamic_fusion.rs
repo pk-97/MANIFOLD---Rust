@@ -53,9 +53,9 @@ use manifold_renderer::node_graph::{
 use crate::harness;
 
 /// 3×3 grid in the XZ plane (y=0), smooth +Y normals, distinct UVs — the
-/// layout `render_scene`'s MeshVertex carries (pos 0, normal 4, uv 8,
-/// tangent 12 in f32 words, stride 64 bytes).
-const VERTEX_WORDS: usize = 16;
+/// layout `render_scene`'s MeshVertex carries (pos 0, normal 4, uv0 8,
+/// uv1 10, tangent 12, color 16 in f32 words, stride 80 bytes).
+const VERTEX_WORDS: usize = 20;
 const VERTEX_COUNT: usize = 9;
 
 fn input_vertices() -> Vec<[f32; VERTEX_WORDS]> {
@@ -70,8 +70,11 @@ fn input_vertices() -> Vec<[f32; VERTEX_WORDS]> {
             v[6] = 0.0;
             v[8] = i as f32 / 2.0;
             v[9] = j as f32 / 2.0;
+            v[10] = v[8];
+            v[11] = v[9];
             v[12] = 1.0;
             v[15] = -1.0;
+            v[16..20].copy_from_slice(&[1.0; 4]);
             verts.push(v);
         }
     }

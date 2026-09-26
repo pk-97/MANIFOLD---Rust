@@ -1,7 +1,7 @@
 //! `Light` — port-data type carried on [`PortType::Light`](crate::node_graph::ports::PortType::Light) wires.
 //!
-//! One `Light` source primitive (`node.light`, with `mode` enum picking Sun
-//! or Point) emits a fully-populated struct each frame; downstream consumers
+//! One `Light` source primitive (`node.light`, with `mode` enum picking Sun,
+//! Point, or Spot) emits a fully-populated struct each frame; downstream consumers
 //! — shading atoms ([`lambert_directional`], [`blinn_specular`], …)
 //! and shadow-aware mesh renderers — take it as a single `light: Light`
 //! input instead of scattered `light_x/y/z/intensity` scalars.
@@ -12,7 +12,7 @@
 //! drains `pending_light_writes` after each node's `evaluate` returns,
 //! parallel to the scalar and camera drains.
 //!
-//! Two modes, distinguished by [`LightMode`]:
+//! Three modes, distinguished by [`LightMode`]:
 //!
 //! - **Sun** — parallel rays from a directional source. `pos` anchors the
 //!   shadow ortho frustum (the shadow pass needs a camera origin); the
@@ -20,9 +20,8 @@
 //!   ortho half-extent (default 30.0).
 //! - **Point** — omnidirectional source at `pos`. `aim - pos` gives the
 //!   shadow camera's forward direction (single-cubemap-face approximation
-//!   for v1; full cubemap shadows are a v2 ask). `range` is the
-//!   attenuation half-distance: `intensity = 1 / (1 + d²/range²)` →
-//!   intensity is 50% at `d = range`.
+//!   for v1; full cubemap shadows are a v2 ask).
+//! - **Spot** — point source with a finite cone from `pos` along `dir`.
 //!
 //! Colour is stored premultiplied with intensity (rgb × intensity) so the
 //! consumer-side shading math is one multiply lighter. Outer-card param
@@ -35,7 +34,7 @@
 
 use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
 
-/// Discriminator for the light's geometric kind. Both modes share the same
+/// Discriminator for the light's geometric kind. All modes share the same
 /// `pos` / `aim` / `colour` / `range` / shadow fields on [`Light`] — only
 /// the interpretation of `pos` and `range` differs, and the consumer-side
 /// math dispatches on this enum.
@@ -46,9 +45,18 @@ pub enum LightMode {
     /// ortho half-extent (how big an area is lit).
     Sun,
     /// Omnidirectional point light. `pos` is the light source; `aim` gives
-    /// the shadow camera's forward direction; `range` is the attenuation
-    /// half-distance.
+    /// the shadow camera's forward direction.
     Point,
+    /// Point source restricted to a cone around `dir`.
+    Spot,
+}
+
+/// Point/spot attenuation policy. `Legacy` preserves the saved-project
+/// half-distance curve; `InverseSquare` is the glTF physical falloff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LightFalloff {
+    Legacy,
+    InverseSquare,
 }
 
 /// Stepped PCF kernel size — the user-facing softness knob on `node.light`.
@@ -118,6 +126,8 @@ impl ShadowSoftness {
 pub struct Light {
     /// Sun vs Point dispatch.
     pub mode: LightMode,
+    /// Point/spot attenuation policy.
+    pub falloff: LightFalloff,
     /// World-space position. Sun: shadow-frustum anchor. Point: light source.
     pub pos: [f32; 3],
     /// World-space point the light aims at. Direction derived as
@@ -131,9 +141,12 @@ pub struct Light {
     /// `color.rgb` gets the final emission directly — no second intensity
     /// multiply needed. `color.a` is reserved (currently 1.0).
     pub color: [f32; 4],
-    /// Sun: shadow ortho half-extent (world units). Point: attenuation
-    /// half-distance (world units, `intensity = 1 / (1 + d²/range²)`).
+    /// Sun: shadow ortho half-extent. Point/spot: attenuation cutoff/range.
     pub range: f32,
+    /// Spot inner cone angle in radians.
+    pub inner_cone_angle: f32,
+    /// Spot outer cone angle in radians.
+    pub outer_cone_angle: f32,
     /// Whether this light casts shadows. When `false`, the renderer skips
     /// the depth pass and downstream PCF math entirely — pure lighting.
     pub cast_shadows: bool,
@@ -157,11 +170,14 @@ impl Light {
         let dir = normalize3(sub3(aim, pos));
         Self {
             mode: LightMode::Sun,
+            falloff: LightFalloff::Legacy,
             pos,
             aim,
             dir,
             color: [1.0, 1.0, 1.0, 1.0],
             range: 30.0,
+            inner_cone_angle: 0.0,
+            outer_cone_angle: 0.0,
             cast_shadows: false,
             shadow_softness: ShadowSoftness::Soft,
             shadow_bias: 0.003,
@@ -187,6 +203,7 @@ impl Light {
         let dir = normalize3(sub3(aim, pos));
         Self {
             mode: LightMode::Sun,
+            falloff: LightFalloff::Legacy,
             pos,
             aim,
             dir,
@@ -197,6 +214,8 @@ impl Light {
                 1.0,
             ],
             range,
+            inner_cone_angle: 0.0,
+            outer_cone_angle: 0.0,
             cast_shadows,
             shadow_softness,
             shadow_bias,
@@ -222,6 +241,7 @@ impl Light {
         let dir = normalize3(sub3(aim, pos));
         Self {
             mode: LightMode::Point,
+            falloff: LightFalloff::Legacy,
             pos,
             aim,
             dir,
@@ -232,11 +252,78 @@ impl Light {
                 1.0,
             ],
             range,
+            inner_cone_angle: 0.0,
+            outer_cone_angle: 0.0,
             cast_shadows,
             shadow_softness,
             shadow_bias,
             shadow_resolution,
         }
+    }
+
+    /// Build a physical spot light. Angles are in radians and are clamped to
+    /// a finite, ordered cone at construction time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spot(
+        pos: [f32; 3],
+        aim: [f32; 3],
+        color_rgb: [f32; 3],
+        intensity: f32,
+        range: f32,
+        inner_cone_angle: f32,
+        outer_cone_angle: f32,
+        cast_shadows: bool,
+        shadow_softness: ShadowSoftness,
+        shadow_bias: f32,
+        shadow_resolution: u32,
+    ) -> Self {
+        let dir = normalize3(sub3(aim, pos));
+        let outer = outer_cone_angle.clamp(0.0, std::f32::consts::FRAC_PI_2);
+        let inner = inner_cone_angle.clamp(0.0, outer);
+        Self {
+            mode: LightMode::Spot,
+            falloff: LightFalloff::InverseSquare,
+            pos,
+            aim,
+            dir,
+            color: [
+                color_rgb[0] * intensity,
+                color_rgb[1] * intensity,
+                color_rgb[2] * intensity,
+                1.0,
+            ],
+            range: range.max(0.0),
+            inner_cone_angle: inner,
+            outer_cone_angle: outer,
+            cast_shadows,
+            shadow_softness,
+            shadow_bias,
+            shadow_resolution,
+        }
+    }
+
+    /// Pack this light into the four-vec4 storage ABI shared by raster
+    /// lighting and shafts. `slot` is the compact caster-table index, or -1.
+    pub fn packed(&self, slot: f32) -> [[f32; 4]; 4] {
+        let (mode, pos_or_dir) = match self.mode {
+            LightMode::Sun => (0.0, [-self.dir[0], -self.dir[1], -self.dir[2], 0.0]),
+            LightMode::Point => (1.0, [self.pos[0], self.pos[1], self.pos[2], 1.0]),
+            LightMode::Spot => (2.0, [self.pos[0], self.pos[1], self.pos[2], 2.0]),
+        };
+        [
+            [pos_or_dir[0], pos_or_dir[1], pos_or_dir[2], mode],
+            [self.color[0], self.color[1], self.color[2], slot],
+            [
+                self.range,
+                match self.falloff {
+                    LightFalloff::Legacy => 0.0,
+                    LightFalloff::InverseSquare => 1.0,
+                },
+                self.inner_cone_angle.cos(),
+                self.outer_cone_angle.cos(),
+            ],
+            [self.dir[0], self.dir[1], self.dir[2], 0.0],
+        ]
     }
 
     /// Unit vector FROM `world_pos` TOWARD the light — the canonical L
@@ -248,30 +335,51 @@ impl Light {
     pub fn light_dir_at(&self, world_pos: [f32; 3]) -> [f32; 3] {
         match self.mode {
             LightMode::Sun => [-self.dir[0], -self.dir[1], -self.dir[2]],
-            LightMode::Point => normalize3(sub3(self.pos, world_pos)),
+            LightMode::Point | LightMode::Spot => normalize3(sub3(self.pos, world_pos)),
         }
     }
 
     /// Per-point attenuation factor in [0, 1].
     ///
     /// Sun: always 1.0 (parallel rays don't fall off).
-    /// Point: `1 / (1 + d²/range²)`. Matches the well-behaved
-    /// (non-divergent) inverse-square variant used by the legacy
-    /// DigitalPlants shader and the mesh renderers' PBR path.
+    /// Point/Spot: the selected legacy or physical falloff, multiplied by
+    /// the spot cone factor for Spot.
     pub fn attenuation_at(&self, world_pos: [f32; 3]) -> f32 {
         match self.mode {
             LightMode::Sun => 1.0,
-            LightMode::Point => {
+            LightMode::Point | LightMode::Spot => {
                 let d = sub3(self.pos, world_pos);
                 let d_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-                let r_sq = self.range * self.range;
-                if r_sq < 1e-10 {
-                    0.0
-                } else {
-                    1.0 / (1.0 + d_sq / r_sq)
-                }
+                let distance = d_sq.sqrt();
+                let base = match self.falloff {
+                    LightFalloff::Legacy => {
+                        let r_sq = self.range * self.range;
+                        if r_sq < 1e-10 { 0.0 } else { 1.0 / (1.0 + d_sq / r_sq) }
+                    }
+                    LightFalloff::InverseSquare => {
+                        if self.range > 0.0 {
+                            (1.0 - (distance / self.range).powi(4)).max(0.0)
+                                / d_sq.max(1e-6)
+                        } else {
+                            1.0 / d_sq.max(1e-6)
+                        }
+                    }
+                };
+                base * self.spot_factor_at(world_pos)
             }
         }
+    }
+
+    /// Smooth squared cone factor for Spot lights; other modes are unity.
+    pub fn spot_factor_at(&self, world_pos: [f32; 3]) -> f32 {
+        if self.mode != LightMode::Spot {
+            return 1.0;
+        }
+        let l = self.light_dir_at(world_pos);
+        let c = self.dir[0] * -l[0] + self.dir[1] * -l[1] + self.dir[2] * -l[2];
+        let inner = self.inner_cone_angle.cos();
+        let outer = self.outer_cone_angle.cos();
+        ((c - outer) / (inner - outer).max(0.001)).clamp(0.0, 1.0).powi(2)
     }
 
     /// Light-space view matrix for the shadow pass. Built via right-handed
@@ -317,10 +425,20 @@ impl Light {
                     far,
                 )
             }
-            LightMode::Point => {
-                let near = (self.range * 0.05).max(0.1);
-                let far = self.range * 4.0;
-                perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far)
+            LightMode::Point | LightMode::Spot => {
+                let physical_infinite = self.falloff == LightFalloff::InverseSquare && self.range <= 0.0;
+                let extent = if physical_infinite {
+                    dist3(self.pos, self.aim).max(1.0)
+                } else {
+                    self.range.max(0.01)
+                };
+                let near = (extent * 0.05).clamp(0.0001, extent * 0.5);
+                let far = if physical_infinite { extent } else { extent * 4.0 };
+                let fov = match self.mode {
+                    LightMode::Spot => (self.outer_cone_angle * 2.0).clamp(0.01, std::f32::consts::PI - 0.0001),
+                    _ => std::f32::consts::FRAC_PI_2,
+                };
+                perspective_rh(fov, 1.0, near, far)
             }
         }
     }
@@ -507,6 +625,81 @@ mod tests {
         // At 2× range it should be 1/(1+4) = 0.2.
         let at_double = l.attenuation_at([20.0, 0.0, 0.0]);
         assert!(approx_eq(at_double, 0.2, 1e-5));
+    }
+
+    #[test]
+    fn inverse_square_range_and_infinite_cutoff_follow_physical_curve() {
+        let mut bounded = Light::point(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 1.0, 1.0],
+            1.0,
+            4.0,
+            false,
+            ShadowSoftness::Soft,
+            0.003,
+            2048,
+        );
+        bounded.falloff = LightFalloff::InverseSquare;
+        // max(1 - (d/r)^4, 0) / d².
+        assert!(approx_eq(bounded.attenuation_at([1.0, 0.0, 0.0]), 255.0 / 256.0, 1e-6));
+        assert!(approx_eq(bounded.attenuation_at([2.0, 0.0, 0.0]), 15.0 / 64.0, 1e-6));
+        assert_eq!(bounded.attenuation_at([4.0, 0.0, 0.0]), 0.0);
+
+        let mut infinite = bounded;
+        infinite.range = 0.0;
+        assert!(approx_eq(infinite.attenuation_at([2.0, 0.0, 0.0]), 0.25, 1e-6));
+    }
+
+    #[test]
+    fn spot_cone_has_center_edge_and_outside_regions() {
+        let light = Light::spot(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 1.0, 1.0],
+            1.0,
+            10.0,
+            0.2,
+            0.4,
+            false,
+            ShadowSoftness::Soft,
+            0.003,
+            2048,
+        );
+        assert!(approx_eq(light.spot_factor_at([0.0, 0.0, -1.0]), 1.0, 1e-5));
+        let outer = light.outer_cone_angle;
+        let edge = [outer.sin(), 0.0, -outer.cos()];
+        assert!(light.spot_factor_at(edge) < 1e-5);
+        let outside = [(outer + 0.1).sin(), 0.0, -(outer + 0.1).cos()];
+        assert_eq!(light.spot_factor_at(outside), 0.0);
+    }
+
+    #[test]
+    fn packed_light_uses_four_vec4s_and_preserves_spot_metadata() {
+        let light = Light::spot(
+            [1.0, 2.0, 3.0],
+            [1.0, 2.0, 1.0],
+            [0.2, 0.3, 0.4],
+            2.0,
+            6.0,
+            0.1,
+            0.5,
+            false,
+            ShadowSoftness::Hard,
+            0.001,
+            512,
+        );
+        let packed = light.packed(3.0);
+        assert_eq!(packed.len(), 4);
+        assert_eq!(packed[0][3], 2.0);
+        assert!(approx_vec3([packed[0][0], packed[0][1], packed[0][2]], light.pos, 1e-6));
+        assert!(approx_vec3([packed[1][0], packed[1][1], packed[1][2]], [0.4, 0.6, 0.8], 1e-6));
+        assert_eq!(packed[1][3], 3.0);
+        assert_eq!(packed[2][0], 6.0);
+        assert_eq!(packed[2][1], 1.0);
+        assert!(approx_eq(packed[2][2], 0.1f32.cos(), 1e-6));
+        assert!(approx_eq(packed[2][3], 0.5f32.cos(), 1e-6));
+        assert!(approx_vec3([packed[3][0], packed[3][1], packed[3][2]], light.dir, 1e-6));
     }
 
     #[test]

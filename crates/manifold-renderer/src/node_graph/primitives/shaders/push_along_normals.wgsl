@@ -1,5 +1,5 @@
 // node.push_along_normals — HAND parity oracle for push_along_normals_body.wgsl.
-// pos += normal * amount * w * f; normal and uv pass through. Uniform layout and
+// pos += normal * amount * w * f; normal, UV0, and UV1 pass through. Uniform layout and
 // bindings match the generated standalone kernel (params amount/field_bias, then
 // the derived weights_len, the optional-texture use_field flag, dispatch_count,
 // pad) so the gpu_tests parity oracle packs ONE uniform for both kernels.
@@ -25,6 +25,7 @@ struct MeshVertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -52,6 +53,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx].normal = v.normal;
     dst[idx]._pad1 = 0.0;
     dst[idx].uv = v.uv;
-    dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+    dst[idx]._pad2 = v._pad2;
     dst[idx].tangent = v.tangent;
+    dst[idx].color = v.color;
 }

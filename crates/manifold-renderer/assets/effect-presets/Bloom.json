@@ -78,45 +78,20 @@
     },
     {
       "id": 3,
-      "nodeId": "blur_h",
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_h",
+      "nodeId": "blur",
+      "typeId": "node.blur",
+      "handle": "blur",
       "params": {
-        "axis": {
+        "mode": {
           "type": "Enum",
-          "value": 0
+          "value": 3
         },
         "radius": {
           "type": "Float",
           "value": 8.0
-        },
-        "radius_mode": {
-          "type": "Enum",
-          "value": 2
         }
       },
-      "title": "Blur Horizontal"
-    },
-    {
-      "id": 6,
-      "nodeId": "blur_v",
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_v",
-      "params": {
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "radius": {
-          "type": "Float",
-          "value": 8.0
-        },
-        "radius_mode": {
-          "type": "Enum",
-          "value": 2
-        }
-      },
-      "title": "Blur Vertical"
+      "title": "Smooth Blur"
     },
     {
       "id": 4,
@@ -156,13 +131,7 @@
       "fromNode": 2,
       "fromPort": "out",
       "toNode": 3,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "out",
-      "toNode": 6,
-      "toPort": "in"
+      "toPort": "source"
     },
     {
       "fromNode": 0,
@@ -171,7 +140,7 @@
       "toPort": "a"
     },
     {
-      "fromNode": 6,
+      "fromNode": 3,
       "fromPort": "out",
       "toNode": 4,
       "toPort": "b"

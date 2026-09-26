@@ -79,7 +79,7 @@ macro_rules! well_known_channels {
                 // cleaner error than a downstream "undefined symbol".
                 for required in [
                     "x", "y", "z", "w",
-                    "position", "velocity", "normal", "uv",
+                    "position", "velocity", "normal", "uv", "uv1",
                     "width", "height",
                     "r", "g", "b", "a", "color",
                     "a_index", "b_index",
@@ -115,6 +115,7 @@ pub mod well_known {
         NORMAL   = "normal";
         TANGENT  = "tangent";
         UV       = "uv";
+        UV1      = "uv1";
         XY       = "xy";
 
         // ─── Rectangle / box geometry ───────────────────────────────

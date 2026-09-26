@@ -611,6 +611,9 @@ impl Runner {
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
         if self.record_executed_commands(data) {
+            let mut active_layer = data.active.and_then(|index| data.project.timeline.layers.get(index)).map(|layer| layer.layer_id.clone());
+            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut active_layer);
+            data.active = active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
             self.needs_structural_sync = true;
             self.advance_frame(ui, data, zoom_ppb, render, false);
         }
@@ -640,9 +643,27 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
+                ContentCommand::ObjectModifier(action) => {
+                    match crate::object_modifier_transfer::build_action(&data.project, action) {
+                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
                 other => other,
             };
             match cmd {
+                ContentCommand::ExecuteSelecting(command, request) => {
+                    let pending = request.capture(&data.project);
+                    let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                    changed |= applied;
+                    if let Some(message) = self.undo.take_rejection() {
+                        let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                    } else if applied && let Some(selection) = pending.resolve(&data.project) {
+                        let sequence = data.content.edit_selection_update.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
+                        data.content.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
+                    }
+                }
                 ContentCommand::SceneModifier(action) => {
                     let error = match crate::scene_modifier_edit::build_action(&data.project, action) {
                         Ok(command) => {
@@ -740,6 +761,18 @@ impl Runner {
         let mut scrolled_in_place = false;
 
         match gesture {
+            Gesture::Press { modifiers } => {
+                self.modifiers = *modifiers;
+                ui.input.set_modifiers(*modifiers);
+                self.last_gesture_points.push(center);
+                ui.pointer_event(center, PointerAction::Down, self.clock);
+                self.drain_and_dispatch(ui, data);
+            }
+            Gesture::Release => {
+                self.last_gesture_points.push(center);
+                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.drain_and_dispatch(ui, data);
+            }
             Gesture::Click { modifiers } => {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
@@ -993,6 +1026,9 @@ impl Runner {
             return n_actions;
         }
         self.overlay.set_modifiers(self.modifiers);
+        if viewport_events.iter().any(|event| matches!(event, UIEvent::PointerDown { .. })) {
+            crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
+        }
         // Local, call-scoped sinks for the two `AppEditingHost` outputs the
         // P2 seam doesn't consume by name (see the module doc): a completed
         // structural drag folds into `needs_structural_sync` below (the seam
@@ -1014,7 +1050,24 @@ impl Runner {
             &mut self.pre_drag_commands,
         );
         for event in &viewport_events {
+            if let UIEvent::PointerDown { modifiers, .. }
+                | UIEvent::Click { modifiers, .. }
+                | UIEvent::DoubleClick { modifiers, .. }
+                | UIEvent::RightClick { modifiers, .. }
+                | UIEvent::DragBegin { modifiers, .. }
+                | UIEvent::Drag { modifiers, .. } = event
+            {
+                self.overlay.set_modifiers(*modifiers);
+            }
             match event {
+                UIEvent::PointerDown { pos, .. } => {
+                    self.overlay.on_pointer_down(
+                        *pos, &mut host, &mut data.selection, &ui.viewport,
+                    );
+                }
+                UIEvent::PointerUp { .. } => {
+                    self.overlay.on_pointer_up(&mut host);
+                }
                 UIEvent::Click { pos, modifiers, .. } => {
                     self.overlay.on_pointer_click(
                         *pos,
@@ -1051,13 +1104,19 @@ impl Runner {
                         &ui.viewport,
                     );
                 }
-                UIEvent::DragBegin { origin, .. } => {
+                UIEvent::DragBegin { origin, pos, .. } => {
                     self.overlay.on_begin_drag(*origin, &mut host, &mut data.selection, &ui.viewport);
+                    if self.overlay.is_automation_drag() {
+                        self.overlay.on_drag(*pos, &mut host, &mut data.selection, &mut ui.viewport);
+                    }
                 }
                 UIEvent::Drag { pos, .. } => {
                     self.overlay.on_drag(*pos, &mut host, &mut data.selection, &mut ui.viewport);
                 }
-                UIEvent::DragEnd { .. } => {
+                UIEvent::DragEnd { pos, .. } => {
+                    if self.overlay.is_automation_drag() {
+                        self.overlay.on_drag(*pos, &mut host, &mut data.selection, &mut ui.viewport);
+                    }
                     self.overlay.on_end_drag(&mut host);
                 }
                 _ => {}
@@ -1221,11 +1280,12 @@ impl Runner {
     fn advance_frame(
         &mut self,
         ui: &mut UIRoot,
-        data: &SceneData,
+        data: &mut SceneData,
         zoom_ppb: f32,
         render: &mut RenderState,
         scrolled_in_place: bool,
     ) {
+        crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
         if self.needs_structural_sync {
             super::sync_data(ui, data, zoom_ppb);
         } else {

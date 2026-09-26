@@ -1,14 +1,13 @@
 //! Static pixel-level drawing primitives for painting waveform data into
 //! per-lane pixel buffers.
 //!
-//! Replaces Unity's tile-based `WaveformLevel.GetOrBuildTileTexture()` with
-//! direct pixel painting. The spectral coloring and amplitude data come from
-//! `WaveformRenderer`; this module handles the final rasterization.
+//! Draws the cached low/mid/high energy envelopes inside the original signal's
+//! peak silhouette. All analysis happens in `WaveformRenderer` at load time.
 //!
 //! Follows the same patterns as `bitmap_painter.rs` — operates on
 //! `&mut [Color32]` arrays, no allocations, bounds-checked.
 
-use crate::bitmap_painter::{alpha_blend, fill_rect};
+use crate::bitmap_painter::fill_rect;
 use crate::color;
 use crate::node::Color32;
 use crate::waveform_renderer::WaveformLevel;
@@ -62,59 +61,108 @@ pub fn draw_waveform(
         return;
     }
 
-    let texel_count = level.texel_count() as f32;
-    let src_span = (src_end - src_start).max(0.0);
-    let height_padding = 10.0; // Unity: HeightPadding = 10f (line 34)
-    let draw_height = (lane_height as f32 - height_padding).max(1.0);
-    let mid = y_offset + lane_height / 2;
+    let src_span = (src_end as f64 - src_start as f64).max(0.0);
+    let mid = y_offset as f32 + lane_height as f32 * 0.5;
+    // Proportional padding stays consistent at Retina scale and in short clips.
+    let max_half_height = lane_height as f32 * 0.43;
 
-    // Draw center line (Unity: GetOrBuildTileTexture line 456)
-    let center_color = color::WAVEFORM_CENTER_LINE;
     for px in x_start.max(0)..x_end.min(buf_w as i32) {
-        let idx = mid as usize * buf_w + px as usize;
-        if idx < buffer.len() {
-            buffer[idx] = alpha_blend(buffer[idx], center_color);
-        }
-    }
-
-    // Draw waveform bars
-    for px in x_start.max(0)..x_end.min(buf_w as i32) {
-        // Map pixel to normalized position within waveform
-        let local_x = px as f32 - waveform_x_px;
-        if local_x < 0.0 || local_x >= waveform_width_px {
+        let left = (px as f64 - waveform_x_px as f64).max(0.0);
+        let right = (px as f64 + 1.0 - waveform_x_px as f64).min(waveform_width_px as f64);
+        if right <= left {
             continue;
         }
-        let norm = local_x / waveform_width_px;
-
-        // Map the pixel into the source sub-window, then to a texel. With the
-        // default (0,1) window this is the old whole-file mapping.
-        let file_norm = src_start + norm * src_span;
-        let texel_index = (file_norm * texel_count) as usize;
-        if texel_index >= level.texel_count() {
+        // Pool the complete time interval under this pixel, including the last
+        // partial source bin. Point sampling used to miss narrow peaks.
+        let sample = level.sample_range(
+            src_start as f64 + left / waveform_width_px as f64 * src_span,
+            src_start as f64 + right / waveform_width_px as f64 * src_span,
+        );
+        if sample.peak <= 0.0 {
             continue;
         }
-
-        let amp = level.amplitude(texel_index);
-        let texel_color = level.color(texel_index);
-
-        if amp <= 0.0001 {
+        let half = sample.peak.clamp(0.0, 1.0).powf(0.7) * max_half_height;
+        // RMS supplies the sustained body; a smaller peak contribution keeps
+        // short percussive bands visible in an overview. Nest contributions so
+        // a loud bass envelope cannot completely cover a quieter high band.
+        let weights: [f32; 3] = std::array::from_fn(|band| {
+            0.75 * sample.band_rms[band] + 0.25 * sample.band_peaks[band]
+        });
+        let total: f32 = weights.iter().sum();
+        if total <= 0.0 {
             continue;
         }
-
-        // Unity: `int half = Mathf.Max(1, Mathf.RoundToInt(amp * (textureHeight * 0.45f)));`
-        let half = ((amp * draw_height * 0.45).round() as i32).max(1);
-        let y_min = (mid - half).max(y_offset).max(0);
+        let high_half = half * weights[2] / total;
+        let mid_high_half = half * (weights[1] + weights[2]) / total;
+        let y_min = (mid - half).floor().max(y_offset as f32).max(0.0) as i32;
         let y_max = (mid + half)
-            .min(y_offset + lane_height - 1)
-            .min(buf_h as i32 - 1);
-
-        for y in y_min..=y_max {
+            .ceil()
+            .min((y_offset + lane_height) as f32)
+            .min(buf_h as f32) as i32;
+        let x_coverage = (right - left).clamp(0.0, 1.0) as f32;
+        for y in y_min..y_max {
             let idx = y as usize * buf_w + px as usize;
             if idx < buffer.len() {
-                buffer[idx] = texel_color;
+                // Integrate vertical pixel coverage at both the outer edge and
+                // band boundaries. Use straight alpha (the clip texture's GPU
+                // blend contract), not the bitmap painter's opaque blending.
+                // Work relative to the centre so cropping a clip cannot change
+                // edge rounding through subtraction at a different Y origin.
+                let pixel_from_mid = y as f32 - mid;
+                let cover = |h: f32| interval_coverage(-h, h, pixel_from_mid);
+                let outer = cover(half);
+                let inner_mid = cover(mid_high_half).min(outer);
+                let inner_high = cover(high_half).min(inner_mid);
+                let mut src = if inner_high >= 1.0 {
+                    color::WAVEFORM_HIGH
+                } else if inner_mid >= 1.0 && inner_high == 0.0 {
+                    color::WAVEFORM_MID
+                } else if outer >= 1.0 && inner_mid == 0.0 {
+                    color::WAVEFORM_LOW
+                } else {
+                    let areas = [outer - inner_mid, inner_mid - inner_high, inner_high];
+                    let palette = [
+                        color::WAVEFORM_LOW,
+                        color::WAVEFORM_MID,
+                        color::WAVEFORM_HIGH,
+                    ];
+                    let channel = |get: fn(Color32) -> u8| {
+                        (areas
+                            .iter()
+                            .zip(palette)
+                            .map(|(a, c)| a * get(c) as f32)
+                            .sum::<f32>()
+                            / outer.max(f32::EPSILON))
+                        .round() as u8
+                    };
+                    Color32::new(channel(|c| c.r), channel(|c| c.g), channel(|c| c.b), 255) // design-token-exempt: coverage-weighted palette blend
+                };
+                src.a = (outer * x_coverage * 255.0).round() as u8;
+                buffer[idx] = straight_alpha_over(buffer[idx], src);
             }
         }
     }
+}
+
+fn interval_coverage(start: f32, end: f32, pixel: f32) -> f32 {
+    (end.min(pixel + 1.0) - start.max(pixel)).clamp(0.0, 1.0)
+}
+
+fn straight_alpha_over(dst: Color32, src: Color32) -> Color32 {
+    if dst.a == 0 || src.a == 255 {
+        return src;
+    }
+    let sa = src.a as f32 / 255.0;
+    let da = dst.a as f32 / 255.0 * (1.0 - sa);
+    let a = sa + da;
+    if a <= 0.0 {
+        return Color32::TRANSPARENT;
+    }
+    let blend = |s: u8, d: u8| ((s as f32 * sa + d as f32 * da) / a).round() as u8;
+    let r = blend(src.r, dst.r);
+    let g = blend(src.g, dst.g);
+    let b = blend(src.b, dst.b);
+    Color32::new(r, g, b, (a * 255.0).round() as u8) // design-token-exempt: computed straight-alpha compositing
 }
 
 /// Draw a small text-style button overlay at a position.
@@ -229,6 +277,102 @@ mod tests {
         assert!(
             non_transparent > 0,
             "Waveform should have drawn some pixels"
+        );
+    }
+
+    fn paint(samples: &[f32], width: usize, height: usize, start: f32, end: f32) -> Vec<Color32> {
+        let mut renderer = WaveformRenderer::new();
+        renderer.set_audio_data(samples, 1, 48000);
+        let level = renderer
+            .select_level_for_zoom(width as f32 / (end - start), 1.0)
+            .unwrap();
+        let mut pixels = vec![Color32::TRANSPARENT; width * height];
+        draw_waveform(
+            &mut pixels,
+            width,
+            height,
+            level,
+            0,
+            width as i32,
+            0,
+            height as i32,
+            0.0,
+            width as f32,
+            start,
+            end,
+        );
+        pixels
+    }
+
+    #[test]
+    fn waveform_silence_and_filter_ringing_do_not_paint_false_attacks() {
+        assert!(
+            paint(&[0.0; 4096], 256, 80, 0.0, 1.0)
+                .iter()
+                .all(|p| p.a == 0)
+        );
+        let mut samples = vec![0.0; 4096];
+        samples[2048] = 0.9;
+        let pixels = paint(&samples, 256, 80, 0.0, 1.0);
+        let columns: Vec<_> = (0..256)
+            .filter(|&x| (0..80).any(|y| pixels[y * 256 + x].a > 0))
+            .collect();
+        assert_eq!(columns, [128], "only the source impulse bin may be visible");
+    }
+
+    #[test]
+    fn waveform_pixel_pools_peaks_between_old_point_samples() {
+        let mut samples = vec![0.0; 4096];
+        samples[128] = 1.0;
+        let pixels = paint(&samples, 33, 80, 0.0, 1.0);
+        assert!(
+            (0..80).any(|y| pixels[y * 33 + 1].a > 0),
+            "bin 2 is inside pixel 1 and must not be skipped"
+        );
+    }
+
+    #[test]
+    fn waveform_trim_preserves_source_position() {
+        let mut samples = vec![0.0; 4096];
+        samples[3072] = 1.0;
+        let pixels = paint(&samples, 128, 80, 0.5, 1.0);
+        let columns: Vec<_> = (0..128)
+            .filter(|&x| (0..80).any(|y| pixels[y * 128 + x].a > 0))
+            .collect();
+        assert_eq!(columns, [64]);
+    }
+
+    #[test]
+    fn waveform_bands_have_distinct_colours_and_antialiased_edges() {
+        for (frequency, expected) in [
+            (60.0, color::WAVEFORM_LOW),
+            (800.0, color::WAVEFORM_MID),
+            (6000.0, color::WAVEFORM_HIGH),
+        ] {
+            let samples: Vec<_> = (0..4800)
+                .map(|i| (i as f32 * frequency * std::f32::consts::TAU / 48000.0).sin() * 0.67)
+                .collect();
+            let pixels = paint(&samples, 160, 81, 0.2, 0.8);
+            let solid: Vec<_> = pixels.iter().filter(|p| p.a == 255).collect();
+            let matching = solid.iter().filter(|&&&p| p == expected).count();
+            assert!(
+                matching * 2 > solid.len(),
+                "{frequency} Hz should predominantly have its band colour"
+            );
+            assert!(
+                pixels.iter().any(|p| p.a > 0 && p.a < 255),
+                "fractional edges need coverage alpha"
+            );
+        }
+    }
+
+    #[test]
+    fn waveform_straight_alpha_keeps_edge_colour_bright() {
+        let src = Color32::new(100, 150, 200, 64); // design-token-exempt: numeric compositing fixture
+        assert_eq!(straight_alpha_over(Color32::TRANSPARENT, src), src);
+        assert_eq!(
+            straight_alpha_over(Color32::new(20, 20, 20, 255), src), // design-token-exempt: numeric compositing fixture
+            Color32::new(40, 53, 65, 255) // design-token-exempt: expected compositing result
         );
     }
 }

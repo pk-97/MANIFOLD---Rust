@@ -309,8 +309,9 @@ mod gpu_tests {
             uv,
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -601,7 +602,8 @@ mod gpu_tests {
             uv: [0.1, 0.2],
             _pad2: [7.0, 8.0],
             tangent: [1.0, 0.0, 0.0, 1.0],
-        }];
+                color: [1.0; 4],
+}];
         let b = vec![MeshVertex {
             position: [2.0, 4.0, 6.0],
             _pad0: 0.0,
@@ -610,7 +612,8 @@ mod gpu_tests {
             uv: [0.9, 0.8],
             _pad2: [9.0, 10.0],
             tangent: [0.0, 1.0, 0.0, -1.0],
-        }];
+                color: [1.0; 4],
+}];
 
         // Neutral opt-in mask must return the complete input semantic vertex.
         let generated_neutral = dispatch_morph(&device, &generated, &a, &b, None, None, true, 0.0);

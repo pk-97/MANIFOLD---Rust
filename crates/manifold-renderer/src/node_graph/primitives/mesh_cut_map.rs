@@ -818,7 +818,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
             MeshVertex {
                 position: [1.0, 0.0, 0.0],
                 _pad0: 0.0,
@@ -827,7 +828,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
             MeshVertex {
                 position: [0.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -836,7 +838,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
         ];
         let (output, status) = dispatch_shader(&vertices, 0, 1, 3);
         assert_eq!(status[1], 0);
@@ -857,7 +860,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
             MeshVertex {
                 position: [1.0, 0.0, 0.0],
                 _pad0: 0.0,
@@ -866,7 +870,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
             MeshVertex {
                 position: [0.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -875,7 +880,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
         ];
         let (output, status) = dispatch_shader(&vertices, 0, 1, 2);
         assert_eq!(status[1], 1);
@@ -894,7 +900,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
             MeshVertex {
                 position: [1.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -903,7 +910,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
             MeshVertex {
                 position: [-1.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -912,7 +920,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-            },
+                    color: [1.0; 4],
+},
         ];
         let (output, status) = dispatch_shader(&vertices, 0, 2, 12);
         assert_eq!(status[1], 0);

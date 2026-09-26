@@ -7,8 +7,8 @@
 //! (the same spectral-colour / MIP / source-window logic the audio lanes use). We
 //! only change *where* it paints — a per-clip buffer instead of a per-layer one.
 //!
-//! Textures are pooled by `ClipId`. A clip's waveform depends only on its trim /
-//! warp / zoom (NOT scroll), so a fully-visible clip's fingerprint is stable as
+//! Textures are pooled by `ClipId`. A clip's waveform depends only on its source,
+//! trim / warp / zoom (NOT scroll), so a fully-visible clip's fingerprint is stable as
 //! the timeline scrolls → cache hit, zero re-raster / re-upload. Only edge-clipped
 //! clips (whose visible window changes) re-rasterise. Entries for clips that leave
 //! the visible set are dropped each frame, bounding memory.
@@ -21,13 +21,13 @@
 use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
+use manifold_foundation::ClipId;
 use manifold_gpu::{
     FrameFence, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
     GpuEncoder, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
     GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
-use manifold_foundation::ClipId;
 use manifold_ui::node::{Color32, Rect};
 use manifold_ui::panels::viewport::ClipScreenRect;
 
@@ -261,6 +261,18 @@ impl ClipContentGpu {
                 continue;
             }
 
+            // The waveform occupies the preview well above the name strip. Keep
+            // the well's full geometry even when the visible intersection is
+            // clipped by the tracks rect; the painter then preserves the
+            // waveform's vertical origin instead of re-centering a cropped clip.
+            let well_h = clip.rect.height
+                - crate::clip_draw::clip_strip_height(clip.rect.height).unwrap_or(0.0);
+            if well_h <= 0.0 {
+                continue;
+            }
+            let well_y0 = clip.rect.y;
+            let well_y1 = well_y0 + well_h;
+
             // Visible intersection with the tracks rect. The waveform spans the
             // clip's FULL width (time-aligned to the body, like the old bitmap
             // path) — no horizontal corner inset: the painter's own vertical
@@ -269,8 +281,8 @@ impl ClipContentGpu {
             // so the rounded body shows through there regardless.
             let vis_x0 = cx.max(tx0);
             let vis_x1 = (cx + cw).min(tx1);
-            let vis_y0 = clip.rect.y.max(ty0);
-            let vis_y1 = (clip.rect.y + clip.rect.height).min(ty1);
+            let vis_y0 = well_y0.max(ty0);
+            let vis_y1 = well_y1.min(ty1);
             let draw_x0 = vis_x0;
             let draw_x1 = vis_x1;
             let draw_w = draw_x1 - draw_x0;
@@ -281,6 +293,8 @@ impl ClipContentGpu {
 
             let tex_w = ((draw_w * scale).round() as u32).clamp(1, MAX_CONTENT_PX);
             let tex_h = ((draw_h * scale).round() as u32).clamp(1, MAX_CONTENT_PX);
+            let full_well_h_px = (well_h * scale).round().max(1.0);
+            let y_offset = ((well_y0 - vis_y0) * scale).round() as i32;
 
             // Source window (Ableton model), now PIECEWISE per the clip's
             // tempo-map breakpoints (`crates/manifold-app/src/ui_bridge/
@@ -345,7 +359,14 @@ impl ClipContentGpu {
                 continue; // nothing visible/valid to paint this frame
             }
 
-            let fp = fingerprint(tex_w, tex_h, &self.seg_scratch);
+            let fp = fingerprint(
+                tex_w,
+                tex_h,
+                renderer.content_fingerprint(),
+                y_offset,
+                full_well_h_px as u32,
+                &self.seg_scratch,
+            );
 
             let needs_paint = match self.pool.get(&clip.clip_id) {
                 Some(t) => t.fingerprint != fp || t.width != tex_w || t.height != tex_h,
@@ -376,8 +397,8 @@ impl ClipContentGpu {
                         level,
                         x_start,
                         x_end,
-                        0,
-                        tex_h as i32,
+                        y_offset,
+                        full_well_h_px as i32,
                         seg_x0_px,
                         seg_w_px,
                         src_start,
@@ -468,10 +489,22 @@ impl ClipContentGpu {
             let (x0, y0) = (d.rect.x, d.rect.y);
             let (x1, y1) = (d.rect.x + d.rect.width, d.rect.y + d.rect.height);
             let verts = [
-                ContentVertex { position: [x0, y0], uv: [0.0, 0.0] },
-                ContentVertex { position: [x1, y0], uv: [1.0, 0.0] },
-                ContentVertex { position: [x1, y1], uv: [1.0, 1.0] },
-                ContentVertex { position: [x0, y1], uv: [0.0, 1.0] },
+                ContentVertex {
+                    position: [x0, y0],
+                    uv: [0.0, 0.0],
+                },
+                ContentVertex {
+                    position: [x1, y0],
+                    uv: [1.0, 0.0],
+                },
+                ContentVertex {
+                    position: [x1, y1],
+                    uv: [1.0, 1.0],
+                },
+                ContentVertex {
+                    position: [x0, y1],
+                    uv: [0.0, 1.0],
+                },
             ];
             unsafe {
                 std::ptr::copy_nonoverlapping(verts.as_ptr(), ptr.add(i * 4), 4);
@@ -489,9 +522,18 @@ impl ClipContentGpu {
             encoder.draw_in_render_pass(
                 &self.pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: globals_bytes },
-                    GpuBinding::Texture { binding: 1, texture: &t.texture },
-                    GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: globals_bytes,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &t.texture,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &self.sampler,
+                    },
                 ],
                 vbuf,
                 vertex_offset,
@@ -507,13 +549,21 @@ impl ClipContentGpu {
 }
 
 /// Deterministic content fingerprint (no RNG — wrapping integer mix). Captures
-/// everything that changes the painted pixels: texture size, and — per
+/// everything that changes the painted pixels: source identity, texture size,
+/// vertical well geometry, and — per
 /// breakpoint segment — its pixel range, its position/scale within the
 /// texture, its source window, and its MIP resolution (so a tempo-map edit,
 /// which changes segment count/position, and a background decode refinement,
 /// which changes `texel_count` under an unchanged window, both repaint).
 /// Scroll alone does NOT change any of these for a fully-visible clip → cache hit.
-fn fingerprint(tex_w: u32, tex_h: u32, segments: &[(i32, i32, f32, f32, f32, f32, usize)]) -> u64 {
+fn fingerprint(
+    tex_w: u32,
+    tex_h: u32,
+    content_fingerprint: u64,
+    y_offset: i32,
+    full_well_h: u32,
+    segments: &[(i32, i32, f32, f32, f32, f32, usize)],
+) -> u64 {
     let mut h: u64 = 1469598103934665603; // FNV offset basis
     let mut mix = |v: u64| {
         h ^= v;
@@ -521,15 +571,290 @@ fn fingerprint(tex_w: u32, tex_h: u32, segments: &[(i32, i32, f32, f32, f32, f32
     };
     mix(tex_w as u64);
     mix(tex_h as u64);
+    mix(content_fingerprint);
+    mix(y_offset as i64 as u64);
+    mix(full_well_h as u64);
     mix(segments.len() as u64);
     for &(x_start, x_end, wx, ww, src_start, src_end, texel_count) in segments {
         mix(x_start as u64);
         mix(x_end as u64);
-        mix(wx.round() as i64 as u64);
-        mix(ww.round() as i64 as u64);
+        mix(wx.to_bits() as u64);
+        mix(ww.to_bits() as u64);
         mix(src_start.to_bits() as u64);
         mix(src_end.to_bits() as u64);
         mix(texel_count as u64);
     }
     h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fingerprint;
+
+    const SEGMENT: [(i32, i32, f32, f32, f32, f32, usize); 1] =
+        [(0, 64, 0.0, 64.0, 0.0, 1.0, 1024)];
+
+    #[test]
+    fn clip_waveform_fingerprint_includes_source_content() {
+        let a = fingerprint(64, 48, 0x11, 0, 48, &SEGMENT);
+        let b = fingerprint(64, 48, 0x22, 0, 48, &SEGMENT);
+        assert_ne!(a, b, "equal-sized replacement sources must repaint");
+    }
+
+    #[test]
+    fn clip_waveform_fingerprint_keeps_fractional_geometry() {
+        let a_segments = [(0, 64, 12.10, 64.10, 0.0, 1.0, 1024)];
+        let b_segments = [(0, 64, 12.40, 64.40, 0.0, 1.0, 1024)];
+        let a = fingerprint(64, 48, 0x11, 0, 48, &a_segments);
+        let b = fingerprint(64, 48, 0x11, 0, 48, &b_segments);
+        assert_ne!(a, b, "subpixel geometry edits must repaint");
+    }
+
+    #[cfg(all(target_os = "macos", feature = "gpu-proofs"))]
+    mod gpu {
+        use super::super::ClipContentGpu;
+        use crate::render_target::RenderTarget;
+        use half::f16;
+        use manifold_foundation::{Beats, ClipId};
+        use manifold_gpu::{GpuDevice, GpuTexture};
+        use manifold_ui::color;
+        use manifold_ui::node::Rect;
+        use manifold_ui::panels::viewport::ClipScreenRect;
+        use manifold_ui::waveform_renderer::WaveformRenderer;
+        use std::ffi::c_void;
+        use std::slice;
+        use std::sync::Arc;
+
+        const WIDTH: u32 = 64;
+        const HEIGHT: u32 = 100;
+        const FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFormat::Rgba16Float;
+
+        fn waveform(frequency: f32) -> Arc<WaveformRenderer> {
+            let mut renderer = WaveformRenderer::new();
+            let samples: Vec<f32> = (0..44_100)
+                .map(|i| (i as f32 * frequency * std::f32::consts::TAU / 44_100.0).sin() * 0.8)
+                .collect();
+            renderer.set_audio_data(&samples, 1, 44_100);
+            Arc::new(renderer)
+        }
+
+        fn clip(waveform: Arc<WaveformRenderer>, rect: Rect) -> ClipScreenRect {
+            ClipScreenRect {
+                clip_id: ClipId::new("waveform-proof"),
+                layer_index: 0,
+                rect,
+                base_color: color::CLIP_NORMAL,
+                name: Arc::from("proof"),
+                start_beat: Beats::ZERO,
+                end_beat: Beats::from_f32(4.0),
+                is_muted: false,
+                is_locked: false,
+                is_generator: false,
+                is_audio: true,
+                waveform: Some(waveform),
+                in_point_seconds: 0.0,
+                waveform_breakpoints: vec![(0.0, 0.0), (1.0, 1.0)],
+            }
+        }
+
+        fn clear_and_render(
+            device: &GpuDevice,
+            content: &mut ClipContentGpu,
+            target: &RenderTarget,
+            tracks: Rect,
+            clip: &ClipScreenRect,
+        ) {
+            crate::clear_texture_committed(
+                device,
+                &target.texture,
+                [0.0, 0.0, 0.0, 0.0],
+                "clip-waveform-proof-clear",
+            );
+            let mut encoder = device.create_encoder("clip-waveform-proof-render");
+            content.render(
+                device,
+                &mut encoder,
+                &target.texture,
+                WIDTH,
+                HEIGHT,
+                1.0,
+                tracks,
+                std::slice::from_ref(clip),
+            );
+            encoder.commit_and_wait_completed();
+        }
+
+        fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
+            let bytes_per_row = WIDTH * FORMAT.bytes_per_pixel();
+            let total = (HEIGHT * bytes_per_row) as u64;
+            let buffer = device.create_buffer_shared(total);
+            let mut encoder = device.create_encoder("clip-waveform-proof-readback");
+            encoder.copy_texture_to_buffer(texture, &buffer, WIDTH, HEIGHT, bytes_per_row);
+            encoder.commit_and_wait_completed();
+            let ptr = buffer.mapped_ptr().expect("shared readback buffer");
+            unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total as usize) }
+                .to_vec()
+        }
+
+        fn pixel_luma(bytes: &[u8], x: usize, y: usize) -> f32 {
+            let offset = (y * WIDTH as usize + x) * FORMAT.bytes_per_pixel() as usize;
+            f16::from_bits(u16::from_le_bytes([bytes[offset], bytes[offset + 1]])).to_f32()
+        }
+
+        #[test]
+        fn clip_waveform_gpu_repaints_same_size_source_replacement() {
+            let device = crate::test_device();
+            let target = RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-proof");
+            let mut content = ClipContentGpu::new(&device, FORMAT);
+            let rect = Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
+            let first = clip(waveform(60.0), rect);
+            clear_and_render(
+                &device,
+                &mut content,
+                &target,
+                Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+                &first,
+            );
+            let before = readback(&device, &target.texture);
+            let second = clip(waveform(6000.0), rect);
+            clear_and_render(
+                &device,
+                &mut content,
+                &target,
+                Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+                &second,
+            );
+            let after = readback(&device, &target.texture);
+            assert_ne!(
+                before, after,
+                "same-sized source replacement left stale waveform pixels"
+            );
+        }
+
+        #[test]
+        fn clip_waveform_gpu_excludes_name_strip() {
+            let device = crate::test_device();
+            let target =
+                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-strip-proof");
+            let mut content = ClipContentGpu::new(&device, FORMAT);
+            let rect = Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
+            let clip = clip(waveform(800.0), rect);
+            clear_and_render(
+                &device,
+                &mut content,
+                &target,
+                Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+                &clip,
+            );
+            let pixels = readback(&device, &target.texture);
+            assert!(
+                (0..84).any(|y| pixel_luma(&pixels, 32, y) > 0.01),
+                "proof must draw a waveform above the strip"
+            );
+            // The clip chrome contract reserves a 16px strip at this height.
+            for y in 84..HEIGHT as usize {
+                for x in 0..WIDTH as usize {
+                    assert_eq!(
+                        pixel_luma(&pixels, x, y),
+                        0.0,
+                        "waveform reached name strip at ({x},{y})"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn clip_waveform_gpu_vertical_crop_matches_full_render() {
+            let device = crate::test_device();
+            let full_target =
+                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-full-proof");
+            let cropped_target =
+                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-crop-proof");
+            let rect = Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
+            let full_clip = clip(waveform(800.0), rect);
+            let mut full_content = ClipContentGpu::new(&device, FORMAT);
+            clear_and_render(
+                &device,
+                &mut full_content,
+                &full_target,
+                Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+                &full_clip,
+            );
+            let full = readback(&device, &full_target.texture);
+            let full_raster = full_content.scratch.clone();
+            let mut cropped_content = ClipContentGpu::new(&device, FORMAT);
+            clear_and_render(
+                &device,
+                &mut cropped_content,
+                &cropped_target,
+                Rect::new(0.0, 20.0, WIDTH as f32, 80.0),
+                &full_clip,
+            );
+            let cropped = readback(&device, &cropped_target.texture);
+            for y in 20..84usize {
+                let full_row = &full_raster[y * WIDTH as usize..(y + 1) * WIDTH as usize];
+                let local_y = y - 20;
+                let cropped_row = &cropped_content.scratch
+                    [local_y * WIDTH as usize..(local_y + 1) * WIDTH as usize];
+                assert_eq!(
+                    full_row, cropped_row,
+                    "vertical crop changed raster row {y}"
+                );
+            }
+            let row_bytes = WIDTH as usize * FORMAT.bytes_per_pixel() as usize;
+            for y in 20..80 {
+                let range = y as usize * row_bytes..(y as usize + 1) * row_bytes;
+                for (a, b) in full[range.clone()]
+                    .chunks_exact(2)
+                    .zip(cropped[range].chunks_exact(2))
+                {
+                    let a = f16::from_bits(u16::from_le_bytes([a[0], a[1]])).to_f32();
+                    let b = f16::from_bits(u16::from_le_bytes([b[0], b[1]])).to_f32();
+                    assert!(
+                        (a - b).abs() <= 0.001,
+                        "vertical crop changed row {y}: {a} vs {b}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn clip_waveform_gpu_trim_and_tempo_breakpoint_preserve_impulse_time() {
+            let device = crate::test_device();
+            let mut waveform = WaveformRenderer::new();
+            let mut samples = vec![0.0; 4096];
+            samples[3072] = 1.0; // Source time 0.75 seconds.
+            waveform.set_audio_data(&samples, 1, 4096);
+            let mut clip = clip(
+                Arc::new(waveform),
+                Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+            );
+            clip.in_point_seconds = 0.25;
+            // First half of the clip covers 0.25s; second half covers 0.5s.
+            // The 0.75s impulse is midway through that second half, at x=48.
+            clip.waveform_breakpoints = vec![(0.0, 0.25), (0.5, 0.5), (1.0, 1.0)];
+            let target =
+                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-time-proof");
+            let mut content = ClipContentGpu::new(&device, FORMAT);
+            clear_and_render(
+                &device,
+                &mut content,
+                &target,
+                Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+                &clip,
+            );
+            let pixels = readback(&device, &target.texture);
+            let columns: Vec<_> = (0..WIDTH as usize)
+                .filter(|&x| (0..84).any(|y| pixel_luma(&pixels, x, y) > 0.01))
+                .collect();
+            assert!(
+                !columns.is_empty(),
+                "source impulse must survive the actual GPU path"
+            );
+            assert!(
+                columns.iter().all(|&x| x.abs_diff(48) <= 1),
+                "trim/tempo map moved impulse: {columns:?}"
+            );
+        }
+    }
 }

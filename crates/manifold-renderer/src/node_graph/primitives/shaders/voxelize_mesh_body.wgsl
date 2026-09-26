@@ -21,5 +21,5 @@ fn body(
     let cs = max(cell_size, 1e-6);
     let voxel_pos = round(e_in.position / cs) * cs;
     let displaced = mix(e_in.position, voxel_pos, amount * w);
-    return Element(displaced, e_in.normal, e_in.uv, e_in.tangent);
+    return Element(displaced, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

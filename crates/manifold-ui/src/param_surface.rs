@@ -43,6 +43,7 @@ pub enum MaterialFeature {
 pub enum MaterialGroup {
     Surface,
     Opacity,
+    Subsurface,
     Feature(MaterialFeature),
     Advanced,
 }
@@ -54,6 +55,8 @@ pub enum MaterialColour {
     Emission,
     Sheen,
     Attenuation,
+    Subsurface,
+    Translucency,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -234,6 +237,20 @@ pub struct ModifierCardInfo {
     pub targets_all: bool,
     /// Available target objects and their explicit-selection state.
     pub objects: Vec<ModifierObjectOption>,
+}
+
+/// Stable address for one object-owned modifier card in Scene Setup.
+///
+/// The object and group owner are structural scene identities; `node_doc_id`
+/// identifies the modifier within that object's ordered chain.  The card uses
+/// all three facts for UI identity while the existing scene modifier action
+/// uses the group owner and modifier document id for removal/reorder.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ObjectModifierCardInfo {
+    pub layer_id: LayerId,
+    pub object_id: u32,
+    pub group_node_id: Option<u32>,
+    pub node_doc_id: u32,
 }
 
 /// One catalog recipe in the modifier picker. Applicability and singleton

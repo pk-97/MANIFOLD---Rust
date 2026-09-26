@@ -261,6 +261,25 @@ impl ScrollContainer {
         self.viewport
     }
 
+    /// Reveal live content bounds without rebuilding or changing the user's
+    /// scroll when the item is already visible. Tall items align at the top.
+    pub fn reveal_rect(&mut self, tree: &mut UITree, bounds: Rect) -> bool {
+        let viewport = self.viewport;
+        if viewport.height <= 0.0 { return false; }
+        let delta = if bounds.y < viewport.y || bounds.height > viewport.height {
+            bounds.y - viewport.y
+        } else if bounds.y + bounds.height > viewport.y + viewport.height {
+            bounds.y + bounds.height - viewport.y - viewport.height
+        } else { return false; };
+        let old = self.scroll_offset;
+        self.scroll_offset = (old + delta).clamp(0.0, self.max_scroll());
+        let moved = self.scroll_offset - old;
+        if moved.abs() < 0.01 { return false; }
+        self.offset_content(tree, -moved);
+        self.update_scrollbar(tree);
+        true
+    }
+
     /// Compute the Y position for a content element at the given local offset.
     /// This accounts for the scroll offset so the element scrolls with the content.
     pub fn content_y(&self, local_offset: f32) -> f32 {

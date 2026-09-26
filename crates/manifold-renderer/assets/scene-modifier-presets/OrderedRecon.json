@@ -915,7 +915,7 @@
               },
               "sample_mode": {
                 "type": "Enum",
-                "value": 1
+                "value": 0
               },
               "center_x": {
                 "type": "Float",
@@ -979,7 +979,7 @@
             "params": {
               "sample_mode": {
                 "type": "Enum",
-                "value": 1
+                "value": 0
               },
               "elapsed_beats": {
                 "type": "Float",

@@ -113,7 +113,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     let index_buffer = write_shared_buffer(device, &indices);
 
     let tracer = MetalShadowRayTracer::new(device);
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
         vertex_offset: 0,
@@ -134,6 +134,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         mr_texture: None,
         normal_texture: None,
                         emissive_texture: None,
+        extra_material_textures: [None; 3],
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -142,6 +143,12 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
@@ -387,7 +394,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
 
     let tracer = MetalShadowRayTracer::new(device);
     let objects = [
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &ground_vertex_buffer,
             vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
             vertex_offset: 0,
@@ -407,6 +414,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             mr_texture: None,
             normal_texture: None,
                         emissive_texture: None,
+        extra_material_textures: [None; 3],
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -415,8 +423,14 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &occ_vertex_buffer,
             vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
             vertex_offset: 0,
@@ -432,6 +446,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             mr_texture: None,
             normal_texture: None,
                         emissive_texture: None,
+        extra_material_textures: [None; 3],
                         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
                         emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -440,6 +455,12 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         },
     ];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder

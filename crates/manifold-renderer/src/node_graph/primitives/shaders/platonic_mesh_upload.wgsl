@@ -1,7 +1,7 @@
 // node.platonic_solid_mesh — CPU-origin compact source upload.
 //
 // UploadVertex is deliberately 32 bytes (position + normal). A full
-// MeshVertex is 64 bytes, which would exceed Metal's setBytes inline limit at
+// MeshVertex is 80 bytes, which would exceed Metal's setBytes inline limit at
 // the fixed 108-vertex capacity. The bridge restores the zero UV/tangent
 // fields while applying the scalar radius.
 
@@ -22,6 +22,7 @@ struct MeshVertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 struct Uniforms {
@@ -51,6 +52,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             vec2<f32>(0.0, 0.0),
             vec2<f32>(0.0, 0.0),
             vec4<f32>(0.0),
+            vec4<f32>(1.0),
         );
     } else {
         // Zero-position triangles are degenerate padding. Keep every field
@@ -63,6 +65,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             vec2<f32>(0.0),
             vec2<f32>(0.0),
             vec4<f32>(0.0),
+            vec4<f32>(1.0),
         );
     }
 }

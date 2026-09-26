@@ -1,6 +1,6 @@
 # glTF Material Extensions — transmission, volume, sheen, iridescence, anisotropy, dispersion
 
-**Status:** SHIPPED 2026-07-16 — all six phases (E1–E6) complete, design closed; as-built record in section 6, conformance truth is the generated manifest (`scripts/gen_glb_conformance_status.py`). Two gaps survive the close: E3's sheen texture path is wired and shader-validated but numerically unverified (no fetched asset exercises it), and CompareSpecular/CompareVolume still fail per BUG-185 (gltf-material-texture-slots) — re-baselining is Peter's visual call. · 2026-07-16 · design session with Peter**
+**Status:** IN PROGRESS 2026-09-26 — BUG-5l4o correctness review reopened the E1–E6 implementation. Section 7 supersedes the affected shading and texture assumptions. Focused numeric proofs are separate from the existing conformance manifest; its classifications do not establish physical accuracy or Peter's visual acceptance.
 **Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (slice-based import with our extension gate) — the gate's supported-list grows per phase here. MATERIAL_SYSTEM_DESIGN.md (SHIPPED M1–M6) is the material contract this extends.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -53,7 +53,7 @@ Each phase: clippy scoped per CLAUDE.md; GPU suite (`cargo test -p manifold-rend
 ## 5. Deferred
 - `KHR_materials_diffuse_transmission` full BTDF (the three DiffuseTransmission assets) → fold into E2 if the factor path covers the Compare asset; else its own follow-up phase — decided by E2's gate result, recorded there.
 - ~~Extension **textures** beyond each family's factor path~~ — REVOKED 2026-07-16 by Peter (no trigger-waiting on trivial work); textures are now in-phase scope (D1 revised) with the E6 completion sweep catching already-shipped families.
-- Spec-gloss specular tint (inherited pointer from GLB_XFAIL_BURNDOWN D2).
+- Spec-gloss specular tint (inherited pointer from GLB_XFAIL_BURNDOWN D2) — superseded by the RGB-preserving conversion in section 7.
 - glTF `TANGENT` attribute import (grow `MeshVertex` past 48 bytes, or a separate tangent stream) → trigger: E5's numeric gate failing from tangent-frame mismatch, or authored assets where the cotangent-frame approximation visibly breaks (UV seams, mirrored UVs). A vertex-layout project: touches `MESH_VERTEX_SPECS`, every mesh atom, deform atoms, codegen — its own design pass, never an overnight improvisation (E5 audit, 2026-07-16). **LANDED 2026-08-01 as BUG-wfxe (gltf-tangent-import)** (64-byte `MeshVertex`, `tbn_for` authored-frame selector with the cotangent fallback, `NormalTangentMirrorTest` red proof).
 
 ## 6. As built (E1–E6, all SHIPPED 2026-07-16)
@@ -82,3 +82,89 @@ Each phase: clippy scoped per CLAUDE.md; GPU suite (`cargo test -p manifold-rend
   section 5). CompareSpecular/CompareVolume stay `expect_pass` and fail per
   BUG-185 (gltf-material-texture-slots) — deliberate, pending Peter's
   re-baselining.
+
+## 7. Material fidelity corrections (2026-09-26)
+
+This section is the current contract for the corrections under BUG-5l4o. The
+dated E1–E6 record above describes the original implementation.
+
+- All three colour renderers (`render_scene`, `render_mesh`, `render_copies`)
+  use `RenderScene` material evaluation. Legacy signed world-normal and separate
+  roughness/metallic maps retain their existing interpretation at the adapter.
+- Metallic/roughness maps multiply their factors. Normal-map scale and AO
+  strength are retained from import. UV0 and UV1, affine transforms, wrap modes,
+  min/mag filters and explicit no-mip/nearest-mip/linear-mip choices travel with
+  each texture family. Extension maps use manual sampling to stay within Metal's
+  sampler limit. Sets above UV1 produce an import warning and use UV0.
+- Specular weight controls F0 and F90. The diffuse energy split uses the largest
+  Fresnel component. Clearcoat applies its Fresnel once and uses the geometric
+  normal unless a coat map is present. Iridescence uses each direct light's V·H;
+  its view reflectance is converted to the equivalent input for split-sum IBL.
+- Anisotropy uses `alphaT = mix(roughness², 1, strength²)` and
+  `alphaB = roughness²`. Its tangent frame follows the authored mesh tangent,
+  with the normal texture's coordinates used for derivative reconstruction
+  when authored tangents are absent. Environment anisotropy remains a bent-normal
+  approximation.
+- Sheen has a Charlie environment convolution and directional-energy LUT, with
+  compensation of the underlying layer. Thin diffuse transmission has an
+  independent colour and its two texture inputs, reduces front diffuse, and
+  uses the opposite hemisphere. It is not a subsurface scattering model.
+- Refraction uses a clamped scene sampler, an off-screen environment transition,
+  and one exposure application. Each sorted transparent surface sees the colour
+  already drawn behind it. Opaque-depth RT lighting never substitutes into a
+  transparent surface at a different depth. Refraction still uses screen-space
+  projection and object-level sorting; this does not provide arbitrary nested
+  dielectric transport.
+- Raster and RT transform normals by the inverse transpose; tangents use the
+  model's linear transform and determinant handedness. RT base colour and MR
+  samples multiply factors; secondary hits use normal mapping, specular weight
+  and colour maps, and the material's dielectric F0/F90. Metals suppress diffuse
+  energy; unlit hits terminate with their colour and emission. Primary reflection
+  rays use anisotropic GGX with the actual hit instance's tangent frame.
+- `MeshVertex` is now 80 bytes: position/normal, UV0/UV1, tangent and RGBA
+  `COLOR_0`. Missing colours are white. Interpolation and deformation preserve
+  colour; base colour and cutout alpha multiply it. Mesh decode caches use a new
+  format/key version while HDRI caches retain their existing version.
+  New imports explicitly enable `vertex_colors` on their geometry sources.
+  The load-time upgrade enables varying colours on older imports. Constant
+  colours already baked into saved material factors keep a white vertex stream,
+  preserving the equivalent factor product without tinting twice.
+- Legacy specular/glossiness import preserves diffuse and RGB specular factors
+  and maps. Glossiness conversion computes `1 - factor * texture.a`. Previously
+  imported graphs recover omitted settings and maps from their source model at
+  load, including RGB specular data. Generated legacy defaults are repaired;
+  edited values, custom wiring, transforms and animation remain authored.
+- Imported punctual lights retain raw intensity, inverse-square falloff, optional
+  finite range and spot cones. Existing authored lights keep legacy attenuation
+  by default; their falloff control can select the physical mode.
+- PBR materials expose both diffusion and homogeneous volumetric random-walk
+  subsurface scattering, with shared colour/radius/phase/weight controls. See
+  [SUBSURFACE_MATERIAL_DESIGN.md](SUBSURFACE_MATERIAL_DESIGN.md) for the boundary
+  model, cost, geometry requirements and evidence.
+
+Project loading upgrades embedded imports and graph overrides in memory, with
+the changes persisted on the next normal save. Missing source assets and
+ambiguous custom topology produce notices and remain retryable after repair.
+Shader corrections apply to existing materials independently of this source-data
+upgrade. SSS stays disabled until selected deliberately; its diffusion/random-walk
+mode, weight, radius, colour, phase and sample controls share a dedicated
+Subsurface inspector section. New texture controls use the existing Advanced
+parameter surface.
+
+Focused enforcement lives in `render_scene_pbr_fidelity`, `render_scene_glass`,
+`render_legacy_parity`, the alpha-depth unit proofs, and the RT transmission
+proofs. Their numeric assertions are L1 evidence. Updating MANIFOLD goldens is
+not a replacement for those assertions or an independent reference comparison.
+
+The RT path remains a hybrid approximation. Secondary hits do not evaluate
+clearcoat, sheen, iridescence, SSS or the full Phong/Cel models; glass and Blend
+surfaces are absent from the acceleration input. Ray-hit texture sampling uses
+level zero and authored magnification/addressing, without ray-cone minification.
+Environment anisotropy uses a bent normal; reflected surfaces use an environment
+approximation rather than recursive specular transport. The material texture
+table admits at most 64 unique textures and reports capacity failure explicitly.
+These are capability limits, not full material parity or a path-tracing claim.
+Arbitrary DCC shader networks, nested dielectric volumes and spectral transport
+are outside the supported material model. Glass validation covers the established
+sampler, exposure and composition defects. Peter withdrew the grid-artifact
+report; no artifact search or reproduction is required.

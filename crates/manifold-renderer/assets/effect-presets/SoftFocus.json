@@ -78,7 +78,7 @@
       "params": {
         "mode": {
           "type": "Enum",
-          "value": 0
+          "value": 3
         },
         "radius": {
           "type": "Float",

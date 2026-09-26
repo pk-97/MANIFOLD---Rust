@@ -44,6 +44,7 @@ mod merge;
 mod object_group;
 mod report;
 mod scene;
+mod upgrade;
 
 mod scene_scale;
 #[cfg(test)]
@@ -56,6 +57,8 @@ mod tests;
 pub use bounds_probe::repair_project_embedded_scene_bounds;
 pub use merge::{MergePlan, assemble_merge_plan};
 pub use report::ImportReport;
+pub use upgrade::{MaterialUpgradeCache, upgrade_material_graph};
+pub use upgrade::project::{MaterialUpgradeReport, upgrade_project_materials};
 
 
 use scene::build_import_graph;

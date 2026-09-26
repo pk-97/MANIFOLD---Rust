@@ -11,7 +11,13 @@ use manifold_core::scene_modifier_preset::{
     initialize_scene_modifier_snapshot, validate_scene_modifier_schema,
 };
 
-use super::scene_modifier_expand::{SceneModifierExpandError, resolve_modifier_mesh_frames};
+use super::PrimitiveRegistry;
+use super::scene_modifier_expand::{
+    SceneModifierExpandError, resolve_modifier_mesh_frames, validate_modifier_attachment,
+};
+
+static SCENE_MODIFIER_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
+    std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
 
 /// Prepare a fresh scene modifier instance for attachment to `owner`.
 ///
@@ -39,6 +45,17 @@ pub fn prepare_new_scene_modifier(
     };
     instance.mesh_frames = resolve_modifier_mesh_frames(owner, &instance)?;
     Ok(instance)
+}
+
+/// Validate a freshly prepared attachment through the same expansion contract
+/// used when a graph is loaded.  Authoring surfaces use this at structural
+/// sync time to explain unavailable recipes without maintaining a second set
+/// of compatibility rules.
+pub fn validate_new_scene_modifier(
+    owner: &EffectGraphDef,
+    instance: &SceneModifierInstanceDef,
+) -> Result<(), SceneModifierExpandError> {
+    validate_modifier_attachment(owner, instance, &SCENE_MODIFIER_REGISTRY)
 }
 
 /// Initialize a catalog recipe against its owner without mesh I/O. Used both

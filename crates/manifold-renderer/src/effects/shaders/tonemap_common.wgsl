@@ -195,14 +195,15 @@ fn linear_to_pq(L: vec3<f32>) -> vec3<f32> {
     return pow((c1 + c2 * Ym1) / (1.0 + c3 * Ym1), vec3<f32>(m2));
 }
 
-// Display-linear EDR shoulder. Values below the knee stay linear; highlights
-// asymptotically approach the currently usable display headroom.
+// Display-linear EDR shoulder. SDR white and values below it stay linear;
+// highlights approach the currently usable display headroom. Keeping the knee
+// at or above white makes shrinking headroom converge to the SDR clamp.
 fn edr_soft_shoulder(value: vec3<f32>, headroom: f32) -> vec3<f32> {
     let peak = max(headroom, 1.0);
-    let knee = peak * 0.8;
+    let knee = max(1.0, peak * 0.8);
     let span = max(peak - knee, 0.0001);
     let positive = max(value, vec3<f32>(0.0));
-    let compressed = knee + span * tanh((positive - knee) / span);
+    let compressed = min(vec3<f32>(peak), knee + span * tanh((positive - knee) / span));
     let below = vec3<f32>(f32(positive.r < knee), f32(positive.g < knee), f32(positive.b < knee));
     return mix(compressed, positive, below);
 }

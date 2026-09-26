@@ -20,13 +20,18 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
+storage_budget = None
 
 
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+storage_budget = load("codex_storage_budget", ROOT / "scripts/storage_budget.py")
 
 
 def git(cwd, *args):
@@ -197,6 +202,7 @@ def evaluate(event):
         # retain strict matching.
         desktop_cwd_fallback = Path(cwd).resolve() == ROOT
         return (check_shell(event, command, cwd, shell_guard)
+                or check_storage(event, command, cwd)
                 or check_budget(event, command, cwd, desktop_cwd_fallback))
     return None
 
@@ -326,6 +332,268 @@ def _command_targets(tokens):
             yield Path(args[j]).name, args[j + 1:]
         return
     yield program, args
+
+
+_BUILD_CARGO_SUBCOMMANDS = {"build", "check", "test", "clippy", "bench", "run", "nextest", "xtask"}
+_BUILD_DRIVER_SCRIPTS = {
+    "gpu_proofs_gate.py",
+    "landing_gate.py",
+    "land_branch.py",
+    "trunk_health.py",
+    "run_ui_flows.py",
+}
+
+
+def _command_targets_with_env(tokens, inherited=None):
+    """Resolve supported wrappers while retaining concrete env assignments."""
+    env = dict(inherited or {})
+    i = 0
+    while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+        key, value = tokens[i].split("=", 1)
+        env[key] = value
+        i += 1
+    if i >= len(tokens):
+        return
+    program = Path(tokens[i]).name
+    args = tokens[i + 1:]
+    if program in {"if", "elif", "then", "do", "while", "until", "!", "{"}:
+        yield from _command_targets_with_env(args, env)
+        return
+    if program in {"command", "exec"}:
+        if program == "command" and any(a in {"-v", "-V"} for a in args[:1]):
+            return
+        if args[:1] == ["--"]:
+            args = args[1:]
+        yield from _command_targets_with_env(args, env)
+        return
+    if program == "env":
+        j = 0
+        while j < len(args):
+            arg = args[j]
+            if arg in {"-u", "--unset", "-C", "--chdir"}:
+                if arg in {"-u", "--unset"} and j + 1 < len(args):
+                    env.pop(args[j + 1], None)
+                elif arg in {"-C", "--chdir"}:
+                    env["__CODEX_UNRESOLVED_CWD__"] = arg
+                j += 2
+            elif arg in {"-i", "--ignore-environment"}:
+                env = {}
+                j += 1
+            elif arg == "--":
+                j += 1
+                break
+            elif arg.startswith(("--unset=", "--chdir=")):
+                if arg.startswith("--unset="):
+                    env.pop(arg.split("=", 1)[1], None)
+                else:
+                    env["__CODEX_UNRESOLVED_CWD__"] = "--chdir"
+                j += 1
+            elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", arg):
+                key, value = arg.split("=", 1)
+                env[key] = value
+                j += 1
+            else:
+                break
+        yield from _command_targets_with_env(args[j:], env)
+        return
+    if program == "with-build-lock.sh":
+        yield from _command_targets_with_env(args, env)
+        return
+    if program in {"bash", "sh", "zsh"}:
+        j = 0
+        while j < len(args) and args[j].startswith("-"):
+            flag = args[j]
+            j += 1
+            if "c" in flag[1:] and j < len(args):
+                for part in execution_segments(args[j]):
+                    yield from _command_targets_with_env(part, env)
+                return
+        if j < len(args):
+            yield from _command_targets_with_env(args[j:], env)
+        return
+    if re.fullmatch(r"python(?:[23](?:\.\d+)?)?", program):
+        j = 0
+        while j < len(args) and args[j].startswith("-"):
+            flag = args[j]
+            if flag in {"-c", "-m"}:
+                return
+            j += 2 if flag in {"-W", "-X"} else 1
+        if j < len(args):
+            yield Path(args[j]).name, args[j + 1:], env
+        return
+    yield program, args, env
+
+
+def _concrete_path(value, base):
+    if not value or any(token in value for token in ("$", "`", "*", "?", "[")):
+        return None
+    path = Path(value).expanduser()
+    return Path(os.path.abspath(os.fspath(path if path.is_absolute() else base / path)))
+
+
+def _workspace_root(cwd):
+    try:
+        return Path(git(cwd, "rev-parse", "--show-toplevel"))
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
+def _cargo_storage_target(args, invocation_cwd):
+    target_values = []
+    config_values = []
+    manifest = None
+    cargo_cwd = Path(invocation_cwd)
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in {"--target-dir", "--manifest-path", "--config", "-C"}:
+            if i + 1 >= len(args):
+                return None, "missing value for " + arg
+            value = args[i + 1]
+            i += 2
+            if arg == "--target-dir":
+                target_values.append(value)
+            elif arg == "--manifest-path":
+                manifest = value
+            elif arg == "--config":
+                config_values.append(value)
+            else:
+                cargo_cwd = _concrete_path(value, cargo_cwd)
+                if cargo_cwd is None:
+                    return None, "dynamic cargo -C path"
+            continue
+        if arg.startswith("--target-dir="):
+            target_values.append(arg.split("=", 1)[1])
+        elif arg.startswith("--manifest-path="):
+            manifest = arg.split("=", 1)[1]
+        elif arg.startswith("--config="):
+            config_values.append(arg.split("=", 1)[1])
+        i += 1
+    values = [value for value in target_values if value]
+    return (cargo_cwd, manifest, values, config_values), None
+
+
+def _storage_invocations(command, cwd):
+    for tokens in execution_segments(command):
+        for program, args, assignments in _command_targets_with_env(tokens, os.environ):
+            if assignments.get("__CODEX_UNRESOLVED_CWD__"):
+                yield None, None, "unresolved env -C/--chdir working directory"
+                continue
+            if program == "cargo":
+                sub = _cargo_subcommand(args)
+                if sub in _BUILD_CARGO_SUBCOMMANDS:
+                    parsed, reason = _cargo_storage_target(args, cwd)
+                    if reason:
+                        yield None, None, reason
+                        continue
+                    cargo_cwd, manifest, explicit, configs = parsed
+                    env_values = [assignments.get(name) for name in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
+                                  if assignments.get(name)]
+                    all_values = explicit + env_values
+                    if len(set(all_values)) > 1:
+                        yield None, None, "conflicting Cargo target directory overrides"
+                        continue
+                    target_value = all_values[0] if all_values else None
+                    config_targets = []
+                    for config in configs:
+                        if "build.target-dir" in config.replace(" ", ""):
+                            match = re.fullmatch(r"\s*build\.target-dir\s*=\s*([^\s]+)\s*", config)
+                            if not match:
+                                yield None, None, "unresolved Cargo build.target-dir config override"
+                                break
+                            config_targets.append(match.group(1).strip("'\""))
+                        elif "=" not in config:
+                            yield None, None, "unresolved Cargo --config override"
+                            break
+                    else:
+                        all_values.extend(config_targets)
+                        if len(set(all_values)) > 1:
+                            yield None, None, "conflicting Cargo target directory overrides"
+                            continue
+                        target_value = all_values[0] if all_values else None
+                        root = _workspace_root(cargo_cwd)
+                        if manifest is not None:
+                            manifest_path = _concrete_path(manifest, cargo_cwd)
+                            if manifest_path is None:
+                                yield None, None, "dynamic Cargo manifest path"
+                                continue
+                            root = _workspace_root(manifest_path.parent)
+                        if root is None:
+                            yield None, None, "unable to resolve Cargo workspace root"
+                            continue
+                        target = _concrete_path(target_value, cargo_cwd) if target_value else root / "target"
+                        if target is None:
+                            yield None, None, "dynamic Cargo target directory override"
+                            continue
+                        yield target, root, None
+            elif program in _BUILD_DRIVER_SCRIPTS:
+                root = _workspace_root(cwd)
+                if root is None:
+                    yield None, None, "unable to resolve build-driver workspace root"
+                    continue
+                target = root / "target"
+                env_target_override = None
+                env_values = [assignments.get(name) for name in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
+                              if assignments.get(name)]
+                if len(set(env_values)) > 1:
+                    yield None, None, "conflicting build-driver target directory overrides"
+                    continue
+                if env_values:
+                    env_target_override = _concrete_path(env_values[0], cwd)
+                    if env_target_override is None:
+                        yield None, None, "dynamic build-driver target directory override"
+                        continue
+                i = 0
+                while i < len(args):
+                    arg = args[i]
+                    if program == "land_branch.py" and arg == "--worktree" and i + 1 < len(args):
+                        worktree = _concrete_path(args[i + 1], cwd)
+                        if worktree is None:
+                            yield None, None, "dynamic landing worktree path"
+                            break
+                        target = worktree / "target"
+                        i += 2
+                        continue
+                    if program == "land_branch.py" and arg.startswith("--worktree="):
+                        worktree = _concrete_path(arg.split("=", 1)[1], cwd)
+                        if worktree is None:
+                            yield None, None, "dynamic landing worktree path"
+                            break
+                        target = worktree / "target"
+                        i += 1
+                        continue
+                    if program == "landing_gate.py" and arg == "--repo" and i + 1 < len(args):
+                        repo = _concrete_path(args[i + 1], cwd)
+                        if repo is None:
+                            yield None, None, "dynamic landing repo path"
+                            break
+                        root, target = repo, repo / "target"
+                        i += 2
+                        continue
+                    if program == "landing_gate.py" and arg.startswith("--repo="):
+                        repo = _concrete_path(arg.split("=", 1)[1], cwd)
+                        if repo is None:
+                            yield None, None, "dynamic landing repo path"
+                            break
+                        root, target = repo, repo / "target"
+                        i += 1
+                        continue
+                    i += 1
+                else:
+                    if env_target_override is not None:
+                        target = env_target_override
+                    yield target, root, None
+
+
+def check_storage(event, command, cwd):
+    """Admission-only storage check for commands that can drive Cargo builds."""
+    for target, repo, reason in _storage_invocations(command, cwd):
+        if reason:
+            return "Storage admission refused: " + reason
+        result = storage_budget.check_build(target, repo)
+        if not result:
+            return "Storage admission refused: " + result.reason
+    return None
 
 
 def consume_permit(command, cwd, allow_cwd_fallback=False):

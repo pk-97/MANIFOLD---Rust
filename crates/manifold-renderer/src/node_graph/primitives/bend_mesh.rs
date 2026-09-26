@@ -72,7 +72,7 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("angle"),
             label: "Angle",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.5),
             range: None,
             enum_values: &[],
@@ -247,6 +247,7 @@ mod tests {
     #[test]
     fn bend_mesh_angle_is_unbounded() {
         let angle = BendMesh::PARAMS.iter().find(|p| p.name == "angle").unwrap();
+        assert_eq!(angle.ty, ParamType::Angle, "angle is displayed in degrees");
         assert_eq!(angle.range, None, "angle must be unbounded (BUG-039 class)");
     }
 
@@ -286,8 +287,9 @@ mod gpu_tests {
             uv,
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {

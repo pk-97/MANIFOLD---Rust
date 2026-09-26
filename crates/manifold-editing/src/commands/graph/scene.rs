@@ -448,6 +448,23 @@ impl Command for AddSceneObjectCommand {
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let prev_metadata = def.preset_metadata.clone();
 
+                // Document ids are global even when the edit targets a nested
+                // level. Allocate the complete six-id block before borrowing
+                // that level so a full document or id exhaustion leaves the
+                // graph untouched.
+                let mut next_id = max_node_id_over(&def.nodes).checked_add(1);
+                let mut fresh = || -> Option<u32> {
+                    let id = next_id?;
+                    next_id = id.checked_add(1);
+                    Some(id)
+                };
+                let mesh_id = fresh()?;
+                let mat_id = fresh()?;
+                let transform_id = fresh()?;
+                let scene_object_id = fresh()?;
+                let out_id = fresh()?;
+                let group_id = fresh()?;
+
                 // Build the group + wire it in, entirely within a nested block so
                 // the `nodes`/`wires` borrows (from `descend_level`) end before
                 // the P1 exposure stamping below touches `def.preset_metadata` —
@@ -473,19 +490,6 @@ impl Command for AddSceneObjectCommand {
                             value: (k + 1) as f32,
                         },
                     );
-
-                    let mut next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-                    let mut fresh = move || {
-                        let v = next_id;
-                        next_id += 1;
-                        v
-                    };
-                    let mesh_id = fresh();
-                    let mat_id = fresh();
-                    let transform_id = fresh();
-                    let scene_object_id = fresh();
-                    let out_id = fresh();
-                    let group_id = fresh();
 
                     let tint = scene_object_tint(k);
                     let mut mat_params = BTreeMap::new();
@@ -2139,7 +2143,7 @@ fn target_string_bindings(
 /// them (the importer deliberately fans out one outer control to many nodes).
 /// Return only ids that no longer have any surviving binding so the host
 /// manifest and its modulation collections can be pruned by the caller.
-fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> Vec<String> {
+pub(super) fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> Vec<String> {
     let Some(meta) = def.preset_metadata.as_mut() else {
         return Vec::new();
     };

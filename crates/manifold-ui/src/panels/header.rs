@@ -28,12 +28,9 @@ const PROGRESS_BAR_W: f32 = 140.0;
 const PROGRESS_BAR_H: f32 = 10.0;
 const PROGRESS_BAR_INSET: f32 = 5.0;
 
-// export progress strip, right of centre (mirrors the import
-// status + progress bar above, same visibility-toggle-not-rebuild pattern).
-const EXPORT_STATUS_W: f32 = 220.0;
-
 const ZOOM_BUTTON_W: f32 = 28.0;
 const ZOOM_LABEL_W: f32 = 70.0;
+const ZOOM_CLUSTER_W: f32 = ZOOM_BUTTON_W * 2.0 + ZOOM_LABEL_W;
 
 const TIME_DISPLAY_W: f32 = 260.0;
 
@@ -54,11 +51,6 @@ pub struct HeaderPanel {
     import_status: String,
     import_progress: f32,
     import_progress_visible: bool,
-    /// export status text + progress (0.0..1.0), same
-    /// always-emit/toggle-visibility pattern as the import fields above.
-    export_status: String,
-    export_progress: f32,
-    export_progress_visible: bool,
     time_display: String,
     zoom_label: String,
     /// Whether the Audio Setup / Scene Setup docks are open — drives the two
@@ -77,9 +69,6 @@ impl HeaderPanel {
             import_status: String::new(),
             import_progress: 0.0,
             import_progress_visible: false,
-            export_status: String::new(),
-            export_progress: 0.0,
-            export_progress_visible: false,
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             zoom_label: "120 px/beat".into(),
             audio_setup_open: false,
@@ -97,15 +86,6 @@ impl HeaderPanel {
         self.import_status = status.into();
         self.import_progress = progress.clamp(0.0, 1.0);
         self.import_progress_visible = show;
-    }
-
-    /// export progress strip. `show` is `content_state.is_exporting`;
-    /// `status`/`progress` come straight off the content thread's
-    /// `send_export_progress` snapshots (`export_status`/`export_progress`).
-    pub fn set_export_status(&mut self, status: &str, progress: f32, show: bool) {
-        self.export_status = status.into();
-        self.export_progress = progress.clamp(0.0, 1.0);
-        self.export_progress_visible = show;
     }
 
     pub fn set_time_display(&mut self, text: &str) {
@@ -151,16 +131,27 @@ impl HeaderPanel {
         View::panel().w(Sizing::Fixed(w)).fill_h()
     }
 
-    fn left_group(&self) -> View {
+    fn left_group(&self, available_w: f32, right_w: f32) -> (View, f32) {
+        let room = (available_w - right_w).max(0.0);
+        let compact = room
+            < PROJECT_NAME_W + SPACER + IMPORT_STATUS_W + PROGRESS_BAR_INSET + PROGRESS_BAR_W;
+        let project_w = if compact { room.min(140.0) } else { PROJECT_NAME_W };
+        let detail_visible = !compact;
+        let spacer_w = if compact { 0.0 } else { SPACER };
+        let progress_inset = if detail_visible { PROGRESS_BAR_INSET } else { 0.0 };
+        let status_w = if detail_visible { IMPORT_STATUS_W } else { 0.0 };
+        let progress_w = if detail_visible { PROGRESS_BAR_W } else { 0.0 };
+        let used_w = project_w + spacer_w + status_w + progress_inset + progress_w;
+
         // Progress bar: fixed track with an inset fill scaled by progress, both
         // hidden until an import is running.
         let visible = self.import_progress_visible;
-        let fill_w = (PROGRESS_BAR_W - 2.0) * self.import_progress;
+        let fill_w = (progress_w - 2.0).max(0.0) * self.import_progress;
         let progress = View::panel()
-            .fixed(PROGRESS_BAR_W, PROGRESS_BAR_H)
+            .fixed(progress_w, PROGRESS_BAR_H)
             .bg(color::SLIDER_TRACK_PRESSED_C32)
             .radius(PROGRESS_RADIUS)
-            .visible(visible)
+            .visible(visible && detail_visible)
             .pad(Pad::all(1.0))
             .child(
                 View::panel()
@@ -171,33 +162,51 @@ impl HeaderPanel {
                     .visible(visible),
             );
 
-        View::row(0.0)
-            .fill()
-            .main_align(Align::Start)
-            .cross_align(Align::Center)
-            .child(
-                View::label(self.project_name.as_str())
-                    .w(Sizing::Fixed(PROJECT_NAME_W))
-                    .fill_h()
-                    .font(color::FONT_SUBHEADING)
-                    .text_color(color::TEXT_DIMMED_C32),
-            )
-            .child(Self::spacer_fixed(SPACER))
-            .child(
-                View::label(self.import_status.as_str())
-                    .w(Sizing::Fixed(IMPORT_STATUS_W))
-                    .fill_h()
-                    .font(color::FONT_LABEL)
-                    .text_color(color::TEXT_DIMMED_C32),
-            )
-            .child(Self::spacer_fixed(PROGRESS_BAR_INSET))
-            .child(progress)
+        (
+            View::row(0.0)
+                .fill()
+                .main_align(Align::Start)
+                .cross_align(Align::Center)
+                .child(
+                    View::label(self.project_name.as_str())
+                        .w(Sizing::Fixed(project_w))
+                        .fill_h()
+                        .font(color::FONT_SUBHEADING)
+                        .text_color(color::TEXT_DIMMED_C32),
+                )
+                .child(Self::spacer_fixed(spacer_w))
+                .child(
+                    View::label(self.import_status.as_str())
+                        .w(Sizing::Fixed(status_w))
+                        .fill_h()
+                        .font(color::FONT_LABEL)
+                        .text_color(color::TEXT_DIMMED_C32),
+                )
+                .child(Self::spacer_fixed(progress_inset))
+                .child(progress),
+            used_w,
+        )
     }
 
-    fn center_group(&self) -> View {
+    fn center_group(&self, available_w: f32, left_w: f32, right_w: f32) -> View {
+        let center_w = TIME_DISPLAY_W.min(
+            (available_w - 2.0 * left_w)
+                .min(available_w - 2.0 * right_w)
+                .max(0.0),
+        );
+        let time_text = if center_w < 72.0 {
+            ""
+        } else if center_w < TIME_DISPLAY_W {
+            self.time_display
+                .split(" / ")
+                .next()
+                .unwrap_or(self.time_display.as_str())
+        } else {
+            self.time_display.as_str()
+        };
         View::row(0.0).fill().main_align(Align::Center).child(
-            View::label(self.time_display.as_str())
-                .w(Sizing::Fixed(TIME_DISPLAY_W))
+            View::label(time_text)
+                .w(Sizing::Fixed(center_w))
                 .fill_h()
                 .font(color::FONT_HEADING)
                 .text_color(color::TEXT_PRIMARY_C32)
@@ -205,65 +214,44 @@ impl HeaderPanel {
         )
     }
 
-    fn right_group(&self) -> View {
-        // export progress strip — same fixed-track/inset-fill
-        // pattern as `left_group`'s import progress bar, always emitted and
-        // shown/hidden via `.visible()` so toggling it never rebuilds the
-        // tree (mirrors `progress_toggle_is_in_place` for the import bar).
-        let export_visible = self.export_progress_visible;
-        let export_fill_w = (PROGRESS_BAR_W - 2.0) * self.export_progress;
-        let export_progress = View::panel()
-            .fixed(PROGRESS_BAR_W, PROGRESS_BAR_H)
-            .bg(color::SLIDER_TRACK_PRESSED_C32)
-            .radius(PROGRESS_RADIUS)
-            .visible(export_visible)
-            .pad(Pad::all(1.0))
-            .child(
-                View::panel()
-                    .w(Sizing::Fixed(export_fill_w))
-                    .fill_h()
-                    .bg(PROGRESS_FILL)
-                    .radius(color::HAIRLINE_RADIUS)
-                    .visible(export_visible),
-            );
-        let export_group = View::row(0.0)
-            .fill_h()
-            .cross_align(Align::Center)
-            .child(
-                View::label(self.export_status.as_str())
-                    .w(Sizing::Fixed(EXPORT_STATUS_W))
-                    .fill_h()
-                    .font(color::FONT_LABEL)
-                    .text_color(color::TEXT_DIMMED_C32)
-                    .align_text(TextAlign::Right),
-            )
-            .child(Self::spacer_fixed(PROGRESS_BAR_INSET))
-            .child(export_progress);
-
+    fn right_group(&self, available_w: f32) -> (View, f32) {
+        let dock_button_w = ((available_w - ZOOM_CLUSTER_W - GROUP_SPACING) * 0.5)
+            .clamp(0.0, 60.0);
+        let dock_visible = dock_button_w >= 24.0;
+        let dock_gap = if dock_visible { color::SPACE_XS } else { 0.0 };
+        let audio_label = if dock_button_w >= 50.0 { "Audio" } else { "A" };
+        let scene_label = if dock_button_w >= 50.0 { "Scene" } else { "S" };
         // Utility-dock toggles (SCENE_SETUP_PANEL_DESIGN D2): "Audio" and
-        // "Scene" sit side by side, both always present (never conditionally
-        // hidden — `feedback_no_conditionally_visible_ui`), highlighted when
-        // their dock is open. Also reachable via the View menu (⌘⇧A for
-        // Audio) — this is the on-screen affordance the docs assume exists
-        // beside each other.
-        let dock_toggles = View::row(color::SPACE_XS)
+        // "Scene" sit side by side while there is room for their compact
+        // labels; the zoom cluster keeps its full button affordances first.
+        // They remain highlighted when their dock is open and are also
+        // reachable via the View menu (⌘⇧A for Audio).
+        let dock_toggles = View::row(dock_gap)
             .fill_h()
             .child(
-                View::button("Audio")
-                    .w(Sizing::Fixed(60.0))
+                View::button(audio_label)
+                    .w(Sizing::Fixed(dock_button_w))
                     .fill_h()
+                    .visible(dock_visible)
                     .style(Self::dock_toggle_style(self.audio_setup_open))
                     .on_click(PanelAction::Root(RootAction::OpenAudioSetup)),
             )
             .child(
-                View::button("Scene")
-                    .w(Sizing::Fixed(60.0))
+                View::button(scene_label)
+                    .w(Sizing::Fixed(dock_button_w))
                     .fill_h()
+                    .visible(dock_visible)
                     .style(Self::dock_toggle_style(self.scene_setup_open))
                     .on_click(PanelAction::Root(RootAction::OpenSceneSetup)),
             );
 
         // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
+        let zoom_label_w = (available_w
+            - dock_button_w * 2.0
+            - dock_gap
+            - GROUP_SPACING
+            - ZOOM_BUTTON_W * 2.0)
+            .clamp(0.0, ZOOM_LABEL_W);
         let zoom_cluster = View::row(0.0)
             .fill_h()
             .child(
@@ -275,7 +263,7 @@ impl HeaderPanel {
             )
             .child(
                 View::label(self.zoom_label.as_str())
-                    .w(Sizing::Fixed(ZOOM_LABEL_W))
+                    .w(Sizing::Fixed(zoom_label_w))
                     .fill_h()
                     .font(color::FONT_SUBHEADING)
                     .text_color(color::TEXT_PRIMARY_C32)
@@ -289,23 +277,33 @@ impl HeaderPanel {
                     .on_click(PanelAction::Transport(TransportAction::ZoomIn)),
             );
 
-        View::row(GROUP_SPACING)
-            .fill()
-            .main_align(Align::End)
-            .child(export_group)
-            .child(dock_toggles)
-            .child(zoom_cluster)
+        let used_w = dock_button_w * 2.0
+            + dock_gap
+            + GROUP_SPACING
+            + ZOOM_BUTTON_W * 2.0
+            + zoom_label_w;
+        (
+            View::row(GROUP_SPACING)
+                .fill()
+                .main_align(Align::End)
+                .child(dock_toggles)
+                .child(zoom_cluster),
+            used_w,
+        )
     }
 
     fn view(&self) -> View {
+        let available_w = (self.rect.width - 2.0 * INSET).max(0.0);
+        let (right, right_w) = self.right_group(available_w);
+        let (left, left_w) = self.left_group(available_w, right_w);
         View::stack()
             .fill()
             .bg(color::PANEL_BG_DARK)
             .border(color::BORDER, 1.0)
             .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
-            .child(self.left_group())
-            .child(self.center_group())
-            .child(self.right_group())
+            .child(left)
+            .child(self.center_group(available_w, left_w, right_w))
+            .child(right)
     }
 }
 
@@ -475,28 +473,22 @@ mod tests {
         assert_eq!(tree.structure_version(), sv, "progress toggle must not rebuild");
     }
 
-    /// the export progress strip follows the same
-    /// always-emit/toggle-visibility contract as the import bar above, and
-    /// its text is actually reachable via the tree.
     #[test]
-    fn export_progress_toggle_is_in_place_and_text_updates() {
+    fn narrow_content_keeps_zoom_cluster_inside_header() {
         let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut layout = ScreenLayout::new(1440.0, 900.0);
+        layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
+        let header = layout.header();
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
-        let sv = tree.structure_version();
 
-        panel.set_export_status("Exporting 120/600 (20%)", 0.20, true);
-        panel.update(&mut tree);
-
-        assert_eq!(
-            tree.structure_version(),
-            sv,
-            "export progress toggle must not rebuild"
-        );
-        assert_eq!(
-            node_with_text(&tree, "Exporting 120/600 (20%)").text.as_deref(),
-            Some("Exporting 120/600 (20%)")
-        );
+        let zoom_out = node_with_text(&tree, "\u{2212}").bounds;
+        let zoom_in = node_with_text(&tree, "+").bounds;
+        let project = node_with_text(&tree, "My Project").bounds;
+        assert!(zoom_out.x >= header.x);
+        assert!(zoom_in.x + zoom_in.width <= header.x + header.width);
+        assert!(project.x + project.width <= zoom_out.x);
+        assert!(zoom_in.x > zoom_out.x, "zoom controls retain left-to-right order");
     }
+
 }

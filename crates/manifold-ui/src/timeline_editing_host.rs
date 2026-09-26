@@ -296,6 +296,16 @@ pub trait TimelineEditingHost {
         shape: UiSegmentShape,
     );
 
+    /// Insert a breakpoint at `beat` while preserving the sampled curve on
+    /// both sides of the insertion. Returns the raw PARAM-RANGE value stored
+    /// at the inserted point for immediate selection by the overlay.
+    fn insert_automation_point_on_curve(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        beat: Beats,
+    ) -> Option<f32>;
+
     /// Live-preview a point drag: directly mutates the point currently at
     /// `from_beat` to `(to_beat, to_value)` in PARAM RANGE, bypassing undo.
     /// The caller re-derives `from_beat` each frame as whatever beat this

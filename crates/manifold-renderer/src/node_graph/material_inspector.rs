@@ -38,7 +38,15 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
         "color_r" | "color_g" | "color_b" | "metallic" | "roughness" => {
             Some(MaterialGroup::Surface)
         }
-        "ambient" | "specular" | "baked_look" => Some(MaterialGroup::Advanced),
+        "ambient" | "specular" | "baked_look" | "normal_scale" | "occlusion_strength" => Some(MaterialGroup::Advanced),
+        "clearcoat_normal_scale" => Some(MaterialGroup::Feature(MaterialFeature::Coat)),
+        "subsurface_weight" | "subsurface_radius_r" | "subsurface_radius_g"
+        | "subsurface_radius_b" | "subsurface_color_r" | "subsurface_color_g"
+        | "subsurface_color_b" | "subsurface_anisotropy" | "subsurface_mode"
+        | "subsurface_samples" => Some(MaterialGroup::Subsurface),
+        "translucency_color_r" | "translucency_color_g" | "translucency_color_b" => {
+            Some(MaterialGroup::Feature(MaterialFeature::Translucency))
+        }
         "emission_intensity"
         | "clearcoat"
         | "clearcoat_roughness"
@@ -80,7 +88,29 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
     if let Some((family, component)) = sampler_component(param_name) {
         return Some(MaterialParamRole::Sampler(family, component));
     }
+    if advanced_map_metadata(param_name) {
+        return Some(MaterialParamRole::Scalar(MaterialGroup::Advanced));
+    }
     None
+}
+
+/// Extended map coordinates and sampling stay editable on the shared
+/// Advanced surface. Match only the implemented catalog so unknown future
+/// controls still fail the schema-coverage test.
+fn advanced_map_metadata(name: &str) -> bool {
+    if ["", "nrm_", "mr_", "occ_", "em_"].iter().any(|prefix| {
+        name.strip_prefix(prefix).is_some_and(|suffix| matches!(suffix, "uv_set" | "mip_filter"))
+    }) {
+        return true;
+    }
+    ["sheen_color_", "sheen_roughness_", "iridescence_", "iridescence_thickness_",
+        "anisotropy_", "clearcoat_", "clearcoat_roughness_", "clearcoat_normal_",
+        "specular_", "specular_color_", "transmission_", "volume_thickness_",
+        "diffuse_transmission_", "diffuse_transmission_color_"].iter().any(|prefix| {
+        name.strip_prefix(prefix).is_some_and(|suffix| matches!(suffix,
+            "uv_m00" | "uv_m01" | "uv_m10" | "uv_m11" | "uv_tx" | "uv_ty"
+            | "tex_coord" | "wrap_u" | "wrap_v" | "mag_filter" | "min_filter" | "mip_filter"))
+    })
 }
 
 fn feature_for_scalar(name: &str) -> MaterialFeature {
@@ -116,6 +146,10 @@ fn colour_channel(name: &str) -> Option<(MaterialColour, RgbChannel)> {
         (MaterialColour::Attenuation, suffix)
     } else if let Some(suffix) = name.strip_prefix("specular_tint_") {
         (MaterialColour::Specular, suffix)
+    } else if let Some(suffix) = name.strip_prefix("subsurface_color_") {
+        (MaterialColour::Subsurface, suffix)
+    } else if let Some(suffix) = name.strip_prefix("translucency_color_") {
+        (MaterialColour::Translucency, suffix)
     } else {
         return None;
     };
@@ -191,7 +225,7 @@ mod tests {
     #[test]
     fn material_inspector_schema_covers_pbr() {
         let params = PbrMaterial::PARAMS;
-        assert_eq!(params.len(), 96);
+        assert_eq!(params.len(), 290);
         let mut names = std::collections::HashSet::<&str>::new();
         let mut feature_modes = 0;
         let mut map_families = [0usize; 5];
@@ -216,5 +250,10 @@ mod tests {
         assert_eq!(feature_modes, 7);
         assert_eq!(map_families, [10, 10, 10, 10, 10]);
         assert!(material_param_role("node.phong_material", "color_r").is_none());
+        assert!(material_param_role("node.pbr_material", "subsurface_unknown").is_none());
+        assert_eq!(material_param_role("node.pbr_material", "subsurface_mode"),
+            Some(MaterialParamRole::Scalar(MaterialGroup::Subsurface)));
+        assert_eq!(material_param_role("node.pbr_material", "subsurface_color_r"),
+            Some(MaterialParamRole::Colour(MaterialGroup::Subsurface, MaterialColour::Subsurface, RgbChannel::R)));
     }
 }

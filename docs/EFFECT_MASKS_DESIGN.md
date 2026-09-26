@@ -80,6 +80,12 @@ Core/editing owns the optional reference and undoable structural commands.
 Renderer owns branch assembly and live bindings. UI projects group membership and
 uses ordinary mask cards. Add/remove/reorder/group/ungroup dispatch through
 `ContentCommand::ExecuteOnContent`, which applies through `EditingService`.
+Group headers select their members, collapse the shared frame, and drag the complete
+group. Dropping a card inside a group joins it; dropping at its outside edge removes
+membership. Whole-group moves stay between groups. Every move preserves contiguity;
+masked groups move together. Copy/paste preserves complete groups and mask identity,
+while copying only some members produces ordinary effects. Cut and paste each undo
+in one step. Menus and keyboard shortcuts invoke the same card edit handlers.
 Effect-chain dispatch now supplies the existing `LayerSkinRegistry` to the graph,
 matching generator dispatch; `LayerSource` caches its parsed ID until it changes.
 No additional shared locks, threads, graph target kinds, or parameter identity maps.

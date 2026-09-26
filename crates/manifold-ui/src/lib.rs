@@ -65,7 +65,8 @@ pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
 pub use param_surface::{
     MaterialColour, MaterialFeature, MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole,
-    ModifierCardInfo, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping, RowSpec, RowValue,
+    ModifierCardInfo, ModifierPickerEntry, ObjectModifierCardInfo, ParamRow, ParamSurface,
+    RowMapping, RowSpec, RowValue,
     RgbChannel, SamplerComponent, SceneRowAddr, UvComponent,
 };
 pub use node::*;
