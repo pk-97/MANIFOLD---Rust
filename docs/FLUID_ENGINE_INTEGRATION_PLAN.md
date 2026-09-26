@@ -1,8 +1,8 @@
 # Fluid engine integration — creative scene physics in Manifold
 
-<!-- index: Proposed FLIP integration through shared manifold-physics forces, scene authoring, timed controls, rigid-body interaction, baking and export. -->
+<!-- index: FLIP integration through shared manifold-physics forces, scene authoring, timed controls, rigid-body interaction, baking and export. -->
 
-**Status:** PROPOSED · 2026-09-26 · Codex. This is an implementation plan, not a claim that the app integration exists.
+**Status:** IN PROGRESS · 2026-09-26 · Codex. Full implementation authorised; integration preflight underway. P1–P11 are not yet complete.
 **Prerequisites:** existing CPU FLIP work at `3683a086d66bd5edf68328a7fdb427515258292b` on `codex/flip-fluids-engine`; reuse the concurrent mesh-collision implementation before the mesh-authoring phases.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6. Keep work in the existing worktree; Peter has deferred landing. No public push is authorised by this plan.
 
@@ -168,6 +168,8 @@ All exposed live scalar/vector controls use the usual parameter rows, keyframes,
 Examples are editable compositions: a radial impulse on a clip edge; a vortex whose strength follows any audio send; a moving emitter with velocity modulation; a gravity flip at a timeline marker. A user can replace any trigger or field without changing the solver. Sum modulation with the authored base value using existing arithmetic/envelope nodes; do not overwrite a user's fader with a hardcoded trigger envelope.
 
 Save these as ordinary graph/preset structures with stable `NodeId`/scene references. Group, duplicate, rename, undo/redo and save/reload preserve role assignments and bindings. Runtime worlds, handles, pending events and buffers are skipped in project serialization; new persistent fields use camelCase and backward-compatible defaults. Existing water/honey presets remain loadable and migrate through the normal graph compatibility path.
+
+For the authoring workflow, use Houdini's separation of container, source, collision and surface as a reference, while keeping Manifold's existing scene selection and parameter gestures. Its [minimal FLIP setup](https://www.sidefx.com/docs/houdini/fluid/sopminimalsetup.html) and [tank controls](https://www.sidefx.com/docs/houdini/fluid/sopconfigtank.html) illustrate those roles. This is a UI reference, not a claim of equivalent solver capabilities. Physical controls, surface reconstruction and material/style controls must remain distinguishable in the inspector, with setup edits labelled as requiring restart/rebake.
 
 ## 5. Timing, events and lifecycle
 

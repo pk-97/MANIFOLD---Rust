@@ -37,6 +37,7 @@ fn vertex(position: [f32; 3]) -> MeshVertex {
         uv: [0.0; 2],
         _pad2: [0.0; 2],
         tangent: [0.0; 4],
+        color: [1.0; 4],
     }
 }
 

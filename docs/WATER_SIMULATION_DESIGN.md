@@ -6,7 +6,7 @@
 
 ## Current implementation contract — CPU FLIP reference
 
-The proposed app integration is specified in [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md): shared `manifold-physics` interactions, arbitrary scene authoring, musical controls, baking and export. The contract below describes the existing prototype, not completion of that plan.
+The app integration is specified in [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md): shared `manifold-physics` interactions, arbitrary scene authoring, musical controls, baking and export. The contract below describes the existing prototype, not completion of that plan.
 
 `manifold-fluids` vendors the MIT engine at revision `70a0e954018fe39e1f9c3631264989569752bb7a`; its native provenance file identifies the upstream source and one local numerical fix. Upwind level-set reinitialization copies the input into its scratch grid so narrow-band stencil neighbors remain initialized. Other vendored numerical files are unchanged. A narrow C++ bridge owns each world; native calls serialize access to upstream global state. `node.fluid_surface` runs simulation and the upstream mesher on a worker, then publishes immutable meshes through `manifold-gpu` to ordinary scene/material nodes. **Water Basin (CPU)** is the basic reference; **Water — Dam Break** adds a localized initial column and a composed whitewater scene.
 
@@ -27,6 +27,8 @@ The bounded `fluid_capture --cinematic --fps 30 --linear` workflow averages two 
 Mesh overflow and native/cache failures invalidate the frame. Rotating/arbitrary colliders, clip-transition guarantees, two-way rigid-body coupling and an accelerated solver remain open. GPU work stays within `manifold-gpu` and WGSL so the design remains suitable for Metal and Vulkan; runtime validation on Metal does not establish Vulkan backend support.
 
 Focused checks are the native crate tests, renderer `fluid_` / `water_` tests and `gpu_proofs_gate.py --filter fluid_ --filter water_`. The Water Basin proof renders ticks 0–90 at 640×360 and writes `/tmp/manifold_water_{1,30,90}.png` for observation. These checks do not establish app frame rate or production export/lifecycle acceptance.
+
+The 2026-09-26 main integration adopts the renderer's 80-byte `MeshVertex`, including vertex colour. Fluid uploads use five vec4 words per vertex; native fluid surfaces initialise colour to white. Cache v6 stores the expanded records, while v3–v5 retain explicit 64-byte decoding with white colour. Their physics-setting defaults and validation remain unchanged. New material maps and subsurface bindings coexist with geometric-volume optics; the latter uses separate bindings 53–55.
 
 ## Earlier GPU proposal (historical)
 **Prerequisites:** existing scene renderer, material system and native Metal backend. No cloth, ropes, baked-cache import or generic physics engine prerequisite.
