@@ -112,28 +112,10 @@ pub fn push_state(
                 .extend_from_slice(&content_state.midi_device_names);
         }
 
-        // D17 "export-complete green sweep" (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
-        // `export_finished` was written by the content thread but never read —
-        // see the `FIXME(dead-code-audit)` on `ExportFinishedEvent` in
-        // `content_state.rs`. `content_state` here is a cached snapshot
-        // re-pushed every UI frame, not an edge-triggered event, so key on the
-        // event's own identity to fire the toast exactly once per real export.
-        if let Some(ev) = &content_state.export_finished {
-            let key = format!("{}|{}|{}", ev.success, ev.message, ev.output_path);
-            if ui.last_export_toast_key.as_deref() != Some(key.as_str()) {
-                if ev.success {
-                    ui.toast.show_with_accent(ev.message.clone(), color::GREEN_BASE);
-                } else {
-                    ui.toast.show_with_accent(ev.message.clone(), color::RED_BASE);
-                }
-                ui.last_export_toast_key = Some(key);
-            }
-        }
-
         // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
         // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
-        // handlers used to show directly (`app_render.rs`). Same re-fire guard
-        // as the export toast above; keyed on `data_version` (bumped by every
+        // handlers used to show directly (`app_render.rs`). Keyed on
+        // `data_version` (bumped by every
         // undo/redo) rather than the description, so undoing the same command
         // twice in a row (rare, but possible via redo-then-undo) still fires.
         if let Some(ev) = &content_state.undo_redo_event {
@@ -154,6 +136,27 @@ pub fn push_state(
         ) {
             ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
             ui.last_graph_edit_diagnostic_sequence = Some(sequence);
+        }
+
+        if let Some(update) = &content_state.modifier_selection_update {
+            if ui.last_modifier_selection_sequence != Some(update.sequence) {
+                ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
+                ui.inspector.apply_selection_visuals(tree);
+                ui.last_modifier_selection_sequence = Some(update.sequence);
+            }
+        } else {
+            ui.last_modifier_selection_sequence = None;
+        }
+
+        if let Some(update) = &content_state.object_modifier_selection_update {
+            if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
+                ui.scene_setup_panel.select_object_modifier_by_address(
+                    &update.layer_id, update.owner_id, update.node_doc_id, tree,
+                );
+                ui.last_object_modifier_selection_sequence = Some(update.sequence);
+            }
+        } else {
+            ui.last_object_modifier_selection_sequence = None;
         }
 
         // Cache Ableton session for parameter mapping dropdown
@@ -370,12 +373,25 @@ pub fn push_state(
             .set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
                 project.settings.tonemap_curve,
             ));
+        ui.settings_popup
+            .set_tonemap_enabled(project.settings.tonemap_enabled);
         ui.settings_popup.set_hdr(project.settings.export_hdr);
         ui.settings_popup
             .set_split_sections(project.settings.split_at_markers);
 
         // RT Quality panel — feed the current settings
         ui.rt_quality_panel.configure(project.settings.rt_quality);
+    }
+
+    // Runtime-only presentation state rides every ContentState, including
+    // paused command snapshots; it must not wait for a project-version change.
+    if let Some(sdr_preview) = content_state.sdr_preview
+        && ui.settings_popup.set_sdr_preview(sdr_preview)
+    {
+        // The runtime preview does not bump the project version. Request the
+        // established overlay visual rebuild so its segment active styling
+        // reflects the new snapshot even while paused.
+        ui.overlay_dirty = true;
     }
 
     // Footer stats

@@ -56,7 +56,7 @@ Changing Bands, Cell Size or cut Direction evaluates new cuts on the GPU;
 none becomes a setup-only control. Stable cut maps are cached independently
 of motion. New cut vertices interpolate surface attributes; source corners
 retain their original records. Cuts remain open: caps and bevels are outside
-this change. Existing shared 4x MSAA remains the raster antialiasing path.
+this change. Existing shared 4x MSAA remains the raster antialiasing path. Stock feathered masks and Recon stagger envelopes sample reference vertices, then use the shared weight remap: adjacent triangles within a fragment remain joined through partial blends (BUG-9q34). Partial weights may deform a fragment; intentional band/cell cuts remain open. Full weights retain the rigid fragment response.
 Remaps use generated standalone/fused kernels with the map as their output
 capacity anchor. Reference remap chains feeding another cutter stay cached
 independently, so a moving fused output cannot invalidate stable cut maps.

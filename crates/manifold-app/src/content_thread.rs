@@ -205,6 +205,11 @@ pub struct ContentThread {
     /// Most recent rejected graph edit, retained until a newer rejection so
     /// every regular snapshot carries the diagnostic to the UI.
     pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
+    /// Most recent content-authoritative selection update for newly created
+    /// scene modifiers, retained until a newer update.
+    pub modifier_selection_update: Option<crate::content_state::ModifierSelectionUpdate>,
+    pub object_modifier_selection_update:
+        Option<crate::content_state::ObjectModifierSelectionUpdate>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -1333,6 +1338,7 @@ impl ContentThread {
                 .engine
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator),
+            sdr_preview: Some(self.content_pipeline.sdr_preview()),
             rt_quality: self
                 .engine
                 .project()
@@ -1437,9 +1443,12 @@ impl ContentThread {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            export_run_finished: false,
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
             graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),
+            modifier_selection_update: self.modifier_selection_update.clone(),
+            object_modifier_selection_update: self.object_modifier_selection_update.clone(),
             ableton_session: if self.ableton_bridge.session_changed() {
                 Some(Arc::new(self.ableton_bridge.session().clone()))
             } else {
@@ -2145,6 +2154,32 @@ mod tests {
             "expected data_version to bump, got {}",
             state.data_version
         );
+
+        let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
+        handle.join().expect("content thread joined");
+    }
+
+    #[test]
+    fn paused_sdr_preview_publishes_runtime_snapshot() {
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        thread.rendering_paused = true;
+
+        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(64);
+        let (state_tx, state_rx) = crossbeam_channel::bounded(4);
+        let cmd_tx_for_test = cmd_tx.clone();
+        let handle = std::thread::spawn(move || {
+            thread.run(cmd_tx, cmd_rx, state_tx);
+        });
+
+        cmd_tx_for_test
+            .send(ContentCommand::SetSdrPreview(true))
+            .expect("command channel open");
+        let state = state_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("runtime preview snapshot published while paused");
+        assert_eq!(state.sdr_preview, Some(true));
+        assert_eq!(state.data_version, 0, "preview must not create an edit");
+        assert!(!state.editing_is_dirty, "preview must not dirty the project");
 
         let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
         handle.join().expect("content thread joined");

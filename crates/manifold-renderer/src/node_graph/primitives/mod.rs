@@ -47,6 +47,7 @@ mod blob_overlay_render;
 mod block_displace_field;
 mod block_sample;
 mod bokeh_gather;
+pub use bokeh_gather::BokehGather;
 mod box_mask;
 mod blur_3d_separable;
 mod blinn_specular;

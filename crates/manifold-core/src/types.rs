@@ -1012,7 +1012,8 @@ impl TryFrom<i32> for MarkerColor {
 
 // ─── Tonemap Curve ───
 
-/// Tonemapping curve applied as the final step before display output.
+/// Tonemapping curve selected for final SDR presentation after master effects.
+/// Application is controlled by `ProjectSettings::tonemap_enabled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TonemapCurve {

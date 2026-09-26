@@ -1,6 +1,6 @@
 # Cinematic Scene Tail — DoF + motion blur back into 3D scene graphs
 
-**Status:** IN PROGRESS — P0+P1+P2+P4 executed; camera On/Off controls repaired and new-import DoF default On (2026-09-22); P3 look-pass running (Peter). Owed: half-res DoF design phase (revived, figure on record); near reduction blocked by BUG-rdy0 (RT zero-intensity sun direction leak). Phase history lives in git. · k3 (lead)
+**Status:** IN PROGRESS — P0+P1+P2+P4 executed; camera On/Off controls repaired and new-import DoF default On (2026-09-22); P3 look-pass running (Peter). Half-resolution DoF implementation and flower acceptance are covered by CINEMATIC_POST D10 (2026-09-26); near reduction blocked by BUG-rdy0 (RT zero-intensity sun direction leak). Phase history lives in git. · k3 (lead)
 **Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) root-caused in P0 of this doc)
 
 Camera-control correction (2026-09-22): Motion Blur and Depth of Field use the shared On/Off buttons, with live value sync across panel rebuilds. New model imports default DoF to On; existing projects retain their saved choice and legacy neutral-lens migration remains unchanged. Required GPU validation exposed BUG-8a3c: the 4K tail measured a best peak delta of 32.60 ms (mean 14.21 ms), exceeding the 20 ms any-frame target. Peter ruled on 2026-09-23 that this measured performance target warns rather than blocks unrelated landings; BUG-8a3c stays open for the deferred half-resolution DoF work. The requested On default remains. The 1080p budget and remaining GPU proofs passed.
@@ -38,7 +38,7 @@ Section 2.5 audit (DECOMPOSING_GENERATORS.md section 2.5 (primitive audit)): no 
 ## 2. Decisions
 
 **D1 — Fresh imports get the full polished tail, always, with neutral lens defaults.**
-Import assembly wires `camera_lens → coc_from_depth → coc_dilate → bokeh_gather → motion_blur` after the existing SSAO mix, templated node-for-node on CinematicScene.json. Defaults are the neutral lens (`f_stop` = 1000, `shutter_angle` = 0), which CINEMATIC_POST I2 (pinhole pass-through) guarantees is a bit-clean pass-through — a fresh import renders byte-identical to today until Peter dials the lens.
+Import assembly wires `camera_lens → coc_from_depth → bokeh_gather → motion_blur` after the existing SSAO mix, templated node-for-node on CinematicScene.json. Defaults are the neutral lens (`f_stop` = 1000, `shutter_angle` = 0), which CINEMATIC_POST I2 (pinhole pass-through) guarantees is a bit-clean pass-through — a fresh import renders byte-identical to today until Peter dials the lens.
 Rejected: a per-scene enable toggle — the neutral passthrough already *is* the off state; a toggle adds an identity/flag system for zero behavioral difference (zero-new-systems test, DESIGN_AUTHORING.md section 3 (shaping the architecture)).
 Rejected: reinstating the pre-polish `variable_blur` DoF chain — that is the exact build Peter remembers as "a blocky blur filter from 2001"; `coc_dilate` + `bokeh_gather` replaced it and he has never seen the replacement.
 
@@ -54,7 +54,14 @@ Consequences, stated honestly: migration must find the same insertion point the 
 The Scene Setup rows already write the right lens params; once D1/D3 give those params consumers, the rows go live with zero UI changes. The guard is a test: for an import-assembled graph and a migrated graph, every surfaced lens param (`focus_distance`, `f_stop`, `shutter_angle`) has a downstream consumer path to `final`.
 Rejected: hiding the rows when consumers are absent — masks the bug class instead of killing it, and adds UI state for a condition that should not exist.
 
-**D5 — DoF runs full-res, template-faithful; half-res is deferred, not improvised.**
+**D5 — DoF keeps full-resolution graph ports; processing is half-resolution internally.**
+Amended 2026-09-26 by Peter's full upgrade request: the mechanism is now defined
+in [CINEMATIC_POST_DESIGN.md D10](CINEMATIC_POST_DESIGN.md). Existing graph wiring
+continues to use the shared bokeh atom; source classification, layered gathers
+and reconstruction live inside its established reduction boundary. Aperture and
+quality are exposed alongside the DoF toggle using the shared parameter surface.
+The earlier full-resolution decision below records the original phase boundary.
+
 Amended 2026-08-26 (P1 lane escalation, ruled by k3 (lead)): the original D5 assumed CinematicScene carried a half-res mechanism for the CoC/bokeh leg — the ⚠ VERIFY-AT-IMPL caught that it does not; every node in the preset's DoF group is full-res, and the codebase has no clean upsample atom to pair with `node.downsample`. Building a downsample/upsample leg would be improvising a mechanism the template lacks — exactly what the VERIFY-AT-IMPL forbids. So the tail ships FULL-RES like the reference preset, and the I4 measurement (≤ 3 ms at 1920×1080, `MANIFOLD_RENDER_TRACE=1`) decides whether resolution work is ever needed. If the measurement breaks budget, half-res becomes its own designed phase with the mechanism designed, not improvised.
 Consequences, stated honestly: full-res `bokeh_gather` (32 taps) costs more than the half-res leg D5 originally priced; the honest-cost halo note is moot unless the deferred phase ever ships.
 
@@ -66,15 +73,14 @@ Consequences, stated honestly: full-res `bokeh_gather` (32 taps) costs more than
 render_scene.out(color) ──┬──> ssao_mix (existing) ──> bokeh_gather.in
 render_scene.depth ───────┴──> coc_from_depth.depth
 lens.out ─────────────────────> coc_from_depth.camera
-coc_from_depth.out ───────────> coc_dilate.in
-coc_dilate.out ───────────────> bokeh_gather.width   (the atom's CoC input port is named `width` — verified against the primitive ABI and the preset at P1 execution; this doc's original `.coc` label was wrong)
+coc_from_depth.out ───────────> bokeh_gather.width   (the atom's CoC input port is named `width` — verified against the primitive ABI and the preset at P1 execution; this doc's original `.coc` label was wrong)
 bokeh_gather.out ─────────────> motion_blur.in
 render_scene.velocity ────────> motion_blur.velocity
 lens.out ─────────────────────> motion_blur.camera
 motion_blur.out ──────────────> final
 ```
 
-This is CinematicScene.json's wiring transcribed; the import assembler and the migration MUST produce this same shape (the migration's insertion point is the `final` upstream edge, D3). Full-res per the amended D5 (the VERIFY-AT-IMPL fired 2026-08-26: the preset has no half-res mechanism — ruled full-res, half-res deferred).
+This is CinematicScene.json's wiring transcribed; the import assembler and the migration MUST produce this same shape (the migration's insertion point is the `final` upstream edge, D3). Full-resolution graph ports, with half-resolution processing inside the shared bokeh primitive (D5/D10). Canonical saved `coc_from_depth → coc_dilate → bokeh_gather` wiring migrates to direct source CoC; dilation stays when another consumer needs it. Custom CoC producers are untouched.
 
 ## 4. Invariants & enforcement
 

@@ -15,6 +15,51 @@ pub(crate) struct ModifierClipboard {
     selected: Vec<NodeId>,
 }
 
+/// Copy modulation routes for a set of remapped host parameters. Both scene
+/// and object-card clipboard transfers use the same route state shape.
+pub(crate) fn copy_host_routes(
+    source: &PresetInstance,
+    destination: &mut PresetInstance,
+    remaps: &[(String, String)],
+    include_ableton: bool,
+) {
+    macro_rules! copy_routes {
+        ($field:ident) => {
+            if let Some(entries) = &source.$field {
+                let copies: Vec<_> = entries
+                    .iter()
+                    .flat_map(|entry| {
+                        remaps
+                            .iter()
+                            .filter(move |(source_id, _)| entry.param_id.as_ref() == source_id)
+                            .map(move |(_, destination_id)| {
+                                let mut copy = entry.clone();
+                                copy.param_id = Cow::Owned(destination_id.clone());
+                                copy
+                            })
+                    })
+                    .collect();
+                if !copies.is_empty() {
+                    let destination_entries = destination.$field.get_or_insert_with(Vec::new);
+                    destination_entries.retain(|entry| {
+                        !remaps
+                            .iter()
+                            .any(|(_, destination_id)| entry.param_id.as_ref() == destination_id)
+                    });
+                    destination_entries.extend(copies);
+                }
+            }
+        };
+    }
+    copy_routes!(drivers);
+    copy_routes!(envelopes);
+    copy_routes!(audio_mods);
+    copy_routes!(automation_lanes);
+    if include_ableton {
+        copy_routes!(ableton_mappings);
+    }
+}
+
 impl ModifierClipboard {
     pub(crate) fn capture(
         project: &Project,
@@ -324,43 +369,9 @@ pub(crate) fn transfer(
             }
         }
     }
-    macro_rules! copy_routes {
-        ($field:ident) => {
-            if let Some(entries) = &source_host.$field {
-                let copies: Vec<_> = entries
-                    .iter()
-                    .flat_map(|entry| {
-                        remaps
-                            .iter()
-                            .filter(move |(source, _)| entry.param_id.as_ref() == source)
-                            .map(move |(_, destination)| {
-                                let mut copy = entry.clone();
-                                copy.param_id = Cow::Owned(destination.clone());
-                                copy
-                            })
-                    })
-                    .collect();
-                if !copies.is_empty() {
-                    let destination_entries = host.$field.get_or_insert_with(Vec::new);
-                    destination_entries.retain(|entry| {
-                        !remaps
-                            .iter()
-                            .any(|(_, destination)| entry.param_id.as_ref() == destination)
-                    });
-                    destination_entries.extend(copies);
-                }
-            }
-        };
-    }
-    copy_routes!(drivers);
-    copy_routes!(envelopes);
-    copy_routes!(audio_mods);
-    copy_routes!(automation_lanes);
+    copy_host_routes(source_host, &mut host, &remaps, preserve_ids);
     // Hardware mappings stay attached when changing the same generator owner;
     // a clipboard paste must not duplicate external control bindings.
-    if preserve_ids {
-        copy_routes!(ableton_mappings);
-    }
     host.bump_graph_structure_version();
     *destination_host = host;
     Ok(())

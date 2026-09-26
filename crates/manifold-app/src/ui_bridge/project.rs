@@ -68,7 +68,7 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
-        ProjectAction::ExportVideo | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
+        ProjectAction::ExportVideo | ProjectAction::CancelExport | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }
@@ -174,19 +174,16 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         ProjectAction::SetTonemapCurve(curve) => {
-            let old_curve = project.settings.tonemap_curve;
             let curve = crate::ui_translate::tonemap_curve_to_core(*curve);
-            if curve != old_curve {
-                let cmd = manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
-                    old_curve, curve,
-                );
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
-            }
+            ContentCommand::send(content_tx, ContentCommand::SetTonemapCurve(curve));
+            DispatchResult::handled()
+        }
+        ProjectAction::SetTonemapEnabled(enabled) => {
+            ContentCommand::send(content_tx, ContentCommand::SetTonemapEnabled(*enabled));
+            DispatchResult::handled()
+        }
+        ProjectAction::SetSdrPreview(enabled) => {
+            ContentCommand::send(content_tx, ContentCommand::SetSdrPreview(*enabled));
             DispatchResult::handled()
         }
         ProjectAction::ChangeRtQuality(new_settings) => {
@@ -958,21 +955,12 @@ pub(super) fn dispatch_project(
         // composites `InsertMeshModifierCommand`/`RemoveMeshModifierCommand`/
         // `MoveMeshModifierCommand`.
         ProjectAction::SceneSetupAddModifier(layer_id, group_node_id, type_id) => {
-            if let Some(default) = generator_catalog_default(project, layer_id) {
-                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-                let cmd = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
-                    target,
-                    Vec::new(),
-                    *group_node_id,
-                    type_id.clone(),
-                    None,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(type_id),
-                    default,
-                );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            }
+            ContentCommand::send(content_tx, ContentCommand::ObjectModifier(
+                crate::object_modifier_transfer::ObjectModifierAction::Add {
+                    layer_id: layer_id.clone(), owner_id: *group_node_id,
+                    type_id: type_id.clone(), after: None,
+                },
+            ));
             DispatchResult::structural()
         }
         ProjectAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
@@ -985,9 +973,7 @@ pub(super) fn dispatch_project(
                     *modifier_node_id,
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
@@ -1007,9 +993,7 @@ pub(super) fn dispatch_project(
                     *new_position as usize,
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
@@ -1590,6 +1574,93 @@ mod tests {
             objects_param(&project, &layer_id, render_scene_id),
             before + 1.0
         );
+    }
+
+    #[test]
+    fn sdr_controls_route_pointer_gestures_to_content_and_undo() {
+        use crate::content_command::ContentCommand;
+        use manifold_ui::panels::overlay::{Overlay, OverlayPlacement, OverlayResponse};
+        use manifold_ui::{PanelAction, PointerAction, Rect, UIInputSystem, UITree, Vec2};
+
+        let mut project = Project::default();
+        let before = serde_json::to_value(&project).expect("project serializes");
+        let mut content = crate::headless_harness::headless_content_thread(project.clone(), 64, 64);
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = None;
+        let mut user_prefs = UserPrefs::in_memory();
+        let mut tree = UITree::new();
+        let mut input = UIInputSystem::new();
+        ui.settings_popup.open();
+
+        for label in ["SDR", "AgX", "Off"] {
+            tree.clear();
+            let size = ui.settings_popup.desired_size();
+            let region = tree.begin_region(
+                Rect::new(0.0, 0.0, 1280.0, 720.0),
+                manifold_ui::tree::ZTier::Overlay,
+                "settings",
+                manifold_ui::UIFlags::empty(),
+            );
+            let content_start = tree.count();
+            ui.settings_popup.build_at(&mut tree, OverlayPlacement {
+                rect: Rect::new(0.0, 0.0, size.x, size.y),
+                screen: Vec2::new(1280.0, 720.0),
+            });
+            tree.end_region(region, content_start);
+            let bounds = tree.nodes().iter()
+                .find(|node| node.text.as_deref() == Some(label))
+                .expect("settings control exists").bounds;
+            let point = Vec2::new(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
+            input.process_pointer(&mut tree, point, PointerAction::Down, 0.0);
+            input.process_pointer(&mut tree, point, PointerAction::Up, 0.1);
+            for event in input.drain_events() {
+                if let OverlayResponse::Consumed(actions) = ui.settings_popup.on_event(&event, &mut tree) {
+                    for action in actions {
+                        let PanelAction::Project(action) = action else {
+                            panic!("settings control emitted unexpected action");
+                        };
+                        dispatch_project(
+                            &action, &mut project, &content_tx, &content_state,
+                            &mut ui, &mut selection, &mut active_layer, &mut user_prefs,
+                        );
+                    }
+                }
+            }
+            let command = content_rx.try_recv().expect("pointer gesture forwarded a content command");
+            assert!(content_rx.is_empty(), "one command per gesture");
+            assert!(!content.handle_command(command));
+            let settings = &content.engine.project().unwrap().settings;
+            match label {
+                "SDR" => {
+                    assert!(content.content_pipeline.sdr_preview());
+                    assert_eq!(content.editing_service.data_version(), 0);
+                    assert!(!content.editing_service.is_dirty());
+                }
+                "AgX" => {
+                    assert!(settings.tonemap_enabled);
+                    assert_eq!(settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+                }
+                "Off" => {
+                    assert!(!settings.tonemap_enabled);
+                    assert_eq!(settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        assert_eq!(
+            serde_json::to_value(&project).expect("project serializes"),
+            before,
+            "UI gestures must not mutate the UI's project copy"
+        );
+        assert!(!content.handle_command(ContentCommand::Undo));
+        let settings = &content.engine.project().unwrap().settings;
+        assert!(settings.tonemap_enabled);
+        assert_eq!(settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert!(content.content_pipeline.sdr_preview(), "undo leaves the viewing preference alone");
     }
 
     #[test]

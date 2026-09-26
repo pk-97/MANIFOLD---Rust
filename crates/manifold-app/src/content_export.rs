@@ -24,7 +24,10 @@ struct ExportFrameFailure {
 
 /// One production export frame immediately before the native encoder call.
 /// This is test-only evidence: it observes the already-rendered frame and
-/// never evaluates the graph or performs another GPU submission.
+/// never evaluates the graph or performs another render submission. The
+/// explicit colour-proof opt-in may additionally request one blocking readback
+/// of frame 0's already-mapped SDR texture or the canonical HDR texture fed to
+/// the PQ encoder.
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 #[derive(Clone, Debug)]
 pub(crate) struct ExportFrameObservation {
@@ -37,6 +40,8 @@ pub(crate) struct ExportFrameObservation {
     pub history_resets: u32,
     pub beat: f64,
     pub generator_values: Vec<(String, f32)>,
+    pub sdr_mapped_rgba16f: Option<Vec<u8>>,
+    pub hdr_scene_rgba16f: Option<Vec<u8>>,
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -54,6 +59,8 @@ pub(crate) enum ExportTestFault {
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 thread_local! {
     static EXPORT_OBSERVER: RefCell<Option<Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
+    static EXPORT_SDR_READBACK: Cell<bool> = const { Cell::new(false) };
+    static EXPORT_HDR_READBACK: Cell<bool> = const { Cell::new(false) };
     static EXPORT_FAILURE_FRAME: Cell<Option<(u32, ExportTestFault)>> = const { Cell::new(None) };
     static EXPORT_GPU_ABORT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 }
@@ -69,10 +76,25 @@ pub(crate) fn install_export_observer(
     sender: Sender<ExportFrameObservation>,
     fail_before_encode_frame: Option<(u32, ExportTestFault)>,
 ) -> ExportObservationGuard {
+    install_export_observer_with_export_readbacks(sender, fail_before_encode_frame, false, false)
+}
+
+/// Install the observer with explicit first-frame readback of already-rendered
+/// export textures. This remains test-only; normal observers perform no GPU
+/// readback and no production allocation.
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) fn install_export_observer_with_export_readbacks(
+    sender: Sender<ExportFrameObservation>,
+    fail_before_encode_frame: Option<(u32, ExportTestFault)>,
+    capture_first_sdr_frame: bool,
+    capture_first_hdr_frame: bool,
+) -> ExportObservationGuard {
     EXPORT_OBSERVER.with(|slot| {
         assert!(slot.borrow().is_none(), "export observer already installed");
         *slot.borrow_mut() = Some(sender);
     });
+    EXPORT_SDR_READBACK.with(|capture| capture.set(capture_first_sdr_frame));
+    EXPORT_HDR_READBACK.with(|capture| capture.set(capture_first_hdr_frame));
     EXPORT_FAILURE_FRAME.with(|frame| frame.set(fail_before_encode_frame));
     EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(false));
     ExportObservationGuard
@@ -82,6 +104,8 @@ pub(crate) fn install_export_observer(
 impl Drop for ExportObservationGuard {
     fn drop(&mut self) {
         EXPORT_OBSERVER.with(|slot| *slot.borrow_mut() = None);
+        EXPORT_SDR_READBACK.with(|capture| capture.set(false));
+        EXPORT_HDR_READBACK.with(|capture| capture.set(false));
         EXPORT_FAILURE_FRAME.with(|frame| frame.set(None));
     }
 }
@@ -103,6 +127,16 @@ fn export_test_fault(frame_idx: u32) -> Option<ExportTestFault> {
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 pub(crate) fn export_test_gpu_abort_requested() -> bool {
     EXPORT_GPU_ABORT_REQUESTED.with(Cell::get)
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+fn export_sdr_readback_requested(frame_idx: u32) -> bool {
+    frame_idx == 0 && EXPORT_SDR_READBACK.with(Cell::get)
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+fn export_hdr_readback_requested(frame_idx: u32) -> bool {
+    frame_idx == 0 && EXPORT_HDR_READBACK.with(Cell::get)
 }
 
 /// A signalled fence is not success if any GPU work failed during the frame.
@@ -262,6 +296,17 @@ fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) 
         .collect()
 }
 
+/// The modal prevents authoring commands while export owns the content loop.
+#[cfg(target_os = "macos")]
+fn poll_export_cancel(cmd_rx: &Receiver<ContentCommand>) -> bool {
+    while let Ok(cmd) = cmd_rx.try_recv() {
+        if matches!(cmd, ContentCommand::CancelExport) {
+            return true;
+        }
+    }
+    false
+}
+
 impl ContentThread {
     /// Run the offline video export loop.
     ///
@@ -276,6 +321,20 @@ impl ContentThread {
     /// Port of Unity VideoExporter.ExportCoroutine() (offline / generator-only path).
     #[cfg(target_os = "macos")]
     pub(crate) fn run_export(
+        &mut self,
+        config: manifold_media::export_config::ExportConfig,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) {
+        self.send_export_phase(state_tx, true, 0.0, "Preparing export...", false);
+        self.run_export_inner(config, cmd_rx, state_tx);
+        self.send_export_phase(state_tx, false, 1.0, "Export finished", true);
+    }
+
+    /// Run the export body. The public wrapper owns the whole-run lifecycle
+    /// notifications, including the terminal pulse after playback restore.
+    #[cfg(target_os = "macos")]
+    fn run_export_inner(
         &mut self,
         config: manifold_media::export_config::ExportConfig,
         cmd_rx: &Receiver<ContentCommand>,
@@ -400,6 +459,7 @@ impl ContentThread {
         }
 
         // Restore playback state (once, after all sections).
+        self.send_export_phase(state_tx, true, 1.0, "Restoring playback...", false);
 
         // Restore unconditionally: the saved output dimensions can match the
         // export dimensions while the saved live render scale differs.
@@ -432,6 +492,30 @@ impl ContentThread {
         self.engine.set_export_mode(false);
     }
 
+    #[cfg(target_os = "macos")]
+    fn send_export_phase(
+        &self,
+        state_tx: &Sender<ContentState>,
+        is_exporting: bool,
+        export_progress: f32,
+        status: &str,
+        export_run_finished: bool,
+    ) {
+        let state = ContentState {
+            is_exporting,
+            export_progress,
+            export_status: Arc::from(status),
+            export_run_finished,
+            current_beat: self.engine.current_beat(),
+            current_time: self.engine.current_time(),
+            is_playing: self.engine.is_playing(),
+            ..ContentState::default()
+        };
+        if let Err(e) = state_tx.send(state) {
+            log::error!("[ContentThread] Export phase channel disconnected: {e}");
+        }
+    }
+
     /// Run one export pass for a single (possibly section) range — the original
     /// single-export body from timing through finalize. The caller owns playback
     /// save/restore and the export-mode / resize lifecycle; this does the
@@ -448,6 +532,12 @@ impl ContentThread {
     ) -> bool {
         use manifold_core::tempo::TempoMapConverter;
         use manifold_media::audio_muxer::AudioMuxer;
+
+        let status = match progress_prefix {
+            Some(prefix) => format!("{prefix} — Preparing export..."),
+            None => "Preparing export...".into(),
+        };
+        self.send_export_phase(state_tx, true, 0.0, &status, false);
 
         // Re-fetch the project (the caller's borrow ended before entering
         // export mode). Defensive: the caller already resolved it.
@@ -712,12 +802,7 @@ impl ContentThread {
         let mut gpu_failed = false;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                if matches!(cmd, ContentCommand::CancelExport) {
-                    cancelled = true;
-                    break;
-                }
-            }
+            cancelled = poll_export_cancel(cmd_rx);
             if cancelled {
                 session.cancel();
                 break;
@@ -758,49 +843,66 @@ impl ContentThread {
         }
 
         // 6. Finalize
-        let failed = cancelled || encode_error.is_some();
+        let mut failed = cancelled || encode_error.is_some();
         let mut finalize_failed = false;
+        let frames_encoded = session.frames_encoded();
+        if failed {
+            session.cancel();
+        } else {
+            // Finalization can block in the native encoder/audio muxer. Honor a
+            // request both before and after it, before reporting this file done.
+            let status = match progress_prefix {
+                Some(prefix) => format!("{prefix} — Finalizing video..."),
+                None => "Finalizing video...".into(),
+            };
+            self.send_export_phase(state_tx, true, 1.0, &status, false);
+            cancelled = poll_export_cancel(cmd_rx);
+            if cancelled {
+                session.cancel();
+            } else {
+                let result = session.finalize(ffmpeg_path.as_deref());
+                cancelled = poll_export_cancel(cmd_rx);
+                if !cancelled {
+                    match result {
+                        Ok(result) => {
+                            log::info!(
+                                "[ContentThread] Export complete: {} frames, {:.2}s -> {}",
+                                result.frames_encoded,
+                                result.duration_seconds,
+                                result.output_path,
+                            );
+                            self.send_export_finished(
+                                state_tx,
+                                true,
+                                format!("Export complete: {} frames", result.frames_encoded),
+                                &result.output_path,
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("[ContentThread] Export finalization failed: {e}");
+                            self.send_export_finished(
+                                state_tx,
+                                false,
+                                format!("Export failed: {e}"),
+                                &export_config.output_path,
+                            );
+                            finalize_failed = true;
+                        }
+                    }
+                }
+            }
+            failed = cancelled;
+        }
         if failed {
             if cancelled {
                 log::info!(
                     "[ContentThread] Export cancelled at frame {}",
-                    session.frames_encoded()
+                    frames_encoded
                 );
             }
-            session.cancel();
-            // Clean up partial file
             let _ = std::fs::remove_file(&export_config.output_path);
             let temp_video = format!("{}.video_only.mp4", export_config.output_path);
             let _ = std::fs::remove_file(&temp_video);
-        } else {
-            // FFmpeg was already resolved (and its presence verified when
-            // audio muxing is needed) before the frame loop started — BUG-130.
-            match session.finalize(ffmpeg_path.as_deref()) {
-                Ok(result) => {
-                    log::info!(
-                        "[ContentThread] Export complete: {} frames, {:.2}s -> {}",
-                        result.frames_encoded,
-                        result.duration_seconds,
-                        result.output_path,
-                    );
-                    self.send_export_finished(
-                        state_tx,
-                        true,
-                        format!("Export complete: {} frames", result.frames_encoded),
-                        &result.output_path,
-                    );
-                }
-                Err(e) => {
-                    log::error!("[ContentThread] Export finalization failed: {e}");
-                    self.send_export_finished(
-                        state_tx,
-                        false,
-                        format!("Export failed: {e}"),
-                        &export_config.output_path,
-                    );
-                    finalize_failed = true;
-                }
-            }
         }
 
         // Remove the temporary audio mixdown WAV (already muxed into the final
@@ -919,15 +1021,38 @@ impl ContentThread {
             return Some(ExportFrameFailure { message, gpu: false });
         }
 
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut sdr_mapped_rgba16f = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut sdr_mapped_texture = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut hdr_scene_rgba16f = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut hdr_scene_texture = None;
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if export_hdr_readback_requested(frame_idx) {
+                // The canonical scene texture is the production source fed to
+                // PQ encoding. Clone only its native handle so readback can
+                // happen after the completion barrier without retaining a
+                // borrow into ContentPipeline.
+                hdr_scene_texture = Some(self.content_pipeline.export_output_texture().clone());
+            }
             let texture = self
                 .content_pipeline
                 .pq_encode_for_export(paper_white, max_nits);
             Self::get_metal_texture_ptr(texture)
         } else {
             let texture = self.content_pipeline.sdr_export_output_texture();
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if export_sdr_readback_requested(frame_idx) {
+                // Clone only the native texture handle so the readback can
+                // happen after the export completion barrier without holding
+                // a borrow into ContentPipeline across that wait.
+                sdr_mapped_texture = Some(texture.clone());
+            }
             Self::get_metal_texture_ptr(texture)
         };
 
@@ -941,6 +1066,36 @@ impl ContentThread {
             Some(ExportTestFault::CompletionTimeout) => export_gpu_completion(false, 0, 0, false, true).unwrap(),
             _ => Ok(()),
         });
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        if completion.is_ok()
+            && let Some(texture) = sdr_mapped_texture.as_ref()
+        {
+            let device = self
+                .content_pipeline
+                .native_device()
+                .expect("SDR colour proof requires the export Metal device");
+            sdr_mapped_rgba16f = Some(manifold_renderer::headless_readback::readback_raw_halves(
+                device,
+                texture,
+                texture.width,
+                texture.height,
+            ));
+        }
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        if completion.is_ok()
+            && let Some(texture) = hdr_scene_texture.as_ref()
+        {
+            let device = self
+                .content_pipeline
+                .native_device()
+                .expect("HDR colour proof requires the export Metal device");
+            hdr_scene_rgba16f = Some(manifold_renderer::headless_readback::readback_raw_halves(
+                device,
+                texture,
+                texture.width,
+                texture.height,
+            ));
+        }
         if let Err(message) = completion {
             log::error!("[Export] Frame {frame_idx} failed: {message}");
             return Some(ExportFrameFailure { message, gpu: true });
@@ -964,6 +1119,8 @@ impl ContentThread {
                     .filter_map(|layer| layer.gen_params())
                     .flat_map(|instance| instance.params.iter())
                     .map(|param| (param.id().to_owned(), param.value)).collect(),
+                sdr_mapped_rgba16f,
+                hdr_scene_rgba16f,
             });
             if export_test_fault(frame_idx) == Some(ExportTestFault::BeforeEncode) {
                 return Some(ExportFrameFailure {
@@ -1010,9 +1167,8 @@ impl ContentThread {
     /// `export_progress` / `export_status` were deleted un-consumed by the
     /// 2026-07-09 ContentState orphan purge (UI_PROJECTION_LAYER_DESIGN.md
     /// P0) — this call kept running as a transport keep-alive into a void.
-    /// Restored here WITH their UI consumer (the header export status
-    /// strip, `app_render.rs`), per I1's "fields land with their consumer
-    /// or not at all".
+    /// Consumed as notifications by the export modal (`ui_root/export.rs`),
+    /// without replacing the full playback snapshot with default fields.
     #[cfg(target_os = "macos")]
     fn send_export_progress(
         &self,

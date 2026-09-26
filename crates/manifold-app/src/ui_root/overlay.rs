@@ -17,6 +17,7 @@ impl UIRoot {
             OverlayId::RtQuality => &mut self.rt_quality_panel,
             OverlayId::BrowserPopup => &mut self.browser_popup,
             OverlayId::AbletonPicker => &mut self.ableton_picker,
+            OverlayId::ExportProgress => &mut self.export_progress,
             OverlayId::Toast => &mut self.toast,
         }
     }
@@ -31,6 +32,7 @@ impl UIRoot {
             OverlayId::RtQuality => &self.rt_quality_panel,
             OverlayId::BrowserPopup => &self.browser_popup,
             OverlayId::AbletonPicker => &self.ableton_picker,
+            OverlayId::ExportProgress => &self.export_progress,
             OverlayId::Toast => &self.toast,
         }
     }
@@ -47,6 +49,7 @@ impl UIRoot {
             OverlayId::RtQuality => self.rt_quality_panel.is_open(),
             OverlayId::BrowserPopup => self.browser_popup.is_open(),
             OverlayId::AbletonPicker => self.ableton_picker.is_open(),
+            OverlayId::ExportProgress => self.export_progress.is_open(),
             OverlayId::Toast => self.toast.is_open(),
         }
     }
@@ -60,6 +63,7 @@ impl UIRoot {
             OverlayId::RtQuality => self.rt_quality_panel.modality(),
             OverlayId::BrowserPopup => self.browser_popup.modality(),
             OverlayId::AbletonPicker => self.ableton_picker.modality(),
+            OverlayId::ExportProgress => self.export_progress.modality(),
             OverlayId::Toast => self.toast.modality(),
         }
     }
@@ -74,7 +78,7 @@ impl UIRoot {
     }
 
     /// Live open-set as a bitmask, bit `i` = `OverlayId::Z_ORDER[i]` is open.
-    /// Seven overlays today, so a `u8` has room to spare.
+    /// Eight overlays fit in the `u8` snapshot.
     fn current_overlay_open_mask(&self) -> u8 {
         let mut mask = 0u8;
         for (i, id) in OverlayId::Z_ORDER.iter().enumerate() {
@@ -383,6 +387,15 @@ impl UIRoot {
     /// — the perf HUD (modeless, never-consuming) does not, so Escape falls
     /// through to selection clearing when only the HUD is up.
     pub fn escape_overlays(&mut self) -> bool {
+        if self.scene_setup_panel.cancel_object_modifier_drag(&mut self.tree) {
+            self.drag_owner = None;
+            return true;
+        }
+        if self.inspector.is_card_drag_active() {
+            self.inspector.cancel_card_drag(&mut self.tree);
+            self.drag_owner = None;
+            return true;
+        }
         let event = UIEvent::KeyDown {
             node_id: NodeId::PLACEHOLDER,
             key: Key::Escape,

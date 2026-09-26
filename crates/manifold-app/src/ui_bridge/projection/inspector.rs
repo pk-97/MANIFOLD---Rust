@@ -50,6 +50,7 @@ fn rack_groups(
                 .collect::<Vec<_>>();
             (!member_ids.is_empty()).then(|| RackGroupConfig {
                 id: group.id.clone(),
+                collapsed: group.collapsed,
                 name: match group.name.as_str() {
                     "Group" | "Masked Group" => "Modifier Group".to_string(),
                     _ => group.name.clone(),
@@ -660,6 +661,9 @@ pub fn sync_inspector_data(
                                                         index: i,
                                                         node_doc_id: m.node_doc_id,
                                                         display_name: modifier_display_name(&m.type_id),
+                                                        parameter_ids: super::scene::object_modifier_parameter_ids(
+                                                            def.as_ref(), *group_node_id, m.node_doc_id,
+                                                        ),
                                                     })
                                                     .collect(),
                                                 modifiers_addable: *modifier_chain_parseable,

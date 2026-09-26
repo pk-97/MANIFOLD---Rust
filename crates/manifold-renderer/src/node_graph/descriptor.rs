@@ -281,7 +281,7 @@ hand_descriptor!(
 );
 hand_descriptor!(
     "node.blur",
-    "Separable Gaussian blur, a horizontal then a vertical pass through a per-instance ping-pong texture. `radius` sets the kernel width.",
+    "Gaussian, Box, Radial and Smooth blur. Smooth uses a cached Dual Kawase pyramid for wide softening; its radius follows Gaussian softness. Existing mode numbers remain compatible.",
     summary: "Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur.",
     category: BlurAndSharpen,
     role: Filter,

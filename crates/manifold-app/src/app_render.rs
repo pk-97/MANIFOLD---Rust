@@ -207,8 +207,14 @@ impl Application {
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
-                let drag_active =
-                    self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
+                // Export messages are sparse notifications, not full playback
+                // snapshots. Consume every event before keeping the latest state.
+                if self.ws.ui_root.consume_export_notification(&state) {
+                    continue;
+                }
+                let drag_active = self.overlay.drag_mode()
+                    != manifold_ui::interaction_overlay::DragMode::None
+                    || self.overlay.has_pending_automation_press();
                 // Suppress snapshots until content thread catches up after a local project load.
                 // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
                 const MAX_SUPPRESS_FRAMES: u64 = 120;
@@ -432,6 +438,9 @@ impl Application {
                 &self.local_project,
                 self.selection.automation_mode_visible,
                 &self.selection.chosen_automation_params,
+                &self.selection.automation_lane_order,
+                &self.selection.hidden_automation_lanes,
+                &self.selection.pinned_automation_lanes,
             );
         }
 
@@ -512,16 +521,21 @@ impl Application {
 
         // 1d. Percussion import runs on content thread — read status from content_state.
         let was_importing = false; // previous frame state not tracked here
-        let is_importing = self.content_state.percussion_importing;
+        let is_importing = !self.ws.ui_root.export_progress.is_open()
+            && self.content_state.percussion_importing;
 
         // 1e. Sync percussion pipeline status to header panel
         // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
         {
-            let msg = self.content_state.percussion_status_message.clone();
+            let msg = if self.ws.ui_root.export_progress.is_open() {
+                ""
+            } else {
+                self.content_state.percussion_status_message.as_ref()
+            };
             let progress = self.content_state.percussion_progress;
             let show = self.content_state.percussion_show_progress && !msg.is_empty();
             self.ws.ui_root.header.set_import_status(
-                &msg,
+                msg,
                 if progress < 0.0 {
                     0.0
                 } else {
@@ -541,33 +555,16 @@ impl Application {
             }
         }
 
-        // 1d2. Export progress (BUG-083) — the content thread's export loop
-        // (content_export.rs's run_export/send_export_progress) blocks the
-        // content thread and pushes a degraded ContentState every 10 frames;
-        // read it the same way percussion import status is read above, so a
-        // multi-minute export no longer looks like a hang.
+        // Export owns its progress surface. Do not redraw a stale loading
+        // overlay beneath it; warmup itself only needs changed-state rebuilds.
         {
-            let is_exporting = self.content_state.is_exporting;
-            self.ws.ui_root.header.set_export_status(
-                &self.content_state.export_status,
-                self.content_state.export_progress,
-                is_exporting,
-            );
-            // Keep redrawing the progress strip while exporting, same as
-            // the percussion import bar above.
-            if is_exporting {
-                self.needs_rebuild = true;
-            }
-        }
-
-        // 1d3. Warmup progress overlay — published from inside the blocking
-        // LoadProject warmup pass (WARMUP_DESIGN.md D5). Rebuild while warming
-        // so the layer label + bar update; rebuild once more when it clears
-        // so the overlay disappears.
-        {
-            let was_warming = self.ws.ui_root.warmup.is_some();
-            self.ws.ui_root.warmup = self.content_state.warmup.clone();
-            if self.ws.ui_root.warmup.is_some() || was_warming {
+            let warmup = if self.ws.ui_root.export_progress.is_open() {
+                None
+            } else {
+                self.content_state.warmup.clone()
+            };
+            if self.ws.ui_root.warmup != warmup {
+                self.ws.ui_root.warmup = warmup;
                 self.needs_rebuild = true;
             }
         }
@@ -666,6 +663,9 @@ impl Application {
             .map(crate::menu::AppMenu::drain)
             .unwrap_or_default();
         for ma in menu_actions {
+            if self.ws.ui_root.export_progress.is_open() {
+                continue;
+            }
             use crate::menu::MenuAction as M;
             use manifold_ui::panels::PanelAction as P;
             match ma {
@@ -930,6 +930,9 @@ impl Application {
                 .map(|p| (p.target.clone(), p.param_id.clone()));
             let viewport_events = self.ws.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
+                if viewport_events.iter().any(|event| matches!(event, manifold_ui::input::UIEvent::PointerDown { .. })) {
+                    crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
+                }
                 // Sync modifier state to overlay (Unity reads Keyboard.current inline)
                 self.overlay.set_modifiers(self.modifiers);
                 let content_tx = self.content_tx.as_ref().unwrap();
@@ -947,7 +950,24 @@ impl Application {
                 );
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
+                    if let UIEvent::PointerDown { modifiers, .. }
+                        | UIEvent::Click { modifiers, .. }
+                        | UIEvent::DoubleClick { modifiers, .. }
+                        | UIEvent::RightClick { modifiers, .. }
+                        | UIEvent::DragBegin { modifiers, .. }
+                        | UIEvent::Drag { modifiers, .. } = event
+                    {
+                        self.overlay.set_modifiers(*modifiers);
+                    }
                     match event {
+                        UIEvent::PointerDown { pos, .. } => {
+                            self.overlay.on_pointer_down(
+                                *pos, &mut host, &mut self.selection, &self.ws.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::PointerUp { .. } => {
+                            self.overlay.on_pointer_up(&mut host);
+                        }
                         UIEvent::Click { pos, modifiers, .. } => {
                             self.overlay.on_pointer_click(
                                 *pos,
@@ -984,13 +1004,18 @@ impl Application {
                                 &self.ws.ui_root.viewport,
                             );
                         }
-                        UIEvent::DragBegin { origin, .. } => {
+                        UIEvent::DragBegin { origin, pos, .. } => {
                             self.overlay.on_begin_drag(
                                 *origin,
                                 &mut host,
                                 &mut self.selection,
                                 &self.ws.ui_root.viewport,
                             );
+                            if self.overlay.is_automation_drag() {
+                                self.overlay.on_drag(
+                                    *pos, &mut host, &mut self.selection, &mut self.ws.ui_root.viewport,
+                                );
+                            }
                         }
                         UIEvent::Drag { pos, .. } => {
                             self.overlay.on_drag(
@@ -1000,7 +1025,12 @@ impl Application {
                                 &mut self.ws.ui_root.viewport,
                             );
                         }
-                        UIEvent::DragEnd { .. } => {
+                        UIEvent::DragEnd { pos, .. } => {
+                            if self.overlay.is_automation_drag() {
+                                self.overlay.on_drag(
+                                    *pos, &mut host, &mut self.selection, &mut self.ws.ui_root.viewport,
+                                );
+                            }
                             self.overlay.on_end_drag(&mut host);
                         }
                         _ => {}
@@ -1055,6 +1085,11 @@ impl Application {
             .unwrap_or_default();
 
         for (action_idx, action) in actions.iter().enumerate().take(editor_card_seg_start) {
+            if self.ws.ui_root.export_progress.is_open()
+                && !matches!(action, PanelAction::Project(ProjectAction::CancelExport))
+            {
+                continue;
+            }
             if self.dispatch_inspector_host_action(action, false) { continue; }
             if let PanelAction::Root(action) = action
                 && self.dispatch_mapping_action(action)
@@ -1254,6 +1289,10 @@ impl Application {
                     self.save_project_as();
                     continue;
                 }
+                PanelAction::Project(ProjectAction::CancelExport) => {
+                    self.send_content_cmd(ContentCommand::CancelExport);
+                    continue;
+                }
                 PanelAction::Project(ProjectAction::ExportVideo) => {
                     self.start_export();
                     continue;
@@ -1273,57 +1312,12 @@ impl Application {
                     continue;
                 }
                 PanelAction::Params(ParamsAction::PasteEffects) => {
-                    // Browser popup paste button → route through same logic as Cmd+V
-                    let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    let target = match tab {
-                        manifold_ui::InspectorTab::Master => {
-                            manifold_editing::commands::effect_target::EffectTarget::Master
-                        }
-                        manifold_ui::InspectorTab::Layer
-                        | manifold_ui::InspectorTab::Group
-                        | manifold_ui::InspectorTab::Clip => {
-                            let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                            manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                layer_id,
-                            }
-                        }
-                    };
-                    let effects_len = match tab {
-                        manifold_ui::InspectorTab::Master => {
-                            self.local_project.settings.master_effects.len()
-                        }
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
-                            .active_layer_id
-                            .as_ref()
-                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                            .and_then(|(_, l)| l.effects.as_ref())
-                            .map(|e| e.len())
-                            .unwrap_or(0),
-                        manifold_ui::InspectorTab::Clip => self
-                            .selection
-                            .primary_selected_clip_id
-                            .as_ref()
-                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                            .map(|c| c.effects.len())
-                            .unwrap_or(0),
-                    };
-                    let clones = self.ws.ui_root.effect_clipboard.get_paste_clones();
-                    for (offset, fx) in clones.into_iter().enumerate() {
-                        // Fresh, independent copy: new EffectId + dropped hardware
-                        // bindings. Drop group membership too — cross-chain paste,
-                        // the source's group isn't in the destination chain.
-                        let mut fx = fx.duplicated();
-                        fx.group_id = None;
-                        let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
-                            target.clone(),
-                            fx,
-                            effects_len + offset,
-                        );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
+                    self.edit_inspector_cards(manifold_ui::panels::actions::CardEditAction::Paste);
+                    needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::Params(ParamsAction::EditCards(action)) => {
+                    self.edit_inspector_cards(*action);
                     needs_structural_sync = true;
                     continue;
                 }
@@ -1788,7 +1782,7 @@ impl Application {
         // retarget the canvas to that card's graph. Card-click retargets are
         // collected and applied after the editor-workspace borrow drops (they call
         // `self.watch_*`). See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
-        if actions.len() > editor_card_seg_start {
+        if !self.ws.ui_root.export_progress.is_open() && actions.len() > editor_card_seg_start {
             let mut retarget_effect: Option<usize> = None;
             let mut retarget_generator = false;
             // Deferred like the retargets above: `self.begin_save_preset_prompt`
@@ -2974,6 +2968,7 @@ impl Application {
                 .active_layer_id
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
             crate::ui_bridge::sync_project_data(
                 &mut self.ws.ui_root,
                 &self.local_project,
@@ -2993,6 +2988,7 @@ impl Application {
                 .active_layer_id
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
             crate::ui_bridge::sync_project_data(
                 &mut self.ws.ui_root,
                 &self.local_project,
@@ -3179,6 +3175,9 @@ impl Application {
                 &self.local_project,
                 self.selection.automation_mode_visible,
                 &self.selection.chosen_automation_params,
+                &self.selection.automation_lane_order,
+                &self.selection.hidden_automation_lanes,
+                &self.selection.pinned_automation_lanes,
             );
         }
 
@@ -3238,7 +3237,9 @@ impl Application {
         // forced rebuild's own invalidate_all repaints the inspector, so no
         // separate invalidate is needed here. Reduced motion settles instantly, so
         // this is false at once — no per-frame rebuild churn.
-        if self.ws.ui_root.inspector.drawer_anim_active() {
+        if self.ws.ui_root.inspector.drawer_anim_active()
+            || self.ws.ui_root.scene_setup_panel.object_cards_animating()
+        {
             self.needs_rebuild = true;
         }
 

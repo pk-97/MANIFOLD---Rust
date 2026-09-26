@@ -644,8 +644,8 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
         "camera tilt spans the ParamDef +/-360 range"
     );
 
-    // GTAO, the lens, the polished DoF chain (coc → coc_dilate →
-    // bokeh_gather) and the motion-blur tail are all wired into the spine
+    // GTAO, the lens, the polished DoF chain (coc → bokeh_gather)
+    // and the motion-blur tail are all wired into the spine
     // (CINEMATIC_SCENE_TAIL D1/section 3 — reinstated after BUG-136 was
     // root-caused as missing chains, never a kernel defect). `node.variable_blur`
     // and `node.atmosphere` stay absent (P4's superseded DoF blur stage;
@@ -655,7 +655,6 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
         "node.bilateral_blur",
         "node.camera_lens",
         "node.coc_from_depth",
-        "node.coc_dilate",
         "node.bokeh_gather",
         "node.motion_blur",
     ] {
@@ -841,7 +840,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
 
     // Top level: two per-object group boxes PLUS the "ao" presentation
     // group PLUS the "dof" group (CINEMATIC_SCENE_TAIL D1/section 3 —
-    // coc_from_depth → coc_dilate → bokeh_gather), no bare producer
+    // coc_from_depth → bokeh_gather), no bare producer
     // nodes.
     let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
     assert_eq!(groups.len(), 4, "2 object groups + ao + dof");
@@ -997,7 +996,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
 /// `shutter_angle`, surfaced on the import card as `{lens_doc_id}_…`) — has
 /// a directed consumer path to `final` in an import-assembled graph. Dead
 /// sliders are the bug D4 kills by construction: once the tail exists,
-/// focus_distance/f_stop reach final via lens → coc_from_depth → coc_dilate
+/// focus_distance/f_stop reach final via lens → coc_from_depth
 /// → bokeh_gather → motion_blur, and shutter_angle via lens →
 /// motion_blur.camera.
 #[test]
@@ -1110,6 +1109,8 @@ fn scene_lens_params_have_consumers() {
     let inner = dof_group.group.as_ref().expect("dof group has inner nodes");
     let bokeh = inner.nodes.iter().find(|node| node.type_id == "node.bokeh_gather").unwrap();
     assert_eq!(bokeh.params["enabled"], bool_val(true));
+    assert_eq!(bokeh.params["aperture"], enum_val(0));
+    assert_eq!(bokeh.params["quality"], enum_val(1));
     for node in [bokeh, def.nodes.iter().find(|node| node.type_id == "node.motion_blur").unwrap()] {
         let binding = meta.bindings.iter().find(|binding| matches!(
             &binding.target,
@@ -1120,12 +1121,30 @@ fn scene_lens_params_have_consumers() {
         assert_eq!(spec.default_value, 1.0);
     }
     let inner_types: Vec<&str> = inner.nodes.iter().map(|n| n.type_id.as_str()).collect();
-    for want in ["node.coc_from_depth", "node.coc_dilate", "node.bokeh_gather"] {
+    for want in ["node.coc_from_depth", "node.bokeh_gather"] {
         assert!(
             inner_types.contains(&want),
             "dof group must contain `{want}` (got {inner_types:?})"
         );
     }
+    let coc = inner
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.coc_from_depth")
+        .expect("dof group CoC source present");
+    assert!(
+        inner.nodes.iter().all(|node| node.type_id != "node.coc_dilate"),
+        "import DoF tail must not retain the obsolete CoC dilation node"
+    );
+    assert!(
+        inner.wires.iter().any(|wire| {
+            wire.from_node == coc.id
+                && wire.from_port == "out"
+                && wire.to_node == bokeh.id
+                && wire.to_port == "width"
+        }),
+        "import DoF tail must feed original CoC directly into bokeh width"
+    );
     let mb = def
         .nodes
         .iter()

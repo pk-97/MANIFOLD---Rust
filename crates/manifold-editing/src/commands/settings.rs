@@ -818,16 +818,22 @@ impl Command for ChangeRenderScaleCommand {
 pub struct ChangeTonemapCurveCommand {
     old_curve: manifold_core::TonemapCurve,
     new_curve: manifold_core::TonemapCurve,
+    old_enabled: bool,
+    new_enabled: bool,
 }
 
 impl ChangeTonemapCurveCommand {
     pub fn new(
         old_curve: manifold_core::TonemapCurve,
+        old_enabled: bool,
         new_curve: manifold_core::TonemapCurve,
+        new_enabled: bool,
     ) -> Self {
         Self {
             old_curve,
             new_curve,
+            old_enabled,
+            new_enabled,
         }
     }
 }
@@ -835,10 +841,12 @@ impl ChangeTonemapCurveCommand {
 impl Command for ChangeTonemapCurveCommand {
     fn execute(&mut self, project: &mut Project) {
         project.settings.tonemap_curve = self.new_curve;
+        project.settings.tonemap_enabled = self.new_enabled;
     }
 
     fn undo(&mut self, project: &mut Project) {
         project.settings.tonemap_curve = self.old_curve;
+        project.settings.tonemap_enabled = self.old_enabled;
     }
 
     fn description(&self) -> &str {
@@ -1134,6 +1142,42 @@ mod tests {
     use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise};
 
     #[test]
+    fn tonemap_editing_service_round_trip_preserves_curve_when_off() {
+        let mut project = Project::default();
+        project.settings.tonemap_curve = manifold_core::TonemapCurve::Agx;
+        let mut editing = crate::service::EditingService::new();
+
+        editing.execute(
+            Box::new(ChangeTonemapCurveCommand::new(
+                manifold_core::TonemapCurve::Agx,
+                false,
+                manifold_core::TonemapCurve::Agx,
+                true,
+            )),
+            &mut project,
+        );
+        assert_eq!(project.settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert!(project.settings.tonemap_enabled);
+        assert!(editing.undo(&mut project));
+        assert_eq!(project.settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert!(!project.settings.tonemap_enabled);
+        assert!(editing.redo(&mut project));
+        assert!(project.settings.tonemap_enabled);
+
+        editing.execute(
+            Box::new(ChangeTonemapCurveCommand::new(
+                manifold_core::TonemapCurve::Agx,
+                true,
+                manifold_core::TonemapCurve::Agx,
+                false,
+            )),
+            &mut project,
+        );
+        assert_eq!(project.settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert!(!project.settings.tonemap_enabled);
+    }
+
+    #[test]
     fn change_rt_quality_execute_undo_redo_round_trip() {
         let mut project = Project::default();
         let old_settings = project.settings.rt_quality;
@@ -1306,4 +1350,3 @@ mod tests {
         assert_eq!(gp.generator_type(), &TEST_PASTE_GEN_B);
     }
 }
-

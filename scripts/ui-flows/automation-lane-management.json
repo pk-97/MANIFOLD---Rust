@@ -1,0 +1,194 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Choose parameter\u2026"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mirror \u00b7 Amount"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Mirror \u00b7 Amount"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Pin lane"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Unpin lane"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Unpin lane"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Hide lane"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Bloom: Amount"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Show all automated lanes"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "automation_lanes",
+          "kind": "automation_strip",
+          "label": "Mirror: Amount"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

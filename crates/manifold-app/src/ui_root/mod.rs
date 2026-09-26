@@ -13,6 +13,7 @@ use manifold_ui::panels::overlay::{
 use manifold_ui::*;
 
 mod events;
+mod export;
 
 mod dropdowns;
 // `build_picker_session` is called by `ui_bridge/state_sync.rs` at the historical
@@ -43,6 +44,7 @@ pub(crate) enum OverlayId {
     RtQuality,
     BrowserPopup,
     AbletonPicker,
+    ExportProgress,
     Toast,
 }
 
@@ -51,16 +53,18 @@ impl OverlayId {
     /// input). The perf HUD sits at the bottom so a real modal always covers it.
     /// The dropdown sits on top: it's a transient selection surface opened *from*
     /// another overlay (e.g. the Audio Setup modal's device/channel pickers), so
-    /// it must render above whatever spawned it. The toast (D11,
+    /// it must render above whatever spawned it. Export progress covers all
+    /// authoring overlays until the content thread finishes the run. The toast (D11,
     /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) sits topmost of all — a status message
     /// must stay legible over an open modal/dropdown, not be hidden by one.
-    const Z_ORDER: [OverlayId; 7] = [
+    const Z_ORDER: [OverlayId; 8] = [
         OverlayId::PerfHud,
         OverlayId::Settings,
         OverlayId::RtQuality,
         OverlayId::BrowserPopup,
         OverlayId::AbletonPicker,
         OverlayId::Dropdown,
+        OverlayId::ExportProgress,
         OverlayId::Toast,
     ];
 }
@@ -136,6 +140,15 @@ pub struct EmbeddedPresetItem {
     pub origin: manifold_core::project::EmbeddedOrigin,
 }
 
+/// Manifest-backed parameter choice for the automation chooser. The action is
+/// stored with the candidate at projection time, retaining the exact target
+/// and parameter identity through filtering and popup navigation.
+pub(crate) struct AutomationChooserCandidate {
+    pub layer_id: manifold_core::LayerId,
+    pub item: manifold_ui::panels::picker_core::PickerItem,
+    pub action: PanelAction,
+}
+
 /// Owns all UI state for one window.
 pub struct UIRoot {
     // Core
@@ -171,30 +184,20 @@ pub struct UIRoot {
     pub settings_popup: manifold_ui::panels::settings_popup::SettingsPopup,
     pub rt_quality_panel: manifold_ui::panels::rt_quality_panel::RtQualityPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
+    pub export_progress: manifold_ui::panels::export_progress::ExportProgressPanel,
     /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Fired by
     /// `Application` on `M::Undo`/`M::Redo` (see `app_render.rs`); ticked every
     /// frame in `update()`.
     pub toast: manifold_ui::panels::toast::ToastPanel,
-    /// D17 "export-complete green sweep" one-shot guard: `content_state` is a
-    /// cached snapshot re-pushed every UI frame (`push_state` in
-    /// `ui_bridge/state_sync.rs`), not an edge-triggered event, so without this
-    /// the toast would re-fire on every frame the last-received snapshot still
-    /// carries the same `ExportFinishedEvent` (it can outlive a single UI frame
-    /// under load). Keyed on `(success, message, output_path)` — distinct
-    /// enough that two different real exports are never conflated, cheap
-    /// enough to just compare as a string. `None` = no export toast shown yet.
-    pub last_export_toast_key: Option<String>,
-
-    /// Same re-fire guard as `last_export_toast_key`, for the D11 undo/redo
-    /// toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Keyed on
-    /// `content_state.data_version` (undo/redo always bumps it, so each real
-    /// undo/redo gets a distinct key even when the description repeats).
+    /// Last undo/redo data version shown in the transient status toast.
     pub last_undo_redo_toast_key: Option<u64>,
 
     /// Last rejected graph-edit diagnostic shown by the UI. Rejections do not
     /// bump `data_version`, so this guard keys directly on the content event's
     /// sequence and remains stable across repeated snapshots.
     pub last_graph_edit_diagnostic_sequence: Option<u64>,
+    pub last_modifier_selection_sequence: Option<u64>,
+    pub last_object_modifier_selection_sequence: Option<u64>,
 
     /// Load-time warmup progress shown as a centered overlay during project
     /// open. `None` when no warmup is active.
@@ -279,6 +282,8 @@ pub struct UIRoot {
     /// Written only through `set_scene_modifier_clipboard` so the latest
     /// copy wins across both clipboards.
     pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
+    pub object_modifier_clipboard: Option<crate::object_modifier_transfer::ObjectModifierClipboard>,
+    pub object_cards_have_focus: bool,
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
@@ -305,6 +310,8 @@ pub struct UIRoot {
     last_right_click_pos: Vec2,
     /// One-shot view request, consumed after lane geometry is projected.
     pub(crate) pending_automation_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    pub(crate) automation_chooser_candidates: Vec<AutomationChooserCandidate>,
+    pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.
     pub macro_labels: [String; manifold_core::MACRO_COUNT],
@@ -336,6 +343,8 @@ pub struct UIRoot {
     /// drag-active latch + `is_event_in_tracks_area`'s positional gate for
     /// Drag/DragEnd.
     drag_owner: Option<DragOwner>,
+    /// A press forwarded to the tracks needs its release even before a drag starts.
+    tracks_press_active: bool,
 
     /// Cached Ableton session for the picker popup.
     pub ableton_session: Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
@@ -451,9 +460,11 @@ impl UIRoot {
             rt_quality_panel: manifold_ui::panels::rt_quality_panel::RtQualityPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             toast: manifold_ui::panels::toast::ToastPanel::new(),
-            last_export_toast_key: None,
+            export_progress: manifold_ui::panels::export_progress::ExportProgressPanel::new(),
             last_undo_redo_toast_key: None,
             last_graph_edit_diagnostic_sequence: None,
+            last_modifier_selection_sequence: None,
+            last_object_modifier_selection_sequence: None,
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
             built: false,
@@ -484,11 +495,15 @@ impl UIRoot {
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             scene_modifier_clipboard: None,
+            object_modifier_clipboard: None,
+            object_cards_have_focus: false,
             cursor_hover_actions: Vec::new(),
             pending_keyboard_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             pending_automation_reveal: None,
+            automation_chooser_candidates: Vec::new(),
+            pinned_automation_lanes: Vec::new(),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
@@ -498,6 +513,7 @@ impl UIRoot {
             scene_setup_handle_id: None,
             layout_tick_last: std::time::Instant::now(),
             drag_owner: None,
+            tracks_press_active: false,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
             ableton_picker_context: None,
@@ -520,6 +536,7 @@ impl UIRoot {
     ) {
         if clipboard.is_some() {
             self.effect_clipboard.clear();
+            self.object_modifier_clipboard = None;
         }
         self.scene_modifier_clipboard = clipboard;
     }
@@ -840,7 +857,7 @@ impl UIRoot {
 
         // Load-time warmup overlay: centered progress bar + layer label,
         // drawn above everything else while the content thread is warming.
-        if let Some(ref warmup) = self.warmup {
+        if !self.export_progress.is_open() && let Some(ref warmup) = self.warmup {
             use manifold_ui::chrome::{materialize, Align, Pad, Sizing, View};
             use manifold_ui::color;
             use manifold_ui::node::Color32;
@@ -890,6 +907,7 @@ impl UIRoot {
             self.tree.end_region(region, start);
         }
 
+        self.inspector.rebuild_card_drag_overlay(&mut self.tree);
         self.built = true;
     }
 
@@ -905,6 +923,7 @@ impl UIRoot {
         let start = self.tree.count();
         self.inspector.build_in_rect(&mut self.tree, rect);
         self.tree.end_region(region, start);
+        self.inspector.rebuild_card_drag_overlay(&mut self.tree);
     }
 
     /// Route pre-drained events through the inspector subset of the main
@@ -972,8 +991,9 @@ impl UIRoot {
                         actions.append(&mut drag_actions);
                     }
                 }
-                UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+                UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. } => {
                     if self.inspector.is_card_drag_active() {
+                        self.inspector.update_card_drag(*pos, &mut self.tree);
                         let mut reorder = self.inspector.end_card_drag(&mut self.tree);
                         actions.append(&mut reorder);
                     } else if self.inspector.has_pressed_target() {
@@ -1519,6 +1539,7 @@ impl UIRoot {
         self.footer.update(&mut self.tree);
         self.layer_headers.update(&mut self.tree);
         self.tick_inspector();
+        self.scene_setup_panel.tick_object_cards(&mut self.tree, split_dt_ms);
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
         // D11 toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2): repaints its own alpha
@@ -1560,6 +1581,7 @@ impl UIRoot {
         dt: f32,
     ) {
         self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
+        self.scene_setup_panel.update_object_card_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
