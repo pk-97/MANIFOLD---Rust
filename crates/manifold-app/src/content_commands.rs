@@ -1155,7 +1155,7 @@ impl ContentThread {
                     && let Some(selection) = pending.resolve(project)
                 {
                     let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
-                    self.edit_selection_update = Some(crate::edit_selection::EditSelectionUpdate { sequence, selection });
+                    self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
                 }
                 // Refresh the compositor even while paused: a blend-mode change,
                 // effect edit, or reorder that doesn't alter clip membership

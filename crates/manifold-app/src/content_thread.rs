@@ -207,7 +207,7 @@ pub struct ContentThread {
     pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
     /// Most recent content-authoritative selection update for newly created
     /// scene modifiers, retained until a newer update.
-    pub edit_selection_update: Option<crate::edit_selection::EditSelectionUpdate>,
+    pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
     pub modifier_selection_update: Option<crate::content_state::ModifierSelectionUpdate>,
     pub object_modifier_selection_update:
         Option<crate::content_state::ObjectModifierSelectionUpdate>,

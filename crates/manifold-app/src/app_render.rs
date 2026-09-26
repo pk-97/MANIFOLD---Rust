@@ -378,7 +378,7 @@ impl Application {
 
         if crate::edit_selection::apply_update(
             &mut self.ws.ui_root, &self.local_project,
-            self.content_state.edit_selection_update.as_ref(),
+            self.content_state.edit_selection_update.as_deref(),
             &mut self.selection, &mut self.active_layer_id,
         ) {
             self.needs_structural_sync = true;
