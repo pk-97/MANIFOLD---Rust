@@ -40,6 +40,21 @@ def step(name, cmd, cwd, check=True):
     return r
 
 
+def run_landing_gate(cmd, cwd, log_path):
+    """Expose check progress immediately and preserve the complete gate log."""
+    print(f"[land] landing_gate: {' '.join(cmd)}", flush=True)
+    print(f"[land] complete landing gate transcript: {log_path}", flush=True)
+    with log_path.open("w") as log, subprocess.Popen(
+        cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    ) as proc:
+        for line in proc.stdout:
+            log.write(line)
+            log.flush()
+            print(line, end="", flush=True)
+        return proc.wait()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("branch")
@@ -61,19 +76,18 @@ def main():
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     step("merge origin/main into branch", ["git", "merge", "origin/main", "--no-edit"], wt)
 
-    gate_cmd = ["scripts/landing_gate.py"]
+    gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py"]
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
-    gate = step("landing_gate", gate_cmd, wt, check=False)
-    gate_out = gate.stdout + gate.stderr
+    elif a.named_red and a.reason:
+        # An override still requires the results of every mandatory check.
+        gate_cmd += ["--keep-going"]
     log_dir = wt / "target" / "landing-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     gate_log = (log_dir / f"landing-gate-{stamp}-{time.time_ns()}.log").resolve()
-    gate_log.write_text(gate_out)
-    print(f"[land] complete landing gate transcript: {gate_log}", flush=True)
-    print(gate_out[-2000:], flush=True)
-    if gate.returncode != 0:
+    gate_returncode = run_landing_gate(gate_cmd, wt, gate_log)
+    if gate_returncode != 0:
         if a.skip_gpu or not (a.named_red and a.reason):
             print("[land] gate red and no --named-red/--reason given — stopping. "
                   "Review the failure; land over it only with an explicit named red.", file=sys.stderr)
