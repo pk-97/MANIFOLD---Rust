@@ -153,6 +153,10 @@ impl UIRoot {
     pub(crate) fn should_stash_for_tracks(&self, event: &manifold_ui::input::UIEvent) -> bool {
         use manifold_ui::input::UIEvent;
         match event {
+            // A provisional automation point owns its press until release,
+            // including a release outside the tracks. The overlay ignores
+            // releases when it has no provisional edit to finish/cancel.
+            UIEvent::PointerUp { .. } => true,
             UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. } => {
                 self.drag_owner == Some(DragOwner::TimelineTracks)
             }
@@ -267,6 +271,15 @@ mod drag_capture_tests {
     /// `InteractionOverlay::on_end_drag` — ownership decides, not position.
     /// The old `is_event_in_tracks_area` positional gate would have dropped
     /// this exact case (BUG-058's leak-adjacent failure mode).
+    #[test]
+    fn pointer_release_reaches_provisional_automation_outside_tracks() {
+        let ui = new_root();
+        assert!(ui.should_stash_for_tracks(&UIEvent::PointerUp {
+            node_id: None,
+            pos: Vec2::new(-100.0, -100.0),
+        }));
+    }
+
     #[test]
     fn drag_end_stashes_by_ownership_regardless_of_release_position() {
         let mut ui = new_root();

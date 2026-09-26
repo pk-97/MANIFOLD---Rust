@@ -138,6 +138,9 @@ const SOURCE_CHIPS: [(Source, &str); 3] = [
 pub enum BrowserPopupMode {
     Effect,
     Generator,
+    /// Picking a parameter action (for example, an automation lane). Unlike
+    /// preset modes this session returns the typed action captured at open.
+    Actions,
     /// Picking a graph node to spawn in the node editor. Items carry node
     /// `type_id`s and selection returns `NodeSelected`.
     Node,
@@ -166,6 +169,10 @@ pub enum BrowserPopupAction {
         type_id: String,
         graph_pos: (f32, f32),
     },
+    /// A typed action selected from an action picker. The action is captured
+    /// with the item at open time, so filtering and navigation never require
+    /// parsing a display string or re-resolving a target later.
+    ActionSelected(PanelAction),
 }
 
 /// Everything the app needs to open the browser's right-click management menu
@@ -204,6 +211,7 @@ pub struct BrowserPopupRequest {
 /// P5) additionally needs the cell's classified source.
 #[derive(Clone)]
 struct CellMeta {
+    item_index: usize,
     type_id: String,
     source: Option<Source>,
 }
@@ -273,6 +281,8 @@ pub struct BrowserSession {
     pub picker: PickerCore,
     pub pending_spawn_graph_pos: Option<(f32, f32)>,
     pub paste_count: usize,
+    /// Typed actions parallel to `picker` items for an Actions session.
+    actions: Option<Vec<PanelAction>>,
     layout: BrowserLayout,
 }
 
@@ -347,6 +357,19 @@ impl BrowserPopupPanel {
     }
 
     pub fn open(&mut self, req: BrowserPopupRequest) {
+        self.open_with_actions(req, None);
+    }
+
+    /// Open a searchable picker whose cells dispatch the supplied typed
+    /// actions. `actions` is parallel to `req.items`, keyed by the picker
+    /// item's stable index; filtering never changes that identity.
+    pub fn open_actions(&mut self, req: BrowserPopupRequest, actions: Vec<PanelAction>) {
+        debug_assert_eq!(req.mode, BrowserPopupMode::Actions);
+        debug_assert_eq!(req.items.len(), actions.len());
+        self.open_with_actions(req, Some(actions));
+    }
+
+    fn open_with_actions(&mut self, req: BrowserPopupRequest, actions: Option<Vec<PanelAction>>) {
         // The search-focus hook is effect/generator-only; Node mode never
         // dirties it.
         if req.mode != BrowserPopupMode::Node {
@@ -361,6 +384,7 @@ impl BrowserPopupPanel {
             picker: PickerCore::new(req.items, req.category_names),
             pending_spawn_graph_pos: req.spawn_graph_pos,
             paste_count: req.paste_count,
+            actions,
             layout,
         });
     }
@@ -421,6 +445,8 @@ impl BrowserPopupPanel {
 
         let count = session.picker.filtered_len();
         let mode = session.mode;
+        let cell_h = if mode == BrowserPopupMode::Actions { 32.0 } else { CELL_H };
+        let cell_w = if mode == BrowserPopupMode::Actions { 360.0_f32.min((screen_w - SCREEN_MARGIN * 2.0).max(1.0)) } else { CELL_W };
 
         // ── Width: content-sized, screen-clamped ──
         //
@@ -429,16 +455,16 @@ impl BrowserPopupPanel {
         // resize jitter), and the empty state keeps a sensible surface. The
         // GRID's columns below follow the filtered count.
         let chrome_w = (PADDING + BORDER) * 2.0;
-        let inner_max_w = (screen_w - SCREEN_MARGIN * 2.0 - chrome_w).max(CELL_W);
-        let cols_fit = ((inner_max_w + CELL_SPACING) / (CELL_W + CELL_SPACING))
+        let inner_max_w = (screen_w - SCREEN_MARGIN * 2.0 - chrome_w).max(cell_w);
+        let cols_fit = ((inner_max_w + CELL_SPACING) / (cell_w + CELL_SPACING))
             .floor()
             .max(1.0) as usize;
         let full_count = session.picker.all_items().count();
         // Never more columns than items (content-sized) and never more than
         // MAX_COLUMNS — 6-8 columns at 1080p-class windows (D12).
-        let width_columns = cols_fit.min(MAX_COLUMNS).min(full_count.max(1));
+        let width_columns = if mode == BrowserPopupMode::Actions { 1 } else { cols_fit.min(MAX_COLUMNS).min(full_count.max(1)) };
         let inner_w =
-            width_columns as f32 * CELL_W + width_columns.saturating_sub(1) as f32 * CELL_SPACING;
+            width_columns as f32 * cell_w + width_columns.saturating_sub(1) as f32 * CELL_SPACING;
         let popup_w = (inner_w + chrome_w).min(screen_w);
         let content_w = popup_w - chrome_w;
         // Grid columns follow the FILTERED count — a narrow result set packs
@@ -448,7 +474,7 @@ impl BrowserPopupPanel {
         // ── Chips: measured with the tree's real font metrics (F12), then
         // wrapped at the content edge — overflow wraps to another row, it
         // never silently runs past the popup. ──
-        let has_source_row = mode != BrowserPopupMode::Node;
+        let has_source_row = matches!(mode, BrowserPopupMode::Effect | BrowserPopupMode::Generator);
         let has_chips = !session.picker.categories().is_empty();
         let active_source = session.picker.active_source();
         let active_category = session.picker.active_category().map(str::to_string);
@@ -493,7 +519,7 @@ impl BrowserPopupPanel {
         };
 
         // ── Height: content-sized, the SCREEN is the only cap (D12) ──
-        let pitch = CELL_H + CELL_SPACING;
+        let pitch = cell_h + CELL_SPACING;
         let grid_content_h = if count == 0 {
             EMPTY_STATE_H
         } else {
@@ -506,7 +532,7 @@ impl BrowserPopupPanel {
         if has_chips {
             above += chip_block_h(wrapped_rows(&chip_widths)) + SECTION_SPACING;
         }
-        let below = if session.paste_count > 0 {
+        let below = if mode != BrowserPopupMode::Actions && session.paste_count > 0 {
             SECTION_SPACING + PASTE_BUTTON_HEIGHT
         } else {
             0.0
@@ -523,7 +549,7 @@ impl BrowserPopupPanel {
         } else {
             // Screen cap: shrink ONLY the grid viewport — the grid scrolls
             // internally beyond it, exactly as before.
-            let vp = (max_total - above - below - PADDING - BORDER).max(CELL_H * 0.5);
+            let vp = (max_total - above - below - PADDING - BORDER).max(cell_h * 0.5);
             (SCREEN_MARGIN, vp, max_total)
         };
         let popup_x = anchor.x.clamp(0.0, (screen_w - popup_w).max(0.0));
@@ -648,7 +674,7 @@ impl BrowserPopupPanel {
                 vp_top,
                 content_w,
                 vp_h,
-                "No presets match",
+                if mode == BrowserPopupMode::Actions { "No parameters match" } else { "No presets match" },
                 UIStyle {
                     font_size: CELL_FONT,
                     text_color: TEXT_DIM,
@@ -661,18 +687,18 @@ impl BrowserPopupPanel {
         let scroll_offset = session.picker.scroll.scroll_offset();
         let cursor = session.picker.cursor();
 
-        for (fi, (_, item)) in session.picker.filtered().enumerate() {
+        for (fi, (item_index, item)) in session.picker.filtered().enumerate() {
             let col = fi % columns;
             let row = fi / columns;
             // Relative Y for culling check (viewport-local)
             let rel_y = row as f32 * pitch - scroll_offset;
 
             // Cull cells entirely outside viewport
-            if rel_y + CELL_H < 0.0 || rel_y > vp_h {
+            if rel_y + cell_h < 0.0 || rel_y > vp_h {
                 continue;
             }
 
-            let cell_x = cx + col as f32 * (CELL_W + CELL_SPACING);
+            let cell_x = cx + col as f32 * (cell_w + CELL_SPACING);
             let cell_y = vp_top + rel_y;
 
             // Category accent bar
@@ -684,7 +710,7 @@ impl BrowserPopupPanel {
                     cell_x,
                     cell_y,
                     ACCENT_BAR_W,
-                    CELL_H,
+                    cell_h,
                     UIStyle {
                         bg_color: category_color(cat),
                         corner_radius: color::SMALL_RADIUS,
@@ -701,21 +727,21 @@ impl BrowserPopupPanel {
             // space-padded prefix hack is gone (F10). All non-interactive
             // nodes paint BEFORE the button, so they never shadow its click
             // region and its hover/press tint composites on top.
-            let has_image = item.thumbnail.is_some();
+            let has_image = mode != BrowserPopupMode::Actions && item.thumbnail.is_some();
             if let Some(path) = item.thumbnail.as_deref() {
                 let handle = crate::node::texture_handle_for_key(path);
-                tree.add_image(clip_parent, cell_x, cell_y, CELL_W, CELL_H, CELL_RADIUS, handle);
+                tree.add_image(clip_parent, cell_x, cell_y, cell_w, cell_h, CELL_RADIUS, handle);
             }
 
             if has_image {
                 // Centered stroked label: 8 black offset copies, white on top.
-                let band_y = cell_y + (CELL_H - CELL_LABEL_BAND_H) * 0.5;
+                let band_y = cell_y + (cell_h - CELL_LABEL_BAND_H) * 0.5;
                 for &(dx, dy) in &STROKE_OFFSETS {
                     tree.add_label(
                         clip_parent,
                         cell_x + dx,
                         band_y + dy,
-                        CELL_W,
+                        cell_w,
                         CELL_LABEL_BAND_H,
                         &item.label,
                         UIStyle {
@@ -730,7 +756,7 @@ impl BrowserPopupPanel {
                     clip_parent,
                     cell_x,
                     band_y,
-                    CELL_W,
+                    cell_w,
                     CELL_LABEL_BAND_H,
                     &item.label,
                     UIStyle {
@@ -754,8 +780,8 @@ impl BrowserPopupPanel {
                 clip_parent,
                 cell_x,
                 cell_y,
-                CELL_W,
-                CELL_H,
+                cell_w,
+                cell_h,
                 UIStyle {
                     bg_color: if has_image {
                         if is_cursor { CELL_HOVER_OVER_IMAGE } else { Color32::TRANSPARENT }
@@ -778,6 +804,7 @@ impl BrowserPopupPanel {
             session.layout.cell_ids.push((
                 id,
                 CellMeta {
+                    item_index,
                     type_id: item.type_id.clone(),
                     source: item.source,
                 },
@@ -787,7 +814,7 @@ impl BrowserPopupPanel {
         cy += vp_h;
 
         // Paste button
-        if session.paste_count > 0 {
+        if mode != BrowserPopupMode::Actions && session.paste_count > 0 {
             cy += SECTION_SPACING;
             let paste_label = if session.paste_count == 1 {
                 "Paste Effect".to_string()
@@ -893,7 +920,14 @@ impl BrowserPopupPanel {
                 let action = {
                     let session = self.session.as_ref()?;
                     let (_, meta) = &session.layout.cell_ids[i];
-                    if session.mode == BrowserPopupMode::Node {
+                    if session.mode == BrowserPopupMode::Actions {
+                        session
+                            .actions
+                            .as_ref()
+                            .and_then(|actions| actions.get(meta.item_index))
+                            .cloned()
+                            .map(BrowserPopupAction::ActionSelected)?
+                    } else if session.mode == BrowserPopupMode::Node {
                         BrowserPopupAction::NodeSelected {
                             type_id: meta.type_id.clone(),
                             graph_pos: session.pending_spawn_graph_pos.unwrap_or((0.0, 0.0)),
@@ -926,7 +960,7 @@ impl BrowserPopupPanel {
     /// inspector.
     pub fn handle_right_click(&self, node_id: NodeId) -> Option<BrowserCellContext> {
         let session = self.session.as_ref()?;
-        if session.mode == BrowserPopupMode::Node {
+        if matches!(session.mode, BrowserPopupMode::Node | BrowserPopupMode::Actions) {
             return None;
         }
         let (_, meta) = session.layout.cell_ids.iter().find(|(id, _)| *id == node_id)?;
@@ -969,11 +1003,12 @@ impl BrowserPopupPanel {
     pub fn handle_key_nav(&mut self, key: Key) -> Option<BrowserPopupAction> {
         let session = self.session.as_mut()?;
         let mode = session.mode;
+        let cell_h = if mode == BrowserPopupMode::Actions { 32.0 } else { CELL_H };
         let tab = session.tab;
         let layer_id = session.layer_id.clone();
         let spawn_pos = session.pending_spawn_graph_pos;
         let columns = session.layout.columns.max(1);
-        let page = (session.layout.grid_viewport_height / (CELL_H + CELL_SPACING))
+        let page = (session.layout.grid_viewport_height / (cell_h + CELL_SPACING))
             .floor()
             .max(1.0) as usize;
 
@@ -985,7 +1020,7 @@ impl BrowserPopupPanel {
             session
                 .picker
                 .scroll
-                .scroll_to_reveal(row as f32 * (CELL_H + CELL_SPACING), CELL_H);
+                .scroll_to_reveal(row as f32 * (cell_h + CELL_SPACING), cell_h);
         }
         let picked_type_id = if let PickerNav::Picked(idx) = nav {
             session.picker.item(idx).map(|it| it.type_id.clone())
@@ -1001,6 +1036,20 @@ impl BrowserPopupPanel {
                 Some(BrowserPopupAction::Dismissed)
             }
             PickerNav::Picked(_) => {
+                if mode == BrowserPopupMode::Actions {
+                    let idx = match nav {
+                        PickerNav::Picked(idx) => idx,
+                        _ => unreachable!(),
+                    };
+                    let action = session
+                        .actions
+                        .as_ref()
+                        .and_then(|actions| actions.get(idx))
+                        .cloned()
+                        .map(BrowserPopupAction::ActionSelected);
+                    self.close();
+                    return action;
+                }
                 let type_id = picked_type_id.unwrap_or_default();
                 let action = if mode == BrowserPopupMode::Node {
                     BrowserPopupAction::NodeSelected {
@@ -1028,8 +1077,9 @@ impl BrowserPopupPanel {
             return;
         };
         let columns = session.layout.columns.max(1);
+        let cell_h = if session.mode == BrowserPopupMode::Actions { 32.0 } else { CELL_H };
         let rows = session.picker.filtered_len().div_ceil(columns);
-        let content_h = rows as f32 * (CELL_H + CELL_SPACING) - CELL_SPACING;
+        let content_h = rows as f32 * (cell_h + CELL_SPACING) - CELL_SPACING;
         session.picker.scroll.set_content_height(content_h);
         session.picker.scroll.apply_scroll_delta(delta);
     }
@@ -1173,6 +1223,9 @@ impl Overlay for BrowserPopupPanel {
                 | Key::Enter),
                 ..
             } => match self.handle_key_nav(*key) {
+                Some(BrowserPopupAction::ActionSelected(action)) => {
+                    OverlayResponse::Consumed(vec![action])
+                }
                 Some(BrowserPopupAction::Selected {
                     type_id,
                     mode,
@@ -1194,6 +1247,7 @@ impl Overlay for BrowserPopupPanel {
                             layer_id,
                             crate::types::PresetTypeId::from_string(type_id),
                         )),
+                        BrowserPopupMode::Actions => return OverlayResponse::Consumed(Vec::new()),
                         // Node mode is editor-window only; never reached on
                         // the main-window overlay path.
                         BrowserPopupMode::Node => return OverlayResponse::Consumed(Vec::new()),
@@ -1211,6 +1265,9 @@ impl Overlay for BrowserPopupPanel {
                     return OverlayResponse::Consumed(vec![PanelAction::Params(ParamsAction::BrowserSearchClicked)]);
                 }
                 match self.handle_click(*node_id) {
+                    Some(BrowserPopupAction::ActionSelected(action)) => {
+                        OverlayResponse::Consumed(vec![action])
+                    }
                     Some(BrowserPopupAction::Selected {
                         type_id,
                         mode,
@@ -1229,6 +1286,9 @@ impl Overlay for BrowserPopupPanel {
                                 layer_id,
                                 crate::types::PresetTypeId::from_string(type_id),
                             )),
+                            BrowserPopupMode::Actions => {
+                                return OverlayResponse::Consumed(Vec::new());
+                            }
                             // Node mode is editor-window only; never reached on
                             // the main-window overlay path.
                             BrowserPopupMode::Node => {
@@ -1277,5 +1337,48 @@ impl Overlay for BrowserPopupPanel {
             }
             _ => OverlayResponse::Ignored,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_picker_returns_typed_action_after_filter_and_enter() {
+        let action = PanelAction::Params(ParamsAction::ShowAutomation(
+            crate::panels::GraphParamTarget::Generator,
+            "density".to_string().into(),
+        ));
+        let mut popup = BrowserPopupPanel::new();
+        popup.open_actions(
+            BrowserPopupRequest {
+                mode: BrowserPopupMode::Actions,
+                tab: InspectorTab::Layer,
+                layer_id: None,
+                items: vec![PickerItem {
+                    label: "Noise · Density".to_string(),
+                    type_id: "generator:density".to_string(),
+                    category: Some("Generator".to_string()),
+                    search_text: Some("noise density".to_string()),
+                    source: None,
+                    thumbnail: None,
+                }],
+                category_names: vec!["Generator".to_string()],
+                spawn_graph_pos: None,
+                paste_count: 0,
+                screen_anchor: Vec2::ZERO,
+            },
+            vec![action.clone()],
+        );
+        popup.set_filter("density".to_string());
+        let Some(BrowserPopupAction::ActionSelected(selected)) = popup.handle_key_nav(Key::Enter) else {
+            panic!("filtered action picker should select its first action");
+        };
+        assert!(matches!(selected, PanelAction::Params(ParamsAction::ShowAutomation(
+            crate::panels::GraphParamTarget::Generator,
+            ref param,
+        )) if param.as_ref() == "density"));
+        assert!(!popup.is_open());
     }
 }
