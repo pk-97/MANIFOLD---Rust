@@ -36,7 +36,9 @@ use std::path::{Path, PathBuf};
 // 213→209, 2026-09-05 (preset-browser P3): the browser popup's category accent
 // table moved to `design-token-exempt` palette consts (tokenize into color.rs
 // at landing); the four raw literals it replaced came out of the count.
-const COLOR_BASELINE: usize = 209;
+// 209→205, 2026-09-26 (three-band waveforms): removed the old computed
+// spectral palette and its two interpolation fixture colours.
+const COLOR_BASELINE: usize = 205;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
