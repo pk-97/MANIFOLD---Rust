@@ -86,6 +86,7 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::temporal_reset::TemporalResetDetector;
 use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
+use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
@@ -167,7 +168,7 @@ const DEFAULT_LIGHTS: u32 = 1;
 /// `objects × lights`. Bumpable like any cap — the shader's caster table
 /// (`@binding(9)`) and shadow-map bindings (`@binding(10..)`) size to it.
 pub(crate) const MAX_RASTER_SHADOW_CASTERS: usize = 4;
-const LIGHT_VEC4_STRIDE: usize = 3;
+const LIGHT_VEC4_STRIDE: usize = 4;
 const _: () = assert!(MAX_RASTER_SHADOW_CASTERS <= manifold_gpu::raytrace::MAX_RT_CASTERS);
 
 /// Ring depth for the per-frame light storage buffer. The content thread is
@@ -249,15 +250,6 @@ const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
 )]
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 
-/// RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant, single source
-/// of truth for the WGSL mirror `RT_TRANSMISSION_WRAP` in
-/// `shaders/render_scene.wgsl`. Range 0..1 — 0 = sharp terminator (only
-/// dead-on backlight), 1 = full wrap (petals glow at wide angles).
-#[expect(
-    dead_code,
-    reason = "single source of truth for the WGSL mirror constant; the WGSL side reads it"
-)]
-const RT_TRANSMISSION_WRAP: f32 = 0.5;
 /// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
 /// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
 /// `n` is the texel's accumulated frame count, so a still surface converges;
@@ -354,7 +346,7 @@ struct PrefilterUniforms {
     src_width: u32,
     src_height: u32,
     roughness: f32,
-    _pad0: f32,
+    sheen: f32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -682,6 +674,47 @@ struct RenderSceneUniforms {
 // field keeps its offset (appending is the byte-identical contract).
 const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 816);
 
+/// Per-map sampling metadata. Core maps retain hardware anisotropic
+/// samplers; extension maps use these settings within Metal sampler limits.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MaterialMapUniform {
+    matrix: [f32; 4],
+    offset_set: [f32; 4],
+    sampling: [u32; 4],
+}
+
+impl From<crate::node_graph::material::MaterialMapInfo> for MaterialMapUniform {
+    fn from(info: crate::node_graph::material::MaterialMapInfo) -> Self {
+        use manifold_gpu::{GpuAddressMode as A, GpuFilterMode as F};
+        let address = |a| match a { A::ClampToEdge => 0, A::Repeat => 1, A::MirrorRepeat => 2, A::ClampToZero => 3 };
+        let linear = |f| u32::from(f == F::Linear);
+        Self {
+            matrix: info.uv_transform[..4].try_into().expect("fixed affine"),
+            offset_set: [info.uv_transform[4], info.uv_transform[5], info.tex_coord as f32, 0.0],
+            sampling: [address(info.sampler.wrap_u), address(info.sampler.wrap_v),
+                linear(info.sampler.mag_filter) | (linear(info.sampler.min_filter) << 1),
+                info.sampler.mip_filter.map_or(0, |f| 1 + linear(f))],
+        }
+    }
+}
+
+fn material_map_uniforms(material: &Material) -> [MaterialMapUniform; 19] {
+    let transforms = [material.base_color_uv_transform, material.normal_uv_transform,
+        material.mr_uv_transform, material.occlusion_uv_transform, material.emissive_uv_transform];
+    let samplers = [material.base_color_sampler, material.normal_sampler,
+        material.mr_sampler, material.occlusion_sampler, material.emissive_sampler];
+    std::array::from_fn(|i| {
+        if i < 5 {
+            crate::node_graph::material::MaterialMapInfo {
+                uv_transform: transforms[i], tex_coord: material.core_tex_coords[i], sampler: samplers[i],
+            }.into()
+        } else {
+            material.extension_maps[i - 5].into()
+        }
+    })
+}
+
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
 /// `light_view_proj · model · position` and writes only depth. 128 bytes.
@@ -692,8 +725,25 @@ struct ShadowUniforms {
     model: [[f32; 4]; 4],
     /// `(gain, weights_wired, 0, 0)` for the depth visibility discard.
     appearance: [f32; 4],
+    alpha: [f32; 4],
+    uv_m: [f32; 4],
+    uv_t: [f32; 4],
 }
-const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 144);
+const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 192);
+
+impl ShadowUniforms {
+    fn for_draw(view_proj: [[f32; 4]; 4], draw: &ObjectDraw<'_>) -> Self {
+        Self {
+            light_view_proj: view_proj,
+            model: draw.uniforms.model,
+            appearance: draw.uniforms.appearance,
+            alpha: [draw.uniforms.alpha_params[0], draw.uniforms.alpha_params[1],
+                draw.uniforms.base_color[3], draw.uniforms.texture_flags[2]],
+            uv_m: draw.uniforms.base_color_uv_m,
+            uv_t: draw.map_uniforms[0].offset_set,
+        }
+    }
+}
 
 pub struct RenderScene {
     inputs: Vec<NodeInput>,
@@ -908,6 +958,8 @@ pub struct RenderScene {
     /// the prefiltered-env chain).
     dummy_emissive_buffer: Option<manifold_gpu::GpuBuffer>,
     sampler: Option<manifold_gpu::GpuSampler>,
+    /// Screen-space refraction must never wrap to the opposite image edge.
+    refraction_sampler: Option<manifold_gpu::GpuSampler>,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family material samplers
     /// (bindings 22..26), keyed by [`sampler_cache_key`] — one entry per
     /// DISTINCT `MapSamplerDesc` seen so far, not per object or per family
@@ -997,6 +1049,8 @@ pub struct RenderScene {
     /// `run_ibl_convolution`'s doc comment for the generation-signal safety
     /// argument).
     prefiltered_specular: Option<manifold_gpu::GpuTexture>,
+    prefiltered_sheen: Option<manifold_gpu::GpuTexture>,
+    subsurface_pass: subsurface::SubsurfacePass,
     /// Diffuse irradiance map (`IRRADIANCE_WIDTH`×`IRRADIANCE_HEIGHT`).
     irradiance_map: Option<manifold_gpu::GpuTexture>,
     /// Split-sum BRDF LUT (`BRDF_LUT_SIZE`²). Envmap-independent —
@@ -1525,6 +1579,9 @@ struct ObjectDraw<'ctx> {
     /// at the weights slot as an unused ABI dummy.
     weights: Option<&'ctx manifold_gpu::GpuBuffer>,
     uniforms: RenderSceneUniforms,
+    map_uniforms: [MaterialMapUniform; 19],
+    subsurface: crate::node_graph::material::Subsurface,
+    subsurface_binding: [f32; 4],
     pipeline: manifold_gpu::GpuRenderPipeline,
     base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
     /// IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
@@ -1532,6 +1589,8 @@ struct ObjectDraw<'ctx> {
     /// draw time" shape as `base_color_map` above.
     normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
     mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    legacy_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    legacy_metallic_map: Option<&'ctx manifold_gpu::GpuTexture>,
     occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
     emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
     /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
@@ -1550,6 +1609,8 @@ struct ObjectDraw<'ctx> {
     specular_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
     transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
     volume_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    diffuse_transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
+    diffuse_transmission_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
     /// sampler settings, order `[base_color, normal, mr, occlusion,
     /// emissive]` — matches `binding_sets`' 22..26 slot order below.
@@ -1568,7 +1629,7 @@ struct ObjectDraw<'ctx> {
     vertices_content: Option<ContentVersion>,
     mesh_revision: Option<MeshRevision>,
     topology_hint: Option<ContentVersion>,
-    rt_texture_content: [Option<ContentVersion>; 4],
+    rt_texture_content: [Option<ContentVersion>; 7],
     instances_content: Option<ContentVersion>,
     weights_content: Option<ContentVersion>,
     /// Per-object appearance gain, folded into the shadow dirtiness key.
@@ -1822,6 +1883,7 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
         port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
+        single_object: Option<SceneObject>,
     ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
         let FramePrelude {
             objects, cam, envmap_wired, atmosphere, render_mode, view_proj, prev_view_proj,
@@ -1862,7 +1924,7 @@ impl RenderScene {
                 ctx.gpu_encoder().merge_frame_status(status);
                 return None;
             }
-            let Some(object) = object_slot_id.and_then(|s| ctx.inputs.object_slot(s)) else {
+            let Some(object) = single_object.or_else(|| object_slot_id.and_then(|s| ctx.inputs.object_slot(s))) else {
                 // Unwired `object_n` (no `node.scene_object` feeding this
                 // index yet — an in-progress edit): skip this object
                 // entirely, no error. Matches an unwired `visible` object's
@@ -1991,6 +2053,8 @@ impl RenderScene {
             // per-object texture ports.
             let normal_map = object.normal_map.and_then(|s| inputs.texture_2d_slot(s));
             let mr_map = object.mr_map.and_then(|s| inputs.texture_2d_slot(s));
+            let legacy_roughness_map = single_object.and_then(|_| inputs.texture_2d("roughness_map"));
+            let legacy_metallic_map = single_object.and_then(|_| inputs.texture_2d("metallic_map"));
             let occlusion_map = object.occlusion_map.and_then(|s| inputs.texture_2d_slot(s));
             let emissive_map = object.emissive_map.and_then(|s| inputs.texture_2d_slot(s));
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
@@ -2014,6 +2078,8 @@ impl RenderScene {
             let transmission_map = object.transmission_map.and_then(|s| inputs.texture_2d_slot(s));
             let volume_thickness_map =
                 object.volume_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let diffuse_transmission_map = object.diffuse_transmission_map.and_then(|s| inputs.texture_2d_slot(s));
+            let diffuse_transmission_color_map = object.diffuse_transmission_color_map.and_then(|s| inputs.texture_2d_slot(s));
 
             // `object.transform` already defaults to `Transform::default()`
             // (identity) when scene_object's own `transform` input is
@@ -2050,6 +2116,11 @@ impl RenderScene {
                 weights.is_some(),
                 render_mode.point_size,
             );
+            if single_object.is_some() {
+                uniforms.appearance[2] = (1u32
+                    | if legacy_roughness_map.is_some() { 2 } else { 0 }
+                    | if legacy_metallic_map.is_some() { 4 } else { 0 }) as f32;
+            }
             // TAA/MetalFX velocity jitter exclusion (see the field's doc):
             // the fragment subtracts (cur − prev) from the baked-in-jitter
             // clip varyings. Zero whenever temporal_upscale is off.
@@ -2117,6 +2188,12 @@ impl RenderScene {
             if volume_thickness_map.is_some() {
                 specular_family_flags |= 8; // bit 3 = volume_thickness_map present
             }
+            if diffuse_transmission_map.is_some() {
+                specular_family_flags |= 16;
+            }
+            if diffuse_transmission_color_map.is_some() {
+                specular_family_flags |= 32;
+            }
             uniforms.pbr_specular_tint[3] = specular_family_flags as f32;
             let mut clearcoat_family_flags: u32 = 0;
             if clearcoat_map.is_some() {
@@ -2179,10 +2256,15 @@ impl RenderScene {
                 vertices,
                 weights,
                 uniforms,
+                map_uniforms: material_map_uniforms(&material),
+                subsurface: material.subsurface,
+                subsurface_binding: [0.0; 4],
                 pipeline,
                 base_color_map,
                 normal_map,
                 mr_map,
+                legacy_roughness_map,
+                legacy_metallic_map,
                 occlusion_map,
                 emissive_map,
                 sheen_color_map,
@@ -2197,6 +2279,8 @@ impl RenderScene {
                 specular_color_map,
                 transmission_map,
                 volume_thickness_map,
+                diffuse_transmission_map,
+                diffuse_transmission_color_map,
                 sampler_descs,
                 instances,
                 instance_count,
@@ -2205,9 +2289,9 @@ impl RenderScene {
                 topology_hint: object.topology.and_then(|slot| inputs.content_version_of(slot)),
                 geometry_content_known: [object.mesh, object.instances, object.topology]
                     .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
-                appearance_content_known: [object.weights, object.base_color_map, object.normal_map, object.mr_map, object.emissive_map]
+                appearance_content_known: [object.weights, object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map]
                     .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
-                rt_texture_content: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map]
+                rt_texture_content: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map]
                     .map(|slot| slot.and_then(|slot| ctx.inputs.content_version_of(slot))),
                 instances_content,
                 weights_content: weights_slot.and_then(|s| inputs.content_version_of(s)),
@@ -2255,6 +2339,7 @@ impl RenderScene {
         } = *pre;
         let preparing = ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_enabled = rt_enabled || preparing;
+        let has_subsurface = draws.iter().any(|draw| draw.subsurface_binding[0] > 0.0);
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek color format BEFORE the gpu_encoder block below borrows ctx.
         let opaque_scene_color_target_format =
             has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
@@ -2384,6 +2469,20 @@ impl RenderScene {
             // `@binding(16..18)` always has something valid, regardless of
             // whether `envmap` is wired this frame.
             self.ensure_ibl_resources(gpu.device);
+            if self.prefiltered_sheen.is_none()
+                && draws.iter().any(|d| d.uniforms.sheen_params[..3].iter().any(|v| *v > 0.0))
+            {
+                self.prefiltered_sheen = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: PREFILTER_BASE_WIDTH,
+                    height: PREFILTER_BASE_HEIGHT,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::SHADER_READ | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                    label: "node.render_scene sheen environment",
+                    mip_levels: PREFILTER_MIP_COUNT,
+                }));
+            }
             // Identity instance stub (D11) — bound to any object's
             // instances_n when unwired, both in the main pass and every
             // caster's shadow pass below.
@@ -2393,12 +2492,13 @@ impl RenderScene {
             // in a scene with no casters. The shadow *pipeline* + per-caster
             // maps are created only when a caster exists (unwired = zero cost).
             self.ensure_shadow_binding_stubs(gpu.device);
-            if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
+            if has_casters && (!(rt_enabled && rt_ready && rt_shadows_enabled)
+                || draws.iter().any(ObjectDraw::routes_to_transparent)) {
                 self.ensure_shadow_pass(gpu.device);
                 for (slot, l) in casters.iter().take(MAX_RASTER_SHADOW_CASTERS).enumerate() {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
                 }
-            } else if has_transmission || rt_enabled {
+            } else if has_transmission || rt_enabled || has_subsurface {
                 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the transmissive
                 // opaque-depth prepass below reuses `shadow_pipeline` (a
                 // depth-only pipeline fed the camera's `view_proj` instead
@@ -2417,8 +2517,11 @@ impl RenderScene {
             // borrows of `self` below) — the same `&mut self` ensure calls
             // deferred to right before Pass 2 fetches `target` (the natural
             // place otherwise) would conflict with those borrows under NLL.
-            if has_transmission || rt_enabled {
+            if has_transmission || rt_enabled || has_subsurface {
                 self.ensure_opaque_depth_snapshot(gpu.device, width, height);
+            }
+            if has_subsurface {
+                self.subsurface_pass.ensure(gpu.device, width, height, draws.len());
             }
             if has_transmission
                 && let Some(format) = opaque_scene_color_target_format
@@ -2515,11 +2618,12 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
         opaque_draws: &[&ObjectDraw<'ctx>],
-        has_casters: bool,
         will_rt_accumulate_this_frame: bool,
         rt_ready: bool,
+        has_transparent: bool,
     ) {
         let FramePrelude { ref casters, rt_enabled, rt_shadows_enabled, .. } = *pre;
+        let has_casters = !casters.is_empty();
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
         // 2026-07-31): phong/cel draws in an RT scene get the flat ambient
@@ -2549,7 +2653,7 @@ impl RenderScene {
         // textures are unwritten (shadow_spp=0) and the WGSL rt_flags.w
         // gate directs shadow_factor to the raster path below (the sv
         // read branch is never entered).
-        if has_casters && !(rt_enabled && rt_ready && rt_shadows_enabled) {
+        if has_casters && (!(rt_enabled && rt_ready && rt_shadows_enabled) || has_transparent) {
             // Per-object shadow toggle: this raster depth-only pass is the
             // ONLY place `cast_shadows == false` removes an object from —
             // it stays in `opaque_draws` (and therefore the prepass/accel
@@ -2585,6 +2689,9 @@ impl RenderScene {
                     d.instances_content.hash(&mut hasher);
                     d.weights_content.hash(&mut hasher);
                     hasher.write_u32(d.gain.to_bits());
+                    hasher.write(bytemuck::bytes_of(&ShadowUniforms::for_draw(vp, d)));
+                    d.rt_texture_content[0].hash(&mut hasher);
+                    hasher.write_u32(Self::sampler_cache_key(d.sampler_descs[0]));
                     hasher.write_u32(mesh_vertex_count(d.vertices));
                     hasher.write_u32(d.instance_count);
                 }
@@ -2605,7 +2712,8 @@ impl RenderScene {
                 // except on resolution change — see `ensure_shadow_map`)
                 // already holds exactly this content, so the depth-only
                 // batch this caster would otherwise issue is redundant.
-                if caster_draws.iter().all(|draw| draw.geometry_content_known && draw.appearance_content_known)
+                if caster_draws.iter().all(|draw| draw.geometry_content_known && draw.appearance_content_known
+                    && (draw.base_color_map.is_none() || draw.rt_texture_content[0].is_some()))
                     && self.shadow_cache_keys[slot] == Some(shadow_key) {
                     continue;
                 }
@@ -2613,13 +2721,9 @@ impl RenderScene {
 
                 let shadow_uniforms: Vec<ShadowUniforms> = caster_draws
                     .iter()
-                    .map(|d| ShadowUniforms {
-                        light_view_proj: vp,
-                        model: d.uniforms.model,
-                        appearance: d.uniforms.appearance,
-                    })
+                    .map(|d| ShadowUniforms::for_draw(vp, d))
                     .collect();
-                let shadow_bindings: Vec<[GpuBinding; 4]> = caster_draws
+                let shadow_bindings: Vec<[GpuBinding; 6]> = caster_draws
                     .iter()
                     .zip(&shadow_uniforms)
                     .map(|(d, su)| {
@@ -2643,6 +2747,8 @@ impl RenderScene {
                                 buffer: d.weights.unwrap_or(d.vertices),
                                 offset: 0,
                             },
+                            GpuBinding::Texture { binding: 4, texture: d.base_color_map.unwrap_or(self.dummy_texture.as_ref().expect("ensured")) },
+                            GpuBinding::Sampler { binding: 5, sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])] },
                         ]
                     })
                     .collect();
@@ -2681,22 +2787,19 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         opaque_draws: &[&ObjectDraw<'ctx>],
         has_transmission: bool,
+        has_subsurface: bool,
     ) {
         let FramePrelude { view_proj, rt_enabled, .. } = *pre;
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        if has_transmission || rt_enabled {
+        if has_transmission || rt_enabled || has_subsurface {
             let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
             let opaque_depth_ds = self.depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
             let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
                 .iter()
-                .map(|d| ShadowUniforms {
-                    light_view_proj: view_proj,
-                    model: d.uniforms.model,
-                    appearance: d.uniforms.appearance,
-                })
+                .map(|d| ShadowUniforms::for_draw(view_proj, d))
                 .collect();
-            let cam_bindings: Vec<[GpuBinding; 4]> = opaque_draws
+            let cam_bindings: Vec<[GpuBinding; 6]> = opaque_draws
                 .iter()
                 .zip(&cam_uniforms)
                 .map(|(d, su)| {
@@ -2720,6 +2823,8 @@ impl RenderScene {
                             buffer: d.weights.unwrap_or(d.vertices),
                             offset: 0,
                         },
+                        GpuBinding::Texture { binding: 4, texture: d.base_color_map.unwrap_or(self.dummy_texture.as_ref().expect("ensured")) },
+                        GpuBinding::Sampler { binding: 5, sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])] },
                     ]
                 })
                 .collect();
@@ -2754,6 +2859,20 @@ impl RenderScene {
         objects: &[manifold_gpu::raytrace::RtObjectGeometry<'ctx>],
         draws: &[ObjectDraw<'ctx>],
     ) -> Result<RtFrameTables<'ctx>, FrameRenderFailure> {
+            // Reject an unrepresentable material set before publishing tables.
+            // Missing texture bindings must never turn a cutout solid or lose a lobe.
+            let mut texture_keys: arrayvec::ArrayVec<usize, { manifold_gpu::raytrace::MAX_RT_MATERIAL_TEXTURES }> = arrayvec::ArrayVec::new();
+            for object in objects {
+                for texture in [object.base_color_texture, object.normal_texture, object.mr_texture, object.emissive_texture]
+                    .into_iter().chain(object.extra_material_textures).flatten()
+                {
+                    let key = texture.identity_key();
+                    if !texture_keys.contains(&key) && texture_keys.try_push(key).is_err() {
+                        ctx.error(format!("Ray-traced materials exceed the {} unique-texture capacity.", manifold_gpu::raytrace::MAX_RT_MATERIAL_TEXTURES));
+                        return Err(FrameRenderFailure::RtAllocation);
+                    }
+                }
+            }
             let opaque_draws = draws
                 .iter()
                 .filter(|d| !d.routes_to_transparent() && d.instance_count > 0);
@@ -2776,13 +2895,25 @@ impl RenderScene {
                         [
                             d.uniforms.pbr_metallic_roughness[0],
                             d.uniforms.pbr_metallic_roughness[1],
-                            0.0,
-                            0.0,
+                            d.uniforms.anisotropy_dispersion_params[0],
+                            d.uniforms.anisotropy_dispersion_params[1],
                         ],
                         // RT-TL-B (section 16 TL4): the walk's attenuation
                         // factor — the same `diffuse_transmission_params.x`
                         // the raster forward term reads.
                         d.uniforms.diffuse_transmission_params,
+                    ).with_surface(
+                        match d.kind { MaterialKind::Unlit => 0.0, MaterialKind::Phong => 1.0,
+                            MaterialKind::Pbr => 2.0, MaterialKind::Cel => 3.0 },
+                        {
+                            let mr = d.uniforms.pbr_metallic_roughness;
+                            let dielectric = ((mr[2] - 1.0) / (mr[2] + 1.0)).powi(2);
+                            let weight = mr[3].clamp(0.0, 1.0);
+                            let tint = d.uniforms.pbr_specular_tint;
+                            [(dielectric*tint[0]).min(1.0)*weight,
+                             (dielectric*tint[1]).min(1.0)*weight,
+                             (dielectric*tint[2]).min(1.0)*weight, weight]
+                        },
                     )
                 })
                 .collect();
@@ -2857,12 +2988,16 @@ impl RenderScene {
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.emissive));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.metallic_roughness));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.translucency));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.specular));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&material.kind));
             }
             for draw in opaque_draws.clone() {
                 for content in draw.rt_texture_content { appearance_hasher.content(content); }
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.alpha_params));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.emissive_uv_m));
                 appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.emissive_uv_t));
+                appearance_hasher.parameter_bytes(bytemuck::cast_slice(&draw.map_uniforms));
+                appearance_hasher.parameter_bytes(bytemuck::bytes_of(&draw.uniforms.normal_uv_t));
             }
             let appearance_key = appearance_hasher.finish();
             let appearance_changed = !opaque_draws.clone().all(|draw| draw.appearance_content_known)
@@ -3105,7 +3240,8 @@ impl RenderScene {
                                 sun_cone_half_angle(l.shadow_softness),
                                 0u32,
                             ),
-                            crate::node_graph::light::LightMode::Point => {
+                            crate::node_graph::light::LightMode::Point
+                            | crate::node_graph::light::LightMode::Spot => {
                                 let light_size = match l.shadow_softness {
                                     crate::node_graph::light::ShadowSoftness::Contact { light_size } => {
                                         light_size
@@ -3786,7 +3922,8 @@ impl RenderScene {
                         let m = d.uniforms.model;
                         shaft_light_data.push([m[3][0], m[3][1], m[3][2], 1.0]);
                         shaft_light_data.push([emission[0], emission[1], emission[2], -1.0]);
-                        shaft_light_data.push([EMISSIVE_GLOW_RANGE_WORLD_UNITS, 0.0, 0.0, 0.0]);
+                        shaft_light_data.push([EMISSIVE_GLOW_RANGE_WORLD_UNITS, 1.0, 0.0, 0.0]);
+                        shaft_light_data.push([0.0; 4]);
                         *shaft_light_count += 1;
                     }
                 }
@@ -4064,7 +4201,7 @@ impl RenderScene {
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 47]> = draws
+        let binding_sets: Vec<[GpuBinding; 53]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -4095,7 +4232,7 @@ impl RenderScene {
                     // shader-side comment; always the dummy.
                     GpuBinding::Texture {
                         binding: 5,
-                        texture: dummy,
+                        texture: draw.legacy_roughness_map.unwrap_or(dummy),
                     },
                     GpuBinding::Texture {
                         binding: 6,
@@ -4105,7 +4242,7 @@ impl RenderScene {
                     // shader-side comment; always the dummy.
                     GpuBinding::Texture {
                         binding: 7,
-                        texture: dummy,
+                        texture: draw.legacy_metallic_map.unwrap_or(dummy),
                     },
                     // Lights: ring-buffered storage buffer (was a 4KB-capped
                     // Bytes bind). Holds one zeroed entry when no light is
@@ -4223,7 +4360,7 @@ impl RenderScene {
                     },
                     GpuBinding::Sampler {
                         binding: 28,
-                        sampler,
+                        sampler: self.refraction_sampler.as_ref().expect("ensured"),
                     },
                     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1
                     // revised): sheen/iridescence/anisotropy extension
@@ -4289,6 +4426,22 @@ impl RenderScene {
                         texture: draw.volume_thickness_map.unwrap_or(dummy),
                     },
                     GpuBinding::Texture {
+                        binding: 47,
+                        texture: draw.diffuse_transmission_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 48,
+                        texture: draw.diffuse_transmission_color_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Bytes {
+                        binding: 50,
+                        data: bytemuck::cast_slice(&draw.map_uniforms),
+                    },
+                    GpuBinding::Texture {
+                        binding: 49,
+                        texture: self.prefiltered_sheen.as_ref().unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
                         binding: 41,
                         texture: rt_mask_tex,
                     },
@@ -4316,6 +4469,8 @@ impl RenderScene {
                         buffer: draw.weights.unwrap_or(draw.vertices),
                         offset: 0,
                     },
+                    GpuBinding::Bytes { binding: 51, data: bytemuck::bytes_of(&draw.subsurface_binding) },
+                    GpuBinding::Texture { binding: 52, texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy) },
                 ]
             })
             .collect();
@@ -4557,27 +4712,24 @@ impl RenderScene {
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
             let blend_depth_stencil = self.blend_depth_stencil.as_ref().expect("ensured");
             let gpu = ctx.gpu_encoder();
-            gpu.native_enc
-                .copy_texture_to_texture(resolve_target, opaque_scene_color, width, height, 1);
-            // E2b: level 0 is fresh from the blit above; levels 1.. are
-            // stale until regenerated (same "regen on every write" rule
-            // `node.gltf_texture_source` step 8 follows) — `fs_pbr`'s
-            // roughness-driven refraction blur samples this chain, so it
-            // must be current EVERY frame the snapshot is retaken (unlike a
-            // static imported texture, this content changes every frame the
-            // camera or scene moves).
-            if opaque_scene_color.mip_level_count() > 1 {
-                gpu.native_enc.generate_mipmaps(opaque_scene_color);
-            }
-            if !blend_draw_calls.is_empty() {
+            // Capture the already-composited layers before each farther-to-nearer
+            // draw. Every glass layer then transmits the layers behind it, instead
+            // of all panes replacing one another with the original opaque image.
+            for draw_call in &blend_draw_calls {
+                gpu.native_enc.copy_texture_to_texture(
+                    resolve_target, opaque_scene_color, width, height, 1,
+                );
+                if opaque_scene_color.mip_level_count() > 1 {
+                    gpu.native_enc.generate_mipmaps(opaque_scene_color);
+                }
                 gpu.native_enc.draw_instanced_depth_batch(
                     resolve_target,
                     opaque_depth_snapshot,
                     blend_depth_stencil,
-                    &blend_draw_calls,
+                    std::slice::from_ref(draw_call),
                     manifold_gpu::GpuLoadAction::Load,
                     manifold_gpu::GpuLoadAction::Load,
-                    "node.render_scene E2a transmissive pass B",
+                    "node.render_scene transmissive layer",
                 );
             }
         }
@@ -4694,10 +4846,10 @@ impl RenderScene {
             // binding's presence) — checked HERE, after every append
             // (real lights above, RT-P3's emissive pseudo-lights in the RT
             // block above) has already happened, so a stub only gets added
-            // when the buffer is genuinely still empty. 3 vec4s = one
+            // when the buffer is genuinely still empty. 4 vec4s = one
             // zeroed light-shaped stub.
             if shaft_light_data.is_empty() {
-                shaft_light_data.extend([[0.0f32; 4]; 3]);
+                shaft_light_data.extend([[0.0f32; 4]; LIGHT_VEC4_STRIDE]);
             }
             let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
             {
@@ -5201,6 +5353,37 @@ impl RenderScene {
                     // so a change in it rebuilds the affected BLAS.
                     appearance_weights: d.weights,
                     appearance_gain: d.gain,
+                    base_color_uv_transform: [
+                        d.uniforms.base_color_uv_m[0], d.uniforms.base_color_uv_m[1],
+                        d.uniforms.base_color_uv_m[2], d.uniforms.base_color_uv_m[3],
+                        d.uniforms.base_color_uv_t[0], d.uniforms.base_color_uv_t[1],
+                    ],
+                    mr_uv_transform: [
+                        d.uniforms.mr_uv_m[0], d.uniforms.mr_uv_m[1],
+                        d.uniforms.mr_uv_m[2], d.uniforms.mr_uv_m[3],
+                        d.uniforms.mr_uv_t[0], d.uniforms.mr_uv_t[1],
+                    ],
+                    normal_uv_transform: [
+                        d.uniforms.normal_uv_m[0], d.uniforms.normal_uv_m[1],
+                        d.uniforms.normal_uv_m[2], d.uniforms.normal_uv_m[3],
+                        d.uniforms.normal_uv_t[0], d.uniforms.normal_uv_t[1],
+                    ],
+                    normal_scale: d.uniforms.normal_uv_t[2],
+                    base_color_alpha: d.uniforms.base_color[3],
+                    tangent_offset: 48,
+                    extra_material_textures: [d.anisotropy_map, d.specular_map, d.specular_color_map],
+                    material_attributes: manifold_gpu::raytrace::RtMaterialAttributes {
+                        uv1_offset: std::mem::offset_of!(MeshVertex, _pad2) as u32,
+                        color_offset: std::mem::offset_of!(MeshVertex, color) as u32,
+                        sampling: std::array::from_fn(|i| {
+                            let m = d.map_uniforms[[0, 1, 2, 3, 4, 9, 13, 14][i]];
+                            [m.offset_set[2] as u32, m.sampling[0], m.sampling[1], m.sampling[2] & 1]
+                        }),
+                        extension_uv_transforms: [9, 13, 14].map(|i| {
+                            let m = d.map_uniforms[i];
+                            [m.matrix[0], m.matrix[1], m.matrix[2], m.matrix[3], m.offset_set[0], m.offset_set[1]]
+                        }),
+                    },
                 }
                 })
                 .collect();
@@ -5223,6 +5406,11 @@ impl RenderScene {
         let rt_just_resumed = will_rt_accumulate_this_frame && !self.rt_prev_accumulating;
         self.rt_prev_accumulating = will_rt_accumulate_this_frame;
         for draw in draws.iter_mut() {
+            // Screen-space RT results belong to the opaque depth surface.
+            // A transparent fragment at the same pixel is a different surface:
+            // reading that lighting projects background edges and denoising
+            // tiles onto glass. It uses environment lighting and raster shadows.
+            let surface_rt = rt_enabled && *rt_ready && !draw.routes_to_transparent();
             let uniforms = &mut draw.uniforms;
             // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
             // a permanently-zero reserved slot (see the field's doc
@@ -5236,7 +5424,7 @@ impl RenderScene {
             // caster-slot lookup already no-ops when the light loop has no
             // caster slot to hand it (`slot_f < 0.0` returns fully lit),
             // so this flag is safe to raise with zero casters too.
-            uniforms.scene_params[3] = if rt_enabled && *rt_ready { 1.0 } else { 0.0 };
+            uniforms.scene_params[3] = if surface_rt { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 9 RD9/RD1: the reflection-substitution
             // gate — stricter than scene_params.w: the raster may only
             // read `rt_reflection` (binding 43) when the trace dispatch
@@ -5245,7 +5433,7 @@ impl RenderScene {
             // (scene-wide value, like scene_params.w). BUG-17r3: reflections
             // trace against the scene geometry, not toward a light — never
             // caster-gated.
-            uniforms.rt_flags[0] = if rt_reflections && *rt_ready { 1.0 } else { 0.0 };
+            uniforms.rt_flags[0] = if rt_reflections && surface_rt { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
             // diffuse substitution gate — the raster may only read the RT
             // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
@@ -5258,7 +5446,7 @@ impl RenderScene {
             // sparse residue). Mirrors the reflection fallback discipline
             // (`rt_refl.a < 0` keeping the raster prefiltered fetch). No new
             // scene param (MB4).
-            uniforms.rt_flags[1] = if rt_gi_enabled && *rt_ready { 1.0 } else { 0.0 };
+            uniforms.rt_flags[1] = if rt_gi_enabled && surface_rt { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 16 TL5: rt_flags.z = designated
             // sun caster slot + 1 (0 = none). fs_pbr reads this to know which
             // light substitutes rt_sun_tint for the luma vis channel.
@@ -5268,13 +5456,13 @@ impl RenderScene {
             // could read a stale rt_sun_tint with RT
             // off or with the shadow kernel disabled — a zeroed texture
             // zeroed the sun's entire direct contribution.
-            uniforms.rt_flags[2] = if rt_shadows_enabled && *rt_ready { rt_svt_slot(casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
+            uniforms.rt_flags[2] = if rt_shadows_enabled && surface_rt { rt_svt_slot(casters).map(|s| s as f32 + 1.0).unwrap_or(0.0) } else { 0.0 };
             // RT term toggles: rt_flags.w = RT shadow mask read gate. When
             // rt_shadows is off, shadow_factor falls through to raster shadow
             // maps. The kernel still dispatches (for AO/GI/refl), but the sv
             // textures are not written (shadow_spp=0 gated in-kernel) and the
             // WGSL never reads them (gated here).
-            uniforms.rt_flags[3] = if rt_shadows_enabled && *rt_ready { 1.0 } else { 0.0 };
+            uniforms.rt_flags[3] = if rt_shadows_enabled && surface_rt { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
             // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
             // the value the EMIT_AO_MASK fragment variants write to the
@@ -5286,7 +5474,7 @@ impl RenderScene {
             // Same reserved-slot reuse doctrine as `scene_params.w` above.
             // Written unconditionally — non-mask pipelines never read it.
             uniforms.fog_params[2] =
-                if draw.kind == MaterialKind::Unlit || (rt_enabled && *rt_ready && rt_ao_enabled)
+                if draw.kind == MaterialKind::Unlit || (surface_rt && rt_ao_enabled)
                 {
                     0.0
                 } else {
@@ -5301,7 +5489,7 @@ impl RenderScene {
             // off->on cycle. AO off also restores the raster's
             // full-strength flat ambient (the 0.15 RT ceiling only applies
             // when RT AO is actually providing the occlusion term).
-            uniforms.fog_params[3] = if rt_ao_enabled && *rt_ready { 1.0 } else { 0.0 };
+            uniforms.fog_params[3] = if rt_ao_enabled && surface_rt { 1.0 } else { 0.0 };
         }
 
         // RAYTRACING_DESIGN.md section 12 AM1: when `has_transmission`
@@ -5376,12 +5564,13 @@ impl RenderScene {
         // Point) contributes to the march — 3-vec4-per-light packing,
         // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
         // field-for-field:
-        //   [i*3+0] = Sun: dir-toward-light (.xyz, matches
+        //   [i*4+0] = Sun: dir-toward-light (.xyz, matches
         //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
         //           = Point: light world position (.xyz), .w = 1.0 (mode Point)
-        //   [i*3+1] = premultiplied color.rgb, .w = caster slot (-1 =
+        //   [i*4+1] = premultiplied color.rgb, .w = caster slot (-1 =
         //             unshadowed glow, D2's honest cost)
-        //   [i*3+2] = .x = attenuation range (Point only; ignored for Sun)
+        //   [i*4+2] = range, falloff, cos(inner), cos(outer)
+        //   [i*4+3] = spot forward direction (.xyz), .w = 0
         // Reuses the SAME `slot` this loop already computed (the caster
         // table below is shared, unfiltered by mode).
         let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
@@ -5397,19 +5586,7 @@ impl RenderScene {
                     -1.0
                 };
                 light_count += 1;
-                let pos_or_dir = match l.mode {
-                    crate::node_graph::light::LightMode::Sun => {
-                        [-l.dir[0], -l.dir[1], -l.dir[2], 0.0]
-                    }
-                    crate::node_graph::light::LightMode::Point => {
-                        [l.pos[0], l.pos[1], l.pos[2], 1.0]
-                    }
-                };
-                let packed = [
-                    pos_or_dir,
-                    [l.color[0], l.color[1], l.color[2], slot],
-                    [l.range, 0.0, 0.0, 0.0],
-                ];
+                let packed = l.packed(slot);
                 light_data.extend_from_slice(&packed);
                 shaft_light_data.extend_from_slice(&packed);
                 shaft_light_count += 1;
@@ -5900,6 +6077,7 @@ impl RenderScene {
             dummy_texture: None,
             dummy_emissive_buffer: None,
             sampler: None,
+            refraction_sampler: None,
             material_samplers: AHashMap::default(),
             light_buffers: Vec::new(),
             light_frame: 0,
@@ -6015,6 +6193,8 @@ impl RenderScene {
             denoiser_lighting_changed: false,
             denoiser_gesture_active: false,
             prefiltered_specular: None,
+            prefiltered_sheen: None,
+            subsurface_pass: Default::default(),
             irradiance_map: None,
             brdf_lut: None,
             brdf_lut_built: false,
@@ -6441,6 +6621,17 @@ impl RenderScene {
     }
 
     fn ensure_sampler(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.refraction_sampler.is_none() {
+            self.refraction_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mip_filter: manifold_gpu::GpuFilterMode::Linear,
+                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+                ..Default::default()
+            }));
+        }
         if self.sampler.is_none() {
             self.sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 mag_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -6479,6 +6670,7 @@ impl RenderScene {
             | (addr_code(desc.wrap_v) << 2)
             | (filter_code(desc.mag_filter) << 4)
             | (filter_code(desc.min_filter) << 5)
+            | (desc.mip_filter.map_or(2, filter_code) << 6)
     }
 
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure a cached sampler exists for
@@ -6496,7 +6688,7 @@ impl RenderScene {
             device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 mag_filter: desc.mag_filter,
                 min_filter: desc.min_filter,
-                mip_filter: manifold_gpu::GpuFilterMode::Linear,
+                mip_filter: desc.mip_filter.unwrap_or(manifold_gpu::GpuFilterMode::Nearest),
                 address_mode_u: desc.wrap_u,
                 address_mode_v: desc.wrap_v,
                 address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
@@ -6505,7 +6697,10 @@ impl RenderScene {
                 // minification on grazing surfaces (floors, the AMG's paint) stays
                 // sharp instead of over-blurring. Material samplers only — every
                 // other sampler in this file keeps the field's default (1).
-                max_anisotropy: 8,
+                max_anisotropy: if desc.min_filter == manifold_gpu::GpuFilterMode::Linear
+                    && desc.mag_filter == manifold_gpu::GpuFilterMode::Linear
+                    && desc.mip_filter == Some(manifold_gpu::GpuFilterMode::Linear) { 8 } else { 1 },
+                lod_max_clamp: if desc.mip_filter.is_none() { 0.0 } else { f32::MAX },
             })
         });
     }
@@ -7324,7 +7519,7 @@ impl RenderScene {
                 width: BRDF_LUT_SIZE,
                 height: BRDF_LUT_SIZE,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rg16Float,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                     | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
@@ -7423,6 +7618,7 @@ impl RenderScene {
         let mut hasher = ahash::AHasher::default();
         envmap_content.hash(&mut hasher);
         hasher.write_u64(rebuild_epoch);
+        hasher.write_u8(u8::from(self.prefiltered_sheen.is_some()));
         let ibl_key = hasher.finish();
         if envmap_content.is_some() && self.ibl_cache_key == Some(ibl_key) {
             // I2: cache hit — the persisted prefiltered-specular/irradiance
@@ -7465,8 +7661,11 @@ impl RenderScene {
         // — the hardware `generate_mipmaps` box-filter blit cannot express
         // GGX importance convolution, so each level is its own compute
         // pass rather than a derived box-filtered downsample).
-        {
-            let chain = self.prefiltered_specular.as_ref().expect("ensured");
+        for (chain, sheen) in [
+            (self.prefiltered_specular.as_ref(), 0.0),
+            (self.prefiltered_sheen.as_ref(), 1.0),
+        ] {
+            let Some(chain) = chain else { continue };
             let pipeline = self.ibl_prefilter_pipeline.as_ref().expect("ensured");
             for mip in 0..PREFILTER_MIP_COUNT {
                 let mip_w = (PREFILTER_BASE_WIDTH >> mip).max(1);
@@ -7479,7 +7678,7 @@ impl RenderScene {
                     src_width,
                     src_height,
                     roughness,
-                    _pad0: 0.0,
+                    sheen,
                     _pad1: 0.0,
                     _pad2: 0.0,
                 };
@@ -8231,11 +8430,17 @@ fn build_uniforms(
         base_color_uv_m: uv_m(&material.base_color_uv_transform),
         base_color_uv_t: uv_t(&material.base_color_uv_transform),
         normal_uv_m: uv_m(&material.normal_uv_transform),
-        normal_uv_t: uv_t(&material.normal_uv_transform),
+        normal_uv_t: [
+            material.normal_uv_transform[4], material.normal_uv_transform[5],
+            material.normal_scale, material.clearcoat_normal_scale,
+        ],
         mr_uv_m: uv_m(&material.mr_uv_transform),
         mr_uv_t: uv_t(&material.mr_uv_transform),
         occlusion_uv_m: uv_m(&material.occlusion_uv_transform),
-        occlusion_uv_t: uv_t(&material.occlusion_uv_transform),
+        occlusion_uv_t: [
+            material.occlusion_uv_transform[4], material.occlusion_uv_transform[5],
+            material.occlusion_strength, 0.0,
+        ],
         emissive_uv_m: uv_m(&material.emissive_uv_transform),
         emissive_uv_t: uv_t(&material.emissive_uv_transform),
         cel_params: [
@@ -8252,7 +8457,8 @@ fn build_uniforms(
                 // IMPORT_FIDELITY_DESIGN.md D8: Blend never discards — its
                 // coverage comes from the sorted blend pass's pipeline blend
                 // state, not the shader's cutout branch.
-                AlphaMode::Opaque | AlphaMode::Blend => 0.0,
+                AlphaMode::Opaque => 0.0,
+                AlphaMode::Blend => 2.0,
             },
             material.alpha_cutoff,
             // GLB_CONFORMANCE_DESIGN.md G-P5/D5: z/w were permanently-zero
@@ -8312,7 +8518,12 @@ fn build_uniforms(
         ],
         // RAYTRACING_DESIGN.md section 16 TL7: x = translucency factor,
         // yzw reserved.
-        diffuse_transmission_params: [material.translucency, 0.0, 0.0, 0.0],
+        diffuse_transmission_params: [
+            material.translucency,
+            material.diffuse_transmission_color[0],
+            material.diffuse_transmission_color[1],
+            material.diffuse_transmission_color[2],
+        ],
         // Overwritten per-object right after the build (rt_reflections
         // gate, section 9 RD9) — default 0 = substitution OFF.
         rt_flags: [0.0; 4],
@@ -8528,6 +8739,57 @@ impl EffectNode for RenderScene {
     }
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        self.render_objects(ctx, None);
+    }
+}
+
+impl RenderScene {
+    /// Legacy mesh nodes share the complete material renderer. Their named
+    /// light input and world-normal/red-channel map conventions remain intact.
+    pub(crate) fn for_single_mesh() -> Self {
+        let mut renderer = Self::new();
+        renderer.rebuild(1, 1);
+        renderer.light_port_names[0] = "light".into();
+        renderer
+    }
+
+    pub(crate) fn render_single_mesh(&mut self, ctx: &mut EffectNodeContext<'_, '_>, instance_count: Option<f32>) {
+        let inputs = ctx.inputs;
+        let object = SceneObject {
+            visible: true,
+            cast_shadows: true,
+            transform: crate::node_graph::transform::Transform::default(),
+            material: inputs.material("material"),
+            mesh: inputs.slot_of("vertices"),
+            weights: None,
+            topology: None,
+            base_color_map: inputs.slot_of("base_color_map"),
+            normal_map: inputs.slot_of("normal_map"),
+            mr_map: inputs.slot_of("mr_map"),
+            occlusion_map: inputs.slot_of("occlusion_map"),
+            emissive_map: inputs.slot_of("emissive_map"),
+            sheen_color_map: inputs.slot_of("sheen_color_map"),
+            sheen_roughness_map: inputs.slot_of("sheen_roughness_map"),
+            iridescence_map: inputs.slot_of("iridescence_map"),
+            iridescence_thickness_map: inputs.slot_of("iridescence_thickness_map"),
+            anisotropy_map: inputs.slot_of("anisotropy_map"),
+            clearcoat_map: inputs.slot_of("clearcoat_map"),
+            clearcoat_roughness_map: inputs.slot_of("clearcoat_roughness_map"),
+            clearcoat_normal_map: inputs.slot_of("clearcoat_normal_map"),
+            specular_map: inputs.slot_of("specular_map"),
+            specular_color_map: inputs.slot_of("specular_color_map"),
+            transmission_map: inputs.slot_of("transmission_map"),
+            volume_thickness_map: inputs.slot_of("volume_thickness_map"),
+            diffuse_transmission_map: inputs.slot_of("diffuse_transmission_map"),
+            diffuse_transmission_color_map: inputs.slot_of("diffuse_transmission_color_map"),
+            instances: inputs.slot_of("instances"),
+            instance_count,
+            emission_strength: 1.0,
+            gain: 1.0,
+        };
+        self.render_objects(ctx, Some(object));
+    }
+    fn render_objects<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>, single_object: Option<SceneObject>) {
         // BUG-trh7 stage 2: the preamble is pass 0 (`frame_preliminaries`);
         // the destructure below copies the Copy fields out of the shared
         // prelude and borrows the three read-only Vecs, so later pass calls
@@ -8567,12 +8829,32 @@ impl EffectNode for RenderScene {
         // abort frame: structured error + magenta clear, or no visible
         // objects — the inline code's exact early returns.
         let Some((mut draws, has_transmission)) =
-            self.collect_object_draws(ctx, &pre, &port_index)
+            self.collect_object_draws(ctx, &pre, &port_index, single_object)
         else {
             return;
         };
 
-        let prepare_rt = rt_enabled || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
+        let mut has_subsurface = false;
+        let mut opaque_index = 0u32;
+        for draw in &mut draws {
+            let requested = draw.kind == MaterialKind::Pbr && draw.subsurface.weight > 0.0;
+            if requested && draw.points {
+                ctx.error("Subsurface scattering requires a triangle surface; point primitives have no volume boundary.");
+                return;
+            }
+            if requested && draw.routes_to_transparent() {
+                ctx.error("Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.");
+                return;
+            }
+            if !draw.routes_to_transparent() && draw.instance_count > 0 {
+                if requested {
+                    draw.subsurface_binding = [draw.subsurface.weight, (opaque_index + 1) as f32, 0.0, 0.0];
+                    has_subsurface = true;
+                }
+                opaque_index += 1;
+            }
+        }
+        let prepare_rt = rt_enabled || has_subsurface || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_objects = Self::collect_rt_objects(&draws, prepare_rt);
         let rt_tables = if prepare_rt && !rt_objects.is_empty() {
             self.ensure_rt_tracer(ctx.gpu_encoder().device);
@@ -8603,8 +8885,6 @@ impl EffectNode for RenderScene {
             has_transmission,
             rt_ready,
         );
-        let has_casters = !pre.casters.is_empty();
-
         // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
         // `ibl_convolution_pass`) — returns the envmap generation the RT
         // block's lighting key folds in.
@@ -8627,15 +8907,25 @@ impl EffectNode for RenderScene {
             ctx,
             &pre,
             &opaque_draws,
-            has_casters,
             will_rt_accumulate_this_frame,
             rt_ready,
+            draws.iter().any(ObjectDraw::routes_to_transparent),
         );
 
         // ---- E2a/RT-D3 opaque camera-depth prepass (BUG-trh7 stage 2,
         // `opaque_depth_snapshot_pass`) — Pass B's depth test source and the
         // RT shadow-ray pass's depth source.
-        self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission);
+        self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission, has_subsurface);
+
+        if has_subsurface {
+            let Some((materials, textures, _, _)) = rt_tables.as_ref() else {
+                ctx.error("Subsurface scattering has no current-frame geometry acceleration data.");
+                return;
+            };
+            if !self.subsurface_trace(ctx, &pre, &opaque_draws, &rt_objects, materials, textures) {
+                return;
+            }
+        }
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
         // shadow-ray dispatch + depth-aware upsample, reading the opaque-
@@ -8807,3 +9097,4 @@ mod tests;
 /// gpu-proofs node_graph::primitives::render_scene::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
+mod subsurface;

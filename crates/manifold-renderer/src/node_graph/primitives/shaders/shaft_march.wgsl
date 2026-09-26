@@ -1,8 +1,8 @@
 // node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D2, P2/P3) —
 // half-res single-scattering light-shaft march. Committed algorithm (section 2 D2's
 // block), implemented verbatim — no substitution. P3: every wired light
-// (Sun AND Point) contributes; Point attenuation is D2's
-// `1/(1+d²/range²)` (light.rs:261), and Point shadow sampling is
+// (Sun, Point, and Spot) contributes; attenuation follows Light's selected
+// legacy or physical policy, and Point/Spot shadow sampling is
 // frustum-clipped against the light's single-frustum view-proj (light.rs:
 // 48-51) via the SAME `shadow_vis` caster-table lookup Sun already uses —
 // outside the frustum (or no caster slot) falls through to `vis=1.0`
@@ -33,9 +33,9 @@ fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
 
 const PI: f32 = 3.14159265358979;
 const CASTER_STRIDE: u32 = 5u;
-// P3: 3 vec4s per light (was 2 in P2's Sun-only packing) — see the binding(2)
+// P3: 4 vec4s per light (was 2 in P2's Sun-only packing) — see the binding(2)
 // doc comment below for the field layout.
-const LIGHT_STRIDE: u32 = 3u;
+const LIGHT_STRIDE: u32 = 4u;
 
 struct Uniforms {
     camera_pos: vec4<f32>,   // xyz, near
@@ -51,13 +51,14 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var half_depth: texture_2d<f32>;
 // P3 (VOLUMETRIC_LIGHT_DESIGN.md's own P3): every wired light (Sun AND
-// Point), 3 vec4s per light:
-//   [i*3+0] = Sun: dir-toward-light (.xyz, toward the light, matches
+// Point and Spot), 4 vec4s per light:
+//   [i*4+0] = Sun: dir-toward-light (.xyz, toward the light, matches
 //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
 //           = Point: light world position (.xyz), .w = 1.0 (mode Point)
-//   [i*3+1] = premultiplied color.rgb, .w = this light's caster slot index
+//   [i*4+1] = premultiplied color.rgb, .w = this light's caster slot index
 //             (-1 = no shadow, unshadowed glow per D2)
-//   [i*3+2] = .x = attenuation range (Point only; ignored for Sun), rest 0
+//   [i*4+2] = range, falloff 0/1, cos(inner), cos(outer)
+//   [i*4+3] = Spot forward direction (.xyz), .w = 0
 // RAYTRACING_DESIGN.md section 5.2 P3 (D5, "emissive-colored volumetric glow"):
 // `render_scene.rs` also appends one Point-mode entry per emissive object
 // (world-space centroid as `pos`, the object's emission factor as `color`,
@@ -216,16 +217,15 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             let pos_or_dir = shaft_lights[base];
             let color_slot = shaft_lights[base + 1u];
             let range_v = shaft_lights[base + 2u];
+            let forward = shaft_lights[base + 3u].xyz;
             // RAYTRACING_DESIGN.md section 5.2 P3/D5: the Sun entry (mode 0)
             // reuses the per-pixel RT visibility computed once above,
             // in place of `shadow_vis`'s shadow-map lookup, when RT is on.
             let is_sun = pos_or_dir.w < 0.5;
             let vis = select(shadow_vis(color_slot.w, x), rt_sun_vis, rt_enabled && is_sun);
 
-            // D2: Sun att = 1.0, fixed L (dir toward light). Point att =
-            // 1/(1+d²/range²) (light.rs:261), L = normalize(pos - x)
-            // (recomputed per sample, matches `Light::light_dir_at`'s Point
-            // case).
+            // Sun is unattenuated. Point/Spot use the same CPU/WGSL falloff
+            // contract as surface lighting and recompute L per sample.
             var light_dir_toward_light: vec3<f32>;
             var att: f32;
             if pos_or_dir.w < 0.5 {
@@ -235,13 +235,31 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
                 let to_light = pos_or_dir.xyz - x;
                 let d_sq = dot(to_light, to_light);
                 let range = range_v.x;
-                let r_sq = range * range;
                 light_dir_toward_light = select(
                     vec3<f32>(0.0, 0.0, 1.0),
                     to_light * inverseSqrt(max(d_sq, 1e-12)),
                     d_sq > 1e-12,
                 );
-                att = select(1.0 / (1.0 + d_sq / max(r_sq, 1e-10)), 0.0, r_sq < 1e-10);
+                let distance = sqrt(d_sq);
+                if range_v.y > 0.5 {
+                    if range > 0.0 {
+                        att = max(1.0 - pow(distance / range, 4.0), 0.0) / max(d_sq, 1e-6);
+                    } else {
+                        att = 1.0 / max(d_sq, 1e-6);
+                    }
+                } else {
+                    let r_sq = range * range;
+                    att = select(1.0 / (1.0 + d_sq / max(r_sq, 1e-10)), 0.0, r_sq < 1e-10);
+                }
+                if pos_or_dir.w > 1.5 {
+                    let cone = clamp(
+                        (dot(forward, -light_dir_toward_light) - range_v.w)
+                            / max(range_v.z - range_v.w, 0.001),
+                        0.0,
+                        1.0,
+                    );
+                    att = att * cone * cone;
+                }
             }
             let light_to_x_dir = -light_dir_toward_light;
             let cos_theta = dot(ray_dir, light_to_x_dir);

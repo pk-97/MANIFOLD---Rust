@@ -125,6 +125,16 @@
     }
   },
   {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.13_pos_x.slider",
+          "nth": 1
+        }
+      }
+    }
+  },
+  {
     "Pointer": {
       "target": {
         "Query": {
@@ -135,9 +145,9 @@
       "gesture": {
         "Drag": {
           "to": {
-            "Point": {
-              "x": 902.75,
-              "y": 200.0
+            "Query": {
+              "name": "param_row.13_pos_x.value",
+              "nth": 1
             }
           },
           "steps": 8

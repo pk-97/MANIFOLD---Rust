@@ -167,7 +167,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         "rt-t2c-cutout-stripe",
     );
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -184,6 +184,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -192,6 +193,12 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
 
     let tracer = MetalShadowRayTracer::new(device);

@@ -27,7 +27,7 @@ const PM2T_CORNER_UV: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
 fn body(idx: u32, count: u32, max_capacity: i32, width: f32, height: f32) -> Element {
     if idx >= 6u {
         // Padding vertex — degenerate (matches the hand kernel).
-        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
+        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0), vec4<f32>(1.0));
     }
 
     let corner = PM2T_CORNER_POS[idx];
@@ -35,5 +35,5 @@ fn body(idx: u32, count: u32, max_capacity: i32, width: f32, height: f32) -> Ele
     let normal = vec3<f32>(0.0, 0.0, 1.0);
     let uv = PM2T_CORNER_UV[idx];
 
-    return Element(pos, normal, uv, vec4<f32>(0.0));
+    return Element(pos, normal, uv, vec2<f32>(0.0, 0.0), vec4<f32>(0.0), vec4<f32>(1.0));
 }

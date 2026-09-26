@@ -204,7 +204,7 @@ mod rt_dynamic_oracle {
         let state_b = triangle_at(STATE_B_X);
         let vertex_buffer = write_vertices(device, &state_a);
 
-        let objects = [RtObjectGeometry {
+        let objects = [RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -220,6 +220,7 @@ mod rt_dynamic_oracle {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -228,6 +229,12 @@ mod rt_dynamic_oracle {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         }];
         let mut as_builds = 0u32;
         // P3 seam: plan/prepare allocate; the encode rides the first
@@ -469,7 +476,7 @@ fn cs_main() {
         index_buffer: Option<&'a GpuBuffer>,
         transform: [[f32; 4]; 4],
     ) -> RtObjectGeometry<'a> {
-        RtObjectGeometry {
+        RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -485,6 +492,7 @@ fn cs_main() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -493,6 +501,12 @@ fn cs_main() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         }
     }
 
@@ -720,7 +734,7 @@ fn cs_main() {
         let local = triangle_at(0.0);
         let vertex_buffer = write_vertices(device, &local);
         let instances_buffer = device.create_buffer_shared(32);
-        let objects = [RtObjectGeometry {
+        let objects = [RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -736,6 +750,7 @@ fn cs_main() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -744,6 +759,12 @@ fn cs_main() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         }];
         let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
         let mut accel_slot = None;
@@ -1119,15 +1140,15 @@ fn cs_main() {
             }
         };
         expect_invalid(
-            RtObjectGeometry { triangle_count: 0, ..triangle_object(&vertex_buffer, None, IDENTITY) },
+            RtObjectGeometry { material_attributes: Default::default(), triangle_count: 0, ..triangle_object(&vertex_buffer, None, IDENTITY) },
             "zero triangles",
         );
         expect_invalid(
-            RtObjectGeometry { vertex_stride: 4, ..triangle_object(&vertex_buffer, None, IDENTITY) },
+            RtObjectGeometry { material_attributes: Default::default(), vertex_stride: 4, ..triangle_object(&vertex_buffer, None, IDENTITY) },
             "absurd vertex stride",
         );
         expect_invalid(
-            RtObjectGeometry {
+            RtObjectGeometry { material_attributes: Default::default(),
                 triangle_count: 1_000_000,
                 ..triangle_object(&vertex_buffer, None, IDENTITY)
             },
@@ -1135,7 +1156,7 @@ fn cs_main() {
         );
         let tiny_index = device.create_buffer_shared(4);
         expect_invalid(
-            RtObjectGeometry {
+            RtObjectGeometry { material_attributes: Default::default(),
                 index_buffer: Some(&tiny_index),
                 triangle_count: 2,
                 ..triangle_object(&vertex_buffer, None, IDENTITY)
@@ -1252,7 +1273,7 @@ fn cs_main() {
         // re-prepare fails NeedsPreparation; both rejections leave the
         // resident set valid.
         let objects_big = [
-            RtObjectGeometry { triangle_count: 2, ..triangle_object(&verts_a, None, IDENTITY) },
+            RtObjectGeometry { material_attributes: Default::default(), triangle_count: 2, ..triangle_object(&verts_a, None, IDENTITY) },
             triangle_object(&verts_b, None, IDENTITY),
         ];
         let mut enc4 = device.create_encoder("rt-ordering-shape-change");

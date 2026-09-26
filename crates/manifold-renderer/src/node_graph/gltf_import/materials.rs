@@ -1,7 +1,7 @@
 //! Material map-texture wiring: one glTF texture map (normal / MR /
 //! occlusion / emissive / …) into an object's `node.scene_object` input.
 //!
-//! P3-D T1: the sixteen near-identical map families are a catalog — one row
+//! P3-D T1: the eighteen near-identical map families are a catalog — one row
 //! per glTF texture map, differing only in which source field carries the
 //! texture index, the decode colour space, the node/port names, and (for the
 //! spec-gloss `mrMap` case alone) a channel repack mode. That catalog is
@@ -10,15 +10,14 @@
 //! increments `textures_wired` and pre-dates the per-object texture cache
 //! (RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md D8, both oddities preserved).
 
-use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphNode, EffectGraphWire, SerializedParamValue, StringBindingDef,
+    BindingTarget, EffectGraphNode, EffectGraphWire, StringBindingDef,
 };
+use manifold_core::NodeId;
 
 use crate::node_graph::gltf_load::GltfMaterialInfo;
-
-use super::MODEL_FILE_PARAM_ID;
 use super::assembly::{enum_val, float, int, plain_node, wire};
+use super::MODEL_FILE_PARAM_ID;
 
 /// The per-object accumulators a map-family wire threads through: the running
 /// node/wire/string-binding vectors, the id source, the object's index and
@@ -72,12 +71,13 @@ struct MapFamily {
     channel_mode: fn(&GltfMaterialInfo) -> u32,
 }
 
-/// The sixteen map families, in wiring order. Colour-space citations per KHR
+/// The eighteen map families, in wiring order. Colour-space citations per KHR
 /// section: data maps (normal / MR / occlusion / sheen-roughness /
 /// iridescence(+thickness) / anisotropy / clearcoat(+roughness/+normal) /
-/// specular / transmission / volume-thickness) decode Linear — the raw bytes
-/// ARE the value; colour maps (emissive / sheenColor / specularColor) decode
-/// sRGB, same convention as base-colour.
+/// specular / transmission / diffuse-transmission-factor / volume-thickness)
+/// decode Linear — the raw bytes ARE the value; colour maps (emissive /
+/// sheenColor / specularColor / diffuseTransmissionColor) decode sRGB, same
+/// convention as base-colour.
 const MAP_FAMILIES: &[MapFamily] = &[
     // D3/D5/D6 — the base five maps (base-colour is the separate explicit
     // block in object_group.rs). ORM-packed files (occlusion index == mr
@@ -201,6 +201,20 @@ const MAP_FAMILIES: &[MapFamily] = &[
         channel_mode: |_| 0,
     },
     MapFamily {
+        texture: |m| m.diffuse_transmission_texture,
+        color_space: 1, // Linear — data map (A channel = diffuseTransmissionFactor scale)
+        node_prefix: "diffuse_transmission_tex",
+        port: "diffuse_transmission_map",
+        channel_mode: |_| 0,
+    },
+    MapFamily {
+        texture: |m| m.diffuse_transmission_color_texture,
+        color_space: 0, // sRGB — diffuseTransmissionColorTexture is a colour map
+        node_prefix: "diffuse_transmission_color_tex",
+        port: "diffuse_transmission_color_map",
+        channel_mode: |_| 0,
+    },
+    MapFamily {
         texture: |m| m.volume_thickness_texture,
         color_space: 1, // Linear — data map (G channel = thicknessFactor scale)
         node_prefix: "volume_thickness_tex",
@@ -249,20 +263,40 @@ fn wire_map_family(family: &MapFamily, m: &GltfMaterialInfo, asm: &mut ObjectAss
         let node_id_str = format!("{}_{}", family.node_prefix, asm.k);
         let tid = (asm.fresh_id)();
         let mut node = plain_node(tid, &node_id_str, "node.gltf_texture_source", &node_id_str);
-        node.params.insert("texture_index".to_string(), int(tex_index as i32));
-        node.params.insert("color_space".to_string(), enum_val(color_space));
+        node.params
+            .insert("texture_index".to_string(), int(tex_index as i32));
+        node.params
+            .insert("color_space".to_string(), enum_val(color_space));
         // GLB_XFAIL_BURNDOWN_DESIGN.md D2: 1 = gloss_to_roughness, wired
         // only for a specularGlossinessTexture standing in for `mrMap` (the
         // mr row's `channel_mode`); every other family passes 0
         // (passthrough), byte-identical to before this param existed.
-        node.params.insert("mode".to_string(), enum_val(channel_mode));
+        node.params
+            .insert("mode".to_string(), enum_val(channel_mode));
+        // Spec-gloss alpha stores glossiness. The source blit applies the
+        // authored factor exactly once: roughness = 1 - factor * alpha.
+        let glossiness_factor = if channel_mode == 1 {
+            (1.0 - m.roughness).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        node.params.insert(
+            "glossiness_factor".to_string(),
+            float(glossiness_factor),
+        );
         // Authored resolution, not the 1024² v1 default (see
         // `ObjectAssembly::texture_dims`). 8192 is the param's declared
         // range max — a past-cap image resamples rather than clamping at
         // param load.
-        let (tw, th) = asm.texture_dims.get(tex_index as usize).copied().unwrap_or((1024, 1024));
-        node.params.insert("width".to_string(), int((tw.min(8192)) as i32));
-        node.params.insert("height".to_string(), int((th.min(8192)) as i32));
+        let (tw, th) = asm
+            .texture_dims
+            .get(tex_index as usize)
+            .copied()
+            .unwrap_or((1024, 1024));
+        node.params
+            .insert("width".to_string(), int((tw.min(8192)) as i32));
+        node.params
+            .insert("height".to_string(), int((th.min(8192)) as i32));
         asm.group_nodes.push(node);
 
         asm.string_bindings.push(StringBindingDef {
@@ -280,101 +314,13 @@ fn wire_map_family(family: &MapFamily, m: &GltfMaterialInfo, asm: &mut ObjectAss
         entry
     };
 
-    asm.group_wires
-        .push(wire(node_numeric_id, "out", asm.scene_object_id, family.port));
+    asm.group_wires.push(wire(
+        node_numeric_id,
+        "out",
+        asm.scene_object_id,
+        family.port,
+    ));
 }
 
-/// The six components of a `KHR_texture_transform` affine, in the order the
-/// per-map UV-transform params are named (`{prefix}m00` … `{prefix}ty`). Used
-/// by the per-map UV-transform loop in `object_group.rs`, which pairs each
-/// component name with the matching value off a borrowed `&m.<map>_uv_transform`
-/// (so the loop's `(prefix, transform)` pairs cannot themselves be const).
-pub(super) const UV_TRANSFORM_PARTS: [&str; 6] = ["m00", "m01", "m10", "m11", "tx", "ty"];
-
-/// One plain glTF-field → `node.pbr_material` param: a name and the extractor
-/// that reads its value straight off `GltfMaterialInfo`. The five COMPUTED
-/// params (color_a from `effective_alpha`, the roughness clamp, the const
-/// ambient floor, the gated emission_intensity, and the alpha_mode enum) are
-/// NOT rows — they stay explicit code adjacent to [`write_material_params`]'s
-/// call site in `object_group.rs` (RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md
-/// D8: a closure-captured local smuggled into a "const" table is the tell
-/// that a row isn't a fact).
-struct MaterialParam {
-    name: &'static str,
-    value: fn(&GltfMaterialInfo) -> SerializedParamValue,
-}
-
-/// The plain field → param catalog. Extension factor defaults reproduce
-/// glTF's own implicit defaults (ior=1.5, specular=1.0, clearcoat=0.0, …), so
-/// a material without an extension writes byte-identical params — see
-/// `gltf_load.rs` and GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1 / GLB_CONFORMANCE
-/// _DESIGN.md G-P4/G-P5. Insertion order is irrelevant: `node.params` is a
-/// `BTreeMap`, so output is key-sorted regardless of walk order.
-const MATERIAL_PARAMS: &[MaterialParam] = &[
-    MaterialParam { name: "color_r", value: |m| float(m.base_color_factor[0]) },
-    MaterialParam { name: "color_g", value: |m| float(m.base_color_factor[1]) },
-    MaterialParam { name: "color_b", value: |m| float(m.base_color_factor[2]) },
-    MaterialParam { name: "metallic", value: |m| float(m.metallic) },
-    MaterialParam { name: "emission_r", value: |m| float(m.emissive[0]) },
-    MaterialParam { name: "emission_g", value: |m| float(m.emissive[1]) },
-    MaterialParam { name: "emission_b", value: |m| float(m.emissive[2]) },
-    MaterialParam { name: "alpha_cutoff", value: |m| float(m.alpha_cutoff) },
-    MaterialParam { name: "ior", value: |m| float(m.ior) },
-    MaterialParam { name: "specular", value: |m| float(m.specular_factor) },
-    MaterialParam { name: "specular_tint_r", value: |m| float(m.specular_color_factor[0]) },
-    MaterialParam { name: "specular_tint_g", value: |m| float(m.specular_color_factor[1]) },
-    MaterialParam { name: "specular_tint_b", value: |m| float(m.specular_color_factor[2]) },
-    MaterialParam { name: "clearcoat", value: |m| float(m.clearcoat_factor) },
-    MaterialParam { name: "clearcoat_roughness", value: |m| float(m.clearcoat_roughness_factor) },
-    MaterialParam { name: "sheen_color_r", value: |m| float(m.sheen_color_factor[0]) },
-    MaterialParam { name: "sheen_color_g", value: |m| float(m.sheen_color_factor[1]) },
-    MaterialParam { name: "sheen_color_b", value: |m| float(m.sheen_color_factor[2]) },
-    MaterialParam { name: "sheen_roughness", value: |m| float(m.sheen_roughness_factor) },
-    MaterialParam { name: "iridescence", value: |m| float(m.iridescence_factor) },
-    MaterialParam { name: "iridescence_ior", value: |m| float(m.iridescence_ior) },
-    MaterialParam {
-        name: "iridescence_thickness_min",
-        value: |m| float(m.iridescence_thickness_minimum),
-    },
-    MaterialParam {
-        name: "iridescence_thickness_max",
-        value: |m| float(m.iridescence_thickness_maximum),
-    },
-    MaterialParam { name: "anisotropy_strength", value: |m| float(m.anisotropy_strength) },
-    MaterialParam { name: "anisotropy_rotation", value: |m| float(m.anisotropy_rotation) },
-    MaterialParam { name: "dispersion", value: |m| float(m.dispersion) },
-    MaterialParam { name: "transmission", value: |m| float(m.transmission_factor) },
-    MaterialParam { name: "volume_thickness", value: |m| float(m.volume_thickness_factor) },
-    MaterialParam {
-        name: "volume_attenuation_distance",
-        value: |m| float(m.volume_attenuation_distance),
-    },
-    MaterialParam {
-        name: "volume_attenuation_color_r",
-        value: |m| float(m.volume_attenuation_color[0]),
-    },
-    MaterialParam {
-        name: "volume_attenuation_color_g",
-        value: |m| float(m.volume_attenuation_color[1]),
-    },
-    MaterialParam {
-        name: "volume_attenuation_color_b",
-        value: |m| float(m.volume_attenuation_color[2]),
-    },
-    // RAYTRACING_DESIGN.md section 16 TL3: KHR_materials_diffuse_transmission
-    // factor -> pbr_material's translucency param. Color factor/texture stay
-    // deferred (section 16.8) — tint=albedo is the right default for foliage
-    // and the only source for most scans.
-    MaterialParam {
-        name: "translucency",
-        value: |m| float(m.diffuse_transmission_factor),
-    },
-];
-
-/// Write the plain [`MATERIAL_PARAMS`] catalog onto a `node.pbr_material`
-/// node. The five computed params stay explicit at the call site.
-pub(super) fn write_material_params(mat_node: &mut EffectGraphNode, m: &GltfMaterialInfo) {
-    for param in MATERIAL_PARAMS {
-        mat_node.params.insert(param.name.to_string(), (param.value)(m));
-    }
-}
+mod params;
+pub(super) use params::{write_material_params, UV_TRANSFORM_PARTS};

@@ -29,7 +29,9 @@
 use std::borrow::Cow;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
+use crate::node_graph::material::{
+    AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface, SubsurfaceMode,
+};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -46,7 +48,7 @@ const FILTER_MODES: &[&str] = &["Linear", "Nearest"];
 crate::primitive! {
     name: PbrMaterial,
     type_id: "node.pbr_material",
-    purpose: "Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. The workhorse for realistic 3D surfaces. The bundled 3D mesh renderers evaluate the BRDF per fragment, blend with envmap-sampled IBL, and combine with diffuse + emission. `metallic` blends F0 from dielectric (≈4%) to metal (= base_color); `roughness` controls the microfacet spread (sharp 0.01 to fully rough 1.0). `clearcoat` (0..1) layers a second, always-dielectric (F0=0.04) GGX specular lobe on top — a car-paint/lacquer coat — with its own `clearcoat_roughness`; the base layer is energy-compensated by the coat's Fresnel (KHR_materials_clearcoat, factor-only v1). Outputs one Material on `out`. Requires BOTH a `light` input AND an `envmap` Texture2D wired to the renderer (the conditional-requirement table enforces this at preset-load).",
+    purpose: "Physically based surface material with metallic/roughness, normal maps, clearcoat, sheen, anisotropy, iridescence, glass transmission, and subsurface scattering. Subsurface weight replaces diffuse reflection; colour is the scattering albedo and RGB radius is the transport mean-free path in world units. Diffusion is the cheaper approximation; Random Walk follows multiple scattering inside a closed mesh and can cost much more. Samples trade speed for noise. Both scattering modes require an opaque surface; open Random Walk geometry or an exhausted transport bound is shown in magenta. Surface highlights and emission are retained.",
     inputs: {
         color_r: ScalarF32 optional,
         color_g: ScalarF32 optional,
@@ -55,6 +57,9 @@ crate::primitive! {
         ambient: ScalarF32 optional,
         metallic: ScalarF32 optional,
         roughness: ScalarF32 optional,
+        normal_scale: ScalarF32 optional,
+        clearcoat_normal_scale: ScalarF32 optional,
+        occlusion_strength: ScalarF32 optional,
         emission_r: ScalarF32 optional,
         emission_g: ScalarF32 optional,
         emission_b: ScalarF32 optional,
@@ -98,6 +103,19 @@ crate::primitive! {
         // at import time; dialable as a card param for scans without
         // extension data.
         translucency: ScalarF32 optional,
+        translucency_color_r: ScalarF32 optional,
+        translucency_color_g: ScalarF32 optional,
+        translucency_color_b: ScalarF32 optional,
+        // Shared subsurface controls. Continuous values have optional
+        // scalar ports; transport mode and sample count are params only.
+        subsurface_weight: ScalarF32 optional,
+        subsurface_radius_r: ScalarF32 optional,
+        subsurface_radius_g: ScalarF32 optional,
+        subsurface_radius_b: ScalarF32 optional,
+        subsurface_color_r: ScalarF32 optional,
+        subsurface_color_g: ScalarF32 optional,
+        subsurface_color_b: ScalarF32 optional,
+        subsurface_anisotropy: ScalarF32 optional,
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
@@ -195,6 +213,30 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
             range: Some((0.01, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("normal_scale"),
+            label: "Normal Scale",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-1.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("clearcoat_normal_scale"),
+            label: "Clearcoat Normal Scale",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-1.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occlusion_strength"),
+            label: "Occlusion Strength",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -453,6 +495,30 @@ crate::primitive! {
             label: "Translucency",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("translucency_color_r"),
+            label: "Translucency Colour R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("translucency_color_g"),
+            label: "Translucency Colour G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("translucency_color_b"),
+            label: "Translucency Colour B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
@@ -887,6 +953,198 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("sheen_mode"), label: "Sheen Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
         ParamDef { name: Cow::Borrowed("anisotropy_mode"), label: "Anisotropy Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
         ParamDef { name: Cow::Borrowed("translucency_mode"), label: "Translucency Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["From values", "Off", "On", "Removed"] },
+
+        // Per-map sampler metadata and extension transforms.
+        ParamDef { name: Cow::Borrowed("uv_set"), label: "Base Colour UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("mip_filter"), label: "Base Colour Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("nrm_uv_set"), label: "Normal UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("nrm_mip_filter"), label: "Normal Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("mr_uv_set"), label: "Metallic Roughness UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("mr_mip_filter"), label: "Metallic Roughness Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("occ_uv_set"), label: "Occlusion UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("occ_mip_filter"), label: "Occlusion Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("em_uv_set"), label: "Emissive UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("em_mip_filter"), label: "Emissive Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("sheen_color_uv_m00"), label: "Sheen Color UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_uv_m01"), label: "Sheen Color UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_uv_m10"), label: "Sheen Color UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_uv_m11"), label: "Sheen Color UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_uv_tx"), label: "Sheen Color UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_uv_ty"), label: "Sheen Color UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_tex_coord"), label: "Sheen Color UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_color_wrap_u"), label: "Sheen Color Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("sheen_color_wrap_v"), label: "Sheen Color Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("sheen_color_mag_filter"), label: "Sheen Color Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("sheen_color_min_filter"), label: "Sheen Color Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("sheen_color_mip_filter"), label: "Sheen Color Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_uv_m00"), label: "Sheen Roughness UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_uv_m01"), label: "Sheen Roughness UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_uv_m10"), label: "Sheen Roughness UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_uv_m11"), label: "Sheen Roughness UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_uv_tx"), label: "Sheen Roughness UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_uv_ty"), label: "Sheen Roughness UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_tex_coord"), label: "Sheen Roughness UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_wrap_u"), label: "Sheen Roughness Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_wrap_v"), label: "Sheen Roughness Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_mag_filter"), label: "Sheen Roughness Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_min_filter"), label: "Sheen Roughness Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("sheen_roughness_mip_filter"), label: "Sheen Roughness Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("iridescence_uv_m00"), label: "Iridescence UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_uv_m01"), label: "Iridescence UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_uv_m10"), label: "Iridescence UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_uv_m11"), label: "Iridescence UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_uv_tx"), label: "Iridescence UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_uv_ty"), label: "Iridescence UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_tex_coord"), label: "Iridescence UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_wrap_u"), label: "Iridescence Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("iridescence_wrap_v"), label: "Iridescence Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("iridescence_mag_filter"), label: "Iridescence Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("iridescence_min_filter"), label: "Iridescence Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("iridescence_mip_filter"), label: "Iridescence Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_uv_m00"), label: "Iridescence Thickness UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_uv_m01"), label: "Iridescence Thickness UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_uv_m10"), label: "Iridescence Thickness UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_uv_m11"), label: "Iridescence Thickness UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_uv_tx"), label: "Iridescence Thickness UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_uv_ty"), label: "Iridescence Thickness UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_tex_coord"), label: "Iridescence Thickness UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_wrap_u"), label: "Iridescence Thickness Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_wrap_v"), label: "Iridescence Thickness Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_mag_filter"), label: "Iridescence Thickness Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_min_filter"), label: "Iridescence Thickness Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("iridescence_thickness_mip_filter"), label: "Iridescence Thickness Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_uv_m00"), label: "Anisotropy UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_uv_m01"), label: "Anisotropy UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_uv_m10"), label: "Anisotropy UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_uv_m11"), label: "Anisotropy UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_uv_tx"), label: "Anisotropy UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_uv_ty"), label: "Anisotropy UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_tex_coord"), label: "Anisotropy UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("anisotropy_wrap_u"), label: "Anisotropy Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_wrap_v"), label: "Anisotropy Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_mag_filter"), label: "Anisotropy Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_min_filter"), label: "Anisotropy Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("anisotropy_mip_filter"), label: "Anisotropy Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_uv_m00"), label: "Clearcoat UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_uv_m01"), label: "Clearcoat UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_uv_m10"), label: "Clearcoat UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_uv_m11"), label: "Clearcoat UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_uv_tx"), label: "Clearcoat UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_uv_ty"), label: "Clearcoat UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_tex_coord"), label: "Clearcoat UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_wrap_u"), label: "Clearcoat Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_wrap_v"), label: "Clearcoat Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_mag_filter"), label: "Clearcoat Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_min_filter"), label: "Clearcoat Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_mip_filter"), label: "Clearcoat Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_uv_m00"), label: "Clearcoat Roughness UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_uv_m01"), label: "Clearcoat Roughness UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_uv_m10"), label: "Clearcoat Roughness UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_uv_m11"), label: "Clearcoat Roughness UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_uv_tx"), label: "Clearcoat Roughness UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_uv_ty"), label: "Clearcoat Roughness UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_tex_coord"), label: "Clearcoat Roughness UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_wrap_u"), label: "Clearcoat Roughness Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_wrap_v"), label: "Clearcoat Roughness Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_mag_filter"), label: "Clearcoat Roughness Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_min_filter"), label: "Clearcoat Roughness Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_roughness_mip_filter"), label: "Clearcoat Roughness Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_uv_m00"), label: "Clearcoat Normal UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_uv_m01"), label: "Clearcoat Normal UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_uv_m10"), label: "Clearcoat Normal UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_uv_m11"), label: "Clearcoat Normal UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_uv_tx"), label: "Clearcoat Normal UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_uv_ty"), label: "Clearcoat Normal UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_tex_coord"), label: "Clearcoat Normal UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_wrap_u"), label: "Clearcoat Normal Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_wrap_v"), label: "Clearcoat Normal Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_mag_filter"), label: "Clearcoat Normal Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_min_filter"), label: "Clearcoat Normal Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("clearcoat_normal_mip_filter"), label: "Clearcoat Normal Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("specular_uv_m00"), label: "Specular UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_uv_m01"), label: "Specular UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_uv_m10"), label: "Specular UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_uv_m11"), label: "Specular UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_uv_tx"), label: "Specular UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_uv_ty"), label: "Specular UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_tex_coord"), label: "Specular UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_wrap_u"), label: "Specular Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("specular_wrap_v"), label: "Specular Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("specular_mag_filter"), label: "Specular Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("specular_min_filter"), label: "Specular Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("specular_mip_filter"), label: "Specular Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("specular_color_uv_m00"), label: "Specular Color UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_uv_m01"), label: "Specular Color UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_uv_m10"), label: "Specular Color UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_uv_m11"), label: "Specular Color UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_uv_tx"), label: "Specular Color UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_uv_ty"), label: "Specular Color UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_tex_coord"), label: "Specular Color UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("specular_color_wrap_u"), label: "Specular Color Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("specular_color_wrap_v"), label: "Specular Color Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("specular_color_mag_filter"), label: "Specular Color Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("specular_color_min_filter"), label: "Specular Color Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("specular_color_mip_filter"), label: "Specular Color Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("transmission_uv_m00"), label: "Transmission UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_uv_m01"), label: "Transmission UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_uv_m10"), label: "Transmission UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_uv_m11"), label: "Transmission UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_uv_tx"), label: "Transmission UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_uv_ty"), label: "Transmission UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_tex_coord"), label: "Transmission UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("transmission_wrap_u"), label: "Transmission Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("transmission_wrap_v"), label: "Transmission Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("transmission_mag_filter"), label: "Transmission Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("transmission_min_filter"), label: "Transmission Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("transmission_mip_filter"), label: "Transmission Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_uv_m00"), label: "Volume Thickness UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_uv_m01"), label: "Volume Thickness UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_uv_m10"), label: "Volume Thickness UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_uv_m11"), label: "Volume Thickness UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_uv_tx"), label: "Volume Thickness UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_uv_ty"), label: "Volume Thickness UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_tex_coord"), label: "Volume Thickness UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_wrap_u"), label: "Volume Thickness Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_wrap_v"), label: "Volume Thickness Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_mag_filter"), label: "Volume Thickness Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_min_filter"), label: "Volume Thickness Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("volume_thickness_mip_filter"), label: "Volume Thickness Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_uv_m00"), label: "Diffuse Transmission UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_uv_m01"), label: "Diffuse Transmission UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_uv_m10"), label: "Diffuse Transmission UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_uv_m11"), label: "Diffuse Transmission UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_uv_tx"), label: "Diffuse Transmission UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_uv_ty"), label: "Diffuse Transmission UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_tex_coord"), label: "Diffuse Transmission UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_wrap_u"), label: "Diffuse Transmission Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_wrap_v"), label: "Diffuse Transmission Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_mag_filter"), label: "Diffuse Transmission Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_min_filter"), label: "Diffuse Transmission Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_mip_filter"), label: "Diffuse Transmission Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_uv_m00"), label: "Diffuse Transmission Color UV M00", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_uv_m01"), label: "Diffuse Transmission Color UV M01", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_uv_m10"), label: "Diffuse Transmission Color UV M10", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_uv_m11"), label: "Diffuse Transmission Color UV M11", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_uv_tx"), label: "Diffuse Transmission Color UV TX", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_uv_ty"), label: "Diffuse Transmission Color UV TY", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-128.0, 128.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_tex_coord"), label: "Diffuse Transmission Color UV Set", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_wrap_u"), label: "Diffuse Transmission Color Wrap U", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_wrap_v"), label: "Diffuse Transmission Color Wrap V", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Repeat", "ClampToEdge", "MirrorRepeat"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_mag_filter"), label: "Diffuse Transmission Color Mag Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_min_filter"), label: "Diffuse Transmission Color Min Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Linear", "Nearest"] },
+        ParamDef { name: Cow::Borrowed("diffuse_transmission_color_mip_filter"), label: "Diffuse Transmission Color Mip Filter", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Linear", "Nearest", "None"] },
+        // Shared subsurface controls. Appended to preserve all existing
+        // parameter identities and serialized slot ordering.
+        ParamDef { name: Cow::Borrowed("subsurface_weight"), label: "Subsurface Weight", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_radius_r"), label: "Subsurface Radius R", ty: ParamType::Float, default: ParamValue::Float(0.01), range: Some((0.00001, 10.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_radius_g"), label: "Subsurface Radius G", ty: ParamType::Float, default: ParamValue::Float(0.005), range: Some((0.00001, 10.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_radius_b"), label: "Subsurface Radius B", ty: ParamType::Float, default: ParamValue::Float(0.0025), range: Some((0.00001, 10.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_color_r"), label: "Subsurface Color R", ty: ParamType::Float, default: ParamValue::Float(0.9), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_color_g"), label: "Subsurface Color G", ty: ParamType::Float, default: ParamValue::Float(0.8), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_color_b"), label: "Subsurface Color B", ty: ParamType::Float, default: ParamValue::Float(0.7), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_anisotropy"), label: "Subsurface Anisotropy", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-0.95, 0.95)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_mode"), label: "Subsurface Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Diffusion", "Random Walk"] },
+        ParamDef { name: Cow::Borrowed("subsurface_samples"), label: "Subsurface Samples", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
@@ -938,6 +1196,11 @@ impl Primitive for PbrMaterial {
         let ambient = ctx.scalar_or_param("ambient", 0.05);
         let metallic = ctx.scalar_or_param("metallic", 0.0).clamp(0.0, 1.0);
         let roughness = ctx.scalar_or_param("roughness", 0.5);
+        let normal_scale = ctx.scalar_or_param("normal_scale", 1.0);
+        let clearcoat_normal_scale = ctx.scalar_or_param("clearcoat_normal_scale", 1.0);
+        let occlusion_strength = ctx
+            .scalar_or_param("occlusion_strength", 1.0)
+            .clamp(0.0, 1.0);
         let mut emission_r = ctx.scalar_or_param("emission_r", 0.0);
         let mut emission_g = ctx.scalar_or_param("emission_g", 0.0);
         let mut emission_b = ctx.scalar_or_param("emission_b", 0.0);
@@ -989,6 +1252,72 @@ impl Primitive for PbrMaterial {
         let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
         // RAYTRACING_DESIGN.md section 16 TL3.
         let mut translucency = ctx.scalar_or_param("translucency", 0.0);
+        let translucency_color_r = ctx
+            .scalar_or_param("translucency_color_r", 1.0)
+            .clamp(0.0, 1.0);
+        let translucency_color_g = ctx
+            .scalar_or_param("translucency_color_g", 1.0)
+            .clamp(0.0, 1.0);
+        let translucency_color_b = ctx
+            .scalar_or_param("translucency_color_b", 1.0)
+            .clamp(0.0, 1.0);
+
+        let subsurface_defaults = Subsurface::default();
+        let finite_clamped = |name: &str, fallback: f32, min: f32, max: f32| {
+            let value = ctx.scalar_or_param(name, fallback);
+            if value.is_finite() {
+                value.clamp(min, max)
+            } else {
+                fallback
+            }
+        };
+        let subsurface_weight =
+            finite_clamped("subsurface_weight", subsurface_defaults.weight, 0.0, 1.0);
+        let subsurface_radius = [
+            finite_clamped(
+                "subsurface_radius_r",
+                subsurface_defaults.radius[0],
+                0.00001,
+                10.0,
+            ),
+            finite_clamped(
+                "subsurface_radius_g",
+                subsurface_defaults.radius[1],
+                0.00001,
+                10.0,
+            ),
+            finite_clamped(
+                "subsurface_radius_b",
+                subsurface_defaults.radius[2],
+                0.00001,
+                10.0,
+            ),
+        ];
+        let subsurface_color = [
+            finite_clamped("subsurface_color_r", subsurface_defaults.color[0], 0.0, 1.0),
+            finite_clamped("subsurface_color_g", subsurface_defaults.color[1], 0.0, 1.0),
+            finite_clamped("subsurface_color_b", subsurface_defaults.color[2], 0.0, 1.0),
+        ];
+        let subsurface_anisotropy = finite_clamped(
+            "subsurface_anisotropy",
+            subsurface_defaults.anisotropy,
+            -0.95,
+            0.95,
+        );
+        let subsurface_mode = match ctx.params.get("subsurface_mode") {
+            Some(ParamValue::Enum(0)) => SubsurfaceMode::Diffusion,
+            Some(ParamValue::Enum(1)) => SubsurfaceMode::RandomWalk,
+            Some(ParamValue::Float(value)) if value.is_finite() && value.round() == 1.0 => {
+                SubsurfaceMode::RandomWalk
+            }
+            _ => subsurface_defaults.mode,
+        };
+        let subsurface_samples = match ctx.params.get("subsurface_samples") {
+            Some(ParamValue::Float(value)) if value.is_finite() => {
+                value.round().clamp(1.0, 64.0) as u32
+            }
+            _ => subsurface_defaults.samples,
+        };
 
         // A saved Off mode gates evaluated output only. Authored factors,
         // maps, and their drivers remain untouched in the graph.
@@ -1067,13 +1396,8 @@ impl Primitive for PbrMaterial {
                 ctx.scalar_or_param(keys[5], 0.0),
             ]
         };
-        let [
-            base_color_uv_transform,
-            normal_uv_transform,
-            mr_uv_transform,
-            occlusion_uv_transform,
-            emissive_uv_transform,
-        ] = UV_XF_KEYS.map(uv_xf);
+        let [base_color_uv_transform, normal_uv_transform, mr_uv_transform, occlusion_uv_transform, emissive_uv_transform] =
+            UV_XF_KEYS.map(uv_xf);
 
         // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
         // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
@@ -1102,39 +1426,279 @@ impl Primitive for PbrMaterial {
         };
         // Same static-key treatment as UV_XF_KEYS above: 20 more format!
         // allocations per frame otherwise.
-        const SAMPLER_KEYS: [[&str; 4]; 5] = [
-            ["wrap_u", "wrap_v", "mag_filter", "min_filter"],
+        const SAMPLER_KEYS: [[&str; 5]; 5] = [
+            ["wrap_u", "wrap_v", "mag_filter", "min_filter", "mip_filter"],
             [
                 "nrm_wrap_u",
                 "nrm_wrap_v",
                 "nrm_mag_filter",
                 "nrm_min_filter",
+                "nrm_mip_filter",
             ],
-            ["mr_wrap_u", "mr_wrap_v", "mr_mag_filter", "mr_min_filter"],
+            [
+                "mr_wrap_u",
+                "mr_wrap_v",
+                "mr_mag_filter",
+                "mr_min_filter",
+                "mr_mip_filter",
+            ],
             [
                 "occ_wrap_u",
                 "occ_wrap_v",
                 "occ_mag_filter",
                 "occ_min_filter",
+                "occ_mip_filter",
             ],
-            ["em_wrap_u", "em_wrap_v", "em_mag_filter", "em_min_filter"],
+            [
+                "em_wrap_u",
+                "em_wrap_v",
+                "em_mag_filter",
+                "em_min_filter",
+                "em_mip_filter",
+            ],
         ];
-        let map_sampler = |keys: [&str; 4]| -> MapSamplerDesc {
+        let map_sampler = |keys: [&str; 5]| -> MapSamplerDesc {
             MapSamplerDesc {
                 wrap_u: wrap_mode(enum_or(keys[0])),
                 wrap_v: wrap_mode(enum_or(keys[1])),
                 mag_filter: filter_mode(enum_or(keys[2])),
                 min_filter: filter_mode(enum_or(keys[3])),
+                mip_filter: match enum_or(keys[4]) {
+                    1 => Some(manifold_gpu::GpuFilterMode::Nearest),
+                    2 => None,
+                    _ => Some(manifold_gpu::GpuFilterMode::Linear),
+                },
             }
         };
-        let [
-            base_color_sampler,
-            normal_sampler,
-            mr_sampler,
-            occlusion_sampler,
-            emissive_sampler,
-        ] = SAMPLER_KEYS.map(map_sampler);
-
+        let [base_color_sampler, normal_sampler, mr_sampler, occlusion_sampler, emissive_sampler] =
+            SAMPLER_KEYS.map(map_sampler);
+        const CORE_TEX_COORD_KEYS: [&str; 5] = [
+            "uv_set",
+            "nrm_uv_set",
+            "mr_uv_set",
+            "occ_uv_set",
+            "em_uv_set",
+        ];
+        let core_tex_coords = CORE_TEX_COORD_KEYS.map(|name| {
+            ctx.params
+                .get(name)
+                .and_then(|v| v.as_u32_clamped(0))
+                .unwrap_or(0)
+        });
+        const EXTENSION_KEYS: [[&str; 12]; 14] = [
+            [
+                "sheen_color_uv_m00",
+                "sheen_color_uv_m01",
+                "sheen_color_uv_m10",
+                "sheen_color_uv_m11",
+                "sheen_color_uv_tx",
+                "sheen_color_uv_ty",
+                "sheen_color_tex_coord",
+                "sheen_color_wrap_u",
+                "sheen_color_wrap_v",
+                "sheen_color_mag_filter",
+                "sheen_color_min_filter",
+                "sheen_color_mip_filter",
+            ],
+            [
+                "sheen_roughness_uv_m00",
+                "sheen_roughness_uv_m01",
+                "sheen_roughness_uv_m10",
+                "sheen_roughness_uv_m11",
+                "sheen_roughness_uv_tx",
+                "sheen_roughness_uv_ty",
+                "sheen_roughness_tex_coord",
+                "sheen_roughness_wrap_u",
+                "sheen_roughness_wrap_v",
+                "sheen_roughness_mag_filter",
+                "sheen_roughness_min_filter",
+                "sheen_roughness_mip_filter",
+            ],
+            [
+                "iridescence_uv_m00",
+                "iridescence_uv_m01",
+                "iridescence_uv_m10",
+                "iridescence_uv_m11",
+                "iridescence_uv_tx",
+                "iridescence_uv_ty",
+                "iridescence_tex_coord",
+                "iridescence_wrap_u",
+                "iridescence_wrap_v",
+                "iridescence_mag_filter",
+                "iridescence_min_filter",
+                "iridescence_mip_filter",
+            ],
+            [
+                "iridescence_thickness_uv_m00",
+                "iridescence_thickness_uv_m01",
+                "iridescence_thickness_uv_m10",
+                "iridescence_thickness_uv_m11",
+                "iridescence_thickness_uv_tx",
+                "iridescence_thickness_uv_ty",
+                "iridescence_thickness_tex_coord",
+                "iridescence_thickness_wrap_u",
+                "iridescence_thickness_wrap_v",
+                "iridescence_thickness_mag_filter",
+                "iridescence_thickness_min_filter",
+                "iridescence_thickness_mip_filter",
+            ],
+            [
+                "anisotropy_uv_m00",
+                "anisotropy_uv_m01",
+                "anisotropy_uv_m10",
+                "anisotropy_uv_m11",
+                "anisotropy_uv_tx",
+                "anisotropy_uv_ty",
+                "anisotropy_tex_coord",
+                "anisotropy_wrap_u",
+                "anisotropy_wrap_v",
+                "anisotropy_mag_filter",
+                "anisotropy_min_filter",
+                "anisotropy_mip_filter",
+            ],
+            [
+                "clearcoat_uv_m00",
+                "clearcoat_uv_m01",
+                "clearcoat_uv_m10",
+                "clearcoat_uv_m11",
+                "clearcoat_uv_tx",
+                "clearcoat_uv_ty",
+                "clearcoat_tex_coord",
+                "clearcoat_wrap_u",
+                "clearcoat_wrap_v",
+                "clearcoat_mag_filter",
+                "clearcoat_min_filter",
+                "clearcoat_mip_filter",
+            ],
+            [
+                "clearcoat_roughness_uv_m00",
+                "clearcoat_roughness_uv_m01",
+                "clearcoat_roughness_uv_m10",
+                "clearcoat_roughness_uv_m11",
+                "clearcoat_roughness_uv_tx",
+                "clearcoat_roughness_uv_ty",
+                "clearcoat_roughness_tex_coord",
+                "clearcoat_roughness_wrap_u",
+                "clearcoat_roughness_wrap_v",
+                "clearcoat_roughness_mag_filter",
+                "clearcoat_roughness_min_filter",
+                "clearcoat_roughness_mip_filter",
+            ],
+            [
+                "clearcoat_normal_uv_m00",
+                "clearcoat_normal_uv_m01",
+                "clearcoat_normal_uv_m10",
+                "clearcoat_normal_uv_m11",
+                "clearcoat_normal_uv_tx",
+                "clearcoat_normal_uv_ty",
+                "clearcoat_normal_tex_coord",
+                "clearcoat_normal_wrap_u",
+                "clearcoat_normal_wrap_v",
+                "clearcoat_normal_mag_filter",
+                "clearcoat_normal_min_filter",
+                "clearcoat_normal_mip_filter",
+            ],
+            [
+                "specular_uv_m00",
+                "specular_uv_m01",
+                "specular_uv_m10",
+                "specular_uv_m11",
+                "specular_uv_tx",
+                "specular_uv_ty",
+                "specular_tex_coord",
+                "specular_wrap_u",
+                "specular_wrap_v",
+                "specular_mag_filter",
+                "specular_min_filter",
+                "specular_mip_filter",
+            ],
+            [
+                "specular_color_uv_m00",
+                "specular_color_uv_m01",
+                "specular_color_uv_m10",
+                "specular_color_uv_m11",
+                "specular_color_uv_tx",
+                "specular_color_uv_ty",
+                "specular_color_tex_coord",
+                "specular_color_wrap_u",
+                "specular_color_wrap_v",
+                "specular_color_mag_filter",
+                "specular_color_min_filter",
+                "specular_color_mip_filter",
+            ],
+            [
+                "transmission_uv_m00",
+                "transmission_uv_m01",
+                "transmission_uv_m10",
+                "transmission_uv_m11",
+                "transmission_uv_tx",
+                "transmission_uv_ty",
+                "transmission_tex_coord",
+                "transmission_wrap_u",
+                "transmission_wrap_v",
+                "transmission_mag_filter",
+                "transmission_min_filter",
+                "transmission_mip_filter",
+            ],
+            [
+                "volume_thickness_uv_m00",
+                "volume_thickness_uv_m01",
+                "volume_thickness_uv_m10",
+                "volume_thickness_uv_m11",
+                "volume_thickness_uv_tx",
+                "volume_thickness_uv_ty",
+                "volume_thickness_tex_coord",
+                "volume_thickness_wrap_u",
+                "volume_thickness_wrap_v",
+                "volume_thickness_mag_filter",
+                "volume_thickness_min_filter",
+                "volume_thickness_mip_filter",
+            ],
+            [
+                "diffuse_transmission_uv_m00",
+                "diffuse_transmission_uv_m01",
+                "diffuse_transmission_uv_m10",
+                "diffuse_transmission_uv_m11",
+                "diffuse_transmission_uv_tx",
+                "diffuse_transmission_uv_ty",
+                "diffuse_transmission_tex_coord",
+                "diffuse_transmission_wrap_u",
+                "diffuse_transmission_wrap_v",
+                "diffuse_transmission_mag_filter",
+                "diffuse_transmission_min_filter",
+                "diffuse_transmission_mip_filter",
+            ],
+            [
+                "diffuse_transmission_color_uv_m00",
+                "diffuse_transmission_color_uv_m01",
+                "diffuse_transmission_color_uv_m10",
+                "diffuse_transmission_color_uv_m11",
+                "diffuse_transmission_color_uv_tx",
+                "diffuse_transmission_color_uv_ty",
+                "diffuse_transmission_color_tex_coord",
+                "diffuse_transmission_color_wrap_u",
+                "diffuse_transmission_color_wrap_v",
+                "diffuse_transmission_color_mag_filter",
+                "diffuse_transmission_color_min_filter",
+                "diffuse_transmission_color_mip_filter",
+            ],
+        ];
+        let extension_maps = EXTENSION_KEYS.map(|keys| MaterialMapInfo {
+            uv_transform: [
+                ctx.scalar_or_param(keys[0], 1.0),
+                ctx.scalar_or_param(keys[1], 0.0),
+                ctx.scalar_or_param(keys[2], 0.0),
+                ctx.scalar_or_param(keys[3], 1.0),
+                ctx.scalar_or_param(keys[4], 0.0),
+                ctx.scalar_or_param(keys[5], 0.0),
+            ],
+            tex_coord: ctx
+                .params
+                .get(keys[6])
+                .and_then(|v| v.as_u32_clamped(0))
+                .unwrap_or(0),
+            sampler: map_sampler([keys[7], keys[8], keys[9], keys[10], keys[11]]),
+        });
         let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],
             ambient,
@@ -1148,6 +1712,9 @@ impl Primitive for PbrMaterial {
         material.specular_factor = specular;
         material.specular_tint = [specular_tint_r, specular_tint_g, specular_tint_b];
         material.ior = ior;
+        material.normal_scale = normal_scale;
+        material.clearcoat_normal_scale = clearcoat_normal_scale;
+        material.occlusion_strength = occlusion_strength;
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
         material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];
@@ -1160,6 +1727,11 @@ impl Primitive for PbrMaterial {
         material.anisotropy_rotation = anisotropy_rotation;
         material.dispersion = dispersion;
         material.translucency = translucency;
+        material.diffuse_transmission_color = [
+            translucency_color_r,
+            translucency_color_g,
+            translucency_color_b,
+        ];
         material.transmission_factor = transmission;
         material.volume_thickness_factor = volume_thickness;
         material.volume_attenuation_distance = volume_attenuation_distance;
@@ -1168,6 +1740,14 @@ impl Primitive for PbrMaterial {
             volume_attenuation_color_g,
             volume_attenuation_color_b,
         ];
+        material.subsurface = Subsurface {
+            weight: subsurface_weight,
+            radius: subsurface_radius,
+            color: subsurface_color,
+            anisotropy: subsurface_anisotropy,
+            mode: subsurface_mode,
+            samples: subsurface_samples,
+        };
         material.base_color_uv_transform = base_color_uv_transform;
         material.normal_uv_transform = normal_uv_transform;
         material.mr_uv_transform = mr_uv_transform;
@@ -1178,6 +1758,8 @@ impl Primitive for PbrMaterial {
         material.mr_sampler = mr_sampler;
         material.occlusion_sampler = occlusion_sampler;
         material.emissive_sampler = emissive_sampler;
+        material.core_tex_coords = core_tex_coords;
+        material.extension_maps = extension_maps;
         // BUG-pt6g: "Baked Look" opt-out — every field above stays set (the
         // Unlit shader simply doesn't read the PBR-only ones), only the
         // shading-model dispatch changes.
@@ -1191,17 +1773,17 @@ impl Primitive for PbrMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::ParamValues;
     use crate::node_graph::material::MaterialKind;
     use crate::node_graph::primitive::PrimitiveSpec;
+    use crate::node_graph::EffectNode;
 
     fn run_material(params: ParamValues, bound_emission_r: Option<f32>) -> Material {
-        use crate::node_graph::MockBackend;
         use crate::node_graph::execution_plan::ResourceId;
         use crate::node_graph::ports::PortType;
+        use crate::node_graph::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -1327,6 +1909,55 @@ mod tests {
     }
 
     #[test]
+    fn subsurface_controls_survive_evaluation_and_sanitize() {
+        let mut params = ParamValues::default();
+        for (name, value) in [
+            ("subsurface_weight", 0.75),
+            ("subsurface_radius_r", 0.12),
+            ("subsurface_radius_g", 0.08),
+            ("subsurface_radius_b", 0.04),
+            ("subsurface_color_r", 0.95),
+            ("subsurface_color_g", 0.65),
+            ("subsurface_color_b", 0.35),
+            ("subsurface_anisotropy", -0.4),
+            ("subsurface_samples", 23.0),
+        ] {
+            params.insert(Cow::Borrowed(name), ParamValue::Float(value));
+        }
+        params.insert(Cow::Borrowed("subsurface_mode"), ParamValue::Enum(1));
+        let material = run_material(params, None);
+        assert_eq!(material.subsurface.weight, 0.75);
+        assert_eq!(material.subsurface.radius, [0.12, 0.08, 0.04]);
+        assert_eq!(material.subsurface.color, [0.95, 0.65, 0.35]);
+        assert_eq!(material.subsurface.anisotropy, -0.4);
+        assert_eq!(material.subsurface.mode, SubsurfaceMode::RandomWalk);
+        assert_eq!(material.subsurface.samples, 23);
+
+        let mut invalid = ParamValues::default();
+        for name in [
+            "subsurface_weight",
+            "subsurface_radius_r",
+            "subsurface_radius_g",
+            "subsurface_radius_b",
+            "subsurface_color_r",
+            "subsurface_color_g",
+            "subsurface_color_b",
+            "subsurface_anisotropy",
+        ] {
+            invalid.insert(Cow::Borrowed(name), ParamValue::Float(f32::NAN));
+        }
+        invalid.insert(Cow::Borrowed("subsurface_mode"), ParamValue::Enum(99));
+        invalid.insert(
+            Cow::Borrowed("subsurface_samples"),
+            ParamValue::Float(f32::NAN),
+        );
+        assert_eq!(
+            run_material(invalid, None).subsurface,
+            Subsurface::default()
+        );
+    }
+
+    #[test]
     fn pbr_material_declares_port_shadow_scalars_and_material_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
 
@@ -1353,12 +1984,12 @@ mod tests {
 
     #[test]
     fn run_emits_pbr_material_and_clamps_roughness_floor() {
-        use crate::node_graph::MockBackend;
         use crate::node_graph::backend::Backend;
         use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
         use crate::node_graph::effect_node::ParamValues;
         use crate::node_graph::execution_plan::ResourceId;
         use crate::node_graph::ports::PortType;
+        use crate::node_graph::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -1392,6 +2023,30 @@ mod tests {
         params.insert(
             std::borrow::Cow::Borrowed("roughness"),
             ParamValue::Float(0.0),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("normal_scale"),
+            ParamValue::Float(-0.35),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("clearcoat_normal_scale"),
+            ParamValue::Float(-0.6),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("occlusion_strength"),
+            ParamValue::Float(1.2),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("translucency_color_r"),
+            ParamValue::Float(1.2),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("translucency_color_g"),
+            ParamValue::Float(-0.1),
+        );
+        params.insert(
+            std::borrow::Cow::Borrowed("translucency_color_b"),
+            ParamValue::Float(0.4),
         );
         params.insert(
             std::borrow::Cow::Borrowed("emission_r"),
@@ -1451,6 +2106,10 @@ mod tests {
         assert_eq!(mat.kind, MaterialKind::Pbr);
         assert_eq!(mat.metallic, 1.0);
         assert!(mat.roughness >= 0.01, "roughness must clamp to floor");
+        assert_eq!(mat.normal_scale, -0.35);
+        assert_eq!(mat.clearcoat_normal_scale, -0.6);
+        assert_eq!(mat.occlusion_strength, 1.0);
+        assert_eq!(mat.diffuse_transmission_color, [1.0, 0.0, 0.4]);
         assert!(mat.requires_light());
         assert!(mat.requires_envmap());
     }
@@ -1463,12 +2122,12 @@ mod tests {
     /// branch in `run()` (this primitive is CPU-only, no GPU dispatch).
     #[test]
     fn material_inspector_baked_look_emission_off_stays_gated() {
-        use crate::node_graph::MockBackend;
         use crate::node_graph::backend::Backend;
         use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
         use crate::node_graph::effect_node::ParamValues;
         use crate::node_graph::execution_plan::ResourceId;
         use crate::node_graph::ports::PortType;
+        use crate::node_graph::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let run_with_baked_look = |baked_look: bool| -> (MaterialKind, [f32; 4]) {

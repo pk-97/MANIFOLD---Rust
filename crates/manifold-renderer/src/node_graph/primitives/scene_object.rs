@@ -6,7 +6,7 @@
 //! "whatever named group happens to wrap the wires feeding `mesh_k`" — a
 //! convention `SceneVm` reverse-engineers. This primitive makes the object a
 //! typed graph fact instead: it consumes the same wires `render_scene`'s
-//! per-object port family consumed (mesh vertices, transform, material, five
+//! per-object port family consumed (mesh vertices, transform, material, nineteen
 //! maps, instances) and emits ONE [`Object`](crate::node_graph::ports::PortType::Object)
 //! wire carrying a [`SceneObject`]. `render_scene` takes `object_k: Object`
 //! (P2 of the design) instead of nine parallel per-object wires that had to
@@ -36,7 +36,7 @@ use crate::node_graph::scene_object::SceneObject;
 crate::primitive! {
     name: SceneObjectNode,
     type_id: "node.scene_object",
-    purpose: "Binds one scene object's mesh vertices, transform, material, seventeen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
+    purpose: "Binds one scene object's mesh vertices, transform, material, nineteen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / diffuse transmission / diffuse transmission colour / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
     inputs: {
         vertices: Array(MeshVertex) optional,
         weights: Array(f32) optional,
@@ -59,6 +59,8 @@ crate::primitive! {
         specular_map: Texture2D optional,
         specular_color_map: Texture2D optional,
         transmission_map: Texture2D optional,
+        diffuse_transmission_map: Texture2D optional,
+        diffuse_transmission_color_map: Texture2D optional,
         volume_thickness_map: Texture2D optional,
         instances: Array(InstanceTransform) optional,
         instance_count: ScalarF32 optional,
@@ -147,6 +149,8 @@ impl Primitive for SceneObjectNode {
         let specular_map = ctx.inputs.slot_of("specular_map");
         let specular_color_map = ctx.inputs.slot_of("specular_color_map");
         let transmission_map = ctx.inputs.slot_of("transmission_map");
+        let diffuse_transmission_map = ctx.inputs.slot_of("diffuse_transmission_map");
+        let diffuse_transmission_color_map = ctx.inputs.slot_of("diffuse_transmission_color_map");
         let volume_thickness_map = ctx.inputs.slot_of("volume_thickness_map");
         let instances = ctx.inputs.slot_of("instances");
         let instance_count = ctx
@@ -178,6 +182,8 @@ impl Primitive for SceneObjectNode {
             specular_map,
             specular_color_map,
             transmission_map,
+            diffuse_transmission_map,
+            diffuse_transmission_color_map,
             volume_thickness_map,
             instances,
             instance_count,
@@ -429,8 +435,8 @@ mod gpu_tests {
     }
 
     fn mk_vertex(pos: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0, 1.0, 0.0], _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4] }
-    }
+        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0, 1.0, 0.0], _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4], color: [1.0; 4] }
+}
 
     /// Test-only mesh producer: its `out` resource is pre-bound directly to
     /// a real GPU buffer before the frame runs (mirroring

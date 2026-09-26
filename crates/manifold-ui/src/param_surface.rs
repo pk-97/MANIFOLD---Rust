@@ -43,6 +43,7 @@ pub enum MaterialFeature {
 pub enum MaterialGroup {
     Surface,
     Opacity,
+    Subsurface,
     Feature(MaterialFeature),
     Advanced,
 }
@@ -54,6 +55,8 @@ pub enum MaterialColour {
     Emission,
     Sheen,
     Attenuation,
+    Subsurface,
+    Translucency,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

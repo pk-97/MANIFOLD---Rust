@@ -323,7 +323,21 @@ Extend `RtNormalSource` with `appearance_weights_addr: u64`, `appearance_weight_
 
 All candidate-hit walkers (visibility, GI and reflection) use the same appearance helper. Descriptor nonopaque property is `alpha_mask || translucent || appearance_weights.is_some() || appearance_gain != 1.0`; a change in that property rebuilds the affected BLAS. A subsequent fractional-to-fractional gain change updates the source table only. Accepted hits multiply evaluated reflected/emitted surface radiance by `brightness`; coverage has already been applied by stochastic acceptance and must not multiply it twice. Explicit emitter samples multiply radiance by `coverage * brightness` at the sampled barycentrics because those samples have not passed the hit test. Preserve current area×material-luma candidate ranking/alias probabilities; do not use a different hidden appearance-dependent importance estimator. Gain=1 with no weights retains existing alpha/material behavior.
 
-Inherited material boundaries (explicitly outside this geometry change): RT currently omits base-color/MR/normal-map KHR UV transforms, ignores authored tangent handedness, uses its existing normal-transform approximation for nonuniform scale, and its alpha helper uses nearest/repeat texture alpha without the material alpha factor. Emissive-map transforms are already supported and remain required. Raster shadow-depth likewise has its existing base-alpha limitation. Anchors: `metal/shadow_rays.msl:478`, `:552`, `:586`; `raytrace/params.rs:325`; renderer `shaders/shadow_depth.wgsl`. This work must not regress those paths or claim their full parity. The appearance factor above is the new matched behavior; inherited material discrepancies are tracked separately as `BUG-yrca`. Fixing all material transport here would turn the modifier contract into an unrelated renderer rewrite.
+Material-boundary note (updated 2026-09-26): the former inherited-limit list is
+superseded by the current material contract in
+[GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26).
+RT now carries per-map UV transforms/addressing, authored tangent handedness,
+inverse-transpose normals, and base-alpha × texture-alpha × colour-factor
+transport; raster shadow-depth alpha follows the same corrected contract.
+
+The actual hybrid RT limits remain: secondary hits omit clearcoat, sheen,
+iridescence, subsurface and full Phong/Cel evaluation; glass and Blend surfaces
+are absent from acceleration; ray-hit texture sampling has no ray-cone
+minification; environment anisotropy uses a bent-normal approximation; and
+reflections do not provide recursive specular transport. The texture table is
+limited to 64 unique textures, and arbitrary nested dielectric transport and
+spectral transport remain outside the supported model. These limits preserve
+the scope of this geometry contract and are not claims of full material parity.
 
 ### 5.3 Renderer integration and history
 

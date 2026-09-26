@@ -113,7 +113,7 @@ fn rt_object_geom<'a>(
     tri_count: u32,
     cast_shadows: bool,
 ) -> RtObjectGeometry<'a> {
-    RtObjectGeometry {
+    RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: vbuf,
         vertex_stride: std::mem::size_of::<PosVertex>() as u32,
         vertex_offset: 0,
@@ -129,6 +129,7 @@ fn rt_object_geom<'a>(
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows,
@@ -137,6 +138,12 @@ fn rt_object_geom<'a>(
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }
 }
 
@@ -399,7 +406,7 @@ fn emissive_table_truncates_at_cap() {
     let stride = std::mem::size_of::<PosVertex>() as u32;
     let mut objects: Vec<RtObjectGeometry> = Vec::with_capacity(n_quads);
     for i in 0..n_quads {
-        objects.push(RtObjectGeometry {
+        objects.push(RtObjectGeometry { material_attributes: Default::default(),
             vertex_buffer: &buf,
             vertex_stride: stride,
             vertex_offset: (i * 4 * stride as usize) as u32,
@@ -415,6 +422,7 @@ fn emissive_table_truncates_at_cap() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
+        extra_material_textures: [None; 3],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -423,6 +431,12 @@ fn emissive_table_truncates_at_cap() {
             instance_slots: 1,
             appearance_weights: None,
             appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
         });
     }
 

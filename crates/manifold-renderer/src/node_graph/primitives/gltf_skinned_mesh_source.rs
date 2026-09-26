@@ -28,6 +28,18 @@ use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Preserve the pre-COLOR_0 importer contract for saved graphs that do not
+/// carry the opt-in `vertex_colors` parameter. New imports set the parameter
+/// explicitly and retain authored vertex colours.
+fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) -> Vec<MeshVertex> {
+    if !vertex_colors {
+        for vertex in &mut verts {
+            vertex.color = [1.0; 4];
+        }
+    }
+    verts
+}
+
 crate::primitive! {
     name: GltfSkinnedMeshSource,
     type_id: "node.gltf_skinned_mesh_source",
@@ -59,6 +71,14 @@ crate::primitive! {
             // always >= 0, so widening the range down to -2 costs nothing
             // for every existing selection.
             range: Some((-2.0, 1024.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("vertex_colors"),
+            label: "Vertex Colors",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
             enum_values: &[],
         },
         ParamDef {
@@ -103,8 +123,8 @@ crate::primitive! {
     aliases: ["gltf skinned", "skinned mesh source", "rig mesh"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, material_index) last parsed (or in flight).
-        last_key: (String, i32) = (String::new(), i32::MIN),
+        // (path, material_index, vertex_colors) last parsed (or in flight).
+        last_key: (String, i32, bool) = (String::new(), i32::MIN, false),
         cached_verts: Vec<MeshVertex> = Vec::new(),
         cached_joints: Vec<[f32; 4]> = Vec::new(),
         cached_weights: Vec<[f32; 4]> = Vec::new(),
@@ -140,8 +160,9 @@ impl Primitive for GltfSkinnedMeshSource {
             Some(ParamValue::Float(n)) => n.round() as i32,
             _ => 0,
         };
+        let vertex_colors = matches!(ctx.params.get("vertex_colors"), Some(ParamValue::Bool(true)));
 
-        let key = (path.clone(), material_index);
+        let key = (path.clone(), material_index, vertex_colors);
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_verts.clear();
@@ -165,7 +186,10 @@ impl Primitive for GltfSkinnedMeshSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_skinned_mesh(&path_buf, load_material_index);
+                    let result = load_gltf_skinned_mesh(&path_buf, load_material_index)
+                        .map(|(verts, joints, weights)| {
+                            (apply_vertex_color_compat(verts, vertex_colors), joints, weights)
+                        });
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
@@ -340,6 +364,36 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.gltf_skinned_mesh_source");
     }
+
+    #[test]
+    fn vertex_colors_defaults_off_for_saved_graph_compatibility() {
+        let param = GltfSkinnedMeshSource::PARAMS
+            .iter()
+            .find(|param| param.name == "vertex_colors")
+            .expect("vertex_colors compatibility parameter");
+        assert_eq!(param.ty, ParamType::Bool);
+        assert_eq!(param.default, ParamValue::Bool(false));
+    }
+
+    #[test]
+    fn vertex_colors_compatibility_whitens_legacy_and_preserves_opt_in() {
+        let authored = vec![MeshVertex {
+            position: [0.0, 0.0, 0.0],
+            _pad0: 0.0,
+            normal: [0.0, 0.0, 1.0],
+            _pad1: 0.0,
+            uv: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+            color: [0.15, 0.3, 0.6, 0.85],
+        }];
+
+        let legacy = apply_vertex_color_compat(authored.clone(), false);
+        assert_eq!(legacy[0].color, [1.0; 4]);
+        let preserved = apply_vertex_color_compat(authored.clone(), true);
+        assert_eq!(preserved[0].position, authored[0].position);
+        assert_eq!(preserved[0].color, authored[0].color);
+    }
 }
 
 /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
@@ -432,6 +486,14 @@ mod gpu_tests {
         let buf = backend.array_buffer(slot).expect("array buffer retained");
         let ptr = buf.mapped_ptr().expect("shared buffer");
         unsafe { std::slice::from_raw_parts(ptr, buf.size() as usize) }.to_vec()
+    }
+
+    fn readback_vertices(backend: &MetalBackend, slot: Slot, count: usize) -> Vec<MeshVertex> {
+        let bytes = readback(backend, slot);
+        let byte_count = count * std::mem::size_of::<MeshVertex>();
+        assert!(bytes.len() >= byte_count, "vertex readback is smaller than the loaded mesh");
+        bytes[..byte_count].chunks_exact(std::mem::size_of::<MeshVertex>())
+            .map(bytemuck::pod_read_unaligned::<MeshVertex>).collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -534,5 +596,122 @@ mod gpu_tests {
                 "bind-pose output must not vary with the playhead (t={t})"
             );
         }
+    }
+
+    /// The rigid fallback path still carries authored COLOR_0 through the
+    /// skinned source's vertices. Saved graphs omit `vertex_colors` and get
+    /// white output; explicit opt-in and subsequent disable each reparse and
+    /// advance content publication.
+    #[test]
+    fn vertex_colors_toggle_republishes_rigid_fallback_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/BoxVertexColors.glb");
+        assert!(path.exists(), "required colored fixture missing: {}", path.display());
+        let (authored, _, _) = load_gltf_skinned_mesh(&path, DEFAULT_MATERIAL_SENTINEL)
+            .expect("load BoxVertexColors.glb through rigid fallback");
+        assert!(!authored.is_empty());
+        assert!(
+            authored.iter().any(|vertex| vertex.color != [1.0; 4]),
+            "fixture must contain authored nonwhite COLOR_0 values"
+        );
+        assert!(
+            authored.iter().any(|vertex| vertex.color != authored[0].color),
+            "fixture must contain varying COLOR_0 values"
+        );
+
+        let count = authored.len();
+        let device = crate::test_device();
+        let (backend, vs, js, ws) = make_buffer_backend(&device);
+        let params_legacy = params_at(path.to_str().unwrap(), DEFAULT_MATERIAL_MESH_PARAM as f32);
+        let mut prim = GltfSkinnedMeshSource::new();
+
+        settle(&mut prim, &backend, &device, vs, js, ws, &params_legacy);
+        let legacy_version = prim.content_version;
+        let legacy = readback_vertices(&backend, vs, count);
+        assert!(legacy.iter().all(|vertex| vertex.color == [1.0; 4]));
+        let legacy_colors: Vec<[f32; 4]> = legacy.iter().map(|vertex| vertex.color).collect();
+        assert!(run_once(
+            &mut prim,
+            &backend,
+            &device,
+            vs,
+            js,
+            ws,
+            &params_legacy,
+            frame_time_at(0.0),
+        ));
+        assert_eq!(prim.content_version, legacy_version, "unchanged legacy frame must not reload");
+        let next_colors: Vec<[f32; 4]> = readback_vertices(&backend, vs, count)
+            .iter()
+            .map(|vertex| vertex.color)
+            .collect();
+        assert_eq!(legacy_colors, next_colors);
+
+        let mut params_opt_in = params_legacy.clone();
+        params_opt_in.insert(Cow::Borrowed("vertex_colors"), ParamValue::Bool(true));
+        for _ in 0..200 {
+            run_once(
+                &mut prim,
+                &backend,
+                &device,
+                vs,
+                js,
+                ws,
+                &params_opt_in,
+                frame_time_at(0.0),
+            );
+            if prim.content_version > legacy_version && prim.uploaded {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(prim.content_version > legacy_version, "enabling vertex colors must reload content");
+        let opt_in_version = prim.content_version;
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            vs,
+            js,
+            ws,
+            &params_opt_in,
+            frame_time_at(0.0),
+        );
+        let opt_in = readback_vertices(&backend, vs, count);
+        for (actual, expected) in opt_in.iter().zip(authored.iter()) {
+            assert_eq!(actual.color, expected.color, "opt-in output must retain authored COLOR_0");
+        }
+
+        let mut params_false = params_legacy;
+        params_false.insert(Cow::Borrowed("vertex_colors"), ParamValue::Bool(false));
+        for _ in 0..200 {
+            run_once(
+                &mut prim,
+                &backend,
+                &device,
+                vs,
+                js,
+                ws,
+                &params_false,
+                frame_time_at(0.0),
+            );
+            if prim.content_version > opt_in_version && prim.uploaded {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(prim.content_version > opt_in_version, "disabling vertex colors must reload content");
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            vs,
+            js,
+            ws,
+            &params_false,
+            frame_time_at(0.0),
+        );
+        let explicit_false = readback_vertices(&backend, vs, count);
+        assert!(explicit_false.iter().all(|vertex| vertex.color == [1.0; 4]));
     }
 }

@@ -9,7 +9,7 @@ struct U {
     brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
     copy_count: u32, instances_wired: u32, instance_history_stride: u32, _instances_pad: u32,
 };
-struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32> };
+struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> };
 struct I { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
 struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @location(1) @interpolate(flat) grid: u32 };
 @group(0) @binding(0) var<uniform> u: U;

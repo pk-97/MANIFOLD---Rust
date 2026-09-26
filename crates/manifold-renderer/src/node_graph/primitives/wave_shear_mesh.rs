@@ -263,8 +263,9 @@ mod gpu_tests {
             uv: [0.125, 0.875],
             _pad2: [11.0, -7.0],
             tangent,
+            color: [1.0; 4],
         }
-    }
+}
 
     fn rotate_basis(v: [f32; 3], yaw: f32, pitch: f32) -> [f32; 3] {
         let (sp, cp) = pitch.sin_cos();

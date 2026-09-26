@@ -28,5 +28,5 @@ fn body(
 
     let phase = dot(e_in.position, dir) * frequency - time * speed;
     let displaced = e_in.position + e_in.normal * (amplitude * sin(phase) * w);
-    return Element(displaced, e_in.normal, e_in.uv, e_in.tangent);
+    return Element(displaced, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

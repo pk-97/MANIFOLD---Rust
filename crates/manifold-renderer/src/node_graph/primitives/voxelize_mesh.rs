@@ -236,8 +236,9 @@ mod gpu_tests {
             uv,
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {

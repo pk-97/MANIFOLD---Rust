@@ -13,7 +13,7 @@
 // accesses, so unlit/phong/cel pipelines don't reference the envmap
 // binding even though the WGSL declares it.
 //
-// MeshVertex layout (64 bytes):
+// MeshVertex layout (80 bytes):
 //   position: vec3<f32> + pad
 //   normal:   vec3<f32> + pad
 //   uv:       vec2<f32> + pad
@@ -48,6 +48,7 @@ struct Vertex {
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 };
 
 // Superset uniform — fields inert for kinds that don't read them.

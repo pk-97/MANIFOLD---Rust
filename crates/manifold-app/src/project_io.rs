@@ -171,6 +171,10 @@ const MAX_RECENT_PROJECTS: usize = 12;
 pub struct ProjectIOAction {
     /// A project to apply (replaces host.ApplyProject + host.OnProjectOpened).
     pub apply_project: Option<Project>,
+    /// Open-from-path already runs the load-time material migration before
+    /// returning this action. Snapshot restores and detached copies go
+    /// straight through `Application::apply_project_io_action` instead.
+    pub(crate) material_upgrade_applied: bool,
     /// Whether the editing service should be marked clean.
     pub mark_clean: bool,
     /// Whether the UI needs a structural sync (rebuild tree).
@@ -509,8 +513,17 @@ fn append_legacy_math_view(
 /// One load-time migration path for editable scene graphs and acceptance
 /// fixtures. Unsupported legacy ownership remains intact with a visible notice.
 pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
+    let material_report =
+        manifold_renderer::node_graph::gltf_import::upgrade_project_materials(project);
+    let mut notices = material_report.notices;
+    if material_report.changed_graphs > 0 {
+        // Upgrade metadata before the existing scene migrations refresh their
+        // manifests. This also ensures graph-less instances resolve through
+        // the corrected embedded catalog definition.
+        install_project_preset_overlay(project);
+        project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
+    }
     let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-    let mut notices = Vec::new();
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue; };
         if host.graph.is_none() { continue; }
@@ -797,6 +810,7 @@ impl ProjectIOService {
 
                 ProjectIOAction {
                     apply_project: Some(project),
+                    material_upgrade_applied: true,
                     needs_structural_sync: true,
                     set_project_path: Some(path.to_path_buf()),
                     notice,

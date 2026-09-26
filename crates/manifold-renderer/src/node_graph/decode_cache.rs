@@ -31,6 +31,9 @@ use crate::node_graph::primitives::hdri_source::load_hdri as load_hdri_uncached;
 /// On-disk format version. Bumped whenever the header or payload layout
 /// changes so old entries are treated as corrupt and re-decoded.
 const CACHE_VERSION: u32 = 1;
+/// MeshVertex now carries UV1, corrected transforms and RGBA vertex colour.
+/// Separate keys let older app processes keep their own compatible cache.
+const MESH_CACHE_VERSION: u32 = 2;
 
 /// Magic header: "MANIFOLD DECODE CACHE" shortened to four bytes.
 const MAGIC: &[u8; 4] = b"MDC1";
@@ -304,6 +307,9 @@ fn hex(bytes: &[u8]) -> String {
 fn key_hash(namespace: &str, file_hash: &[u8; 32], extra: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(namespace.as_bytes());
+    if namespace == "gltf_mesh" {
+        hasher.update(MESH_CACHE_VERSION.to_le_bytes());
+    }
     hasher.update(file_hash);
     hasher.update(extra);
     hex(&hasher.finalize())
@@ -592,7 +598,7 @@ fn read_mesh_cache(
         return None;
     }
     let version = read_u32(&mut cursor)?;
-    if version != CACHE_VERSION {
+    if version != MESH_CACHE_VERSION {
         return None;
     }
     let kind = read_u8(&mut cursor)?;
@@ -644,7 +650,7 @@ fn write_mesh_cache(
     let payload = bytemuck::cast_slice(verts);
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&CACHE_VERSION.to_le_bytes());
+    out.extend_from_slice(&MESH_CACHE_VERSION.to_le_bytes());
     out.push(2u8); // kind: mesh
     out.extend_from_slice(file_hash);
     out.extend_from_slice(&sha256_bytes(payload));

@@ -17,17 +17,10 @@
 //!    whose absence let `rt_r3_heldout_gltf` run green for its whole life
 //!    while rendering pure raster (see `harness::import_rt_manifest`).
 //!
-//! 2. `..._normal_map_reaches_the_traced_reflection` — the real conformance
-//!    ask, and it FAILS today: BUG-wytp (rt-reflections-are-normal-map-blind).
-//!    The RT kernel's shading normal is `fetch_interpolated_normal`'s
-//!    barycentric vertex normal and nothing perturbs it, so a mirror-smooth
-//!    normal-mapped surface traces as a flat plate. Because
-//!    `render_scene.wgsl` SUBSTITUTES the traced reflection for the
-//!    prefiltered env fetch rather than adding to it, turning RT Reflections
-//!    on DESTROYS shape the raster IBL had. `#[ignore]`d against the bead
-//!    rather than deleted or weakened: the fix is the glTF TANGENT plumbing
-//!    (BUG-wfxe, gltf-tangent-attribute-dropped-at-import) plus in-kernel
-//!    normal-map sampling, and this is the gate that closes both.
+//! 2. `..._normal_map_reaches_the_traced_reflection` — the normal-map
+//!    conformance gate. The RT kernel now uses imported tangents where
+//!    available, preserves authored handedness through mirrored transforms,
+//!    and samples the normal map at both primary and secondary hits.
 
 use manifold_core::flatten::flatten_groups;
 use manifold_core::params::ParamManifest;
@@ -305,14 +298,8 @@ fn settle_and_capture_refl_raw(
     px
 }
 
-/// The normal map must change the traced reflection. It does not: the RT
-/// kernel shades from `fetch_interpolated_normal`'s barycentric vertex normal
-/// and never samples the map, so a mirror-smooth normal-mapped surface traces
-/// as the flat plate it geometrically is.
-///
-/// Measured when filed: `refl_raw` bound vs. normal-map-stripped was
-/// BIT-IDENTICAL — differing fraction 0.00000, max abs diff 0.0000, both
-/// variants lit over the same 0.0897 of the frame.
+/// The normal map must change the traced reflection. The bound and stripped
+/// variants are rendered separately and compared in the raw reflection channel.
 #[test]
 fn normal_tangent_mirror_normal_map_reaches_the_traced_reflection() {
     let h = harness::shared();

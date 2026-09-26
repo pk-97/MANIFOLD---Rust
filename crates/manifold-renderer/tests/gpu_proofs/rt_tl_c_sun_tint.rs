@@ -11,8 +11,8 @@
 //! carries the full rgb tint for the designated sun slot.
 //!
 //! Test 1 — red_petal_tints_transmitted_pool:
-//!   Sun caster (slot 0 designated via svt_slot=0), one occluder albedo
-//!   (1.0, 0.1, 0.1), factor 0.6. out_svt texels behind occluder ≈
+//!   Sun caster (slot 0 designated via svt_slot=0), one occluder with
+//!   transmission colour (1.0, 0.1, 0.1), factor 0.6. out_svt texels behind occluder ≈
 //!   (0.6, 0.06, 0.06). r/g ≈ 10, r/b ≈ 10. out_sv luma channel equals
 //!   luma of the rgb tint (TL-B consistency). Unoccluded texels read
 //!   (1,1,1) in out_svt.
@@ -333,7 +333,7 @@ fn red_petal_tints_transmitted_pool() {
     let vertex_buffer = write_shared_buffer(device, &verts);
 
     // Red albedo, factor 0.6
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -349,6 +349,7 @@ fn red_petal_tints_transmitted_pool() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -357,12 +358,18 @@ fn red_petal_tints_transmitted_pool() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 0.1, 0.1], // red albedo
         [0.0, 0.0, 0.0], // no emissive
         [0.0, 0.0, 0.0, 0.0], // metallic_roughness
-        [0.6, 0.0, 0.0, 0.0], // translucency factor 0.6
+        [0.6, 1.0, 0.1, 0.1], // factor 0.6, independent red transmission colour
     )];
 
     // Sun caster (kind=0), svt_slot=0 → this caster's rgb goes to out_svt.
@@ -370,7 +377,7 @@ fn red_petal_tints_transmitted_pool() {
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 
-    // Expected tint: factor * albedo = (0.6, 0.06, 0.06)
+    // Expected tint: factor * transmission colour = (0.6, 0.06, 0.06)
     let expected: [f32; 3] = [0.6, 0.06, 0.06];
 
     // out_svt behind occluder ≈ expected tint.
@@ -410,7 +417,7 @@ fn point_caster_control_svt_stays_white() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -426,6 +433,7 @@ fn point_caster_control_svt_stays_white() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -434,12 +442,18 @@ fn point_caster_control_svt_stays_white() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 0.1, 0.1],
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 0.0],
-        [0.6, 0.0, 0.0, 0.0], // factor 0.6
+        [0.6, 1.0, 0.1, 0.1], // factor 0.6, independent red transmission colour
     )];
 
     // Point caster (kind=1), svt_slot = SVT_SLOT_NONE since no Sun caster.
@@ -476,7 +490,7 @@ fn factor_zero_occluder_svt_reads_zero() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -492,6 +506,7 @@ fn factor_zero_occluder_svt_reads_zero() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -500,6 +515,12 @@ fn factor_zero_occluder_svt_reads_zero() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
@@ -537,7 +558,7 @@ fn unoccluded_texels_read_white_in_svt() {
     let verts = quad_verts_z(-1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry {
+    let objects = [RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -553,6 +574,7 @@ fn unoccluded_texels_read_white_in_svt() {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -561,6 +583,12 @@ fn unoccluded_texels_read_white_in_svt() {
         instance_slots: 1,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
         [1.0, 1.0, 1.0],
