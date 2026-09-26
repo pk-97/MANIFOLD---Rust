@@ -569,6 +569,43 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupRemoveFluidRole { layer_id, source_node_id }
+        | ProjectAction::SceneSetupRetargetFluidRole { layer_id, source_node_id, .. } => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let def = project.graph_for_target(&target, Some(&default));
+                let source = def.and_then(|def| {
+                    super::projection::scene::scene_node_ref_for_doc_id(def, *source_node_id)
+                });
+                let domain = match action {
+                    ProjectAction::SceneSetupRetargetFluidRole { domain_node_id, .. } => {
+                        def.and_then(|def| {
+                            super::projection::scene::scene_node_ref_for_doc_id(def, *domain_node_id)
+                        })
+                    }
+                    _ => None,
+                };
+                let command: Option<Box<dyn manifold_editing::command::Command>> = match (action, source) {
+                    (ProjectAction::SceneSetupRemoveFluidRole { .. }, Some(source)) => Some(Box::new(
+                        manifold_editing::commands::graph::RemoveSceneFluidRoleCommand::new(target, source, default),
+                    )),
+                    (ProjectAction::SceneSetupRetargetFluidRole { .. }, Some(source)) => {
+                        domain.map(|domain| Box::new(manifold_editing::commands::graph::RetargetSceneFluidRoleCommand::new(
+                                target, source, domain, default,
+                            )) as Box<dyn manifold_editing::command::Command>)
+                    }
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(command));
+                } else {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(
+                        "The selected fluid role or target is no longer available".into(),
+                    ));
+                }
+            }
+            DispatchResult::structural()
+        }
         ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
@@ -1942,6 +1979,47 @@ mod tests {
         command.execute(&mut project);
         assert!(command.was_applied(), "role redo after recreating its object: {:?}", command.rejection_reason());
         assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
+
+        dispatch_project(&ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        let ContentCommand::ExecuteSelecting(mut second_fluid, _) = rx.try_recv().unwrap()
+        else { panic!("second fluid insertion executes on content"); };
+        second_fluid.execute(&mut project);
+        assert!(second_fluid.was_applied());
+        let with_second = effective_def(&project, &layer_id);
+        let domains = super::super::projection::scene::fluid_domains(&with_second, &SceneVm::from_def(&with_second).unwrap());
+        assert_eq!(domains.len(), 2);
+        let new_domain = super::super::projection::scene::scene_node_ref_for_doc_id(&with_second, domains[1].node_doc_id).unwrap();
+        dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
+            layer_id: layer_id.clone(), source_node_id: role.id, domain_node_id: domains[1].node_doc_id,
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
+        let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
+        else { panic!("retarget executes on content"); };
+        retarget.execute(&mut project);
+        assert!(retarget.was_applied(), "{:?}", retarget.rejection_reason());
+        let retargeted = effective_def(&project, &layer_id);
+        let assignments = manifold_editing::commands::graph::scene_fluid_role_assignments(&retargeted, group_id.unwrap()).unwrap();
+        assert_eq!(assignments[0].domains, vec![new_domain]);
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(effective_def(&reloaded, &layer_id), retargeted);
+        dispatch_project(&ProjectAction::SceneSetupRemoveFluidRole {
+            layer_id: layer_id.clone(), source_node_id: role.id,
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        assert_eq!(effective_def(&project, &layer_id), retargeted, "removal waits for content");
+        let ContentCommand::ExecuteOnContent(mut remove) = rx.try_recv().unwrap()
+        else { panic!("removal executes on content"); };
+        remove.execute(&mut project);
+        assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
+        let removed = effective_def(&project, &layer_id);
+        assert!(super::super::projection::scene::group_fluid_role_ids(&removed, group_id).is_empty());
+        remove.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), retargeted);
+        retarget.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), with_second);
+        retarget.execute(&mut project);
+        remove.execute(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), removed);
     }
 
     #[test]

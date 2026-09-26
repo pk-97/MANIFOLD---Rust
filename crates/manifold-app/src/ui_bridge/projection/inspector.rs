@@ -686,6 +686,10 @@ pub fn sync_inspector_data(
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available: *physics_imported || physics.is_some(),
                                                 physics_imported: *physics_imported,
+                                                fluid_roles: if parent_group_id.is_none() {
+                                                    def.as_ref().map(|def| super::scene::fluid_role_rows(def, *group_node_id, &fluid_domains))
+                                                        .unwrap_or_else(|| Ok(Vec::new()))
+                                                } else { Ok(Vec::new()) },
                                                 fluid_role_available: parent_group_id.is_none() && def.as_ref().is_some_and(|def| {
                                                     manifold_editing::commands::graph::scene_fluid_role_eligibility(
                                                         def, vm.scene_root_node_id, *index as u32,

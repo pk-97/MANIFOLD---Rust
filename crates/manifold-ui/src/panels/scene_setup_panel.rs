@@ -81,6 +81,8 @@ const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
 const OBJ_OFF_PHYSICS: u64 = 36;
 const OBJ_OFF_FLUID_ROLE: u64 = 37;
+const OBJ_OFF_FLUID_ROLE_TARGET: u64 = 38;
+const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -439,6 +441,7 @@ pub struct ObjectKnownRow {
     pub physics_available: bool,
     pub physics_imported: bool,
     pub fluid_role_available: bool,
+    pub fluid_roles: Result<Vec<FluidRoleRow>, String>,
 }
 
 /// One Objects-section row (D3/D4).
@@ -576,6 +579,13 @@ pub enum CameraRowVm {
 pub struct FluidDomainOption {
     pub node_doc_id: u32,
     pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FluidRoleRow {
+    pub source_node_id: u32,
+    pub name: String,
+    pub target_label: String,
 }
 
 /// Full live-panel view model for one selected generator layer's scene —
@@ -1002,6 +1012,8 @@ pub struct ScenePanel {
     object_enable_physics_ids: Vec<(NodeId, usize)>,
     object_disable_physics_ids: Vec<(NodeId, usize)>,
     object_fluid_role_ids: Vec<(NodeId, usize)>,
+    fluid_role_target_ids: Vec<(NodeId, u32)>,
+    fluid_role_remove_ids: Vec<(NodeId, u32)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -1106,6 +1118,8 @@ impl Default for ScenePanel {
             object_enable_physics_ids: Vec::new(),
             object_disable_physics_ids: Vec::new(),
             object_fluid_role_ids: Vec::new(),
+            fluid_role_target_ids: Vec::new(),
+            fluid_role_remove_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
             expanded_groups: std::collections::HashMap::new(),
@@ -1389,6 +1403,8 @@ impl ScenePanel {
         self.object_enable_physics_ids.clear();
         self.object_disable_physics_ids.clear();
         self.object_fluid_role_ids.clear();
+        self.fluid_role_target_ids.clear();
+        self.fluid_role_remove_ids.clear();
         self.add_modifier_button_id = None;
         self.skin_source_ids.clear();
         self.skin_target_ids.clear();
@@ -2660,6 +2676,15 @@ impl ScenePanel {
                             domains: vm.fluid_domains.clone(),
                             button_node_id: *node_id,
                         }));
+                    } else if let Some((_, source_node_id)) = self.fluid_role_target_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
+                            layer_id: vm.layer_id.clone(), source_node_id: *source_node_id,
+                            domains: vm.fluid_domains.clone(), button_node_id: *node_id,
+                        }));
+                    } else if let Some((_, source_node_id)) = self.fluid_role_remove_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveFluidRole {
+                            layer_id: vm.layer_id.clone(), source_node_id: *source_node_id,
+                        }));
                     } else if let Some((_, index)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
                             vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
@@ -3198,6 +3223,7 @@ mod tests {
                     physics_available: false,
                     physics_imported: false,
                     fluid_role_available: false,
+                    fluid_roles: Ok(Vec::new()),
                 })),
                 ObjectRowVm::Custom { index: 1 },
             ],
@@ -3470,10 +3496,25 @@ mod tests {
             && *object_index == expected_index && choices == &domains));
         let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
         row.fluid_role_available = false;
+        row.fluid_roles = Ok(vec![FluidRoleRow {
+            source_node_id: 74, name: "Pour".into(), target_label: "Target: Liquid B".into(),
+        }]);
         panel.configure(SceneSetupState::Live(Box::new(vm)));
         tree.clear();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.object_fluid_role_ids.is_empty());
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: panel.fluid_role_target_ids[0].0, pos: Vec2::ZERO, modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
+            source_node_id: 74, domains: choices, ..
+        })] if choices == &domains));
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: panel.fluid_role_remove_ids[0].0, pos: Vec2::ZERO, modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupRemoveFluidRole {
+            source_node_id: 74, ..
+        })]));
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary

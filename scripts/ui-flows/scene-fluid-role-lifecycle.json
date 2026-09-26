@@ -1,0 +1,306 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.add_fluid"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.add_fluid"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Object"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Object"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.add_fluid_role"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.add_fluid_role"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Inflow"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Inherit Motion"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.add_fluid"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.add_fluid"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "■ Object 4"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "■ Object 4"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.fluid_role.47.target"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Target: Fluid 1"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.fluid_role.47.target"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Fluid 2"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Target: Fluid 2"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.fluid_role.47.remove"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Target: Fluid 2"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Target: Fluid 1"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Target: Fluid 2"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

@@ -564,4 +564,7 @@ fn empty_scene_metadata() -> PresetMetadata {
 mod tests;
 
 mod roles;
-pub use roles::{AssignSceneFluidRoleCommand, scene_fluid_role_eligibility};
+pub use roles::{
+    AssignSceneFluidRoleCommand, RemoveSceneFluidRoleCommand, RetargetSceneFluidRoleCommand,
+    SceneFluidRoleAssignment, scene_fluid_role_assignments, scene_fluid_role_eligibility,
+};

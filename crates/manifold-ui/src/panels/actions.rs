@@ -262,6 +262,8 @@ pub enum ProjectAction {
         domain_node_id: u32,
         role: u32,
     },
+    SceneSetupRemoveFluidRole { layer_id: LayerId, source_node_id: u32 },
+    SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain_node_id: u32 },
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),
@@ -952,6 +954,12 @@ pub enum RootAction {
         role: u32,
         domains: Vec<super::scene_setup_panel::FluidDomainOption>,
         anchor: Rect,
+    },
+    SceneSetupFluidRoleTargetClicked {
+        layer_id: LayerId,
+        source_node_id: u32,
+        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
+        button_node_id: crate::node::NodeId,
     },
     /// Open the object-target and preview menu for a scene modifier card.
     SceneModifierObjectsClicked(LayerId, NodeId),

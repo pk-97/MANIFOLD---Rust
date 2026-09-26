@@ -23,7 +23,8 @@
       "scene-panel",
       "scene-skin",
       "material-inspector",
-      "scene-fluid-role-assignment"
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
@@ -31,13 +32,15 @@
       "scene-panel",
       "scene-skin",
       "material-inspector",
-      "scene-fluid-role-assignment"
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
-      "scene-fluid-role-assignment"
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle"
     ],
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
       "scene-setup",
@@ -55,7 +58,8 @@
       "set-param",
       "calibrated-param",
       "scene-skin",
-      "scene-fluid-role-assignment"
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle"
     ],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "scene-setup",
@@ -204,7 +208,8 @@
     "scene-panel-card-convergence-c-p1b-object-scrub": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-setup-fog-density-card-row": "gltfscene",
-    "scene-setup-fog-undo-removes-fog": "gltfscene"
+    "scene-setup-fog-undo-removes-fog": "gltfscene",
+    "scene-fluid-role-lifecycle": "fluidauthoring"
   },
   "expected_fail": {},
   "unresolved": {}

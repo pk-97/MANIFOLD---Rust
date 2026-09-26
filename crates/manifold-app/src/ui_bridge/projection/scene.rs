@@ -58,6 +58,29 @@ pub(crate) fn fluid_domains(
     result
 }
 
+pub(crate) fn fluid_role_rows(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    group_id: Option<u32>,
+    domains: &[manifold_ui::panels::scene_setup_panel::FluidDomainOption],
+) -> Result<Vec<manifold_ui::panels::scene_setup_panel::FluidRoleRow>, String> {
+    let Some(group_id) = group_id else { return Ok(Vec::new()); };
+    manifold_editing::commands::graph::scene_fluid_role_assignments(def, group_id).map(|roles| {
+        roles.into_iter().map(|role| {
+            let target_label = match role.domains.as_slice() {
+                [] => "Choose Fluid".into(),
+                [target] => domains.iter().find(|domain|
+                    scene_node_ref_for_doc_id(def, domain.node_doc_id).as_ref() == Some(target))
+                    .map(|domain| format!("Target: {}", domain.name))
+                    .unwrap_or_else(|| "Fluid outside this scene".into()),
+                targets => format!("Targets: {} fluids", targets.len()),
+            };
+            manifold_ui::panels::scene_setup_panel::FluidRoleRow {
+                source_node_id: role.source_doc_id, name: role.name, target_label,
+            }
+        }).collect()
+    })
+}
+
 pub(crate) fn group_fluid_role_ids(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     group_id: Option<u32>,

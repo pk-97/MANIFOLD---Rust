@@ -1778,6 +1778,19 @@ impl UIRoot {
                 self.open_dropdown_typed(items, anchor);
                 true
             }
+            PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
+                layer_id, source_node_id, domains, button_node_id,
+            }) => {
+                let mut items = vec![DropdownItem::disabled("Replace fluid targets")];
+                items.extend(domains.iter().map(|domain| DropdownItem::new(&domain.name)
+                    .with_action(PanelAction::Project(ProjectAction::SceneSetupRetargetFluidRole {
+                        layer_id: layer_id.clone(), source_node_id: *source_node_id,
+                        domain_node_id: domain.node_doc_id,
+                    }))));
+                if domains.is_empty() { items.push(DropdownItem::disabled("Add a Fluid to this scene first")); }
+                self.open_dropdown_typed(items, self.tree.get_bounds(*button_node_id));
+                true
+            }
             PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
                 layer_id, render_scene_node_id, object_index, role, domains, anchor,
             }) => {

@@ -15,12 +15,12 @@ use manifold_core::scene_modifier_preset::SceneNodeRef;
 
 use crate::command::Command;
 
-use super::super::{
-    InstanceLayerSnapshot, collect_all_handles, dedup_handle,
-    max_node_id_over, refresh_target_manifest, resolve_target_instance, scene_build_node,
-    scene_build_wire, with_target_graph_mut,
-};
 use super::super::super::install_target_graph;
+use super::super::{
+    InstanceLayerSnapshot, collect_all_handles, dedup_handle, max_node_id_over,
+    refresh_target_manifest, resolve_target_instance, scene_build_node, scene_build_wire,
+    with_target_graph_mut,
+};
 
 const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 const FLUID_TYPE_ID: &str = "node.fluid_surface";
@@ -491,7 +491,9 @@ fn discover_role_object(
             }
         }
         let mut local_transform = None;
-        if let Some(wire) = transform_wire && wire.to_port == "transform" {
+        if let Some(wire) = transform_wire
+            && wire.to_port == "transform"
+        {
             let transform = group
                 .nodes
                 .iter()
@@ -783,6 +785,13 @@ fn resolve_domain(
     {
         return Err("Assign Fluid Role render scene is unavailable".into());
     }
+    resolve_domain_ref(def, domain)
+}
+
+pub(super) fn resolve_domain_ref(
+    def: &EffectGraphDef,
+    domain: &SceneNodeRef,
+) -> Result<(Vec<u32>, u32), String> {
     let mut nodes = def.nodes.as_slice();
     let mut runtime_scope = Vec::with_capacity(domain.scope.len());
     for stable in &domain.scope {
@@ -1010,3 +1019,9 @@ fn empty_scene_metadata() -> PresetMetadata {
 
 #[cfg(test)]
 mod tests;
+
+mod lifecycle;
+pub use lifecycle::{
+    RemoveSceneFluidRoleCommand, RetargetSceneFluidRoleCommand, SceneFluidRoleAssignment,
+    scene_fluid_role_assignments,
+};
