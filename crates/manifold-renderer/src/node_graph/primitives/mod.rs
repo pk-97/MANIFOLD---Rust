@@ -196,6 +196,8 @@ mod motion_blur;
 mod push_along_normals;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod mesh_snapshot;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod fragment_mask_continuity_tests;
 mod mux_array;
 mod mux_scalar;
 mod mux_texture;
