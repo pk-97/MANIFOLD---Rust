@@ -546,9 +546,10 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
             )
             .expect("checkerboard graph must load")
         });
-        // Warmup: the GLB parse and accel build land in the first frames;
-        // the first variant also warms every pipeline.
-        for frame in 0..30 {
+        // Cache eviction makes cold imports normal. Count settled frames,
+        // rather than assuming the background parse finishes in 30 ticks.
+        let mut settled_frames = 0;
+        for frame in 0..600 {
             let a_ref = runtime_a.as_mut();
             render_two_layer_frame(
                 &device,
@@ -561,7 +562,19 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
                 &layer_b_id,
                 frame,
             );
+            if runtime_b.warmup_pending()
+                || runtime_a.as_ref().is_some_and(PresetRuntime::warmup_pending)
+            {
+                settled_frames = 0;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else {
+                settled_frames += 1;
+                if settled_frames == 30 {
+                    break;
+                }
+            }
         }
+        assert_eq!(settled_frames, 30, "layer-skin import did not settle within 600 frames");
         // Demo artifacts: the two-layer composite (checkerboard + skinned
         // scene) AND the skinned scene layer's own texture — the direct
         // look at the model wearing the skin.
