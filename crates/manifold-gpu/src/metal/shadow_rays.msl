@@ -2151,6 +2151,11 @@ kernel void trace_shadow_rays(
     uint spp = p.shadow_spp;
     for (uint c = 0; c < n_casters; c++) {
         RtCasterParams cst = p.casters[c];
+        // Production uses the complete light table. Keep an inactive light's
+        // slot neutral so its shadow cannot disturb another channel's temporal
+        // variance gate. Legacy visibility-only callers still trace regardless
+        // of radiance, as their output is geometric visibility itself.
+        if (p.light_data_addr != 0ul && all(float3(cst.color) == float3(0.0f))) continue;
         float3 to_light;
         float cone_half_angle;
         float max_dist;

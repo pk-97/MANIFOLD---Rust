@@ -3296,6 +3296,14 @@ impl RenderScene {
                 let rt_casters: Vec<manifold_gpu::raytrace::RtCasterParams> = casters
                     .iter()
                     .map(|l| {
+                        // Preserve the caster slot while making a dark light's
+                        // irrelevant motion neutral to RT history. Production
+                        // tracing skips its zero-radiance shadow channel.
+                        if l.color[..3].iter().all(|&channel| channel == 0.0) {
+                            return manifold_gpu::raytrace::RtCasterParams::new(
+                                [0.0, 1.0, 0.0], 0.0, [0.0; 3], 0,
+                            );
+                        }
                         let (dir_or_pos, cone_or_size, kind) = match l.mode {
                             crate::node_graph::light::LightMode::Sun => (
                                 [-l.dir[0], -l.dir[1], -l.dir[2]],
@@ -5717,11 +5725,7 @@ impl RenderScene {
         for i in 0..lights_n {
             let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
             if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
-                // Dark lights must not enter the shared shadow history: its
-                // variance gate operates on four caster channels together,
-                // so a dark caster's shadow could disturb a lit neighbour.
-                let emits_light = l.color[..3].iter().any(|&channel| channel != 0.0);
-                let slot: f32 = if l.cast_shadows && emits_light && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
+                let slot: f32 = if l.cast_shadows && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
                     let s = casters.len() as f32;
                     casters.push(l);
                     s
