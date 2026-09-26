@@ -15,9 +15,15 @@
 //! (`over(fg, fg_a, bg) = fg*fg_a + bg*(1-fg_a)`) is exact, not a ratio.
 
 use half::f16;
+use manifold_gpu::GpuBuffer;
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::node_graph::depth_rule::DepthRule;
+use manifold_renderer::node_graph::{
+    ArrayType, EffectNode, EffectNodeContext, EffectNodeType, NodeInput, NodeOutput, NodePort,
+    ParamDef, ParamValues, PortKind, PortType, PrimitiveRegistry,
+};
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 
@@ -28,11 +34,19 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
 }
 
 fn render_frames(json: &str, frames: i64) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
+    render_frames_with_registry(json, frames, &registry)
+}
+
+fn render_frames_with_registry(
+    json: &str,
+    frames: i64,
+    registry: &PrimitiveRegistry,
+) -> (Vec<u8>, u32, u32) {
+    let h = harness::shared();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
-        &registry,
+        registry,
         std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
@@ -78,6 +92,125 @@ fn render_frames(json: &str, frames: i64) -> (Vec<u8>, u32, u32) {
         }
     }
     (h.readback(&target.texture), h.width, h.height)
+}
+
+/// Test-only mesh source used by the transmission regression. The two
+/// constructors emit the same closed mesh with its front and back faces in
+/// opposite triangle order. A staging buffer keeps the source independent of
+/// graph-loader internals while still exercising the real render_scene path.
+struct GlassMeshSource {
+    type_id: EffectNodeType,
+    outputs: Vec<NodeOutput>,
+    vertices: Vec<MeshVertex>,
+    staging: Option<GpuBuffer>,
+}
+
+impl GlassMeshSource {
+    fn new(type_id: &'static str, reverse_faces: bool) -> Self {
+        let mut vertices = closed_glass_mesh();
+        if reverse_faces {
+            let front = vertices[..6].to_vec();
+            let back = vertices[6..12].to_vec();
+            vertices[..6].copy_from_slice(&back);
+            vertices[6..12].copy_from_slice(&front);
+        }
+        Self {
+            type_id: EffectNodeType::new(type_id),
+            outputs: vec![NodePort {
+                name: std::borrow::Cow::Borrowed("vertices"),
+                ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
+                kind: PortKind::Output,
+                required: false,
+            }],
+            vertices,
+            staging: None,
+        }
+    }
+}
+
+impl EffectNode for GlassMeshSource {
+    fn depth_rule(&self) -> DepthRule {
+        DepthRule::Terminal
+    }
+
+    fn type_id(&self) -> &EffectNodeType {
+        &self.type_id
+    }
+
+    fn inputs(&self) -> &[NodeInput] {
+        &[]
+    }
+
+    fn outputs(&self) -> &[NodeOutput] {
+        &self.outputs
+    }
+
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(dst) = ctx.outputs.array("vertices") else {
+            return;
+        };
+        let bytes = bytemuck::cast_slice(self.vertices.as_slice());
+        let staging = self.staging.get_or_insert_with(|| {
+            ctx.gpu_encoder()
+                .device
+                .create_buffer_shared(bytes.len() as u64)
+        });
+        unsafe { staging.write(0, bytes) };
+        ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(
+            staging,
+            dst,
+            bytes.len() as u64,
+        );
+    }
+
+    fn array_output_capacity(
+        &self,
+        _port_name: &str,
+        _params: &ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        Some(self.vertices.len() as u32)
+    }
+}
+
+fn closed_glass_mesh() -> Vec<MeshVertex> {
+    let mut vertices = Vec::with_capacity(36);
+    let face = |vertices: &mut Vec<MeshVertex>,
+                positions: [[f32; 3]; 4],
+                normal: [f32; 3],
+                color: [f32; 4]| {
+        let v = |position: [f32; 3], uv: [f32; 2]| MeshVertex {
+            position,
+            _pad0: 0.0,
+            normal,
+            _pad1: 0.0,
+            uv,
+            _pad2: [0.0; 2],
+            tangent: [0.0; 4],
+            color,
+        };
+        vertices.extend([
+            v(positions[0], [0.0, 0.0]),
+            v(positions[1], [1.0, 0.0]),
+            v(positions[2], [1.0, 1.0]),
+            v(positions[0], [0.0, 0.0]),
+            v(positions[2], [1.0, 1.0]),
+            v(positions[3], [0.0, 1.0]),
+        ]);
+    };
+    let p = 0.9;
+    let n = -0.9;
+    face(&mut vertices, [[-1.2, p, -1.2], [1.2, p, -1.2], [1.2, p, 1.2], [-1.2, p, 1.2]], [0.0, 1.0, 0.0], [1.0; 4]);
+    face(&mut vertices, [[1.2, n, -1.2], [-1.2, n, -1.2], [-1.2, n, 1.2], [1.2, n, 1.2]], [0.0, -1.0, 0.0], [0.15, 0.9, 0.3, 1.0]);
+    face(&mut vertices, [[-1.2, n, -1.2], [1.2, n, -1.2], [1.2, p, -1.2], [-1.2, p, -1.2]], [0.0, 0.0, -1.0], [1.0; 4]);
+    face(&mut vertices, [[1.2, n, 1.2], [-1.2, n, 1.2], [-1.2, p, 1.2], [1.2, p, 1.2]], [0.0, 0.0, 1.0], [1.0; 4]);
+    face(&mut vertices, [[-1.2, n, 1.2], [-1.2, n, -1.2], [-1.2, p, -1.2], [-1.2, p, 1.2]], [-1.0, 0.0, 0.0], [1.0; 4]);
+    face(&mut vertices, [[1.2, n, -1.2], [1.2, n, 1.2], [1.2, p, 1.2], [1.2, p, -1.2]], [1.0, 0.0, 0.0], [1.0; 4]);
+    vertices
 }
 
 fn center_rgb(bytes: &[u8], w: u32, h: u32) -> [f32; 3] {
@@ -493,6 +626,97 @@ fn transmission_scene(exposure: f32, transmission: f32, rt_reflections: bool) ->
     wires.push(json!({"fromNode":3,"fromPort":"out","toNode":4,"toPort":"camera"}));
     wires.push(json!({"fromNode":5,"fromPort":"envmap","toNode":20,"toPort":"envmap"}));
     graph.to_string()
+}
+
+fn closed_mesh_transmission_scene(type_id: &str) -> String {
+    use serde_json::json;
+
+    let mut graph: serde_json::Value =
+        serde_json::from_str(&transmission_scene(0.0, 0.85, false)).unwrap();
+    let nodes = graph["nodes"].as_array_mut().unwrap();
+    let mesh = nodes.iter_mut().find(|node| node["id"] == 200).unwrap();
+    mesh["typeId"] = json!(type_id);
+    mesh["nodeId"] = json!("closed_glass_mesh");
+    mesh["params"] = json!({});
+    nodes.retain(|node| node["id"] != 201);
+    let material = nodes.iter_mut().find(|node| node["id"] == 203).unwrap();
+    for (key, value) in [
+        ("color_r", 0.85),
+        ("color_g", 0.35),
+        ("color_b", 0.12),
+        ("roughness", 0.25),
+        ("transmission", 0.85),
+        ("ambient", 0.0),
+        ("metallic", 0.0),
+        ("specular", 0.0),
+        ("ior", 1.0),
+    ] {
+        material["params"][key] = json!({"type":"Float", "value":value});
+    }
+    material["params"]["alpha_mode"] = json!({"type":"Enum", "value":0});
+    let wires = graph["wires"].as_array_mut().unwrap();
+    wires.retain(|wire| {
+        !(wire["fromNode"] == 200 && wire["toNode"] == 201)
+            && !(wire["fromNode"] == 201 && wire["toNode"] == 20)
+    });
+    wires.push(json!({"fromNode":200,"fromPort":"vertices","toNode":20,"toPort":"mesh_1"}));
+    graph.to_string()
+}
+
+#[test]
+fn solid_transmission_is_invariant_to_triangle_order() {
+    // Before E2b, Pass B depth-tested only against opaque geometry and left
+    // depth writes disabled, so the front/back faces of this closed mesh
+    // blended in submission order. The reversed fixture is the before-fix
+    // witness; the nearest-surface prepass makes both renders identical.
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.glass_mesh_front_first", || {
+        Box::new(GlassMeshSource::new("test.glass_mesh_front_first", false))
+    });
+    registry.register("test.glass_mesh_back_first", || {
+        Box::new(GlassMeshSource::new("test.glass_mesh_back_first", true))
+    });
+
+    let front_first = closed_mesh_transmission_scene("test.glass_mesh_front_first");
+    let back_first = closed_mesh_transmission_scene("test.glass_mesh_back_first");
+    let (front_bytes, w, h) = render_frames_with_registry(&front_first, 2, &registry);
+    let (back_bytes, _, _) = render_frames_with_registry(&back_first, 2, &registry);
+    let front = center_rgb(&front_bytes, w, h);
+    let back = center_rgb(&back_bytes, w, h);
+
+    let mut control: serde_json::Value =
+        serde_json::from_str(&transmission_scene(0.0, 0.85, false)).unwrap();
+    control["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|node| node["id"] == 20)
+        .unwrap()["params"]["objects"]["value"] = serde_json::json!(1);
+    control["nodes"].as_array_mut().unwrap().retain(|node| {
+        !matches!(node["id"].as_u64(), Some(200..=203))
+    });
+    control["wires"].as_array_mut().unwrap().retain(|wire| {
+        !matches!(wire["fromNode"].as_u64(), Some(200..=203))
+            && !matches!(wire["toNode"].as_u64(), Some(200..=203))
+    });
+    let (control_bytes, _, _) = render_readback(&control.to_string());
+    let control_rgb = center_rgb(&control_bytes, w, h);
+    let visibility_delta: f32 = (0..3).map(|c| (front[c] - control_rgb[c]).abs()).sum();
+
+    assert!(
+        front.iter().sum::<f32>() > 0.05 && back.iter().sum::<f32>() > 0.05,
+        "closed transmissive mesh must contribute visible radiance: front={front:?} back={back:?}"
+    );
+    assert!(
+        visibility_delta > 0.03,
+        "closed transmissive mesh must differ from the opaque-background control: front={front:?} control={control_rgb:?} delta={visibility_delta:.4}"
+    );
+    assert_rgb_close(
+        front,
+        back,
+        0.015,
+        "solid transmission must be independent of triangle order",
+    );
 }
 
 #[test]

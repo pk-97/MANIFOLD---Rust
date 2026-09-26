@@ -347,10 +347,13 @@ pub struct RtObjectGeometry<'a> {
     /// (pre-feature behavior). Consumed at every emissive-hit shading
     /// site (the GI gather's emissive term and the reflection hit's).
     pub emissive_texture: Option<&'a GpuTexture>,
-    /// Extension material textures in anisotropy, specular-weight,
-    /// specular-color order. They share the bounded deduplicated table used
-    /// by the core maps and are indexed in `RtNormalSource::extra_tex_indices`.
-    pub extra_material_textures: [Option<&'a GpuTexture>; 3],
+    /// Extension material textures in the 15-map ABI order. The first three
+    /// retain anisotropy/specular-weight/specular-color order; the remaining
+    /// eleven follow raster map indices 5, 6, 7, 8, 10, 11, 12, 15, 16, 17,
+    /// and 18, followed by AO's canonical raster index 3. They share the
+    /// bounded deduplicated table used by the core maps and are indexed in
+    /// `RtNormalSource::extra_tex_indices`.
+    pub extra_material_textures: [Option<&'a GpuTexture>; 15],
     /// BUG-1gqt: KHR_texture_transform fold for the emissive map, in the
     /// raster's `apply_uv_transform` convention:
     /// `uv' = (m[0]*u + m[1]*v + t[0], m[2]*u + m[3]*v + t[1])`.
@@ -882,7 +885,7 @@ pub(crate) fn tlas_probe_structure(
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
-        extra_material_textures: [None; 3],
+        extra_material_textures: [None; 15],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -1745,7 +1748,7 @@ pub fn ensure_normal_sources<'a>(
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
-        let mut extra_tex_indices = [RT_MATERIAL_TEX_INDEX_NONE; 3];
+        let mut extra_tex_indices = [RT_MATERIAL_TEX_INDEX_NONE; 15];
         for (map_index, texture) in obj.extra_material_textures.iter().copied().enumerate() {
             extra_tex_indices[map_index] = match register_material_texture(&mut material_textures, texture) {
                 Some(index) => index,

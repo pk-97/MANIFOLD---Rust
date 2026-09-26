@@ -112,19 +112,54 @@ const IDENTITY: [[f32; 4]; 4] = [
 const EMITTER_EMISSIVE: [f32; 3] = [2.0, 2.0, 2.0];
 
 #[derive(Clone, Copy)]
+struct SurfaceExtensions {
+    clearcoat: [f32; 4],
+    sheen: [f32; 4],
+    iridescence: [f32; 4],
+    transmission: [f32; 4],
+    attenuation: [f32; 4],
+    surface_misc: [f32; 4],
+}
+
+impl SurfaceExtensions {
+    fn neutral() -> Self {
+        Self {
+            clearcoat: [0.0, 0.0, 1.0, 0.0],
+            sheen: [0.0; 4],
+            iridescence: [0.0, 1.3, 100.0, 400.0],
+            transmission: [0.0, 1.5, 0.0, 0.0],
+            attenuation: [1.0, 1.0, 1.0, 1.0e6],
+            surface_misc: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+const DEFAULT_LIGHTS: [[f32; 4]; 4] = [
+    [0.0, 0.0, 0.0, 1.0], // point position, kind = point
+    [1.0, 1.0, 1.0, -1.0], // RGB, w < 0 disables the shadow query
+    [10.0, 0.0, 0.0, 0.0], // smooth range attenuation
+    [0.0, 1.0, 0.0, 0.0], // unused for a point light
+];
+
+#[derive(Clone, Copy)]
 struct FixtureConfig<'a> {
     mr_texture: Option<&'a manifold_gpu::GpuTexture>,
     floor_roughness: f32,
     floor_metallic: f32,
     floor_anisotropy: [f32; 2],
-    floor_extra_material_textures: [Option<&'a manifold_gpu::GpuTexture>; 3],
+    floor_extra_material_textures: [Option<&'a manifold_gpu::GpuTexture>; 15],
     emitter_albedo: [f32; 3],
     emitter_emissive: [f32; 3],
     emitter_metallic: f32,
     emitter_roughness: f32,
     emitter_specular: [f32; 4],
-    emitter_extra_material_textures: [Option<&'a manifold_gpu::GpuTexture>; 3],
+    emitter_extra_material_textures: [Option<&'a manifold_gpu::GpuTexture>; 15],
+    emitter_extensions: SurfaceExtensions,
+    complete_lighting: bool,
+    light_rows: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
     env_rgba: [f32; 4],
+    irradiance_rgba: [f32; 4],
     emitter_bounds: [f32; 4], // x_min, x_max, z_min, z_max
 }
 
@@ -135,14 +170,19 @@ impl<'a> FixtureConfig<'a> {
             floor_roughness,
             floor_metallic: 0.4,
             floor_anisotropy: [0.0, 0.0],
-            floor_extra_material_textures: [None; 3],
+            floor_extra_material_textures: [None; 15],
             emitter_albedo: [0.5, 0.5, 0.5],
             emitter_emissive: EMITTER_EMISSIVE,
             emitter_metallic: 0.0,
             emitter_roughness: 0.5,
             emitter_specular: [0.04, 0.04, 0.04, 1.0],
-            emitter_extra_material_textures: [None; 3],
+            emitter_extra_material_textures: [None; 15],
+            emitter_extensions: SurfaceExtensions::neutral(),
+            complete_lighting: false,
+            light_rows: DEFAULT_LIGHTS,
+            camera_pos: [0.0, 1.0, 0.3],
             env_rgba: [0.0; 4],
+            irradiance_rgba: [1.0; 4],
             emitter_bounds: [-5.0, 5.0, -2.0, 2.0],
         }
     }
@@ -246,7 +286,7 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         },
     ];
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let mut tracer = MetalShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
     let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
@@ -326,6 +366,38 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         "rt-r3-prefiltered-env-dummy",
     );
 
+    let (_secondary_lighting_resources, light_data_addr) = if config.complete_lighting {
+        let light_buffer = write_shared_buffer(device, &config.light_rows);
+        let irradiance = upload_texture_f32(
+            device,
+            1,
+            1,
+            GpuTextureFormat::Rgba32Float,
+            &config.irradiance_rgba,
+            "rt-r3-secondary-irradiance",
+        );
+        let brdf_lut = upload_texture_f32(
+            device,
+            1,
+            1,
+            GpuTextureFormat::Rgba32Float,
+            &[1.0, 1.0, 0.0, 0.0],
+            "rt-r3-secondary-brdf-lut",
+        );
+        let prefiltered_sheen = upload_texture_f32(
+            device,
+            1,
+            1,
+            GpuTextureFormat::Rgba32Float,
+            &[1.0, 1.0, 1.0, 1.0],
+            "rt-r3-secondary-sheen",
+        );
+        tracer.set_secondary_lighting(&light_buffer, &irradiance, &brdf_lut, &prefiltered_sheen);
+        let light_data_addr = light_buffer.gpu_address();
+        (Some((light_buffer, irradiance, brdf_lut, prefiltered_sheen)), light_data_addr)
+    } else {
+        (None, 0)
+    };
     let params = ShadowRayParams::new(
         &[],
         frame_index,
@@ -335,13 +407,14 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         0.0,
         0, // ao_spp
         0, // gi_spp
-        [0.0, 1.0, 0.3], // camera_pos — see module doc's mirror math
+        config.camera_pos,
         IDENTITY,
         1,   // refl_spp
         0.6, // refl_max_roughness
         0.1, // refl_rough_band
         manifold_gpu::raytrace::SVT_SLOT_NONE,
-    );
+    )
+    .with_lights(if config.complete_lighting { 1 } else { 0 }, light_data_addr);
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     // gi_materials[0] = floor (albedo/emissive unused on the primary-hit
@@ -350,7 +423,16 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     // HIT path — env/specular terms multiply through the zero dummy).
     let gi_materials = [
         GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [config.floor_metallic, config.floor_roughness, config.floor_anisotropy[0], config.floor_anisotropy[1]], [0.0, 0.0, 0.0, 0.0]),
-        GiMaterial::new(config.emitter_albedo, config.emitter_emissive, [config.emitter_metallic, config.emitter_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]).with_surface(2.0, config.emitter_specular),
+        GiMaterial::new(config.emitter_albedo, config.emitter_emissive, [config.emitter_metallic, config.emitter_roughness, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
+            .with_surface(2.0, config.emitter_specular)
+            .with_extensions(
+                config.emitter_extensions.clearcoat,
+                config.emitter_extensions.sheen,
+                config.emitter_extensions.iridescence,
+                config.emitter_extensions.transmission,
+                config.emitter_extensions.attenuation,
+                config.emitter_extensions.surface_misc,
+            ),
     ];
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
@@ -445,6 +527,38 @@ fn mean_frames(config: FixtureConfig<'_>, frame_count: u32) -> [[f32; 3]; 2] {
 
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+fn white_extension_maps<'a>(mut config: FixtureConfig<'a>, texture: &'a manifold_gpu::GpuTexture) -> FixtureConfig<'a> {
+    for slot in 3..15 {
+        if slot != 9 {
+            config.emitter_extra_material_textures[slot] = Some(texture);
+        }
+    }
+    config
+}
+
+fn white_extension_maps_with_neutral_normal<'a>(
+    config: FixtureConfig<'a>,
+    white: &'a manifold_gpu::GpuTexture,
+    neutral_normal: &'a manifold_gpu::GpuTexture,
+) -> FixtureConfig<'a> {
+    let mut config = white_extension_maps(config, white);
+    config.emitter_extra_material_textures[9] = Some(neutral_normal);
+    config
+}
+
+fn assert_rgb_close(actual: [[f32; 3]; 2], expected: [[f32; 3]; 2], tolerance: f32, label: &str) {
+    for pixel in 0..2 {
+        for channel in 0..3 {
+            assert!(
+                (actual[pixel][channel] - expected[pixel][channel]).abs() <= tolerance,
+                "{label}: pixel {pixel} channel {channel}: actual={} expected={} tolerance={tolerance}",
+                actual[pixel][channel],
+                expected[pixel][channel],
+            );
+        }
+    }
 }
 
 /// MR texture bound: both channels multiply non-neutral metallic/roughness
@@ -654,4 +768,163 @@ fn colored_specular_map_tints_f0_against_white_environment() {
     assert!(rgb[0] > 1e-3, "white environment should produce a nonzero F0 response: {rgb:?}");
     assert!((rgb[1] / rgb[0] - 0.25).abs() < 0.02, "green F0 tint ratio is wrong: {rgb:?}");
     assert!((rgb[2] / rgb[0] - 0.1).abs() < 0.02, "blue F0 tint ratio is wrong: {rgb:?}");
+}
+
+#[test]
+fn secondary_hit_extension_factors_match_constant_one_maps() {
+    let one = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[1.0; 4],
+        "rt-secondary-one-map",
+    );
+    let neutral_normal = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[0.5, 0.5, 1.0, 1.0],
+        "rt-secondary-neutral-normal-map",
+    );
+    let mut factors = FixtureConfig::base(None, 0.0);
+    factors.complete_lighting = true;
+    factors.emitter_emissive = [0.0; 3];
+    factors.emitter_extensions = SurfaceExtensions {
+        clearcoat: [0.35, 0.2, 1.0, 0.0],
+        sheen: [0.25, 0.1, 0.05, 0.35],
+        iridescence: [0.6, 1.3, 100.0, 400.0],
+        transmission: [0.2, 1.5, 0.1, 0.0],
+        attenuation: [1.0, 1.0, 1.0, 1.0e6],
+        surface_misc: [1.0, 0.0, 0.0, 0.0],
+    };
+    let mapped = white_extension_maps_with_neutral_normal(factors, &one, &neutral_normal);
+    assert_rgb_close(
+        run_fixture_config(mapped, 1),
+        run_fixture_config(factors, 1),
+        2e-3,
+        "constant-one extension maps must preserve authored factors",
+    );
+}
+
+#[test]
+fn secondary_hit_zero_extension_factors_are_inert() {
+    let black = upload_texture_f32(
+        &harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[0.0; 4],
+        "rt-secondary-zero-map",
+    );
+    let mut neutral = FixtureConfig::base(None, 0.0);
+    neutral.complete_lighting = true;
+    neutral.emitter_emissive = [0.0; 3];
+    let mut zero = neutral;
+    zero.emitter_extensions.clearcoat = [0.0, 0.2, 1.0, 0.0];
+    zero.emitter_extensions.sheen = [0.0, 0.0, 0.0, 0.35];
+    zero.emitter_extensions.iridescence[0] = 0.0;
+    zero.emitter_extensions.transmission[0] = 0.0;
+    zero.emitter_extensions.surface_misc[0] = 0.0;
+    let mapped = white_extension_maps(zero, &black);
+    assert_rgb_close(
+        run_fixture_config(mapped, 2),
+        run_fixture_config(neutral, 2),
+        2e-3,
+        "zero extension factors must leave the secondary hit unchanged",
+    );
+}
+
+#[test]
+fn secondary_hit_iridescence_changes_with_view_angle_and_stays_bounded() {
+    let mut flat = FixtureConfig::base(None, 0.0);
+    flat.complete_lighting = true;
+    flat.env_rgba = [1.0; 4];
+    flat.emitter_emissive = [0.0; 3];
+    flat.emitter_albedo = [0.0; 3];
+    flat.emitter_extensions.iridescence = [0.0, 1.3, 100.0, 400.0];
+    let mut film = flat;
+    film.camera_pos = [-0.45, 1.0, 0.3];
+    film.emitter_extensions.clearcoat = [0.95, 0.05, 1.0, 0.0];
+    film.emitter_extensions.sheen = [1.0, 1.0, 1.0, 0.05];
+    film.emitter_extensions.iridescence = [1.0, 2.2, 120.0, 420.0];
+    let flat_rgb = mean_frames(flat, EXTENSION_MEAN_FRAMES);
+    let film_rgb = mean_frames(film, EXTENSION_MEAN_FRAMES);
+    assert!(
+        flat_rgb.iter().zip(film_rgb.iter()).any(|(a, b)| (luma(*a) - luma(*b)).abs() > 1e-3),
+        "changing the angular iridescence film must change at least one secondary-hit sample"
+    );
+    assert!(film_rgb.iter().flatten().all(|v| v.is_finite() && *v >= 0.0 && *v < 32.0), "film radiance must remain bounded: {film_rgb:?}");
+}
+
+#[test]
+fn secondary_hit_ao_only_modulates_diffuse_ibl() {
+    let black_light = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, -1.0], [10.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]];
+    let black = upload_texture_f32(&harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[0.0; 4], "rt-secondary-ao-black");
+    let white = upload_texture_f32(&harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[1.0; 4], "rt-secondary-ao-white");
+    let mut diffuse = FixtureConfig::base(None, 0.0);
+    diffuse.complete_lighting = true;
+    diffuse.light_rows = black_light;
+    diffuse.env_rgba = [1.0; 4];
+    diffuse.emitter_emissive = [0.0; 3];
+    let white_rgb = run_fixture_config(white_extension_maps(diffuse, &white), 3);
+    let black_rgb = run_fixture_config(white_extension_maps(diffuse, &black), 3);
+    assert!(luma(white_rgb[0]) > luma(black_rgb[0]) + 1e-3, "AO must reduce diffuse IBL: white={white_rgb:?} black={black_rgb:?}");
+
+    let mut metallic = diffuse;
+    metallic.emitter_metallic = 1.0;
+    let metallic_white = run_fixture_config(white_extension_maps(metallic, &white), 4);
+    let metallic_black = run_fixture_config(white_extension_maps(metallic, &black), 4);
+    assert_rgb_close(metallic_white, metallic_black, 2e-3, "AO must not modulate the specular IBL");
+}
+
+#[test]
+fn secondary_hit_punctual_point_range_and_disabled_shadow_are_numeric() {
+    let mut near = FixtureConfig::base(None, 0.0);
+    near.complete_lighting = true;
+    near.irradiance_rgba = [0.0; 4];
+    near.env_rgba = [0.0; 4];
+    near.emitter_emissive = [0.0; 3];
+    near.emitter_albedo = [1.0; 3];
+    near.emitter_specular = [0.0; 4];
+    near.light_rows[0] = [-1.5, 1.0, 0.3, 1.0];
+    near.light_rows[1] = [1.0, 1.0, 1.0, -1.0];
+    near.light_rows[2] = [4.0, 1.0, 0.0, 0.0];
+    let near_rgb = run_fixture_config(near, 5);
+    let mut far = near;
+    far.light_rows[0] = [-1.5, -1.0, 0.3, 1.0];
+    let far_rgb = run_fixture_config(far, 5);
+    let expected_near = (1.0 - 1.0 / 256.0) / std::f32::consts::PI;
+    let expected_far = (1.0 - 81.0 / 256.0) / (9.0 * std::f32::consts::PI);
+    assert!((near_rgb[0][0] - expected_near).abs() < 1e-3, "near physical point light mismatch: actual={near_rgb:?} expected={expected_near}");
+    assert!((far_rgb[0][0] - expected_far).abs() < 1e-3, "far physical point light mismatch: actual={far_rgb:?} expected={expected_far}");
+
+    // The analytic vertical rays above lie outside the narrow floor. Move
+    // the light sideways so this independent visibility ray crosses it.
+    let mut occluded = far;
+    occluded.light_rows[0][0] = 0.0;
+    let disabled_rgb = run_fixture_config(occluded, 6);
+    let mut shadowed = occluded;
+    shadowed.light_rows[1][3] = 1.0;
+    let shadowed_rgb = run_fixture_config(shadowed, 6);
+    assert!(luma(disabled_rgb[0]) > luma(shadowed_rgb[0]) + 1e-3, "shadow-disabled punctual light must illuminate through the floor occluder: disabled={disabled_rgb:?} enabled={shadowed_rgb:?}");
+}
+
+#[test]
+fn secondary_hit_punctual_spot_cone_rejects_outside_direction() {
+    let mut center = FixtureConfig::base(None, 0.0);
+    center.complete_lighting = true;
+    center.irradiance_rgba = [0.0; 4];
+    center.emitter_emissive = [0.0; 3];
+    center.emitter_albedo = [1.0; 3];
+    center.light_rows[0] = [0.0, 0.0, 0.0, 2.0];
+    center.light_rows[1] = [1.0, 1.0, 1.0, -1.0];
+    center.light_rows[2] = [10.0, 0.0, 0.95, 0.7];
+    center.light_rows[3] = [0.0, 1.0, 0.0, 0.0];
+    let center_rgb = run_fixture_config(center, 7);
+    let mut outside = center;
+    outside.light_rows[3] = [1.0, 0.0, 0.0, 0.0];
+    let outside_rgb = run_fixture_config(outside, 7);
+    assert!(luma(center_rgb[0]) > luma(outside_rgb[0]) * 4.0, "spot cone must reject the outside direction: center={center_rgb:?} outside={outside_rgb:?}");
 }

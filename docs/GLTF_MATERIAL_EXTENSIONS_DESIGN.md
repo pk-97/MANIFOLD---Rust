@@ -157,14 +157,52 @@ proofs. Their numeric assertions are L1 evidence. Updating MANIFOLD goldens is
 not a replacement for those assertions or an independent reference comparison.
 
 The RT path remains a hybrid approximation. Secondary hits do not evaluate
-clearcoat, sheen, iridescence, SSS or the full Phong/Cel models; glass and Blend
+SSS or the full Phong/Cel models; glass and Blend
 surfaces are absent from the acceleration input. Ray-hit texture sampling uses
 level zero and authored magnification/addressing, without ray-cone minification.
 Environment anisotropy uses a bent normal; reflected surfaces use an environment
-approximation rather than recursive specular transport. The material texture
+approximation rather than recursive specular transport. Continued diffuse
+paths account for coat/sheen/film energy and sample thin diffuse transmission. The material texture
 table admits at most 64 unique textures and reports capacity failure explicitly.
 These are capability limits, not full material parity or a path-tracing claim.
 Arbitrary DCC shader networks, nested dielectric volumes and spectral transport
 are outside the supported material model. Glass validation covers the established
 sampler, exposure and composition defects. Peter withdrew the grid-artifact
 report; no artifact search or reproduction is required.
+
+## 8. Render corrections (2026-09-26)
+
+Peter rejected the visible forehead patch on the transmissive Suzanne demo and
+the noise in the subsurface demos, then explicitly requested the glass and
+secondary-ray fixes. The focused glass and secondary-hit GPU proofs pass. The
+original Suzanne app-presentation render now has a continuous transmissive
+forehead, without the triangle patches in the rejected image. Required landing
+checks remain separate from these focused results.
+
+- A solid transmissive draw first resolves its nearest surface into reusable
+  depth scratch initialized from opaque depth. Its colour pass accepts that
+  surface, preserving the sorted background-layer composition. Alpha blending
+  without transmission keeps its existing semantics. Single-sample passes
+  preserve depth that later consumers read. Triangle-order invariance and
+  opaque occlusion are the numeric acceptance checks.
+- Secondary-hit material records carry the existing raster factors and all
+  extension map families. Their evaluation shares the glTF lobe composition:
+  GGX/anisotropy, thin-film Fresnel, clearcoat, Charlie sheen, diffuse
+  transmission and diffuse-only occlusion. The raster irradiance, BRDF LUT and
+  sheen environment resources also feed hit shading. The full wired light
+  table supplies sun, point and spot lighting, including lights whose shadows
+  are disabled; query admission counts the additional light visibility rays.
+- The subsurface reconstruction contract is D5 in
+  [SUBSURFACE_MATERIAL_DESIGN.md](SUBSURFACE_MATERIAL_DESIGN.md). Surface
+  reflections and emission remain outside the reconstructed diffuse signal.
+
+The implementation follows the current
+[Khronos material composition reference](https://github.com/KhronosGroup/glTF-Sample-Renderer/blob/main/source/Renderer/shaders/pbr.frag).
+Extension-map factor/texture equivalence and independent punctual-light values
+are enforced by `rt_r3_textured_roughness::secondary_hit_*`. Existing imported projects receive shader
+corrections on load without replacing their authored material values.
+
+Expanded per-object RT records use retained CPU heap scratch sized when the
+object ports are rebuilt. Only empty allocations cross frame lifetimes; no
+borrowed GPU resource survives in scratch. This avoids overflowing the render
+thread stack with fixed-capacity arrays after the material ABI expansion.

@@ -93,7 +93,7 @@ fn flat_object(vb: &GpuBuffer, triangle_count: u32) -> RtObjectGeometry<'_> {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
-        extra_material_textures: [None; 3],
+        extra_material_textures: [None; 15],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,

@@ -929,6 +929,22 @@
         assert_eq!(counter, 0);
     }
 
+    #[test]
+    fn secondary_lighting_history_ignores_dark_light_motion() {
+        let mut light = [[0.0; 4]; LIGHT_VEC4_STRIDE];
+        light[0] = [0.0, 1.0, 0.0, 0.0];
+        light[1][3] = -1.0; // no shadow slot
+        let key = |data: &[[f32; 4]]| compute_rt_lighting_key(&[], &[1.0; 3], None, data);
+        let dark = key(&light);
+        light[0][0] = 0.6;
+        assert_eq!(dark, key(&light), "dark light motion must preserve history");
+        light[1][0] = 1.0;
+        let lit = key(&light);
+        assert_ne!(dark, lit, "turning the light on must invalidate history");
+        light[0][0] = 0.2;
+        assert_ne!(lit, key(&light), "moving an unshadowed lit source must invalidate history");
+    }
+
     // ---- geo key (compute_rt_lighting_geo_key) ----
 
     #[test]
