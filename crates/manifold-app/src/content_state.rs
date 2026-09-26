@@ -264,6 +264,7 @@ pub struct ContentState {
     pub graph_edit_diagnostic: Option<GraphEditDiagnostic>,
     /// Most recent authoritative selection update for newly created scene
     /// modifier cards. Persistent across snapshots for sequence-gated UI use.
+    pub edit_selection_update: Option<crate::edit_selection::EditSelectionUpdate>,
     pub modifier_selection_update: Option<ModifierSelectionUpdate>,
     pub object_modifier_selection_update: Option<ObjectModifierSelectionUpdate>,
 
@@ -579,6 +580,7 @@ impl Default for ContentState {
             warmup: None,
             undo_redo_event: None,
             graph_edit_diagnostic: None,
+            edit_selection_update: None,
             modifier_selection_update: None,
             object_modifier_selection_update: None,
             ableton_session: None,

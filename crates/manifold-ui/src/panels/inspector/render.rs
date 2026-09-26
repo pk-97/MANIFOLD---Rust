@@ -1073,6 +1073,7 @@ impl InspectorCompositePanel {
         self.layer_scroll.reparent_content(tree, right_start);
         self.layer_scroll
             .build_scrollbar(tree, right_x + right_content_w, &SCROLLBAR_STYLE);
+        self.reveal_pending_selection(tree);
 
         // Both columns' scroll clips (`ScrollContainer::begin` always mints
         // its clip node with `parent: None`) are still tree roots here — no

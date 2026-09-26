@@ -607,6 +607,34 @@ impl GraphCanvas {
         }
     }
 
+    /// Finish or discard the pointer capture used by the editor's synthetic
+    /// focus-loss / Escape termination path. Wire, marquee, and pan gestures
+    /// have no terminal command to emit, so they are discarded directly. A
+    /// live node move or value scrub still uses the normal release path so its
+    /// existing command / undo session is closed exactly once.
+    ///
+    /// Normal mouse releases continue through [`Self::on_left_button_up`]
+    /// directly; this method is only for termination when the OS withholds the
+    /// matching release event.
+    pub fn finish_pointer_capture(&mut self, viewport: Rect) -> bool {
+        let Some(payload) = self.drag.payload() else {
+            return false;
+        };
+        let commit_on_release = matches!(
+            payload,
+            CanvasDrag::NodeMove { .. }
+                | CanvasDrag::ParamScrub { .. }
+                | CanvasDrag::VecScrub { .. }
+        );
+        if commit_on_release {
+            let (sx, sy) = self.cursor;
+            self.on_left_button_up(viewport, sx, sy);
+        } else {
+            self.drag.cancel();
+        }
+        true
+    }
+
     /// Left-button press dispatch. `shift` toggles selection / box-select.
     /// Resolves, in priority order: breadcrumb bar → reset button → collapse
     /// chevron → port (wire/disconnect) → param-row scrub → group double-click

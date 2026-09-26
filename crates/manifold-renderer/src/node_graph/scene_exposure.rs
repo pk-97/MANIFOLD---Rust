@@ -17,6 +17,13 @@ use crate::node_graph::material_inspector::material_param_role;
 static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
 
+/// An unbounded angle has no primitive range to copy into an exposure, but a
+/// scene card still needs a useful initial scrub band. Keep the band in the
+/// primitive's storage unit (radians); the `is_angle` flag makes the card
+/// present and edit it in degrees. The primitive itself remains unbounded.
+const UNBOUNDED_ANGLE_EXPOSURE_RANGE: (f32, f32) =
+    (-std::f32::consts::TAU, std::f32::consts::TAU);
+
 /// Scene-vocabulary type ids — the nodes whose params the scene panel wants to
 /// address. Kept in sync with `scene_vm.rs`.
 const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
@@ -78,7 +85,13 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
             type_id != "node.render_scene" || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref())
         })
         .map(|pd| {
-            let (min, max) = pd.range.unwrap_or((0.0, 1.0));
+            let (min, max) = pd.range.unwrap_or({
+                if matches!(pd.ty, ParamType::Angle) {
+                    UNBOUNDED_ANGLE_EXPOSURE_RANGE
+                } else {
+                    (0.0, 1.0)
+                }
+            });
             let default_value: manifold_core::effect_graph_def::SerializedParamValue =
                 pd.default.clone().into();
             let is_angle = matches!(pd.ty, ParamType::Angle);
@@ -349,6 +362,38 @@ mod tests {
     #[test]
     fn metadata_for_unknown_type_is_empty() {
         assert!(metadata_for_node_type("node.definitely_not_real").is_empty());
+    }
+
+    #[test]
+    fn metadata_for_mesh_modifiers_preserves_unbounded_angles_with_degree_presentation() {
+        for type_id in ["node.bend_mesh", "node.twist_mesh"] {
+            let angle = metadata_for_node_type(type_id)
+                .into_iter()
+                .find(|param| param.name == "angle")
+                .unwrap_or_else(|| panic!("{type_id} angle metadata missing"));
+            assert!(
+                angle.is_angle,
+                "{type_id} angle must be presented in degrees"
+            );
+            assert_eq!(
+                (angle.min, angle.max),
+                (-std::f32::consts::TAU, std::f32::consts::TAU),
+                "{type_id} gets a useful exposure band while its primitive stays unbounded"
+            );
+        }
+
+        // The already-bounded rotate descriptor is the control case: the
+        // projection must preserve its authored ±TAU band rather than apply
+        // a second fallback.
+        let rotate = metadata_for_node_type("node.rotate_3d");
+        for axis in ["angle_x", "angle_y", "angle_z"] {
+            let angle = rotate.iter().find(|param| param.name == axis).unwrap();
+            assert!(angle.is_angle);
+            assert_eq!(
+                (angle.min, angle.max),
+                (-std::f32::consts::TAU, std::f32::consts::TAU)
+            );
+        }
     }
 
     #[test]

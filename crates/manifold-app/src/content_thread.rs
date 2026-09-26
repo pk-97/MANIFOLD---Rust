@@ -207,6 +207,7 @@ pub struct ContentThread {
     pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
     /// Most recent content-authoritative selection update for newly created
     /// scene modifiers, retained until a newer update.
+    pub edit_selection_update: Option<crate::edit_selection::EditSelectionUpdate>,
     pub modifier_selection_update: Option<crate::content_state::ModifierSelectionUpdate>,
     pub object_modifier_selection_update:
         Option<crate::content_state::ObjectModifierSelectionUpdate>,
@@ -1447,6 +1448,7 @@ impl ContentThread {
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
             graph_edit_diagnostic: self.graph_edit_diagnostic.clone(),
+            edit_selection_update: self.edit_selection_update.clone(),
             modifier_selection_update: self.modifier_selection_update.clone(),
             object_modifier_selection_update: self.object_modifier_selection_update.clone(),
             ableton_session: if self.ableton_bridge.session_changed() {

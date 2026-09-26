@@ -28,6 +28,7 @@ mod display_link;
 mod drag_hover;
 mod drag_interpose;
 mod editing_host;
+mod edit_selection;
 mod editor_frame;
 mod edr_surface;
 mod frame_timer;

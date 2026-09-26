@@ -376,6 +376,15 @@ impl Application {
             }
         }
 
+        if crate::edit_selection::apply_update(
+            &mut self.ws.ui_root, &self.local_project,
+            self.content_state.edit_selection_update.as_ref(),
+            &mut self.selection, &mut self.active_layer_id,
+        ) {
+            self.needs_structural_sync = true;
+            self.needs_rebuild = true;
+        }
+
         // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Runs
         // after the drain so it sees the latest data_version + dirty flag;
         // never reached in perform mode (early return above) — that IS the

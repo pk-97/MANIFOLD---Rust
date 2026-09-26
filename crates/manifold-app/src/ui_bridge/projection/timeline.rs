@@ -129,6 +129,17 @@ pub fn sync_project_data(
         }).collect();
         ui.viewport.set_automation_lane_layout(&lane_heights);
         ui.viewport.rebuild_mapper_layout(&layout_layers);
+        if let Some(id) = ui.pending_layer_reveal.take()
+            && let Some(index) = project.timeline.find_layer_index_by_id(&id)
+        {
+            let top = ui.viewport.mapper().get_layer_y_offset(index);
+            let height = ui.viewport.mapper().get_layer_height(index);
+            let visible = ui.viewport.tracks_rect().height;
+            let current = ui.viewport.scroll_y_px();
+            let scroll = if top < current || height > visible { top }
+                else { current.max(top + height - visible) };
+            ui.viewport.set_scroll(ui.viewport.scroll_x_beats().as_f32(), scroll);
+        }
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
         // `LayerInfo` no longer carries them; the header panel queries the

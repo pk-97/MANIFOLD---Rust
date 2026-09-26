@@ -942,7 +942,11 @@ impl ScenePanel {
         cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
-        let btn_w = STEP_W * 4.0; // Frame + Duplicate + Remove
+        // Frame needs two icon-cell widths for its five-letter label. Keep the
+        // existing total header budget so the name, duplicate, and remove
+        // cells retain their established positions and remain reachable.
+        let frame_w = STEP_W * 2.0;
+        let btn_w = frame_w + STEP_W * 2.0;
         let name_w = inner_w - btn_w - 8.0;
         let name_id = tree.add_button_keyed(
             Some(self.content_parent),
@@ -968,7 +972,7 @@ impl ScenePanel {
             Some(self.content_parent),
             inner_x + name_w + 4.0,
             cy,
-            STEP_W,
+            frame_w,
             ROW_H,
             btn_style(),
             "Frame",
@@ -978,7 +982,7 @@ impl ScenePanel {
 
         let dup_id = tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x + name_w + 4.0 + STEP_W,
+            inner_x + name_w + 4.0 + frame_w,
             cy,
             STEP_W,
             ROW_H,
@@ -989,7 +993,7 @@ impl ScenePanel {
         self.object_duplicate_ids.push((dup_id, row.index));
         let remove_id = tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x + name_w + 4.0 + STEP_W * 2.0,
+            inner_x + name_w + 4.0 + frame_w + STEP_W,
             cy,
             STEP_W,
             ROW_H,

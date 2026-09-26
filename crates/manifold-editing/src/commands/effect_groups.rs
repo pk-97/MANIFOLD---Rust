@@ -1,5 +1,5 @@
 use crate::command::Command;
-use crate::commands::effect_target::{EffectTarget, with_effects_mut};
+use crate::commands::effect_target::{EffectTarget, with_effects, with_effects_mut};
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::project::Project;
 use manifold_core::{EffectGroupId, EffectId};
@@ -1152,7 +1152,8 @@ impl Command for PasteEffectsCommand {
         let before = self.before.clone();
         let destination_group = self.destination_group.clone();
 
-        let target_exists = with_effects_mut(project, &self.target, |effects, groups| {
+        let mut accepted = None;
+        let target_exists = with_effects(project, &self.target, |effects, groups| {
             if payload_effects.is_empty() {
                 self.rejection = Some("paste payload is empty");
                 return;
@@ -1231,7 +1232,7 @@ impl Command for PasteEffectsCommand {
                 }
             }
 
-            let mut candidate = effects.clone();
+            let mut candidate = effects.to_vec();
             let insert_at = before
                 .as_ref()
                 .and_then(|id| candidate.iter().position(|effect| &effect.id == id))
@@ -1248,12 +1249,17 @@ impl Command for PasteEffectsCommand {
                 return;
             }
 
-            self.old_effects = Some(effects.clone());
-            self.old_groups = Some(groups.clone());
-            *effects = candidate;
-            groups.extend(payload_groups.clone());
-            self.applied = true;
+            self.old_effects = Some(effects.to_vec());
+            self.old_groups = Some(groups.to_vec());
+            accepted = Some(candidate);
         });
+        if let Some(candidate) = accepted {
+            with_effects_mut(project, &self.target, |effects, groups| {
+                *effects = candidate;
+                groups.extend(payload_groups);
+            });
+            self.applied = true;
+        }
         if target_exists.is_none() {
             self.rejection = Some("effect target no longer exists");
         }

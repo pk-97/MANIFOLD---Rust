@@ -186,6 +186,7 @@ enum CardDragStack {
 /// Scrolling: the app layer calls `handle_scroll(delta)` on mouse wheel
 /// events within the inspector viewport, then triggers a rebuild.
 pub struct InspectorCompositePanel {
+    pending_reveal: Option<EffectId>,
     // Sub-panels
     macros_panel: MacrosPanel,
     /// P3b: layer-owned clip-trigger authoring (AUDIO_SETUP_DOCK_AND_TRIGGER_
@@ -444,6 +445,7 @@ impl InspectorCompositePanel {
 
     pub fn new() -> Self {
         Self {
+            pending_reveal: None,
             macros_panel: MacrosPanel::new(),
             audio_trigger_section: AudioTriggerSection::new(),
             master_chrome: MasterChromePanel::new(),
@@ -575,7 +577,11 @@ impl InspectorCompositePanel {
     /// Point the inspector at a single scope. `Group` shares the layer section.
     fn set_active_tab(&mut self, tab: InspectorTab) {
         // Single source of truth — visibility is derived on read, not cached.
+        if self.active_tab != tab {
+            self.selected_modifier_ids.clear();
+        }
         self.active_tab = tab;
+        self.last_effect_tab = tab;
     }
 
     /// Display label for a tab rung.
@@ -1420,7 +1426,7 @@ fn in_range(idx: usize, first: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::param_card::{RelightCardConfig, RowMod};
+    use crate::panels::param_card::{ParamCardKind, RelightCardConfig, RowMod};
     use crate::tree::UITree;
 
     fn inspector_layout() -> ScreenLayout {
@@ -1522,6 +1528,39 @@ mod tests {
 
         panel.handle_scroll(100.0); // scroll way up
         assert!(panel.layer_scroll.scroll_offset() >= 0.0);
+    }
+
+    #[test]
+    fn switching_tabs_retargets_shortcuts_without_an_extra_card_click() {
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "Layer card", 1)], None);
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "Master card", 1)]);
+        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Layer);
+        assert!(panel.select_all_effects());
+        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Master);
+        assert!(panel.select_all_effects());
+        assert_eq!(panel.last_effect_tab(), InspectorTab::Master);
+        assert_eq!(panel.selected_effect_ids(), vec![panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].effect_id().clone()]);
+    }
+
+    #[test]
+    fn inserted_card_selection_scrolls_into_view_once() {
+        let mut panel = InspectorCompositePanel::new();
+        let configs: Vec<_> = (0..12).map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 6)).collect();
+        panel.configure_master_effects(&configs);
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let mut tree = UITree::new();
+        panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 400.0));
+        panel.select_effect_ids(InspectorTab::Master, &[configs[11].effect_id.clone()]);
+        panel.reveal_pending_selection(&mut tree);
+        let bounds = panel.effects[InspectorCompositePanel::SCOPE_MASTER][11].live_bounds(&tree).unwrap();
+        let viewport = panel.master_scroll.viewport();
+        assert!(bounds.y >= viewport.y - 0.1);
+        assert!(bounds.y < viewport.y + viewport.height);
+        assert!(panel.master_scroll.scroll_offset() > 0.0);
+        panel.master_scroll.set_scroll_offset(0.0);
+        panel.reveal_pending_selection(&mut tree);
+        assert_eq!(panel.master_scroll.scroll_offset(), 0.0, "a receipt does not fight later user scrolling");
     }
 
     #[test]
