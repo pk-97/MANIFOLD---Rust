@@ -11,6 +11,8 @@ pub use interaction::{
     FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
     VectorField, VortexField,
 };
+mod mesh;
+pub use mesh::{cook_hull_mesh, TriangleMesh};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -27,6 +29,11 @@ mod ffi {
         pub fn manifold_box3d_hull_copy_points(
             hull: usize,
             points_out: *mut f32,
+            capacity: i32,
+        ) -> i32;
+        pub fn manifold_box3d_hull_copy_triangles(
+            hull: usize,
+            triangles_out: *mut u32,
             capacity: i32,
         ) -> i32;
         pub fn manifold_box3d_destroy_hull(hull: usize);

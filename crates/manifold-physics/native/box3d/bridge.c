@@ -65,6 +65,85 @@ int manifold_box3d_hull_copy_points( uintptr_t hull_value, float* points_out, in
 	return count;
 }
 
+int manifold_box3d_hull_copy_triangles( uintptr_t hull_value, uint32_t* triangles_out, int capacity )
+{
+	if ( hull_value == 0 || capacity < 0 )
+	{
+		return -1;
+	}
+
+	b3HullData* hull = (b3HullData*)hull_value;
+	if ( hull->vertexCount < 4 || hull->edgeCount < 6 || hull->faceCount < 4 )
+	{
+		return -1;
+	}
+	const b3HullHalfEdge* edges = b3GetHullEdges( hull );
+	const b3HullFace* faces = b3GetHullFaces( hull );
+	if ( edges == NULL || faces == NULL )
+	{
+		return -1;
+	}
+
+	int triangle_count = 0;
+	for ( int face_index = 0; face_index < hull->faceCount; ++face_index )
+	{
+		int start = faces[face_index].edge;
+		if ( start < 0 || start >= hull->edgeCount )
+		{
+			return -1;
+		}
+		int edge_index = start;
+		int vertex_count = 0;
+		do
+		{
+			if ( vertex_count >= hull->edgeCount || edge_index < 0 || edge_index >= hull->edgeCount )
+			{
+				return -1;
+			}
+			const b3HullHalfEdge* edge = edges + edge_index;
+			if ( edge->face != face_index || edge->origin >= hull->vertexCount || edge->next >= hull->edgeCount ||
+				edge->twin >= hull->edgeCount || edges[edge->twin].twin != edge_index )
+			{
+				return -1;
+			}
+			++vertex_count;
+			edge_index = edge->next;
+		}
+		while ( edge_index != start );
+
+		if ( vertex_count < 3 || triangle_count > 2147483647 - ( vertex_count - 2 ) )
+		{
+			return -1;
+		}
+		triangle_count += vertex_count - 2;
+	}
+
+	if ( triangles_out == NULL || capacity < triangle_count )
+	{
+		return triangle_count;
+	}
+
+	int triangle_index = 0;
+	for ( int face_index = 0; face_index < hull->faceCount; ++face_index )
+	{
+		int start = faces[face_index].edge;
+		int previous = edges[start].next;
+		uint8_t first_origin = edges[start].origin;
+		int edge_index = edges[previous].next;
+		while ( edge_index != start )
+		{
+			const b3HullHalfEdge* edge = edges + edge_index;
+			triangles_out[3 * triangle_index + 0] = first_origin;
+			triangles_out[3 * triangle_index + 1] = edges[previous].origin;
+			triangles_out[3 * triangle_index + 2] = edge->origin;
+			++triangle_index;
+			previous = edge_index;
+			edge_index = edge->next;
+		}
+	}
+	return triangle_index;
+}
+
 static void box3d_set_mass( b3BodyId body_id, float mass )
 {
 	if ( mass <= 0.0f || b3Body_GetType( body_id ) != b3_dynamicBody )
