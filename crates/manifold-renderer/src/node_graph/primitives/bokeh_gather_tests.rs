@@ -10,14 +10,18 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
+use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use crate::node_graph::backend::Backend;
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
 use crate::node_graph::{
-    compile, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
-    Source,
+    Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, Source,
+    compile,
 };
 use crate::render_target::RenderTarget;
+use crate::tonemap::{TonemapMode, TonemapSettings};
+use manifold_core::{BlendMode, LayerId, LayerType};
 
 use super::{BokehGather, BokehSettings};
 
@@ -157,14 +161,27 @@ fn run_with_settings(
     width: &GpuTexture,
     settings: BokehSettings,
 ) -> Vec<[f32; 4]> {
+    let out = run_with_settings_texture(gather, device, src, width, settings);
+    readback(device, &out)
+}
+
+fn run_with_settings_texture(
+    gather: &mut BokehGather,
+    device: &GpuDevice,
+    src: &GpuTexture,
+    width: &GpuTexture,
+    settings: BokehSettings,
+) -> GpuTexture {
     let out = device.create_texture(&GpuTextureDesc {
         width: src.width,
         height: src.height,
         depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
-        label: "bokeh-proof-output",
+        usage: GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::SHADER_WRITE
+            | GpuTextureUsage::COPY_SRC,
+        label: "bokeh-proof-output-texture",
         mip_levels: 1,
     });
     let mut native = device.create_encoder("bokeh-proof");
@@ -173,7 +190,114 @@ fn run_with_settings(
         gather.encode(&mut gpu, src, width, &out, settings);
     }
     native.commit_and_wait_completed();
-    readback(device, &out)
+    out
+}
+
+fn composite_over_background(
+    device: &crate::TestDevice,
+    foreground: &GpuTexture,
+    background_rgb: [f32; 3],
+) -> Vec<[f32; 4]> {
+    let (w, h) = (foreground.width, foreground.height);
+    let background = texture(
+        device,
+        w,
+        h,
+        &solid_pixels(
+            w,
+            h,
+            [background_rgb[0], background_rgb[1], background_rgb[2], 1.0],
+        ),
+        "bokeh-compositor-background",
+    );
+    let top_id = LayerId::from("bokeh-compositor-top");
+    let bottom_id = LayerId::from("bokeh-compositor-bottom");
+    let layers = [
+        CompositeLayerDescriptor {
+            layer_index: 0,
+            layer_id: &top_id,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            hidden: false,
+            blit_to_led: false,
+            layer_type: LayerType::Video,
+            effects: &[],
+            effect_groups: &[],
+            parent_layer_id: None,
+            is_group: false,
+            trigger_count: 0,
+        },
+        CompositeLayerDescriptor {
+            layer_index: 1,
+            layer_id: &bottom_id,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            hidden: false,
+            blit_to_led: false,
+            layer_type: LayerType::Video,
+            effects: &[],
+            effect_groups: &[],
+            parent_layer_id: None,
+            is_group: false,
+            trigger_count: 0,
+        },
+    ];
+    // Clips are supplied bottom-to-top, as they are by the content pipeline.
+    let clips = [
+        CompositeClipDescriptor {
+            clip_id: "bokeh-compositor-background",
+            texture: &background,
+            layer_index: 1,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            is_muted: false,
+            effects: &[],
+            effect_groups: &[],
+        },
+        CompositeClipDescriptor {
+            clip_id: "bokeh-compositor-foreground",
+            texture: foreground,
+            layer_index: 0,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            is_muted: false,
+            effects: &[],
+            effect_groups: &[],
+        },
+    ];
+    let frame = CompositorFrame {
+        time: 0.0,
+        beat: 0.0,
+        dt: 1.0 / 60.0,
+        frame_count: 0,
+        compositor_dirty: true,
+        clips: &clips,
+        layers: &layers,
+        master_effects: &[],
+        master_effect_groups: &[],
+        master_trigger_count: 0,
+        tonemap: TonemapSettings {
+            exposure: 1.0,
+            mode: TonemapMode::SceneLinear,
+            paper_white_nits: 200.0,
+            max_display_nits: 10_000.0,
+            curve: manifold_core::TonemapCurve::AcesNarkowicz,
+        },
+        led_exit_index: -1,
+        led_composite_size: (1, 1),
+        output_width: w,
+        output_height: h,
+        occluded_layers: &[],
+        render_skip: &[],
+    };
+    let mut compositor = LayerCompositor::new(device, w, h);
+    let mut encoder = device.create_encoder("bokeh-compositor-alpha-over");
+    {
+        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, device);
+        compositor.render(&mut gpu, &frame);
+    }
+    encoder.commit_and_wait_completed();
+    readback(device, compositor.output_texture())
 }
 
 fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
@@ -503,7 +627,9 @@ fn oracle_uniform_far_output(source: &OraclePlane, radius: f32, coc: f32) -> Ora
     let half_w = chain[0].w;
     let half_h = chain[0].h;
     let half_radius = radius * coc * 0.5;
-    let lod = (half_radius / 2.0).log2().max(0.0);
+    let sample_count = 32.0;
+    let footprint = half_radius * (std::f32::consts::PI / sample_count).sqrt();
+    let lod = footprint.log2().max(0.0);
     let tap_radius = half_radius;
     let mut gather = vec![[0.0; 4]; half_w * half_h];
     for y in 0..half_h {
@@ -565,8 +691,11 @@ fn zero_coc_is_bit_exact_identity() {
         .map(|i| {
             let x = (i % w) as f32 / w as f32;
             let y = (i / w) as f32 / h as f32;
+            let alpha = if i % 4 == 0 { 0.0 } else { 0.37 };
             Pixel {
-                rgba: [x * 3.0, y * 2.0, 0.25, if i % 4 == 0 { 0.0 } else { 0.37 }],
+                // Match the scene's premultiplied-alpha contract, including
+                // fractional coverage, while proving exact zero-CoC identity.
+                rgba: [x * 3.0 * alpha, y * 2.0 * alpha, 0.25 * alpha, alpha],
             }
         })
         .collect::<Vec<_>>();
@@ -605,7 +734,7 @@ fn zero_radius_preserves_detail_across_near_far_edges() {
     let (w, h) = (37, 19);
     let pixels: Vec<_> = (0..w * h)
         .map(|i| Pixel {
-            rgba: [(i % 2) as f32 * 4.0, 0.25, 0.5, 0.37],
+            rgba: [(i % 2) as f32 * 4.0 * 0.37, 0.25 * 0.37, 0.5 * 0.37, 0.37],
         })
         .collect();
     let values: Vec<_> = (0..w * h).map(|i| (0.8, i % 3 == 0)).collect();
@@ -676,9 +805,12 @@ fn blur_alpha_true_expands_opaque_silhouettes_without_dark_fringe() {
                 let p = out[(y * w + x) as usize];
                 halo_alpha = halo_alpha.max(p[3]);
                 if p[3] > 0.02 {
+                    let ratios = [p[0] / p[3], p[1] / p[3], p[2] / p[3]];
                     assert!(
-                        (p[0] - 8.0).abs() < 0.1 && (p[1] - 2.0).abs() < 0.05,
-                        "straight-alpha halo acquired a dark fringe at ({x},{y}): {p:?}"
+                        (ratios[0] - 8.0).abs() < 0.2
+                            && (ratios[1] - 2.0).abs() < 0.1
+                            && (ratios[2] - 0.5).abs() < 0.05,
+                        "premultiplied halo changed chromaticity at ({x},{y}): {p:?}"
                     );
                 }
             }
@@ -699,7 +831,7 @@ fn blur_alpha_true_expands_opaque_silhouettes_without_dark_fringe() {
 fn blur_alpha_true_preserves_translucent_flat_hdr_near_and_far() {
     let device = crate::test_device();
     let (w, h) = (128, 64);
-    let colors = solid_pixels(w, h, [6.0, 2.0, 0.5, 0.37]);
+    let colors = solid_pixels(w, h, [6.0 * 0.37, 2.0 * 0.37, 0.5 * 0.37, 0.37]);
     let coc = (0..w * h)
         .map(|i| (if i % w < w / 2 { 0.7 } else { 0.8 }, i % w < w / 2))
         .collect::<Vec<_>>();
@@ -722,17 +854,17 @@ fn blur_alpha_true_preserves_translucent_flat_hdr_near_and_far() {
         for x in [16, 112] {
             let p = out[(y * w + x) as usize];
             assert!(
-                (p[0] - 6.0).abs() < 0.2,
+                (p[0] - 6.0 * 0.37).abs() < 0.08,
                 "flat HDR red changed at ({x},{y}): {}",
                 p[0]
             );
             assert!(
-                (p[1] - 2.0).abs() < 0.1,
+                (p[1] - 2.0 * 0.37).abs() < 0.04,
                 "flat HDR green changed at ({x},{y}): {}",
                 p[1]
             );
             assert!(
-                (p[2] - 0.5).abs() < 0.05,
+                (p[2] - 0.5 * 0.37).abs() < 0.02,
                 "flat HDR blue changed at ({x},{y}): {}",
                 p[2]
             );
@@ -749,7 +881,7 @@ fn blur_alpha_true_preserves_translucent_flat_hdr_near_and_far() {
 fn near_opacity_does_not_fade_during_focus_transition() {
     let device = crate::test_device();
     let (w, h) = (32, 32);
-    let colors = solid_pixels(w, h, [6.0, 2.0, 0.5, 0.37]);
+    let colors = solid_pixels(w, h, [6.0 * 0.37, 2.0 * 0.37, 0.5 * 0.37, 0.37]);
     let src = texture(&device, w, h, &colors, "focus-opacity-source");
     for radius in [0.25, 0.75, 1.0, 1.25, 1.75, 2.5, 4.0] {
         let coc = signed_width(
@@ -772,9 +904,84 @@ fn near_opacity_does_not_fade_during_focus_transition() {
         );
         for p in out {
             assert!(
-                (p[3] - 0.37).abs() < 0.005 && (p[0] - 6.0).abs() < 0.03,
+                (p[3] - 0.37).abs() < 0.005 && (p[0] - 6.0 * 0.37).abs() < 0.03,
                 "focus radius {radius} dimmed uniform translucent foreground: {p:?}"
             );
+        }
+    }
+}
+
+#[test]
+fn blur_alpha_true_stays_premultiplied_through_layer_compositor() {
+    let device = crate::test_device();
+    let (w, h) = (96, 64);
+    let hue = [0.8, 0.2, 0.05];
+    let source_pixels = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let alpha = if !(16..80).contains(&x) || !(8..56).contains(&y) {
+                0.0
+            } else if x < w / 2 {
+                0.25
+            } else {
+                0.5
+            };
+            Pixel {
+                rgba: [hue[0] * alpha, hue[1] * alpha, hue[2] * alpha, alpha],
+            }
+        })
+        .collect::<Vec<_>>();
+    let src = texture(&device, w, h, &source_pixels, "bokeh-compositor-premul-src");
+    let width = signed_width(&device, w, h, &vec![(0.75, false); (w * h) as usize]);
+    let gathered_texture = run_with_settings_texture(
+        &mut BokehGather::new(),
+        &device,
+        &src,
+        &width,
+        BokehSettings {
+            radius: 24.0,
+            aperture: APERTURE_CIRCLE,
+            quality: 1,
+            blur_alpha: true,
+        },
+    );
+    let gathered = readback(&device, &gathered_texture);
+    assert_finite(&gathered);
+    assert!(
+        gathered.iter().any(|p| (p[3] - 0.25).abs() < 0.08),
+        "coverage edge lost the quarter-alpha side"
+    );
+    assert!(
+        gathered.iter().any(|p| (p[3] - 0.5).abs() < 0.08),
+        "coverage edge lost the half-alpha side"
+    );
+    assert!(gathered.iter().enumerate().any(|(i, p)| {
+        source_pixels[i].rgba[3] == 0.0 && p[3] > 0.01 && p[3] < 0.1
+    }), "fixture must exercise faint coverage outside the original silhouette");
+
+    for background in [[0.0, 0.0, 0.0], [0.1, 0.35, 0.7]] {
+        let composited = composite_over_background(&device, &gathered_texture, background);
+        assert_finite(&composited);
+        for (i, (gathered_pixel, actual)) in gathered.iter().zip(&composited).enumerate() {
+            let alpha = gathered_pixel[3];
+            let expected = [
+                hue[0] * alpha + background[0] * (1.0 - alpha),
+                hue[1] * alpha + background[1] * (1.0 - alpha),
+                hue[2] * alpha + background[2] * (1.0 - alpha),
+            ];
+            assert!(
+                (actual[3] - 1.0).abs() < 0.01,
+                "opaque background changed output alpha at {i}: {}",
+                actual[3]
+            );
+            for channel in 0..3 {
+                assert!(
+                    (actual[channel] - expected[channel]).abs() < 0.035,
+                    "premultiplied alpha-over mismatch over {background:?} at {i} channel {channel}: got {}, expected {} from coverage {alpha}",
+                    actual[channel],
+                    expected[channel]
+                );
+            }
         }
     }
 }
@@ -1334,6 +1541,119 @@ fn focused_checkerboard_detail_survives_beside_blurred_region() {
         blurred_variance.sqrt() < 0.05,
         "far region retained checkerboard detail"
     );
+}
+
+#[test]
+fn small_alpha_blur_monotonically_sheds_high_frequency_detail() {
+    let device = crate::test_device();
+    let (w, h) = (48, 32);
+    let colors = (0..w * h)
+        .map(|i| {
+            // A resolvable period-eight signal avoids Nyquist phase
+            // inversion while still exposing loss of high-frequency detail.
+            let phase = 2.0 * std::f32::consts::PI * (i % w) as f32 / 8.0;
+            let value = 0.5 + 0.5 * phase.sin();
+            Pixel {
+                rgba: [value, value, value, 1.0],
+            }
+        })
+        .collect::<Vec<_>>();
+    let src = texture(&device, w, h, &colors, "bokeh-proof-small-alpha-sinusoid");
+    let mut previous = f32::INFINITY;
+    let mut focused_detail = 0.0;
+    for local_radius in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
+        let width = signed_width(
+            &device,
+            w,
+            h,
+            &vec![(local_radius / 2.0, false); (w * h) as usize],
+        );
+        let out = run_with_settings(
+            &mut BokehGather::new(),
+            &device,
+            &src,
+            &width,
+            BokehSettings {
+                radius: 2.0,
+                aperture: APERTURE_CIRCLE,
+                quality: 1,
+                blur_alpha: true,
+            },
+        );
+        assert_finite(&out);
+        let mut mean = 0.0;
+        let mut count = 0.0;
+        for y in 2..h - 2 {
+            for x in 2..w - 2 {
+                mean += luma(out[(y * w + x) as usize]);
+                count += 1.0;
+            }
+        }
+        mean /= count;
+        let mut detail = 0.0;
+        for y in 2..h - 2 {
+            for x in 2..w - 2 {
+                let p = luma(out[(y * w + x) as usize]);
+                detail += (p - mean).powi(2);
+            }
+        }
+        let detail = detail / count;
+        if local_radius == 0.5 {
+            focused_detail = detail;
+        } else if local_radius == 0.75 {
+            assert!(detail < focused_detail * 0.99, "subpixel defocus remained sharp");
+        }
+        assert!(
+            detail <= previous + 0.001,
+            "small alpha blur restored high-frequency detail at radius {local_radius}: {detail} after {previous}"
+        );
+        previous = detail;
+    }
+    assert!(
+        previous < focused_detail * 0.8,
+        "radius-two transition retained too much sinusoidal detail: {previous}"
+    );
+}
+
+#[test]
+fn small_alpha_blur_rejects_unrelated_far_surface() {
+    let device = crate::test_device();
+    let (w, h) = (33, 17);
+    let mut colors = solid_pixels(w, h, [20.0, 0.0, 0.0, 1.0]);
+    let mut coc = vec![(0.5, false); (w * h) as usize];
+    for y in 4..h - 4 {
+        for x in w / 2 - 1..=w / 2 + 1 {
+            let i = (y * w + x) as usize;
+            colors[i] = Pixel {
+                rgba: [0.0, 10.0, 0.0, 1.0],
+            };
+            coc[i] = (0.5, true);
+        }
+    }
+    let src = texture(&device, w, h, &colors, "bokeh-proof-small-alpha-depth-edge");
+    let width = signed_width(&device, w, h, &coc);
+    let out = run_with_settings(
+        &mut BokehGather::new(),
+        &device,
+        &src,
+        &width,
+        BokehSettings {
+            radius: 2.0,
+            aperture: APERTURE_CIRCLE,
+            quality: 1,
+            blur_alpha: true,
+        },
+    );
+    assert_finite(&out);
+    for y in 6..h - 6 {
+        for x in w / 2 - 1..=w / 2 + 1 {
+            let p = out[(y * w + x) as usize];
+            assert!(
+                p[0] < 0.05 && p[1] > 9.0,
+                "small blur pulled far red through near surface at ({x}, {y}): {p:?}"
+            );
+        }
+    }
 }
 
 #[test]

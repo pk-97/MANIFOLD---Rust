@@ -6,6 +6,11 @@
 //! (`headless_readback::readback_to_srgb_png`) every headless render tool in
 //! this crate uses — never a local tonemap (D2).
 //!
+//! `--app-presentation` instead captures the normal layer through the app's
+//! production compositor and SDR presentation pipeline. Use this for visual
+//! validation of camera DoF: the legacy readback's straight-alpha assumption
+//! hides premultiplication errors that are visible in the instrument.
+//!
 //! Run:
 //!   cargo run -p manifold-renderer --bin render-import -- \
 //!       tests/fixtures/gltf/DamagedHelmet.glb --out /tmp/helmet.png
@@ -67,11 +72,21 @@ use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, mean_abs_half_diff, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8,
 };
+use manifold_renderer::compositor::{Compositor, CompositorFrame, CompositeLayerDescriptor};
+use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
+use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_renderer::presentation::{
+    DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame,
+    PresentationPipeline, UI_FORMAT,
+};
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::render_target::RenderTarget;
+use manifold_renderer::tonemap::{TonemapMode, TonemapSettings};
+use manifold_core::{BlendMode, LayerId, LayerType, TonemapCurve};
+use manifold_gpu::GpuLoadAction;
 
 struct Args {
     glb: PathBuf,
@@ -104,6 +119,113 @@ struct Args {
     anim_frames: Option<u32>,
     /// Optional bounded static warm-frame benchmark after normal convergence.
     benchmark_frames: Option<u32>,
+    /// Route the imported scene through the production app compositor and
+    /// presentation pipeline before encoding the PNG.
+    app_presentation: bool,
+}
+
+/// The opt-in app capture seam: imported generator output is treated as one
+/// normal layer, then mapped through the same SceneLinear compositor and SDR
+/// presentation passes used by the application.
+struct AppPresentation {
+    compositor: LayerCompositor,
+    presentation: PresentationPipeline,
+    target: RenderTarget,
+    layer_id: LayerId,
+}
+
+impl AppPresentation {
+    fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        Self {
+            compositor: LayerCompositor::new(device, width, height),
+            presentation: PresentationPipeline::new(device),
+            target: RenderTarget::new(device, width, height, UI_FORMAT, "render-import-presentation"),
+            layer_id: LayerId::from("render-import-app-presentation"),
+        }
+    }
+
+    fn capture(
+        &mut self,
+        device: &GpuDevice,
+        source: &manifold_gpu::GpuTexture,
+        width: u32,
+        height: u32,
+        frame_count: u64,
+    ) -> Vec<u8> {
+        let clip = CompositeClipDescriptor {
+            clip_id: "render-import-app-presentation-clip",
+            texture: source,
+            layer_index: 0,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            is_muted: false,
+            effects: &[],
+            effect_groups: &[],
+        };
+        let layer = CompositeLayerDescriptor {
+            layer_index: 0,
+            layer_id: &self.layer_id,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            hidden: false,
+            blit_to_led: false,
+            layer_type: LayerType::Video,
+            effects: &[],
+            effect_groups: &[],
+            parent_layer_id: None,
+            is_group: false,
+            trigger_count: 0,
+        };
+        let frame = CompositorFrame {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            frame_count,
+            compositor_dirty: true,
+            clips: std::slice::from_ref(&clip),
+            layers: std::slice::from_ref(&layer),
+            master_effects: &[],
+            master_effect_groups: &[],
+            master_trigger_count: 0,
+            tonemap: TonemapSettings {
+                exposure: 1.0,
+                mode: TonemapMode::SceneLinear,
+                paper_white_nits: 200.0,
+                max_display_nits: 10_000.0,
+                curve: TonemapCurve::AcesNarkowicz,
+            },
+            led_exit_index: -1,
+            led_composite_size: (1, 1),
+            output_width: width,
+            output_height: height,
+            occluded_layers: &[],
+            render_skip: &[],
+        };
+
+        let mut encoder = device.create_encoder("render-import-app-presentation");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
+            self.compositor.render(&mut gpu, &frame);
+        }
+        self.presentation.encode(
+            &mut encoder,
+            LinearSceneFrame::new(self.compositor.output_texture())
+                .expect("compositor output is SceneLinear"),
+            LinearPresentationTarget::new(&self.target.texture)
+                .expect("presentation target uses UI_FORMAT"),
+            DisplayPlan::new(DisplayCapabilities::sdr(), Some(TonemapCurve::AcesNarkowicz)),
+            (0.0, 0.0, width as f32, height as f32),
+            GpuLoadAction::Clear,
+        );
+        encoder.commit_and_wait_completed();
+
+        let raw = readback_raw_halves(device, &self.target.texture, width, height);
+        LinearUiReadback::from_bytes(&raw, width, height, UI_FORMAT, AlphaInterpretation::Opaque)
+            .expect("presentation readback has UI_FORMAT dimensions")
+            .to_srgb_rgba8()
+            .as_bytes()
+            .to_vec()
+    }
 }
 
 /// BUG-su2o: resolves `--orbit`/`--tilt` against the import graph's ACTUAL
@@ -152,10 +274,17 @@ fn check_param_range(id: &str, parsed: f32, min: f32, max: f32) -> Result<(), St
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut argv = std::env::args().skip(1);
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from<I>(argv: I) -> Result<Args, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut argv = argv.into_iter();
     let glb = argv
         .next()
-        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace] [--benchmark-frames N] [--anim-param ID --anim-start F --anim-end F --anim-frames N]")?;
+        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace] [--app-presentation] [--benchmark-frames N] [--anim-param ID --anim-start F --anim-end F --anim-frames N]")?;
     let mut args = Args {
         glb: PathBuf::from(glb),
         width: 1280,
@@ -173,11 +302,19 @@ fn parse_args() -> Result<Args, String> {
         anim_end: None,
         anim_frames: None,
         benchmark_frames: None,
+        app_presentation: false,
     };
     while let Some(flag) = argv.next() {
-        if flag == "--trace" {
-            args.trace = true;
-            continue;
+        match flag.as_str() {
+            "--trace" => {
+                args.trace = true;
+                continue;
+            }
+            "--app-presentation" => {
+                args.app_presentation = true;
+                continue;
+            }
+            _ => {}
         }
         let value = argv
             .next()
@@ -246,6 +383,9 @@ fn parse_benchmark_frames(value: &str) -> Result<u32, String> {
 }
 
 fn validate_benchmark_mode(args: &Args) -> Result<(), String> {
+    if args.benchmark_frames.is_some() && args.app_presentation {
+        return Err("--benchmark-frames measures generator work only; use the app's perf-soak command for content-path timing".to_string());
+    }
     if args.benchmark_frames.is_some()
         && (args.anim_param.is_some()
             || args.anim_start.is_some()
@@ -429,6 +569,9 @@ fn main() {
     let mut runtime = runtime;
 
     let target = RenderTarget::new(&device, args.width, args.height, format, "render-import-target");
+    let mut app_presentation = args
+        .app_presentation
+        .then(|| AppPresentation::new(&device, args.width, args.height));
 
     // Animation mode: render sequence tiled horizontally. Normal mode:
     // single converged frame.
@@ -449,6 +592,7 @@ fn main() {
                 &manifest,
                 &args,
                 args.time,
+                app_presentation.as_mut(),
             );
             if let Some(frames) = args.benchmark_frames
                 && let Err(e) = benchmark_static_frames(
@@ -547,6 +691,7 @@ fn main() {
         &warmup_manifest,
         &args,
         args.time,
+        None,
     );
 
     // Sequence phase: render N consecutive frames with param advancing.
@@ -590,7 +735,17 @@ fn main() {
         }
         enc.commit_and_wait_completed();
 
-        let rgba = readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height);
+        let rgba = if let Some(presentation) = app_presentation.as_mut() {
+            presentation.capture(
+                &device,
+                &target.texture,
+                args.width,
+                args.height,
+                frame_count as u64,
+            )
+        } else {
+            readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height)
+        };
         let fraction = non_black_fraction(&rgba);
         println!("anim: frame={} param_value={} fraction={:.4}", i, param_value, fraction);
         filmstrip_frames.push(rgba);
@@ -740,6 +895,7 @@ fn render_single_frame(
     manifest: &ParamManifest,
     args: &Args,
     time: f64,
+    mut app_presentation: Option<&mut AppPresentation>,
 ) {
     const DT: f32 = 1.0 / 60.0;
     const STABLE_STREAK: u32 = 3;
@@ -850,7 +1006,17 @@ fn render_single_frame(
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         if stable_count >= STABLE_STREAK {
-            let rgba = readback_tonemapped_rgba8(device, &target.texture, args.width, args.height);
+            let rgba = if let Some(presentation) = app_presentation.as_deref_mut() {
+                presentation.capture(
+                    device,
+                    &target.texture,
+                    args.width,
+                    args.height,
+                    frame as u64,
+                )
+            } else {
+                readback_tonemapped_rgba8(device, &target.texture, args.width, args.height)
+            };
             last_fraction = non_black_fraction(&rgba);
             if last_fraction > args.non_black_floor {
                 converged = true;
@@ -877,8 +1043,24 @@ fn render_single_frame(
     if let Some(parent) = args.out.parent() {
         std::fs::create_dir_all(parent).expect("create output dir");
     }
-    let png = encode_rgba8_png(&final_rgba, args.width, args.height);
-    std::fs::write(&args.out, &png).unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
+    if let Some(presentation) = app_presentation {
+        let raw = readback_raw_halves(device, &presentation.target.texture, args.width, args.height);
+        LinearUiReadback::from_bytes(
+            &raw,
+            args.width,
+            args.height,
+            UI_FORMAT,
+            AlphaInterpretation::Opaque,
+        )
+        .expect("presentation readback has UI_FORMAT dimensions")
+        .to_srgb_rgba8()
+        .write_png(&args.out)
+        .unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
+    } else {
+        let png = encode_rgba8_png(&final_rgba, args.width, args.height);
+        std::fs::write(&args.out, &png)
+            .unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
+    }
     println!("OK {} ({}x{})", args.out.display(), args.width, args.height);
 }
 
@@ -1028,6 +1210,21 @@ mod tests {
     }
 
     #[test]
+    fn app_presentation_flag_is_valueless_and_opt_in() {
+        let default = parse_args_from(vec!["fixture.glb".to_string()]).unwrap();
+        assert!(!default.app_presentation);
+
+        let enabled = parse_args_from(vec![
+            "fixture.glb".to_string(),
+            "--app-presentation".to_string(),
+            "--trace".to_string(),
+        ])
+        .unwrap();
+        assert!(enabled.app_presentation);
+        assert!(enabled.trace);
+    }
+
+    #[test]
     fn benchmark_mode_rejects_animation_flags() {
         let args = Args {
             glb: PathBuf::from("fixture.glb"),
@@ -1046,8 +1243,20 @@ mod tests {
             anim_end: Some(1.0),
             anim_frames: Some(2),
             benchmark_frames: Some(1),
+            app_presentation: false,
         };
         let error = validate_benchmark_mode(&args).unwrap_err();
         assert!(error.contains("cannot be combined with animation flags"));
+    }
+
+    #[test]
+    fn app_presentation_cannot_report_generator_only_timing() {
+        let args = parse_args_from([
+            "fixture.glb",
+            "--app-presentation",
+            "--benchmark-frames",
+            "10",
+        ].map(str::to_string)).unwrap();
+        assert!(validate_benchmark_mode(&args).unwrap_err().contains("generator work only"));
     }
 }

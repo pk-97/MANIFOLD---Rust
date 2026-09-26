@@ -4870,10 +4870,7 @@ mod scene_linear_presentation_gpu_tests {
                 }
             }
         }
-        let master_effects = master_effect
-            .as_ref()
-            .map(std::slice::from_ref)
-            .unwrap_or(&[]);
+        let master_effects = master_effect.as_slice();
         let frame = CompositorFrame {
             time: 0.0,
             beat: 0.0,
