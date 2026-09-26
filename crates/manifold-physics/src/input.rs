@@ -9,6 +9,10 @@ use std::fmt;
 
 use crate::Seconds;
 
+mod events;
+
+pub use events::{AppliedEvent, EventError, EventQueue, EventStamp};
+
 pub trait Timestamped {
     fn time(&self) -> Seconds;
 }

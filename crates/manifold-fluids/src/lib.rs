@@ -1024,6 +1024,8 @@ fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+    mod scheduled_fields;
+
     use manifold_physics::{FieldInput, UniformField, VectorField};
 
     use super::{

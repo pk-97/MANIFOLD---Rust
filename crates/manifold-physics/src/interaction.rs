@@ -13,7 +13,8 @@ pub struct FieldInput<'a> {
     pub delta_velocity: f32,
 }
 
-/// Identifies a published simulation tick.
+/// Identifies a simulation tick within an epoch. A stamp alone does not imply
+/// that the native step completed or that its output has been published.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TickStamp {
     pub epoch: u64,
