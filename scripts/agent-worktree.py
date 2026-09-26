@@ -35,6 +35,10 @@ import tempfile
 import hashlib
 from contextlib import contextmanager
 from pathlib import Path
+# The lifecycle tests load this file through importlib from a child process;
+# make the sibling safety module importable there as well as when run directly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from storage_budget import apply_cache_cleanup, plan_cache_cleanup, target_live_status
 
 def _main_checkout():
     """Anchor to the MAIN checkout even when this script's copy runs inside a
@@ -236,7 +240,7 @@ def pool_slots():
 
 def target_bytes(wt):
     t = wt / "target"
-    if not t.is_dir():
+    if t.is_symlink() or not t.is_dir():
         return 0
     # du -sk is far faster than a python walk over a multi-GB tree.
     out = subprocess.run(["du", "-sk", str(t)], capture_output=True, text=True)
@@ -246,9 +250,36 @@ def target_bytes(wt):
 def enforce_target_cap(wt):
     size = target_bytes(wt)
     if size > TARGET_CAP_GB * 2**30:
-        shutil.rmtree(wt / "target", ignore_errors=True)
-        print(f"TARGET:   wiped ({size / 2**30:.1f}G exceeded the "
-              f"{TARGET_CAP_GB}G per-slot cap — cold build ahead)")
+        removed, files, failures = _cleanup_target(wt, "TARGET")
+        if failures:
+            print(f"TARGET:   kept {size / 2**30:.1f}G; removed {files} files "
+                  f"({removed / 2**30:.1f}G); cleanup refused: "
+                  + "; ".join(failures))
+        else:
+            print(f"TARGET:   removed {files} cache files ({removed / 2**30:.1f}G) "
+                  f"from {size / 2**30:.1f}G over the {TARGET_CAP_GB}G cap")
+
+
+def _cleanup_target(wt, label):
+    """Remove only an exact, Cargo-owned cache-file manifest.
+
+    ``slot_has_live_session`` is intentionally the process-inspection authority
+    for the ring.  It fails closed when lsof is unavailable, while the helper
+    itself never removes directories or follows links.
+    """
+    def process_check(target):
+        # Keep the ring's checkout-wide cwd guard and add descriptor inspection
+        # for compiler processes whose cwd is the worktree root.
+        if slot_has_live_session(wt):
+            return True
+        return target_live_status(target)
+
+    plan = plan_cache_cleanup(wt / "target")
+    removed, files, failures = apply_cache_cleanup(
+        plan, dry_run=False, process_check=process_check)
+    if failures:
+        print(f"{label}: {wt.name}: {len(failures)} failure(s): " + "; ".join(failures))
+    return removed, files, failures
 
 
 def copy_missing_fixtures(wt):
@@ -502,8 +533,9 @@ def cmd_scrub(_args):
     for wt, reason in pinned:
         size = target_bytes(wt)
         if size:
-            shutil.rmtree(wt / "target", ignore_errors=True)
-            print(f"CACHE-ONLY {wt.name}: {size / 2**30:.1f}G target wiped, "
+            removed, files, failures = _cleanup_target(wt, "CACHE-ONLY")
+            print(f"CACHE-ONLY {wt.name}: removed {files} files "
+                  f"({removed / 2**30:.1f}G) from {size / 2**30:.1f}G target, "
                   f"work untouched (pinned: {reason})")
     for wt in idle:
         enforce_target_cap(wt)
@@ -518,10 +550,14 @@ def cmd_scrub(_args):
     while total > SCRUB_TO_GB and victims:
         wt = victims.pop(0)  # least recently built loses its cache first
         size = target_bytes(wt) / 2**30
-        shutil.rmtree(wt / "target", ignore_errors=True)
-        print(f"SCRUBBED {wt.name}: {size:.1f}G target wiped (pool over "
+        removed, files, failures = _cleanup_target(wt, "SCRUBBED")
+        print(f"SCRUBBED {wt.name}: removed {files} files "
+              f"({removed / 2**30:.1f}G) from {size:.1f}G target (pool over "
               f"{SCRUB_TO_GB}G)")
-        total = pool_gb()
+        next_total = pool_gb()
+        if next_total >= total:
+            break
+        total = next_total
     print(f"POOL: {total:.0f}G ({len(idle)} idle / {len(slots)} slots, "
           f"scrub target {SCRUB_TO_GB}G)")
 
@@ -708,7 +744,10 @@ def cmd_retire(args):
         if target.is_symlink():
             sys.exit("REFUSED: target is a symlink; archive is safe, cache untouched")
         if target.exists():
-            shutil.rmtree(target)
+            removed, files, failures = _cleanup_target(wt, "RETIRED")
+            if failures:
+                print(f"RETIRED {wt.name}: cache retained; removed {files} files "
+                      f"({removed / 2**30:.1f}G); " + "; ".join(failures))
         print(f"RETIRED {wt.name}: {branch} preserved as {archive} at {commit}")
 
 

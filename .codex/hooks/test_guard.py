@@ -117,7 +117,7 @@ class Guards(unittest.TestCase):
     def test_normal_git_and_gate_path(self):
         for command in ("git status --short", "git diff --check", "git add -- AGENTS.md",
                         "git commit -m 'docs only' -- AGENTS.md", "git push origin main",
-                        "scripts/land_branch.py lane/test --worktree /tmp/slot --message fix --lead astra"):
+                        f"scripts/land_branch.py lane/test --worktree {self.slot} --message fix --lead astra"):
             with self.subTest(command=command):
                 self.assertIsNone(self.shell_call(command))
         self.assertTrue(self.shell_call("git commit -m fix -- crates/app.rs"))
@@ -259,6 +259,58 @@ class Guards(unittest.TestCase):
         matcher = json.loads((REAL_ROOT / ".codex/hooks.json").read_text())["hooks"]["PreToolUse"][0]["matcher"]
         self.assertIsNotNone(re.search(matcher, "exec_command"))
         self.assertTrue(guard.evaluate(self.event("exec_command", {"cmd": "cargo test"})))
+
+    def test_storage_admission_targets_and_read_only_commands(self):
+        accepted = guard.storage_budget.BuildCheck(True, self.root / "target", 101 * guard.storage_budget.GIB)
+        with patch.object(guard.storage_budget, "check_build", return_value=accepted) as check:
+            self.assertIsNone(self.shell_call("cargo test -p manifold-ui"))
+            self.assertIsNone(self.shell_call("cargo test -p manifold-ui", cwd=self.slot))
+            (self.root / "crates/demo").mkdir(parents=True)
+            (self.root / "crates/demo/Cargo.toml").write_text("[package]\nname='demo'\nversion='0.1.0'\n")
+            self.assertIsNone(self.shell_call("cargo test --manifest-path crates/demo/Cargo.toml -p manifold-ui"))
+            self.assertIsNone(self.shell_call("env CARGO_TARGET_DIR=target with-build-lock.sh cargo test --target-dir=target -p manifold-ui"))
+            self.assertIsNone(self.shell_call("cargo --config build.target-dir=target test -p manifold-ui"))
+            self.assertIsNone(self.shell_call(f"scripts/land_branch.py lane/test --worktree={self.slot} --message fix --lead astra"))
+            self.assertIsNone(self.shell_call(f"scripts/landing_gate.py --repo={self.root}"))
+            self.assertEqual(7, check.call_count)
+            self.assertEqual([self.root / "target", self.slot / "target", self.root / "target",
+                              self.root / "target", self.root / "target", self.slot / "target",
+                              self.root / "target"],
+                             [call.args[0] for call in check.call_args_list])
+            check.reset_mock()
+            self.assertIsNone(self.shell_call("cargo metadata"))
+            self.assertIsNone(self.shell_call("cargo fmt --check"))
+            self.assertEqual([], check.call_args_list)
+
+    def test_storage_admission_rejects_low_space_and_unresolved_targets(self):
+        low = guard.storage_budget.BuildCheck(False, self.root / "target", 99 * guard.storage_budget.GIB,
+                                              reason="REFUSED: only 99.0 GiB free; reserve is 100 GiB")
+        with patch.object(guard.storage_budget, "check_build", return_value=low):
+            self.assertIn("100 GiB", self.shell_call("cargo test"))
+        self.assertIn("canonical", self.shell_call(f"cargo test --target-dir={self.root / 'other-target'}"))
+        self.assertIn("dynamic", self.shell_call("CARGO_TARGET_DIR=$TARGET cargo test"))
+        self.assertIn("working directory", self.shell_call("env -C /tmp cargo test -p manifold-ui"))
+        self.assertIn("working directory", self.shell_call("env --chdir=/tmp cargo test -p manifold-ui"))
+        self.assertIn("config", self.shell_call('cargo --config "build.target-dir = target dir" test -p manifold-ui'))
+        self.assertIn("canonical", self.shell_call(
+            f"CARGO_TARGET_DIR={self.root / 'other-target'} scripts/land_branch.py lane/test --worktree={self.slot} --message fix --lead astra"))
+
+    def test_storage_admission_is_read_only(self):
+        marker = self.root / "admission-marker"
+        before = sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*"))
+        with patch.object(guard.storage_budget, "check_build",
+                          return_value=guard.storage_budget.BuildCheck(True, self.root / "target", 101 * guard.storage_budget.GIB)):
+            self.assertIsNone(self.shell_call("cargo check -p manifold-ui"))
+        after = sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*"))
+        self.assertEqual(before, after)
+        self.assertFalse(marker.exists())
+
+    def test_storage_admission_reads_inherited_build_target_env(self):
+        accepted = guard.storage_budget.BuildCheck(True, self.root / "target", 101 * guard.storage_budget.GIB)
+        with patch.object(guard.storage_budget, "check_build", return_value=accepted) as check:
+            with patch.dict(guard.os.environ, {"CARGO_BUILD_TARGET_DIR": "target"}, clear=False):
+                self.assertIsNone(self.shell_call("cargo check -p manifold-ui"))
+        self.assertEqual(check.call_args[0][0], self.root / "target")
 
 
 if __name__ == "__main__":
