@@ -350,7 +350,8 @@ retain the existing `BarrieredReduction` exemption and generated gather kernel.
 Smooth uses a Dual Kawase pyramid, exact area downsampling, normalized eight-tap
 upsampling, and interpolation between adjacent reconstructed levels. At even
 dimensions per-axis variance is `v(d)=6+4v(d−1)`; the target is `(radius/2)²`.
-Only needed levels dispatch. SoftFocus and Bloom select Smooth; Bloom retains its
+The cached pyramid reaches 1×1 so authored radii above the display range keep
+working without per-frame allocation; only needed levels dispatch. SoftFocus and Bloom select Smooth; Bloom retains its
 bright-pass/downsample/mix composition. The artistic DepthOfField preset reuses
 the layered gather with unsigned CoC from `pack_rgba`, preserving its existing
 quality control and adding aperture. Its former HDR clamp is removed.

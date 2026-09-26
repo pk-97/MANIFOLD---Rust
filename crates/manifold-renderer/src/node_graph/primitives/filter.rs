@@ -228,7 +228,9 @@ struct DualBlurUniforms {
 }
 
 const DUAL_BLUR_MODE: u32 = 3;
-const DUAL_BLUR_MAX_LEVEL: usize = 5;
+// A u32-sized image reaches 1x1 within this many reductions. Cache the whole
+// geometric pyramid so authored radii beyond the display range remain useful.
+const DUAL_BLUR_MAX_LEVEL: usize = u32::BITS as usize;
 // Per-axis variance of one area-down/eight-tap-up reconstruction in source
 // pixels. The down taps contribute 0.25; the up taps contribute 1.25 from
 // their offsets plus 0.1875 from bilinear interpolation in coarse pixels,
@@ -244,7 +246,7 @@ const DUAL_BLUR_LERP: u32 = 3;
 
 fn dual_radius_level(radius: f32) -> (usize, f32) {
     let radius = if radius.is_finite() {
-        radius.clamp(0.0, 64.0)
+        radius.max(0.0)
     } else {
         0.0
     };
@@ -289,7 +291,7 @@ pub struct Blur {
     dual_pyramid: Option<DualBlurPyramid>,
 }
 
-/// Fixed-size storage for Smooth mode. `down[level]` is a half-resolution
+/// Resize-only storage for Smooth mode. `down[level]` is a half-resolution
 /// pyramid level (level 1 is the first downsample); the two up arrays hold the
 /// adjacent reconstructions needed for continuous radius interpolation.
 struct DualBlurPyramid {
@@ -430,7 +432,7 @@ impl EffectNode for Blur {
 
         if mode == DUAL_BLUR_MODE {
             let radius = if radius.is_finite() {
-                radius.clamp(0.0, 64.0)
+                radius.max(0.0)
             } else {
                 0.0
             };
@@ -709,7 +711,7 @@ mod tests {
     #[test]
     fn dual_radius_interpolation_is_monotonic_and_continuous_at_level_edges() {
         let mut previous = (0usize, 0.0f32);
-        for step in 0..=640 {
+        for step in 0..=2560 {
             let radius = step as f32 * 0.1;
             let current = dual_radius_level(radius);
             assert!(
@@ -721,8 +723,9 @@ mod tests {
         }
         assert_eq!(dual_radius_level(0.0), (0, 0.0));
         let (level, blend) = dual_radius_level(64.0);
-        assert_eq!(level, DUAL_BLUR_MAX_LEVEL - 1);
+        assert_eq!(level, 4);
         assert!((blend - (1024.0 - 510.0) / (2046.0 - 510.0)).abs() < 1e-6);
+        assert!(dual_radius_level(96.0).0 > level);
         let first_radius = 2.0 * DUAL_BLUR_FIRST_VARIANCE.sqrt();
         let (first_level, first_blend) = dual_radius_level(first_radius);
         assert_eq!(first_level, 1);
@@ -1028,14 +1031,20 @@ mod gpu_tests {
     fn smooth_odd_large_impulse_stays_finite_and_mass_bounded() {
         let device = crate::test_device();
         let (width, height) = (513, 513);
-        let output = run_smooth(&device, width, height, 32.0, &impulse_pair(width, height));
-        assert_finite(&output);
-        let (mass, moment) = impulse_mass_and_moment(&output, width, height);
-        assert!(
-            (mass - 8.0).abs() < 1.0,
-            "odd pyramid changed mass to {mass}"
-        );
-        assert!(moment.is_finite() && moment > 0.0);
+        let input = impulse_pair(width, height);
+        let mut previous_moment = 0.0;
+        for radius in [32.0, 64.0, 96.0] {
+            let output = run_smooth(&device, width, height, radius, &input);
+            assert_finite(&output);
+            let (mass, moment) = impulse_mass_and_moment(&output, width, height);
+            assert!(
+                (mass - 8.0).abs() < 1.0,
+                "odd pyramid at radius {radius} changed mass to {mass}"
+            );
+            assert!(moment.is_finite() && moment > previous_moment * 1.2,
+                "radius {radius} must broaden the footprint beyond the display range");
+            previous_moment = moment;
+        }
     }
 
     #[test]
