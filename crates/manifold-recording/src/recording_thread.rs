@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait};
+use manifold_audio::capture::AudioStreamRead;
 
 use crate::ffi;
 use crate::texture_pool::PoolSlot;
@@ -258,41 +258,107 @@ fn drain_audio(
     sample_rate: u32,
     channels: u16,
 ) {
-    loop {
-        let available = consumer.occupied_len();
-        if available == 0 {
-            break;
-        }
+    drain_audio_chunks(
+        consumer,
+        scratch,
+        total_frames,
+        sample_rate,
+        channels,
+        |samples, pts| {
+            let result = unsafe {
+                ffi::LiveRecorder_WriteAudioSamples(
+                    encoder_handle,
+                    samples.as_ptr(),
+                    samples.len() as i32,
+                    pts,
+                )
+            };
+            if result != 0 {
+                log::warn!("[RecordingThread] Audio write failed: error {result}");
+            }
+        },
+    );
+}
 
-        let channels_usize = channels as usize;
-        let max_read = scratch.len() - (scratch.len() % channels_usize);
-        let to_read = available.min(max_read);
-        let to_read = to_read - (to_read % channels_usize);
-        if to_read == 0 {
-            break;
+fn drain_audio_chunks(
+    consumer: &mut manifold_audio::capture::AudioConsumer,
+    scratch: &mut [f32],
+    total_frames: &mut u64,
+    sample_rate: u32,
+    channels: u16,
+    mut write: impl FnMut(&[f32], f64),
+) {
+    while let Some(read) = consumer.read(scratch) {
+        let (stamp, popped) = match read {
+            AudioStreamRead::Samples { stamp, samples } => (stamp, samples),
+            AudioStreamRead::Gap {
+                first_frame,
+                end_frame,
+            } => {
+                log::warn!(
+                    "[RecordingThread] Missing captured audio frames {first_frame}..{end_frame}"
+                );
+                *total_frames = end_frame;
+                continue;
+            }
+            AudioStreamRead::InvalidInput => {
+                log::error!(
+                    "[RecordingThread] Invalid captured audio stream; recording audio stopped"
+                );
+                break;
+            }
+        };
+        if stamp.sample_rate != sample_rate {
+            log::error!(
+                "[RecordingThread] Capture rate changed during recording; audio block rejected"
+            );
+            continue;
         }
+        *total_frames = stamp.first_frame;
 
-        let popped = consumer.pop_slice(&mut scratch[..to_read]);
-        if popped == 0 {
-            break;
-        }
-
-        // PTS from total frames written (sample-accurate).
+        // Preserve source PTS across capture loss; never compress a missing interval.
         let elapsed_seconds = *total_frames as f64 / sample_rate as f64;
 
-        let result = unsafe {
-            ffi::LiveRecorder_WriteAudioSamples(
-                encoder_handle,
-                scratch.as_ptr(),
-                popped as i32,
-                elapsed_seconds,
-            )
-        };
-
-        if result != 0 {
-            log::warn!("[RecordingThread] Audio write failed: error {result}");
-        }
+        write(&scratch[..popped], elapsed_seconds);
 
         *total_frames += popped as u64 / channels as u64;
+    }
+}
+
+#[cfg(test)]
+mod audio_input_tests {
+    use super::*;
+    use manifold_audio::capture::audio_stream;
+
+    #[test]
+    fn recording_keeps_source_pts_across_missing_audio() {
+        let (mut source, mut consumer) = audio_stream(2, 2, 4, 48_000);
+        let mut scratch = [0.; 8];
+        let mut total = 0;
+        let mut writes = Vec::new();
+        source.push_interleaved(&[1., -1., 2., -2., 3., -3.]);
+        drain_audio_chunks(
+            &mut consumer,
+            &mut scratch,
+            &mut total,
+            48_000,
+            2,
+            |samples, pts| writes.push((samples.to_vec(), pts)),
+        );
+        assert_eq!(total, 3); // includes the missing source frame
+        source.push_interleaved(&[4., -4.]);
+        drain_audio_chunks(
+            &mut consumer,
+            &mut scratch,
+            &mut total,
+            48_000,
+            2,
+            |samples, pts| writes.push((samples.to_vec(), pts)),
+        );
+        assert_eq!(
+            writes,
+            [(vec![1., -1., 2., -2.], 0.), (vec![4., -4.], 3. / 48_000.)]
+        );
+        assert_eq!(total, 4);
     }
 }

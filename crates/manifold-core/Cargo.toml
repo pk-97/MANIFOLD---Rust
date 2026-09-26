@@ -13,6 +13,7 @@ ahash = { workspace = true }
 arc-swap = { workspace = true }
 inventory = "0.3"
 log = { workspace = true }
+ringbuf = "0.4"
 sha2 = "0.10"
 
 [features]

@@ -269,6 +269,7 @@ impl<'a> OfflineAudioModDriver<'a> {
         let master = self.master_mono;
 
         let snap = engine.audio_snapshot_mut();
+        snap.input_discontinuities.clear();
         snap.sends.clear();
         snap.sends.resize(self.send_count, SendFeatures::default());
 

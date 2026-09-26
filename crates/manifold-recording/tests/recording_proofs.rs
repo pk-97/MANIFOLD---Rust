@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use manifold_gpu::{GpuDevice, GpuTexture};
+use manifold_audio::capture::{audio_stream, AudioStreamProducer};
 use manifold_recording::proofs::{self, PatternWriter};
 use manifold_recording::{AudioCodec, AudioFeed, LiveRecordingConfig, LiveRecordingSession};
 
@@ -87,7 +88,7 @@ fn submit_paced_frame(
 }
 
 fn push_sine_chunk(
-    producer: &mut impl ringbuf::traits::Producer<Item = f32>,
+    producer: &mut AudioStreamProducer,
     phase: &mut f32,
     sample_rate: u32,
     channels: u16,
@@ -95,8 +96,10 @@ fn push_sine_chunk(
 ) {
     const FREQ_HZ: f32 = 440.0;
     const AMPLITUDE: f32 = 0.25;
-    let mut buf = Vec::with_capacity(num_frames as usize * channels as usize);
-    for _ in 0..num_frames {
+    assert!(producer.vacant_frames() >= num_frames as usize, "nominal proof audio must fit its preallocated stream");
+    let frames = num_frames;
+    let mut buf = Vec::with_capacity(frames as usize * channels as usize);
+    for _ in 0..frames {
         let sample = (*phase * std::f32::consts::TAU).sin() * AMPLITUDE;
         for _ in 0..channels {
             buf.push(sample);
@@ -106,7 +109,7 @@ fn push_sine_chunk(
             *phase -= 1.0;
         }
     }
-    producer.push_slice(&buf);
+    assert_eq!(producer.push_interleaved(&buf), buf.len());
 }
 
 // ---------------------------------------------------------------------
@@ -180,15 +183,15 @@ fn nominal_with_audio() {
 
     let sample_rate = 48_000u32;
     let channels = 2u16;
-    // Sized to comfortably hold the full 10s of synthetic audio (960,000
-    // interleaved floats) plus headroom. D8's unpaced submission means the
-    // test thread pushes all 10s of audio while racing 600 unthrottled
-    // video-frame submissions on the SAME thread — the recording thread's
-    // 2ms drain cadence can't be assumed to keep up in real time under that
-    // load, and `push_slice` silently drops samples that don't fit. A
-    // smaller (e.g. 1s) capacity measurably overflows here.
-    let ring = ringbuf::HeapRb::<f32>::new((sample_rate as usize) * (channels as usize) * 12);
-    let (mut producer, consumer) = ringbuf::traits::Split::split(ring);
+    // This unpaced proof supplies 600 blocks / 10 seconds on the video thread.
+    // Preallocate the full fixture and assert admission rather than concealing
+    // a short synthetic source with the live stream's overflow policy.
+    let (mut producer, consumer) = audio_stream(
+        channels as usize,
+        (sample_rate as usize) * 12,
+        2048,
+        sample_rate,
+    );
 
     let out = scratch_output("nominal_with_audio");
     let config = video_only_config(out.clone());

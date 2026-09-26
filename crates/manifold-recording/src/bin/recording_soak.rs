@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use manifold_audio::capture::{audio_stream, AudioStreamProducer};
 use manifold_gpu::{GpuDevice, GpuTexture};
 use manifold_recording::proofs::{self, PatternWriter};
 use manifold_recording::{AudioCodec, AudioFeed, LiveRecordingConfig, LiveRecordingSession};
@@ -251,9 +252,12 @@ fn execute(args: &Args) -> i32 {
         // wall-clock time (see the push loop below), never bursted, so the
         // ring buffer only has to smooth over the recording thread's 2ms
         // drain cadence, not absorb a whole take at once.
-        let capacity = (sample_rate as usize) * (channels as usize) * 5;
-        let ring = ringbuf::HeapRb::<f32>::new(capacity);
-        let (producer, consumer) = ringbuf::traits::Split::split(ring);
+        let (producer, consumer) = audio_stream(
+            channels as usize,
+            (sample_rate as usize) * 5,
+            2048,
+            sample_rate,
+        );
         (
             Some(producer),
             AudioFeed::Injected {
@@ -592,9 +596,9 @@ fn submit_frame_realtime(
 /// actual CoreAudio callback at real hardware rate -- so pacing to wall
 /// clock here is the faithful synthetic equivalent, not a workaround.
 ///
-/// `pushed_frames` advances by what `ringbuf::Producer::push_slice` actually
-/// ACCEPTED, not by the intended push amount (BUG-086 root cause, found this
-/// session): the ring buffer (bounded, `HeapRb`, ~5s capacity) can transiently
+/// `pushed_frames` advances by what the stamped stream actually ACCEPTED, not
+/// by the intended push amount (BUG-086 root cause, found this session): the
+/// stream (bounded, ~5s capacity) can transiently
 /// fill when a burst of real elapsed time is due at once (this binary's own
 /// per-frame call cadence, not the native encoder), and the previous version
 /// of this function advanced `pushed_frames` by the intended `to_push`
@@ -608,7 +612,7 @@ fn submit_frame_realtime(
 /// per-call counter double-counts backlog that's still in flight, not yet
 /// lost).
 fn push_realtime_audio_chunk(
-    producer: &mut impl ringbuf::traits::Producer<Item = f32>,
+    producer: &mut AudioStreamProducer,
     phase: &mut f32,
     sample_rate: u32,
     channels: u16,
@@ -633,7 +637,7 @@ fn push_realtime_audio_chunk(
 /// glue for this binary's own synthetic audio, not a reinvention of shared
 /// infrastructure).
 fn push_audio_chunk(
-    producer: &mut impl ringbuf::traits::Producer<Item = f32>,
+    producer: &mut AudioStreamProducer,
     phase: &mut f32,
     sample_rate: u32,
     channels: u16,
@@ -641,8 +645,9 @@ fn push_audio_chunk(
 ) -> usize {
     const FREQ_HZ: f32 = 440.0;
     const AMPLITUDE: f32 = 0.25;
-    let mut buf = Vec::with_capacity(num_frames as usize * channels as usize);
-    for _ in 0..num_frames {
+    let frames = (producer.vacant_frames().min(num_frames as usize)) as u32;
+    let mut buf = Vec::with_capacity(frames as usize * channels as usize);
+    for _ in 0..frames {
         let sample = (*phase * std::f32::consts::TAU).sin() * AMPLITUDE;
         for _ in 0..channels {
             buf.push(sample);
@@ -652,7 +657,7 @@ fn push_audio_chunk(
             *phase -= 1.0;
         }
     }
-    producer.push_slice(&buf)
+    producer.push_interleaved(&buf)
 }
 
 // ---------------------------------------------------------------------

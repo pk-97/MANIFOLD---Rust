@@ -2314,7 +2314,6 @@ dependencies = [
  "manifold-spectral",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
- "ringbuf 0.4.8",
  "rustfft",
 ]
 
@@ -2327,6 +2326,7 @@ dependencies = [
  "inventory",
  "log",
  "manifold-foundation",
+ "ringbuf 0.4.8",
  "serde",
  "serde_json",
  "sha2",
@@ -2454,7 +2454,6 @@ dependencies = [
  "manifold-io",
  "midir",
  "parking_lot",
- "ringbuf 0.4.8",
  "rosc",
  "rusty_link",
  "serde",
@@ -2479,7 +2478,6 @@ dependencies = [
  "log",
  "manifold-audio",
  "manifold-gpu",
- "ringbuf 0.4.8",
  "serde_json",
 ]
 

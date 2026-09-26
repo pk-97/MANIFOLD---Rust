@@ -2101,7 +2101,7 @@ mod fire_meter_roundtrip_tests {
         bands[AudioBand::Low.index()].transients = 0.8; // (c) Strobe gate
         bands[AudioBand::Low.index()].kick = 0.8; // (d) clip-trigger row (Kick always reads Low)
         manifold_core::audio_features::AudioFeatureSnapshot {
-            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }],
+            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }], ..Default::default()
         }
     }
 

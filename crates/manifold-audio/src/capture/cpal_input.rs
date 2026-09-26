@@ -15,8 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
-use ringbuf::HeapRb;
-use ringbuf::traits::{Producer as ProducerTrait, Split};
+use manifold_core::audio_stream::audio_stream;
 
 use super::{AudioConsumer, CaptureBackend};
 
@@ -94,16 +93,23 @@ impl AudioCaptureDevice {
         const MAX_RING_SAMPLES: usize = 4 * 1024 * 1024; // 16 MiB of f32
         let want = (sample_rate as usize) * (channels as usize) * 2;
         let floor = ((sample_rate as usize) * (channels as usize)) / 4;
-        let capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
-        if capacity < want {
+        let sample_capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
+        if sample_capacity < want {
             log::warn!(
                 "[AudioCapture] {channels}ch @ {sample_rate}Hz: ring capped to \
-                 {capacity} samples (~{:.2}s) to bound memory",
-                capacity as f32 / (sample_rate as f32 * channels as f32).max(1.0),
+                 {sample_capacity} samples (~{:.2}s) to bound memory",
+                sample_capacity as f32 / (sample_rate as f32 * channels as f32).max(1.0),
             );
         }
-        let ring = HeapRb::<f32>::new(capacity);
-        let (mut producer, consumer) = ring.split();
+        // The shared stream allocates whole interleaved frames. Rounding down
+        // keeps its sample allocation within the legacy sample budget.
+        let frame_capacity = (sample_capacity / channels as usize).max(1);
+        let (mut producer, consumer) = audio_stream(
+            channels as usize,
+            frame_capacity,
+            2048,
+            sample_rate,
+        );
 
         let running = Arc::new(AtomicBool::new(false));
         let running_cb = running.clone();
@@ -119,7 +125,7 @@ impl AudioCaptureDevice {
                     if !running_cb.load(Ordering::Relaxed) {
                         return;
                     }
-                    let written = producer.push_slice(data);
+                    let written = producer.push_interleaved(data);
                     if written < data.len() {
                         overflow_cb.fetch_add(1, Ordering::Relaxed);
                     }
@@ -135,7 +141,7 @@ impl AudioCaptureDevice {
             "[AudioCapture] Stream configured: {}Hz, {}ch, ring={}",
             sample_rate,
             channels,
-            capacity,
+            frame_capacity * channels as usize,
         );
 
         Ok(Self {

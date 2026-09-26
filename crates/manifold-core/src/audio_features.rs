@@ -73,6 +73,30 @@ pub struct SendFeatures {
 #[derive(Clone, Debug, Default)]
 pub struct AudioFeatureSnapshot {
     pub sends: Vec<SendFeatures>,
+    /// Source discontinuities observed during this update. Consumers recording
+    /// inputs must invalidate that interval instead of treating it as silence.
+    pub input_discontinuities: Vec<AudioInputDiscontinuity>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AudioInputSource {
+    Capture,
+    Layer(crate::LayerId),
+    Send(crate::AudioSendId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioInputProblem {
+    Gap { first_frame: u64, end_frame: u64 },
+    SourceChanged,
+    FormatChanged,
+    InvalidInput,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioInputDiscontinuity {
+    pub source: AudioInputSource,
+    pub problem: AudioInputProblem,
 }
 
 impl AudioFeatureSnapshot {

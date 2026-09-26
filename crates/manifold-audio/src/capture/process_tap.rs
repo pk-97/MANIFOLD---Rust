@@ -41,8 +41,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::msg_send;
 use objc2_foundation::{NSArray, NSNumber, NSString};
-use ringbuf::HeapRb;
-use ringbuf::traits::{Producer as ProducerTrait, Split};
+use manifold_core::audio_stream::{audio_stream, AudioStreamProducer};
 
 use super::{AudioConsumer, CaptureBackend};
 use crate::directory::TapHandle;
@@ -191,7 +190,7 @@ pub fn is_supported() -> bool {
 /// the sole writer of `producer`, so the `*mut` aliasing is exclusive in
 /// practice (CoreAudio calls the proc serially).
 struct TapCallbackCtx {
-    producer: ringbuf::HeapProd<f32>,
+    producer: AudioStreamProducer,
     running: Arc<AtomicBool>,
     overflow: Arc<AtomicU64>,
     channels: usize,
@@ -251,7 +250,7 @@ unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx) {
             return;
         }
         let data = unsafe { std::slice::from_raw_parts(b.data as *const f32, samples) };
-        let written = producer.push_slice(data);
+        let written = producer.push_interleaved(data);
         if written < data.len() {
             overflow.fetch_add(1, Ordering::Relaxed);
         }
@@ -283,7 +282,7 @@ unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx) {
             }
         }
         let slice = &scratch[..this * ch];
-        let written = producer.push_slice(slice);
+        let written = producer.push_interleaved(slice);
         if written < slice.len() {
             overflow.fetch_add(1, Ordering::Relaxed);
         }
@@ -342,8 +341,16 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
     const MAX_RING_SAMPLES: usize = 4 * 1024 * 1024;
     let want = (sample_rate as usize) * (channels as usize) * 2;
     let floor = ((sample_rate as usize) * (channels as usize)) / 4;
-    let capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
-    let (producer, consumer) = HeapRb::<f32>::new(capacity).split();
+    let sample_capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
+    // The shared stream allocates whole interleaved frames. Rounding down
+    // keeps its sample allocation within the legacy sample budget.
+    let frame_capacity = (sample_capacity / channels as usize).max(1);
+    let (producer, consumer) = audio_stream(
+        channels as usize,
+        frame_capacity,
+        2048,
+        sample_rate,
+    );
 
     let running = Arc::new(AtomicBool::new(false));
     let overflow = Arc::new(AtomicU64::new(0));

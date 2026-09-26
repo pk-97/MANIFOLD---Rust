@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 log = { workspace = true }
 crossbeam-channel = "0.5"
-ringbuf = "0.4"
 manifold-audio = { path = "../manifold-audio" }
 # ffprobe JSON parsing for the recording-proofs oracle (src/proofs.rs). Only
 # enters the dependency graph behind the `recording-proofs` feature — the

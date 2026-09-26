@@ -43,9 +43,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use ringbuf::HeapRb;
-use ringbuf::traits::{
-    Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split,
+use manifold_core::audio_stream::{
+    audio_stream, AudioStreamConsumer, AudioStreamProducer, AudioStreamRead,
 };
 
 pub use manifold_core::audio_features::SendFeatures;
@@ -121,7 +120,7 @@ impl GainBank {
 /// with audio-layer taps before a *single* analysis ("what you hear is what
 /// modulates"). Lock-free SPSC, no `Arc<Mutex>` on the read path.
 pub struct MonoReader {
-    cons: ringbuf::HeapCons<f32>,
+    cons: AudioStreamConsumer,
     send_count: usize,
     sample_rate: u32,
     /// Reusable drain scratch (a whole number of frames).
@@ -139,31 +138,19 @@ impl MonoReader {
         self.send_count
     }
 
-    /// Drain every complete per-send frame produced since the last call, appending
-    /// each send's mono samples to `per_send[i]` (oldest → newest). `per_send`
-    /// must have at least [`Self::send_count`] entries; callers clear them first.
-    pub fn drain(&mut self, per_send: &mut [Vec<f32>]) {
-        let stride = self.send_count.max(1);
-        loop {
-            let frames = self.cons.occupied_len() / stride;
-            if frames == 0 {
-                break;
-            }
-            let cap_frames = (self.scratch.len() / stride).max(1);
-            let take = frames.min(cap_frames) * stride;
-            let got = self.cons.pop_slice(&mut self.scratch[..take]);
-            for frame in self.scratch[..got].chunks_exact(stride) {
-                for (i, &s) in frame.iter().enumerate() {
-                    if let Some(v) = per_send.get_mut(i) {
-                        v.push(s);
-                    }
-                }
-            }
-            if got < take {
-                break;
-            }
+    /// Drain stamped interleaved send frames. Gaps precede post-gap samples.
+    /// InvalidInput terminates this drain; the owner must replace the source.
+    pub fn drain_stamped(&mut self, mut consume: impl FnMut(AudioStreamRead, &[f32])) {
+        while let Some(read) = self.cons.read(&mut self.scratch) {
+            let samples = match read {
+                AudioStreamRead::Samples { samples, .. } => samples,
+                _ => 0,
+            };
+            consume(read, &self.scratch[..samples]);
+            if read == AudioStreamRead::InvalidInput { break; }
         }
     }
+
 }
 
 /// Spawns and owns the capture downmix worker thread. Stops the thread on
@@ -204,7 +191,7 @@ impl AudioFeatureWorker {
         // Interleaved-by-send mono ring (stride = send count). Whole frames only,
         // so the stride never desyncs.
         let stride = send_count.max(1);
-        let (prod, cons) = HeapRb::<f32>::new((MONO_RING_CAPACITY * stride).max(1)).split();
+        let (prod, cons) = audio_stream(stride, MONO_RING_CAPACITY, 2048, sample_rate);
         let reader = MonoReader {
             cons,
             send_count,
@@ -316,7 +303,7 @@ struct SendState {
 struct MonoWorkerLoop {
     consumer: AudioConsumer,
     /// Interleaved-by-send mono output (stride = send count). Whole frames only.
-    producer: ringbuf::HeapProd<f32>,
+    producer: AudioStreamProducer,
     device_channels: usize,
     /// Per-send device channels to downmix to mono, in send order.
     send_channels: Vec<Vec<u16>>,
@@ -325,10 +312,6 @@ struct MonoWorkerLoop {
     /// Per-send linear gain snapshot, refreshed once per drain (avoids an atomic
     /// load per sample).
     gain_scratch: Vec<f32>,
-    /// Leftover interleaved samples that didn't complete a device frame last drain.
-    carry: Vec<f32>,
-    /// Persistent per-drain work buffer (carry-over + freshly drained samples).
-    work: Vec<f32>,
     /// Reusable device-ring drain buffer.
     drain_buf: Vec<f32>,
     /// Reusable interleaved-by-send mono output buffer.
@@ -338,7 +321,7 @@ struct MonoWorkerLoop {
 impl MonoWorkerLoop {
     fn new(
         consumer: AudioConsumer,
-        producer: ringbuf::HeapProd<f32>,
+        producer: AudioStreamProducer,
         device_channels: usize,
         send_channels: Vec<Vec<u16>>,
         gains: Arc<GainBank>,
@@ -351,10 +334,8 @@ impl MonoWorkerLoop {
             send_channels,
             gains,
             gain_scratch: vec![1.0; send_count],
-            carry: Vec::with_capacity(4096),
-            work: Vec::with_capacity(4096),
-            drain_buf: vec![0.0; 4096],
-            out: Vec::with_capacity(4096),
+            drain_buf: vec![0.0; 4096.max(device_channels)],
+            out: Vec::with_capacity(4096 * send_count.max(1)),
         }
     }
 
@@ -367,69 +348,39 @@ impl MonoWorkerLoop {
         }
     }
 
-    /// Drain the device ring, downmix each complete frame to per-send post-gain
-    /// mono, and push the interleaved result. Returns whether anything was pushed.
+    /// Downmix one stamped source block. Returning after a block bounds each
+    /// drain and preserves the source order through both handoffs.
     fn drain_and_downmix(&mut self) -> bool {
-        let available = self.consumer.occupied_len();
-        if available == 0 && self.carry.is_empty() {
-            return false;
-        }
-
-        // carry-over + freshly drained samples → `work` (a borrowed local).
-        let mut work = std::mem::take(&mut self.work);
-        work.clear();
-        work.extend_from_slice(&self.carry);
-        self.carry.clear();
-
-        let mut remaining = available;
-        while remaining > 0 {
-            let n = remaining.min(self.drain_buf.len());
-            let popped = self.consumer.pop_slice(&mut self.drain_buf[..n]);
-            if popped == 0 {
-                break;
+        let Some(read) = self.consumer.read(&mut self.drain_buf) else { return false; };
+        let (stamp, samples) = match read {
+            AudioStreamRead::Samples { stamp, samples } => (stamp, samples),
+            AudioStreamRead::Gap { first_frame, end_frame } => {
+                self.producer.skip_frames(end_frame - first_frame);
+                return true;
             }
-            work.extend_from_slice(&self.drain_buf[..popped]);
-            remaining -= popped;
+            AudioStreamRead::InvalidInput => {
+                self.producer.invalidate();
+                return false;
+            }
+        };
+        self.producer.set_sample_rate(stamp.sample_rate);
+        for (i, gain) in self.gain_scratch.iter_mut().enumerate() {
+            *gain = self.gains.get_linear(i);
         }
-
-        let ch = self.device_channels;
-        let usable = (work.len() / ch) * ch;
-
-        // Refresh the per-send gain snapshot once per drain (lock-free; a gain
-        // edit lands here without a capture restart).
-        for (i, g) in self.gain_scratch.iter_mut().enumerate() {
-            *g = self.gains.get_linear(i);
-        }
-
-        // Downmix each device frame → one post-gain mono sample per send,
-        // interleaved by send (stride = send count).
         self.out.clear();
-        for frame in work[..usable].chunks_exact(ch) {
-            for (channels, &gain) in self.send_channels.iter().zip(self.gain_scratch.iter()) {
+        for frame in self.drain_buf[..samples].chunks_exact(self.device_channels) {
+            for (channels, &gain) in self.send_channels.iter().zip(&self.gain_scratch) {
                 self.out.push(downmix(frame, channels) * gain);
             }
         }
-
-        // Stash the partial-frame remainder; return the work buffer for reuse.
-        self.carry.extend_from_slice(&work[usable..]);
-        self.work = work;
-
         if self.out.is_empty() {
-            return false;
+            self.producer.skip_frames((samples / self.device_channels) as u64);
+        } else {
+            self.producer.push_interleaved(&self.out);
         }
-        // Whole frames only so the stride never desyncs. On overflow (content
-        // thread stalled) drop the OLDEST frames, keeping the newest.
-        let stride = self.send_channels.len().max(1);
-        let vacant_frames = self.producer.vacant_len() / stride;
-        let want_frames = self.out.len() / stride;
-        let push_frames = want_frames.min(vacant_frames);
-        if push_frames == 0 {
-            return false;
-        }
-        let start = (want_frames - push_frames) * stride;
-        self.producer.push_slice(&self.out[start..]);
         true
     }
+
 }
 
 /// Downmix the channels of one interleaved frame to a single mono sample
@@ -3144,18 +3095,43 @@ mod tests {
     }
 
     #[test]
+    fn downmix_preserves_capture_and_handoff_gaps() {
+        let (mut source, capture) = audio_stream(2, 3, 8, SR);
+        let (mono, mut reader) = audio_stream(2, 2, 8, SR);
+        let gains = Arc::new(GainBank::new(&[1.0, 2.0]));
+        let mut worker = MonoWorkerLoop::new(capture, mono, 2, vec![vec![0], vec![1]], gains);
+        // Capture keeps frames 0..3; the mono handoff only fits frames 0..2.
+        assert_eq!(source.push_interleaved(&[0.5, -0.25, 0.6, -0.3, 0.7, -0.35, 0.8, -0.4]), 6);
+        assert!(worker.drain_and_downmix());
+        assert!(worker.drain_and_downmix()); // forward capture's missing frame 3
+        let mut out = [0.; 8];
+        assert!(matches!(reader.read(&mut out), Some(AudioStreamRead::Samples {
+            stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 0, .. }, samples: 4,
+        })));
+        assert_eq!(&out[..4], &[0.5, -0.5, 0.6, -0.6]);
+        assert_eq!(reader.read(&mut out), Some(AudioStreamRead::Gap { first_frame: 2, end_frame: 4 }));
+        source.push_interleaved(&[0.9, -0.45]);
+        worker.drain_and_downmix();
+        assert!(matches!(reader.read(&mut out), Some(AudioStreamRead::Samples {
+            stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 4, .. }, samples: 2,
+        })));
+        assert_eq!(&out[..2], &[0.9, -0.9]);
+        assert_eq!(reader.read(&mut out), None);
+    }
+
+    #[test]
     fn downmix_worker_produces_per_send_mono() {
         // Two device channels, two sends (one channel each). Fill the ring with a
         // distinguishable interleaved signal and confirm the worker downmixes each
         // send to mono, interleaved by send, post-gain.
         let frames = 4000;
-        let (mut prod, cons) = HeapRb::<f32>::new(frames * 2 + 8).split();
+        let (mut prod, cons) = audio_stream(2, frames + 4, 8, SR);
         let mut interleaved = Vec::with_capacity(frames * 2);
         for _ in 0..frames {
             interleaved.push(0.5); // channel 0
             interleaved.push(-0.25); // channel 1
         }
-        let pushed = prod.push_slice(&interleaved);
+        let pushed = prod.push_interleaved(&interleaved);
         assert_eq!(pushed, interleaved.len());
 
         let gains = Arc::new(GainBank::new(&[1.0, 2.0]));
@@ -3169,16 +3145,26 @@ mod tests {
         assert_eq!(reader.send_count(), 2);
         assert_eq!(reader.sample_rate(), SR);
 
-        let mut per_send = vec![Vec::new(), Vec::new()];
+        let mut per_send = [Vec::new(), Vec::new()];
         for _ in 0..250 {
-            reader.drain(&mut per_send);
+            reader.drain_stamped(|read, samples| {
+                assert!(matches!(read, AudioStreamRead::Samples { .. }));
+                for frame in samples.chunks_exact(2) {
+                    for (index, value) in frame.iter().enumerate() { per_send[index].push(*value); }
+                }
+            });
             if per_send[0].len() >= frames {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
         }
         worker.stop();
-        reader.drain(&mut per_send);
+        reader.drain_stamped(|read, samples| {
+                assert!(matches!(read, AudioStreamRead::Samples { .. }));
+                for frame in samples.chunks_exact(2) {
+                    for (index, value) in frame.iter().enumerate() { per_send[index].push(*value); }
+                }
+            });
 
         assert!(
             per_send[0].len() >= frames - 64,

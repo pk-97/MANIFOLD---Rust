@@ -251,7 +251,7 @@ mod tests {
     fn snapshot_with_transient(band: AudioBand, level: f32) -> AudioFeatureSnapshot {
         let mut f = manifold_core::SendFeatures::default();
         f.bands[band.index()].transients = level;
-        AudioFeatureSnapshot { sends: vec![f] }
+        AudioFeatureSnapshot { sends: vec![f], ..Default::default() }
     }
 
     #[test]

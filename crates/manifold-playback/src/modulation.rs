@@ -1489,7 +1489,7 @@ mod tests {
         let mut bands = [manifold_core::BandFeatures::default(); 4];
         bands[manifold_core::AudioBand::Low.index()].amplitude = low;
         AudioFeatureSnapshot {
-            sends: vec![SendFeatures { bands, ..Default::default() }],
+            sends: vec![SendFeatures { bands, ..Default::default() }], ..Default::default()
         }
     }
 
@@ -1721,7 +1721,7 @@ mod tests {
     }
 
     fn snapshot_feature(kind: AudioFeatureKind, band: AudioBand, level: f32) -> AudioFeatureSnapshot {
-        let mut s = AudioFeatureSnapshot { sends: vec![SendFeatures::default()] };
+        let mut s = AudioFeatureSnapshot { sends: vec![SendFeatures::default()], ..Default::default() };
         let feature_band = if kind == AudioFeatureKind::Kick { AudioBand::Low } else { band };
         let band_features = &mut s.sends[0].bands[feature_band.index()];
         match kind {
