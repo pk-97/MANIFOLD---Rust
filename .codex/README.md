@@ -95,3 +95,17 @@ Native computer-use/MCP calls are not covered; obey the repository's
 evidence-driven visual-check rule. Tests cover synthetic hook events; live
 dispatch coverage depends on the trusted desktop hook. Re-trust the updated
 definition with `/hooks`.
+
+## Build storage admission
+
+Supported Cargo build-driving commands and the repository's build gate scripts
+perform a read-only admission check before they execute. The check accepts only
+the `target` directory of a registered Git worktree and requires 100 GiB of
+free space. It recognizes direct Cargo target overrides, common environment and
+build-lock wrappers, and concrete manifest paths; unresolved or dynamic target
+overrides are refused. Read-only Cargo commands such as `metadata` and `fmt`
+remain unaffected.
+
+The storage module also provides an explicit inventory and maintenance goal for
+later operator use. Admission does not delete files, enforce a hard cap, or
+clean protected active work. Hooks never perform automatic cleanup.

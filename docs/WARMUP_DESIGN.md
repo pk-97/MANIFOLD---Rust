@@ -365,7 +365,12 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
 
 - **Deliverables:** content-hash-keyed decode cache for HDRI and GLB preprocess
   output under `~/Library/Caches/com.latentspace.manifold/`; load path consults it;
-  save-on-decode. Cache eviction: size cap with LRU, stated constant.
+  save-on-decode. The decode cache has a 2 GiB LRU cap on actual managed
+  payload bytes. Reads and writes reconcile orphan payloads under a cross-process
+  lock, so a missing or stale manifest cannot hide disk usage. Oversized entries
+  are not persisted. Unknown files and symlinks are preserved. Test cache roots
+  clean up only their known files on success or unwind, then remove empty
+  directories; no recursive deletion is used.
 - **Gate:** second load of the 3D fixture project skips decode (counter assertion);
   corrupted cache entry fails loudly and re-decodes (round-trip rule — never open a
   project on silently-dropped cache data).
