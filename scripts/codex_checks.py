@@ -38,6 +38,8 @@ def tooling_checks(repo, paths):
         "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/test_agent_worktree.py"},
         "scripts/test_rt_noise_gate.py": {"scripts/rt_noise_gate.py", "scripts/test_rt_noise_gate.py", "scripts/rt_noise_baseline.json", "scripts/trunk_health.py"},
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/ui-flows/manifest.json"},
+        "scripts/test_landing_gate.py": {"scripts/landing_gate.py", "scripts/land_branch.py", "scripts/test_landing_gate.py", "scripts/trunk_health.py"},
+        "scripts/test_gpu_proofs_gate.py": {"scripts/gpu_proofs_gate.py", "scripts/test_gpu_proofs_gate.py"},
         "scripts/test_codex_prepare.py": {"scripts/codex_prepare.py", "scripts/codex_subsystems.json", "scripts/test_codex_prepare.py", "scripts/codex_checks.py"},
         "scripts/test_codex_usage.py": {"scripts/codex_usage.py", "scripts/test_codex_usage.py"},
         "scripts/test_codex_regressions.py": {"scripts/codex_regressions.py", "scripts/codex_regressions.json", "scripts/test_codex_regressions.py", "scripts/codex_checks.py", "scripts/ui-flows/manifest.json"},
@@ -64,7 +66,7 @@ def build_plan(repo: Path, paths=None):
     if any(Path(p).is_absolute() or not (repo / p).resolve().is_relative_to(repo) for p in paths):
         raise RuntimeError("explicit paths must stay within --repo")
     paths = sorted({(repo / p).resolve().relative_to(repo).as_posix() for p in paths})
-    from landing_gate import gpu_proofs_scope_for_paths, _path_is_gpu, packages_for_paths
+    from landing_gate import gpu_proofs_scope_for_paths, gpu_proofs_targets_for_paths, _path_is_gpu, packages_for_paths
     packages = packages_for_paths(repo, paths)
     scope = gpu_proofs_scope_for_paths(paths)
     checks = tooling_checks(repo, paths)
@@ -80,6 +82,8 @@ def build_plan(repo: Path, paths=None):
                    {"name": "tests", "argv": ["cargo", "nextest", "run", "--manifest-path", manifest, *args], "cwd": str(repo)}]
     if any(_path_is_gpu(p) for p in paths):
         argv = ["python3", str(repo / "scripts/gpu_proofs_gate.py"), "--manifest-path", str(repo / "Cargo.toml")]
+        for target in gpu_proofs_targets_for_paths(paths):
+            argv += ["--test", target]
         if scope:
             f, s = scope
             argv += sum((["--filter", x] for x in f), []) + sum((["--skip", x] for x in s), [])
