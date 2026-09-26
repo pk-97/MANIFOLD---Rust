@@ -3,16 +3,17 @@
 
 `cargo test -p manifold-renderer --features gpu-proofs` alone stops at the
 first failing test binary, so golden drift surfaces piecemeal over review
-rounds. This wrapper runs every test binary to completion
-(`--no-fail-fast`), streams the output live, then parses the full captured
-run into one summary: every failed test name, every golden-mismatch detail
-(file + diff), and a per-binary pass/fail count. Never nextest — process-
-per-test defeats the GPU device lock.
+rounds. This wrapper streams output live, then parses the full captured run
+into one summary: every failed test name, every golden-mismatch detail (file +
+diff), and a per-binary pass/fail count. Every selected test binary runs to
+completion with `--no-fail-fast`. Never nextest — process-per-test
+defeats the GPU device lock.
 
-Optional `--filter` / `--skip` args pass through to cargo test so a landing
-can run just the proofs for the subsystem it touched (scripts/landing_gate.py
-computes the scope). Default with no args: the full suite — this is the
-on-demand and nightly-trunk_health role.
+The default runs only the `gpu_proofs` test binary. `--test NAME` can be
+repeated for an explicit set of binaries; `--full-suite` restores the broad
+on-demand and nightly-trunk_health run. Optional `--filter` / `--skip` args
+pass through to cargo test so a landing can run just the proofs for the
+subsystem it touched (scripts/landing_gate.py computes the scope).
 
 Exit 0 iff the underlying cargo run exited 0.
 
@@ -56,7 +57,16 @@ def default_manifest_path() -> Path:
     return Path(__file__).resolve().parent.parent / "Cargo.toml"
 
 
-def run_gate(manifest_path: Path, filters: list[str], skips: list[str]) -> tuple[int, str]:
+def run_gate(
+    manifest_path: Path,
+    filters: list[str],
+    skips: list[str],
+    targets: list[str] | None = None,
+    full_suite: bool = False,
+) -> tuple[int, str]:
+    if full_suite and targets is not None:
+        raise ValueError("full_suite and targets are mutually exclusive")
+
     cmd = [
         "cargo",
         "test",
@@ -68,6 +78,9 @@ def run_gate(manifest_path: Path, filters: list[str], skips: list[str]) -> tuple
         "--manifest-path",
         str(manifest_path),
     ]
+    if not full_suite:
+        for target in targets or ["gpu_proofs"]:
+            cmd.extend(["--test", target])
     # Serial test threads, always: ~135 proofs share one Metal device, and
     # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
     # sets rotate across identical binaries; the same tests pass serially).
@@ -190,10 +203,26 @@ def main() -> int:
         metavar="TESTNAME",
         help="cargo test --skip filter (repeatable)",
     )
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--test",
+        action="append",
+        dest="targets",
+        default=None,
+        metavar="NAME",
+        help="run a named test binary (repeatable; default: gpu_proofs)",
+    )
+    scope.add_argument(
+        "--full-suite",
+        action="store_true",
+        help="run every test binary (retains cargo --no-fail-fast)",
+    )
     args = parser.parse_args()
 
     manifest_path = args.manifest_path or default_manifest_path()
-    exit_code, output = run_gate(manifest_path, args.filter, args.skip)
+    exit_code, output = run_gate(
+        manifest_path, args.filter, args.skip, args.targets, args.full_suite
+    )
     print_summary(output, exit_code)
     return exit_code
 

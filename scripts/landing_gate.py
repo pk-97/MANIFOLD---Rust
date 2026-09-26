@@ -3,7 +3,8 @@
 
 Gates only what the branch touched; the workspace-wide sweep lives in
 scripts/trunk_health.py (nightly). Run from the worktree being landed, after
-merging origin/main into it. Exit 0 iff no check fails.
+merging origin/main into it. Stop at the first failed check; preserve its
+transcript and timings. Exit 0 iff all required checks pass.
 """
 
 import argparse
@@ -25,9 +26,8 @@ MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 # substring matches a row contributes that scope, and matching scopes UNION
 # (cargo test runs tests matching ANY filter). If no row matches, or any
 # GPU-touching path is left uncovered by a narrow scope, the leg falls back to
-# the FULL suite — never guess narrow. gpu_proofs_gate.py's default is the full
-# suite, so adding a row here is purely additive; the nightly trunk_health
-# sweep keeps the full-suite safety net.
+# all tests in the gpu_proofs binary — never guess narrow. The nightly
+# trunk_health sweep keeps the full renderer-suite safety net.
 #   - `rt_` skips `particletext`: the freeze proof `particletext_*` hangs the
 #     GPU on main (BUG-i6eo), so keep it out of RT-scoped runs even though no
 #     rt_ test currently matches it.
@@ -93,9 +93,12 @@ def run_cmd(cmd, cwd, timeout):
     try:
         r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
                            timeout=timeout, env=environment)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
         duration = time.time() - start
-        return -1, "", f"TIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration
+        def decoded(value):
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+        return (-1, decoded(error.stdout), decoded(error.stderr) +
+                f"\nTIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration)
     duration = time.time() - start
     return r.returncode, r.stdout, r.stderr, duration
 
@@ -108,6 +111,17 @@ def write_landing_log(repo, label, stdout, stderr):
     path = log_dir / f"{label}-{stamp}-{time.time_ns()}.log"
     path.write_text(stdout + stderr)
     return path.resolve()
+
+
+def run_check(label, cmd, cwd, timeout):
+    print(f"[RUN] {label}", flush=True)
+    result = run_cmd(cmd, cwd, timeout)
+    exit_, out, err, _ = result
+    if exit_ and label != "gpu-proofs":
+        # GPU proofs retain their transcript on both success and failure below.
+        log = write_landing_log(cwd, label.replace("/", "-"), out, err)
+        print(f"[{label}] complete transcript: {log}", flush=True)
+    return result
 
 
 def parse_package_from_cargo(toml_path):
@@ -153,7 +167,21 @@ def _path_is_gpu(path):
         return True
     if "tests/gpu_proofs/" in path:
         return True
+    if _path_is_conformance(path):
+        return True
     return False
+
+
+def _path_is_conformance(path):
+    return (path == "crates/manifold-renderer/tests/glb_conformance.rs"
+            or path.startswith("tests/fixtures/gltf/khronos/"))
+
+
+def gpu_proofs_targets_for_paths(paths):
+    targets = ["gpu_proofs"]
+    if any(_path_is_conformance(path) for path in paths):
+        targets.append("glb_conformance")
+    return targets
 
 
 def touches_gpu_path(repo, base_sha):
@@ -229,9 +257,9 @@ def reverse_deps(repo, packages):
 def print_result(label, status, duration=None, tail=None):
     """Print [PASS]/[FAIL]/[SKIP] with optional tail."""
     if duration is not None:
-        print(f"[{status}] {label} ({duration:.0f}s)")
+        print(f"[{status}] {label} ({duration:.0f}s)", flush=True)
     else:
-        print(f"[{status}] {label}")
+        print(f"[{status}] {label}", flush=True)
     if tail:
         for line in tail[-20:]:
             print(f"    {line}")
@@ -245,6 +273,8 @@ def main():
                         help="base ref for merge-base (default: origin/main)")
     parser.add_argument("--skip-gpu", default=None, metavar="REASON",
                         help="skip gpu-proofs with a reason (does not fail gate)")
+    parser.add_argument("--keep-going", action="store_true",
+                        help="collect every result for explicit named-red review")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -255,17 +285,6 @@ def main():
         return 1
 
     packages = get_touched_packages(repo, base_sha)
-    # Extend with direct reverse dependents
-    dependents = reverse_deps(repo, packages)
-    if dependents:
-        print(f"dependents added: {', '.join(dependents)}")
-    else:
-        print("dependents added: none")
-    gate_packages = packages + dependents
-    # Dedupe while preserving order (touched first, then their dependents)
-    seen = set()
-    gate_packages = [p for p in gate_packages if not (p in seen or seen.add(p))]
-
     touches_docs = run_cmd(["git", "diff", "--name-only", "--diff-filter=AR",
                             f"{base_sha}..HEAD", "--", "docs/"],
                            cwd=repo, timeout=300)[1].strip() != ""
@@ -282,24 +301,28 @@ def main():
         print(f"[FAIL] harness scope: {err}")
         return 1
     for check in tooling_checks(repo, [p for p in changed.split("\0") if p]):
-        exit_, out, err, duration = run_cmd(check["argv"], cwd=repo, timeout=120)
+        exit_, out, err, duration = run_check(check["name"], check["argv"], cwd=repo, timeout=120)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, check["name"], duration, tail))
         print_result(check["name"], status, duration, tail if exit_ else None)
+        if status == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
 
     # a. design-status
-    exit_, out, err, duration = run_cmd(
+    exit_, out, err, duration = run_check("design-status",
         ["python3", ".claude/hooks/design_status_check.py", args.base, "HEAD"],
         cwd=repo, timeout=300)
     tail = (out + err).rstrip().splitlines()[-20:]
     status = "PASS" if exit_ == 0 else "FAIL"
     results.append((status, "design-status", duration, tail))
     print_result("design-status", status, duration, tail if exit_ != 0 else None)
+    if status == "FAIL" and not args.keep_going:
+        return finish(repo, base_sha, results)
 
     # b. docs-index (only if docs added/renamed)
     if touches_docs:
-        exit_, out, err, duration = run_cmd(
+        exit_, out, err, duration = run_check("docs-index",
             ["python3", "scripts/gen_docs_index.py"],
             cwd=repo, timeout=300)
         tail = (out + err).rstrip().splitlines()[-20:]
@@ -312,37 +335,45 @@ def main():
             status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, "docs-index", duration, tail))
         print_result("docs-index", status, duration, tail if status == "FAIL" else None)
+        if status == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
     else:
         results.append(("SKIP", "docs-index", None, None))
         print_result("docs-index", "SKIP", None, None)
 
-    # c. flow-gate
-    exit_, out, err, duration = run_cmd(
-        ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"],
-        cwd=repo, timeout=3600)
-    tail = (out + err).rstrip().splitlines()[-20:]
-    status = "PASS" if exit_ == 0 else "FAIL"
-    results.append((status, "flow-gate", duration, tail))
-    print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
-
     # d. deny
-    exit_, out, err, duration = run_cmd(
+    exit_, out, err, duration = run_check("deny",
         ["cargo", "deny", "check", "bans"],
         cwd=repo, timeout=300)
     tail = (out + err).rstrip().splitlines()[-20:]
     status = "PASS" if exit_ == 0 else "FAIL"
     results.append((status, "deny", duration, tail))
     print_result("deny", status, duration, tail if exit_ != 0 else None)
+    if status == "FAIL" and not args.keep_going:
+        return finish(repo, base_sha, results)
 
     # d2. ignored-tests — no new #[ignore] beyond the ratchet baseline
     # (spec: .claude/hooks/ignored-test-guard.py docstring).
-    exit_, out, err, duration = run_cmd(
+    exit_, out, err, duration = run_check("ignored-tests",
         ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
         cwd=repo, timeout=120)
     tail = (out + err).rstrip().splitlines()[-20:]
     status = "PASS" if exit_ == 0 else "FAIL"
     results.append((status, "ignored-tests", duration, tail))
     print_result("ignored-tests", status, duration, tail if exit_ != 0 else None)
+    if status == "FAIL" and not args.keep_going:
+        return finish(repo, base_sha, results)
+
+    # Extend with direct reverse dependents
+    dependents = reverse_deps(repo, packages) if packages else []
+    if dependents:
+        print(f"dependents added: {', '.join(dependents)}")
+    else:
+        print("dependents added: none")
+    gate_packages = packages + dependents
+    # Dedupe while preserving order (touched first, then their dependents)
+    seen = set()
+    gate_packages = [p for p in gate_packages if not (p in seen or seen.add(p))]
 
     # e. clippy (if packages touched)
     if gate_packages:
@@ -350,14 +381,27 @@ def main():
         for p in gate_packages:
             pkg_args.extend(["-p", p])
         cmd = ["cargo", "clippy", *pkg_args, "--tests", "--", "-D", "warnings"]
-        exit_, out, err, duration = run_cmd(cmd, cwd=repo, timeout=3600)
+        exit_, out, err, duration = run_check("clippy", cmd, cwd=repo, timeout=3600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, "clippy", duration, tail))
         print_result("clippy", status, duration, tail if exit_ != 0 else None)
+        if status == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
     else:
         results.append(("SKIP", "clippy", None, None))
         print_result("clippy", "SKIP", None, None)
+
+    # c. flow-gate
+    exit_, out, err, duration = run_check("flow-gate",
+        ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"],
+        cwd=repo, timeout=3600)
+    tail = (out + err).rstrip().splitlines()[-20:]
+    status = "PASS" if exit_ == 0 else "FAIL"
+    results.append((status, "flow-gate", duration, tail))
+    print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
+    if status == "FAIL" and not args.keep_going:
+        return finish(repo, base_sha, results)
 
     # f. tests (if packages touched)
     if gate_packages:
@@ -365,11 +409,13 @@ def main():
         for p in gate_packages:
             pkg_args.extend(["-p", p])
         cmd = ["cargo", "nextest", "run", *pkg_args]
-        exit_, out, err, duration = run_cmd(cmd, cwd=repo, timeout=3600)
+        exit_, out, err, duration = run_check("tests", cmd, cwd=repo, timeout=3600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, "tests", duration, tail))
         print_result("tests", status, duration, tail if exit_ != 0 else None)
+        if status == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
     else:
         results.append(("SKIP", "tests", None, None))
         print_result("tests", "SKIP", None, None)
@@ -385,8 +431,12 @@ def main():
             paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
             scope = gpu_proofs_scope_for_paths(paths)
             cmd = ["python3", "scripts/gpu_proofs_gate.py"]
+            targets = gpu_proofs_targets_for_paths(paths)
+            for target in targets:
+                cmd += ["--test", target]
+            print(f"[gpu-proofs] test binaries: {', '.join(targets)}", flush=True)
             if scope is None:
-                print("[gpu-proofs] full suite (no narrow scope covers the touched paths)")
+                print("[gpu-proofs] all tests in selected binaries (no narrower scope covers the touched paths)")
             else:
                 filters, skips = scope
                 for f in filters:
@@ -394,7 +444,7 @@ def main():
                 for s in skips:
                     cmd += ["--skip", s]
                 print(f"[gpu-proofs] scoped to filters={filters} skips={skips}")
-            exit_, out, err, duration = run_cmd(cmd, cwd=repo, timeout=7200)
+            exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
@@ -420,10 +470,16 @@ def main():
             status = "PASS" if exit_ == 0 else "FAIL"
             results.append((status, "gpu-proofs", duration, tail))
             print_result("gpu-proofs", status, duration, tail if exit_ != 0 else None)
+            if status == "FAIL" and not args.keep_going:
+                return finish(repo, base_sha, results)
     else:
         results.append(("SKIP", "gpu-proofs", None, None))
         print_result("gpu-proofs", "SKIP", None, None)
 
+    return finish(repo, base_sha, results)
+
+
+def finish(repo, base_sha, results):
     # Summary
     passed = sum(1 for s, _, _, _ in results if s == "PASS")
     failed = sum(1 for s, _, _, _ in results if s == "FAIL")

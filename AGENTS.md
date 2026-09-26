@@ -54,4 +54,6 @@ Finish the worktree lifecycle before ending a workstream: release landed slots; 
 
 Run focused clippy and tests for changed Rust crates. Use `scripts/gpu_proofs_gate.py` for GPU-path changes; GPU proofs use cargo test, not nextest. Use `scripts/landing_gate.py` before landing app changes; broad nightly checks belong to `scripts/trunk_health.py`. Documentation/config-only changes need appropriate syntax, reference, and diff checks, not an app build. Avoid repeating passed checks without new evidence.
 
+Landing stops at the first failed check, with cheap prerequisites before builds and rendering. GPU checks select the `gpu_proofs` binary; edits to the GLB conformance test or its fixture manifest also select `glb_conformance`. The full renderer suite runs nightly (`gpu_proofs_gate.py --full-suite`). Explicit named-red review collects all required results with `--keep-going`. Check progress is live and failure transcripts are retained.
+
 Commit and push completed, verified work. Workers return edits and check results; the lead reviews and commits. App landings use `scripts/land_branch.py` to run the existing gate before merge/push. Give Peter the exact launch command when testing a worktree build. Track discovered unfinished engineering work in beads; update existing contracts when behaviour changes. Keep history in git and avoid duplicate status prose.
