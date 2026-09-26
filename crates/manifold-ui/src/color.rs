@@ -876,11 +876,10 @@ pub const STEM_LANE_BG_BASS: Color32 = Color32::new(26, 28, 26, 255); // Color(0
 pub const STEM_LANE_BG_OTHER: Color32 = Color32::new(26, 26, 29, 255); // Color(0.10, 0.10, 0.115, 1)
 pub const STEM_LANE_BG_VOCALS: Color32 = Color32::new(29, 26, 29, 255); // Color(0.115, 0.10, 0.115, 1)
 
-// ── Spectral waveform palette (WaveformRenderer.cs lines 37-40) ──
-pub const SPEC_SUB: Color32 = Color32::new(180, 40, 40, 255);
-pub const SPEC_LOW: Color32 = Color32::new(230, 140, 50, 255);
-pub const SPEC_MID: Color32 = Color32::new(200, 230, 180, 255);
-pub const SPEC_HIGH: Color32 = Color32::new(80, 180, 255, 255);
+// Three-band waveform: low outer body, mid body, high inner detail.
+pub const WAVEFORM_LOW: Color32 = Color32::new(66, 151, 225, 255);
+pub const WAVEFORM_MID: Color32 = Color32::new(242, 176, 77, 255);
+pub const WAVEFORM_HIGH: Color32 = Color32::new(238, 244, 250, 255);
 pub const WAVEFORM_CENTER_LINE: Color32 = Color32::new(60, 60, 60, 80);
 
 // ── Insert cursor marker ───────────────────────────────────────────
